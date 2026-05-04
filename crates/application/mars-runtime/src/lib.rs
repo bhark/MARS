@@ -194,6 +194,13 @@ pub async fn run_manifest_reload_loop(
             }
         };
 
+        // skip if the runtime already holds this exact version (e.g. startup)
+        if let Some(current) = runtime.current_state()
+            && current.manifest.version == manifest.version
+        {
+            continue;
+        }
+
         let state = match RuntimeState::from_config_and_manifest(&config, stylesheet.clone(), manifest) {
             Ok(state) => Arc::new(state),
             Err(e) => {
