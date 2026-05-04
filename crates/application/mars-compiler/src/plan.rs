@@ -97,7 +97,7 @@ pub fn cell_bbox(origin: (f64, f64), cell_size: f64, cell: &Cell) -> Bbox {
     Bbox::new(min_x, min_y, min_x + cell_size, min_y + cell_size)
 }
 
-fn window_intersects(window: &Option<ScaleWindow>, band: &Band) -> bool {
+pub(crate) fn window_intersects(window: &Option<ScaleWindow>, band: &Band) -> bool {
     // a band spans [prev_max .. band.max_denom). without prev_max here we
     // accept anything overlapping (0, band.max_denom). good enough for phase-0
     // since the test config has one band.
@@ -116,7 +116,7 @@ fn window_intersects(window: &Option<ScaleWindow>, band: &Band) -> bool {
     true
 }
 
-fn compile_classes(layer: &Layer) -> Result<Vec<CompiledClass>, PlanError> {
+pub(crate) fn compile_classes(layer: &Layer) -> Result<Vec<CompiledClass>, PlanError> {
     let mut out = Vec::with_capacity(layer.classes.len());
     for (i, c) in layer.classes.iter().enumerate() {
         let when = match &c.when {
@@ -138,7 +138,7 @@ fn compile_classes(layer: &Layer) -> Result<Vec<CompiledClass>, PlanError> {
     Ok(out)
 }
 
-fn lower_binding(b: &CfgBinding, crs: &CrsCode) -> Result<SourceBinding, PlanError> {
+pub(crate) fn lower_binding(b: &CfgBinding, crs: &CrsCode) -> Result<SourceBinding, PlanError> {
     // `from` is `schema.table`. tolerate single-segment names by routing to
     // the public schema (matches postgres adapter convention).
     let (schema, table) = match b.from.split_once('.') {
@@ -156,4 +156,165 @@ fn lower_binding(b: &CfgBinding, crs: &CrsCode) -> Result<SourceBinding, PlanErr
         b.attributes.clone(),
         crs.clone(),
     )?)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use mars_config::{Class, ClassStyle, Layer, ScaleWindow, SourceBinding as CfgBinding};
+    use mars_types::{CrsCode, LayerId};
+
+    use super::*;
+
+    #[test]
+    fn cell_bbox_negative_coords() {
+        let b = cell_bbox((0.0, 0.0), 1024.0, &Cell { band: ScaleBand::new("hi"), x: -1, y: -2 });
+        assert_eq!(b.min_x, -1024.0);
+        assert_eq!(b.min_y, -2048.0);
+        assert_eq!(b.max_x, 0.0);
+        assert_eq!(b.max_y, -1024.0);
+    }
+
+    #[test]
+    fn cell_bbox_origin() {
+        let b = cell_bbox((100.0, 200.0), 50.0, &Cell { band: ScaleBand::new("hi"), x: 0, y: 0 });
+        assert_eq!(b.min_x, 100.0);
+        assert_eq!(b.min_y, 200.0);
+        assert_eq!(b.max_x, 150.0);
+        assert_eq!(b.max_y, 250.0);
+    }
+
+    #[test]
+    fn window_intersects_no_window() {
+        let band = Band { name: "hi".into(), max_denom: 25000 };
+        assert!(window_intersects(&None, &band));
+    }
+
+    #[test]
+    fn window_intersects_min_at_threshold_rejected() {
+        // band covers [0, 25000); window.min = 25000 means no overlap
+        let band = Band { name: "hi".into(), max_denom: 25000 };
+        let w = ScaleWindow { min: Some(25000), max: None };
+        assert!(!window_intersects(&Some(w), &band));
+    }
+
+    #[test]
+    fn window_intersects_min_below_threshold_accepted() {
+        let band = Band { name: "hi".into(), max_denom: 25000 };
+        let w = ScaleWindow { min: Some(24999), max: None };
+        assert!(window_intersects(&Some(w), &band));
+    }
+
+    #[test]
+    fn window_intersects_max_zero_rejected() {
+        let band = Band { name: "hi".into(), max_denom: 25000 };
+        let w = ScaleWindow { min: None, max: Some(0) };
+        assert!(!window_intersects(&Some(w), &band));
+    }
+
+    #[test]
+    fn compile_classes_assigns_stable_indices() {
+        let layer = Layer {
+            name: LayerId::new("roads"),
+            title: String::new(),
+            abstract_: String::new(),
+            kind: "line".into(),
+            scale: None,
+            group: None,
+            enable_get_feature_info: false,
+            bbox: None,
+            sources: vec![],
+            classes: vec![
+                Class { name: "a".into(), title: String::new(), when: Some("x = 1".into()), style: ClassStyle::Ref { ref_: "s1".into() } },
+                Class { name: "b".into(), title: String::new(), when: Some("x = 2".into()), style: ClassStyle::Ref { ref_: "s2".into() } },
+            ],
+            label: None,
+        };
+        let compiled = compile_classes(&layer).unwrap();
+        assert_eq!(compiled.len(), 2);
+        assert_eq!(compiled[0].class_index, 0);
+        assert_eq!(compiled[1].class_index, 1);
+        assert_eq!(compiled[0].style_id, "s1");
+        assert_eq!(compiled[1].style_id, "s2");
+    }
+
+    #[test]
+    fn compile_classes_inline_style_namespaced() {
+        let layer = Layer {
+            name: LayerId::new("roads"),
+            title: String::new(),
+            abstract_: String::new(),
+            kind: "line".into(),
+            scale: None,
+            group: None,
+            enable_get_feature_info: false,
+            bbox: None,
+            sources: vec![],
+            classes: vec![
+                Class { name: "a".into(), title: String::new(), when: None, style: ClassStyle::Inline(Default::default()) },
+            ],
+            label: None,
+        };
+        let compiled = compile_classes(&layer).unwrap();
+        assert_eq!(compiled[0].style_id, "roads::a");
+    }
+
+    #[test]
+    fn compile_classes_rejects_too_many() {
+        let mut classes = Vec::new();
+        for i in 0..65537 {
+            classes.push(Class {
+                name: format!("c{i}"),
+                title: String::new(),
+                when: None,
+                style: ClassStyle::Ref { ref_: "s".into() },
+            });
+        }
+        let layer = Layer {
+            name: LayerId::new("x"),
+            title: String::new(),
+            abstract_: String::new(),
+            kind: "line".into(),
+            scale: None,
+            group: None,
+            enable_get_feature_info: false,
+            bbox: None,
+            sources: vec![],
+            classes,
+            label: None,
+        };
+        assert!(matches!(compile_classes(&layer), Err(PlanError::Invalid(_))));
+    }
+
+    #[test]
+    fn lower_binding_splits_schema_table() {
+        let b = CfgBinding {
+            scale: None,
+            band: Some("hi".into()),
+            from: "myschema.mytable".into(),
+            geometry_column: "geom".into(),
+            id_column: Some("gid".into()),
+            attributes: vec!["name".into()],
+        };
+        let binding = lower_binding(&b, &CrsCode::new("EPSG:25832")).unwrap();
+        assert_eq!(binding.from_schema, "myschema");
+        assert_eq!(binding.from_table, "mytable");
+        assert_eq!(binding.id_column, "gid");
+    }
+
+    #[test]
+    fn lower_binding_defaults_schema_to_public() {
+        let b = CfgBinding {
+            scale: None,
+            band: Some("hi".into()),
+            from: "mytable".into(),
+            geometry_column: "geom".into(),
+            id_column: None,
+            attributes: vec![],
+        };
+        let binding = lower_binding(&b, &CrsCode::new("EPSG:25832")).unwrap();
+        assert_eq!(binding.from_schema, "public");
+        assert_eq!(binding.from_table, "mytable");
+        assert_eq!(binding.id_column, "ogc_fid");
+    }
 }

@@ -17,6 +17,7 @@ pub type LayerCellKey = (LayerId, ScaleBand, (i64, i64));
 pub type SourceCellKey = (String, ScaleBand, (i64, i64));
 
 /// runtime state — pure data, no I/O. cheap to share across requests behind `Arc`.
+#[derive(Debug)]
 pub struct RuntimeState {
     /// canonical CRS for this service. plans must match.
     pub canonical_crs: CrsCode,
@@ -89,7 +90,7 @@ impl RuntimeState {
     }
 }
 
-fn build_bands(config: &Config) -> Result<Vec<BandConfig>, RuntimeError> {
+pub(crate) fn build_bands(config: &Config) -> Result<Vec<BandConfig>, RuntimeError> {
     let sizes = config
         .cells
         .size_per_band_m()
@@ -111,4 +112,108 @@ fn build_bands(config: &Config) -> Result<Vec<BandConfig>, RuntimeError> {
     }
     out.sort_by_key(|b| b.max_denom);
     Ok(out)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use mars_config::{ArtifactCache, ArtifactStore, Artifacts, Band, Cells, Config, Scales, ServiceMeta, Source};
+    use mars_types::{ArtifactEntry, ArtifactKey, ContentHash, Manifest};
+
+    use super::*;
+
+    fn minimal_config() -> Config {
+        let mut size_per_band = BTreeMap::new();
+        size_per_band.insert("hi".into(), "4096m".into());
+        Config {
+            service: ServiceMeta { name: "t".into(), ..Default::default() },
+            source: Source { kind: "memory".into(), dsn: "memory://".into(), native_crs: CrsCode::new("EPSG:25832"), change_feed: None },
+            artifacts: Artifacts {
+                store: ArtifactStore { kind: "fs".into(), endpoint: None, bucket: None, prefix: None, path: Some("/tmp".into()) },
+                cache: ArtifactCache { path: "/tmp".into(), max_size: "1GiB".into(), eviction: "lru".into() },
+            },
+            scales: Scales { bands: vec![Band { name: "hi".into(), max_denom: 25000 }] },
+            cells: Cells { grid: "regular".into(), origin: [0.0, 0.0], size_per_band, extent: None },
+            interfaces: Default::default(),
+            tile_matrix_sets: Default::default(),
+            reprojection: Default::default(),
+            styles: Default::default(),
+            layers: vec![],
+            observability: Default::default(),
+        }
+    }
+
+    fn manifest_with_layer_key(key: &str) -> Manifest {
+        Manifest {
+            version: 1,
+            service: "t".into(),
+            source_artifacts: vec![],
+            layer_artifacts: vec![ArtifactEntry {
+                key: ArtifactKey::new(key),
+                hash: ContentHash::zero(),
+                size_bytes: 0,
+            }],
+            style_artifact: None,
+        }
+    }
+
+    fn manifest_with_source_key(key: &str) -> Manifest {
+        Manifest {
+            version: 1,
+            service: "t".into(),
+            source_artifacts: vec![ArtifactEntry {
+                key: ArtifactKey::new(key),
+                hash: ContentHash::zero(),
+                size_bytes: 0,
+            }],
+            layer_artifacts: vec![],
+            style_artifact: None,
+        }
+    }
+
+    #[test]
+    fn rejects_source_key_in_layer_artifacts() {
+        let cfg = minimal_config();
+        let manifest = manifest_with_layer_key("src/coll/hi/0_0/abcd.mars");
+        let err = RuntimeState::from_config_and_manifest(&cfg, Stylesheet::default(), manifest).unwrap_err();
+        assert!(matches!(err, RuntimeError::BadKey(_)));
+        let msg = err.to_string();
+        assert!(msg.contains("source-shaped"), "error should say source-shaped: {msg}");
+    }
+
+    #[test]
+    fn rejects_layer_key_in_source_artifacts() {
+        let cfg = minimal_config();
+        let manifest = manifest_with_source_key("lyr/l/hi/0_0/v1/abcd.mars");
+        let err = RuntimeState::from_config_and_manifest(&cfg, Stylesheet::default(), manifest).unwrap_err();
+        assert!(matches!(err, RuntimeError::BadKey(_)));
+        let msg = err.to_string();
+        assert!(msg.contains("layer-shaped"), "error should say layer-shaped: {msg}");
+    }
+
+    #[test]
+    fn build_bands_sorts_by_max_denom() {
+        let mut cfg = minimal_config();
+        cfg.scales.bands = vec![
+            Band { name: "lo".into(), max_denom: 100000 },
+            Band { name: "hi".into(), max_denom: 25000 },
+        ];
+        cfg.cells.size_per_band.insert("lo".into(), "8192m".into());
+        let bands = build_bands(&cfg).unwrap();
+        assert_eq!(bands[0].name.as_str(), "hi");
+        assert_eq!(bands[1].name.as_str(), "lo");
+        assert_eq!(bands[0].max_denom, 25000);
+        assert_eq!(bands[1].max_denom, 100000);
+    }
+
+    #[test]
+    fn build_bands_errors_on_missing_size() {
+        let mut cfg = minimal_config();
+        cfg.scales.bands.push(Band { name: "ghost".into(), max_denom: 1000 });
+        let err = build_bands(&cfg).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("ghost"), "error should name missing band: {msg}");
+    }
 }

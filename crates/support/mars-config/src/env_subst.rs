@@ -103,5 +103,105 @@ fn validate_yaml_safe(value: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
-// inline tests omitted: env mutation is unsafe in edition 2024 and the crate
-// forbids unsafe. behavior is exercised end-to-end in tests/loader.rs.
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::panic)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_rejects_newline() {
+        assert!(validate_yaml_safe("hello\nworld").is_err());
+        assert!(validate_yaml_safe("hello\rworld").is_err());
+    }
+
+    #[test]
+    fn validate_rejects_tab() {
+        assert!(validate_yaml_safe("hello\tworld").is_err());
+    }
+
+    #[test]
+    fn validate_rejects_colon_space() {
+        assert!(validate_yaml_safe("foo: bar").is_err());
+    }
+
+    #[test]
+    fn validate_rejects_space_hash() {
+        assert!(validate_yaml_safe("foo #comment").is_err());
+    }
+
+    #[test]
+    fn validate_rejects_yaml_tag() {
+        assert!(validate_yaml_safe("!!str").is_err());
+    }
+
+    #[test]
+    fn validate_rejects_doc_separator() {
+        assert!(validate_yaml_safe("---").is_err());
+    }
+
+    #[test]
+    fn validate_rejects_unbalanced_double_quotes() {
+        assert!(validate_yaml_safe("\"").is_err());
+        assert!(validate_yaml_safe("\"\"\"").is_err());
+    }
+
+    #[test]
+    fn validate_rejects_unbalanced_single_quotes() {
+        assert!(validate_yaml_safe("'").is_err());
+        assert!(validate_yaml_safe("'''").is_err());
+    }
+
+    #[test]
+    fn validate_accepts_balanced_quotes() {
+        assert!(validate_yaml_safe("\"hello\"").is_ok());
+        assert!(validate_yaml_safe("'hello'").is_ok());
+        assert!(validate_yaml_safe("\"\"''\"\"").is_ok());
+    }
+
+    #[test]
+    fn validate_accepts_safe_specials() {
+        assert!(validate_yaml_safe("foo:bar").is_ok()); // colon without space
+        assert!(validate_yaml_safe("foo#bar").is_ok()); // hash without space
+        assert!(validate_yaml_safe("$PATH").is_ok());
+    }
+
+    #[test]
+    fn substitute_double_dollar_escape() {
+        let result = substitute("cost is $$5").unwrap();
+        assert_eq!(result, "cost is $5");
+    }
+
+    #[test]
+    fn substitute_existing_var() {
+        // PATH is virtually guaranteed to exist
+        let result = substitute("path=${PATH}").unwrap();
+        assert!(!result.contains("${PATH}"), "variable was not substituted");
+    }
+
+    #[test]
+    fn substitute_default_when_unset() {
+        // use a variable name that is extremely unlikely to exist
+        let result = substitute("val=${MARS_TEST_XYZ_UNSET_VAR:-fallback}").unwrap();
+        assert_eq!(result, "val=fallback");
+    }
+
+    #[test]
+    fn substitute_missing_var_errors() {
+        let err = substitute("val=${MARS_TEST_XYZ_UNSET_VAR_NO_DEFAULT}").unwrap_err();
+        assert!(matches!(err, ConfigError::EnvMissing(name) if name == "MARS_TEST_XYZ_UNSET_VAR_NO_DEFAULT"));
+    }
+
+    #[test]
+    fn substitute_multiple_tokens() {
+        let result = substitute("a=${PATH} b=${PATH}").unwrap();
+        assert_eq!(result.matches("${PATH}").count(), 0);
+    }
+
+    #[test]
+    fn substitute_rejects_unsafe_value() {
+        // a default containing a newline should be rejected
+        let err = substitute("val=${MARS_X:-foo\nbar}").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("newline"), "expected newline rejection, got {msg}");
+    }
+}

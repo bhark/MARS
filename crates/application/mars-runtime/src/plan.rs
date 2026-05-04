@@ -53,3 +53,48 @@ pub(crate) fn resolve(plan: &RenderPlan, state: &RuntimeState) -> Result<Vec<Lay
     }
     Ok(out)
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::panic)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn denom_width_zero() {
+        assert_eq!(denom_from_plan(1000.0, 0), u32::MAX);
+    }
+
+    #[test]
+    fn denom_bbox_width_zero() {
+        assert_eq!(denom_from_plan(0.0, 1000), u32::MAX);
+    }
+
+    #[test]
+    fn denom_bbox_width_negative() {
+        assert_eq!(denom_from_plan(-10.0, 1000), u32::MAX);
+    }
+
+    #[test]
+    fn denom_nan() {
+        assert_eq!(denom_from_plan(f64::NAN, 1000), u32::MAX);
+    }
+
+    #[test]
+    fn denom_inf() {
+        assert_eq!(denom_from_plan(f64::INFINITY, 1000), u32::MAX);
+    }
+
+    #[test]
+    fn denom_normal_case() {
+        // bbox_width=1000, width=1000 → denom = 1000 / (1000 * 0.00028) = 1 / 0.00028 ≈ 3571
+        let d = denom_from_plan(1000.0, 1000);
+        assert_eq!(d, 3571);
+    }
+
+    #[test]
+    fn denom_clamps_to_one() {
+        // very small denominator should clamp to 1
+        let d = denom_from_plan(0.0001, 1000);
+        assert_eq!(d, 1);
+    }
+}

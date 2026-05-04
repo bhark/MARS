@@ -173,4 +173,81 @@ layers:
         }
         assert_eq!(depth, 0);
     }
+
+    #[test]
+    fn escapes_xml_special_chars() {
+        let mut cfg = minimal_cfg();
+        cfg.layers[0].title = "A & B <C>".into();
+        let m = Manifest {
+            version: 1,
+            service: cfg.service.name.clone(),
+            source_artifacts: vec![],
+            layer_artifacts: vec![],
+            style_artifact: None,
+        };
+        let xml = capabilities_xml(&cfg, &m).unwrap();
+        // special chars must be escaped, not raw
+        assert!(!xml.contains("A & B <C>"), "raw unescaped special chars found");
+        assert!(xml.contains("A &amp; B &lt;C&gt;"), "expected escaped entities");
+    }
+
+    #[test]
+    fn empty_layers_produces_valid_xml() {
+        let mut cfg = minimal_cfg();
+        cfg.layers.clear();
+        let m = Manifest {
+            version: 1,
+            service: cfg.service.name.clone(),
+            source_artifacts: vec![],
+            layer_artifacts: vec![],
+            style_artifact: None,
+        };
+        let xml = capabilities_xml(&cfg, &m).unwrap();
+        assert!(xml.contains("<Layer>"));
+        assert!(xml.contains("</Layer>"));
+
+        let mut r = Reader::from_str(&xml);
+        let mut depth: i32 = 0;
+        let mut buf = Vec::new();
+        loop {
+            match r.read_event_into(&mut buf).unwrap() {
+                Event::Start(_) => depth += 1,
+                Event::End(_) => depth -= 1,
+                Event::Eof => break,
+                _ => {}
+            }
+            buf.clear();
+        }
+        assert_eq!(depth, 0);
+    }
+
+    #[test]
+    fn empty_allowlist_omits_crs() {
+        let mut cfg = minimal_cfg();
+        cfg.reprojection.allowlist.clear();
+        let m = Manifest {
+            version: 1,
+            service: cfg.service.name.clone(),
+            source_artifacts: vec![],
+            layer_artifacts: vec![],
+            style_artifact: None,
+        };
+        let xml = capabilities_xml(&cfg, &m).unwrap();
+        assert!(!xml.contains("<CRS>"), "expected no CRS elements when allowlist is empty");
+    }
+
+    #[test]
+    fn omits_contact_when_email_empty() {
+        let mut cfg = minimal_cfg();
+        cfg.service.contact_email = String::new();
+        let m = Manifest {
+            version: 1,
+            service: cfg.service.name.clone(),
+            source_artifacts: vec![],
+            layer_artifacts: vec![],
+            style_artifact: None,
+        };
+        let xml = capabilities_xml(&cfg, &m).unwrap();
+        assert!(!xml.contains("ContactInformation"), "expected no contact block when email empty");
+    }
 }

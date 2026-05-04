@@ -242,12 +242,70 @@ mod tests {
         v
     }
 
+    fn point_be() -> Vec<u8> {
+        let mut v = vec![0u8];
+        v.extend_from_slice(&1u32.to_be_bytes());
+        v.extend_from_slice(&1.5f64.to_be_bytes());
+        v.extend_from_slice(&2.5f64.to_be_bytes());
+        v
+    }
+
+    fn ewkb_point_le(srid: u32) -> Vec<u8> {
+        let mut v = vec![1u8];
+        v.extend_from_slice(&(1u32 | 0x2000_0000).to_le_bytes());
+        v.extend_from_slice(&srid.to_le_bytes());
+        v.extend_from_slice(&1.5f64.to_le_bytes());
+        v.extend_from_slice(&2.5f64.to_le_bytes());
+        v
+    }
+
+    fn linestring_le(pts: &[(f64, f64)]) -> Vec<u8> {
+        let mut v = vec![1u8];
+        v.extend_from_slice(&2u32.to_le_bytes());
+        v.extend_from_slice(&(pts.len() as u32).to_le_bytes());
+        for (x, y) in pts {
+            v.extend_from_slice(&x.to_le_bytes());
+            v.extend_from_slice(&y.to_le_bytes());
+        }
+        v
+    }
+
+    fn polygon_le(rings: &[&[(f64, f64)]]) -> Vec<u8> {
+        let mut v = vec![1u8];
+        v.extend_from_slice(&3u32.to_le_bytes());
+        v.extend_from_slice(&(rings.len() as u32).to_le_bytes());
+        for ring in rings {
+            v.extend_from_slice(&(ring.len() as u32).to_le_bytes());
+            for (x, y) in *ring {
+                v.extend_from_slice(&x.to_le_bytes());
+                v.extend_from_slice(&y.to_le_bytes());
+            }
+        }
+        v
+    }
+
+    fn multipolygon_le(polygons: &[&[&[(f64, f64)]]]) -> Vec<u8> {
+        let mut v = vec![1u8];
+        v.extend_from_slice(&6u32.to_le_bytes());
+        v.extend_from_slice(&(polygons.len() as u32).to_le_bytes());
+        for poly in polygons {
+            v.extend_from_slice(&polygon_le(poly));
+        }
+        v
+    }
+
     #[test]
     fn decodes_point() {
         let f = decode_feature(7, &point_le(), None).unwrap();
         assert_eq!(f.id, 7);
         assert!(matches!(f.geom, GeomKind::Point((1.5, 2.5))));
         assert_eq!(f.bbox, [1.5, 2.5, 1.5, 2.5]);
+    }
+
+    #[test]
+    fn decodes_point_big_endian() {
+        let f = decode_feature(0, &point_be(), None).unwrap();
+        assert!(matches!(f.geom, GeomKind::Point((1.5, 2.5))));
     }
 
     #[test]
@@ -258,5 +316,139 @@ mod tests {
             decode_feature(0, &v, None),
             Err(WkbError::UnsupportedType(99))
         ));
+    }
+
+    #[test]
+    fn decodes_ewkb_with_matching_srid() {
+        let f = decode_feature(0, &ewkb_point_le(25832), Some(25832)).unwrap();
+        assert!(matches!(f.geom, GeomKind::Point((1.5, 2.5))));
+    }
+
+    #[test]
+    fn rejects_ewkb_srid_mismatch() {
+        let err = decode_feature(0, &ewkb_point_le(25832), Some(4326)).unwrap_err();
+        assert!(matches!(err, WkbError::SridMismatch { expected: 4326, actual: 25832 }));
+    }
+
+    #[test]
+    fn decodes_ewkb_without_expected_srid() {
+        // no expected_srid means we accept any SRID
+        let f = decode_feature(0, &ewkb_point_le(9999), None).unwrap();
+        assert!(matches!(f.geom, GeomKind::Point((1.5, 2.5))));
+    }
+
+    #[test]
+    fn skips_zm_flags() {
+        // point with Z and M flags set
+        let mut v = vec![1u8];
+        v.extend_from_slice(&(1u32 | 0x8000_0000 | 0x4000_0000).to_le_bytes());
+        v.extend_from_slice(&1.0f64.to_le_bytes());
+        v.extend_from_slice(&2.0f64.to_le_bytes());
+        v.extend_from_slice(&3.0f64.to_le_bytes()); // Z
+        v.extend_from_slice(&4.0f64.to_le_bytes()); // M
+        let f = decode_feature(0, &v, None).unwrap();
+        assert!(matches!(f.geom, GeomKind::Point((1.0, 2.0))));
+    }
+
+    #[test]
+    fn truncated_header() {
+        let v = vec![1u8, 0x01, 0x00]; // too short for type
+        assert!(matches!(decode_feature(0, &v, None), Err(WkbError::Truncated)));
+    }
+
+    #[test]
+    fn truncated_point_coords() {
+        let mut v = point_le();
+        v.truncate(v.len() - 4); // cut inside second f64
+        assert!(matches!(decode_feature(0, &v, None), Err(WkbError::Truncated)));
+    }
+
+    #[test]
+    fn truncated_linestring_count() {
+        let mut v = linestring_le(&[(0.0, 0.0), (1.0, 1.0)]);
+        v.truncate(5); // after endian + type
+        assert!(matches!(decode_feature(0, &v, None), Err(WkbError::Truncated)));
+    }
+
+    #[test]
+    fn truncated_polygon_ring() {
+        let mut v = polygon_le(&[&[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 0.0)]]);
+        v.truncate(v.len() - 10); // inside last coordinate
+        assert!(matches!(decode_feature(0, &v, None), Err(WkbError::Truncated)));
+    }
+
+    #[test]
+    fn empty_geometry_bbox_is_zero() {
+        let v = polygon_le(&[]); // polygon with 0 rings
+        let f = decode_feature(0, &v, None).unwrap();
+        assert_eq!(f.bbox, [0.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn empty_multipolygon_bbox_is_zero() {
+        let v = multipolygon_le(&[]);
+        let f = decode_feature(0, &v, None).unwrap();
+        assert_eq!(f.bbox, [0.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn rejects_nested_srid_in_multipolygon() {
+        // build a multipolygon containing a polygon with SRID flag
+        let _inner = ewkb_point_le(25832); // reuse helper: this is actually a point, not polygon
+        // build proper multipolygon with inner EWKB polygon
+        let mut poly_with_srid = vec![1u8];
+        poly_with_srid.extend_from_slice(&(3u32 | 0x2000_0000).to_le_bytes());
+        poly_with_srid.extend_from_slice(&25832u32.to_le_bytes());
+        poly_with_srid.extend_from_slice(&1u32.to_le_bytes()); // 1 ring
+        poly_with_srid.extend_from_slice(&4u32.to_le_bytes()); // 4 points
+        for (x, y) in [(0.0_f64, 0.0_f64), (1.0_f64, 0.0_f64), (1.0_f64, 1.0_f64), (0.0_f64, 0.0_f64)] {
+            poly_with_srid.extend_from_slice(&x.to_le_bytes());
+            poly_with_srid.extend_from_slice(&y.to_le_bytes());
+        }
+
+        let mut v = vec![1u8];
+        v.extend_from_slice(&6u32.to_le_bytes()); // multipolygon
+        v.extend_from_slice(&1u32.to_le_bytes()); // 1 polygon
+        v.extend_from_slice(&poly_with_srid);
+
+        assert!(matches!(decode_feature(0, &v, None), Err(WkbError::NestedSrid)));
+    }
+
+    #[test]
+    fn rejects_mismatched_type_in_multipolygon() {
+        // multipolygon containing a linestring instead of polygon
+        let mut v = vec![1u8];
+        v.extend_from_slice(&6u32.to_le_bytes());
+        v.extend_from_slice(&1u32.to_le_bytes());
+        v.extend_from_slice(&linestring_le(&[(0.0, 0.0), (1.0, 1.0)]));
+        assert!(matches!(decode_feature(0, &v, None), Err(WkbError::UnsupportedType(6))));
+    }
+
+    #[test]
+    fn decodes_linestring_multilinestring_multipoint() {
+        let ls = linestring_le(&[(0.0, 0.0), (1.0, 1.0), (2.0, 0.0)]);
+        let f = decode_feature(0, &ls, None).unwrap();
+        assert!(matches!(f.geom, GeomKind::LineString(ref pts) if pts.len() == 3));
+
+        // multilinestring wrapping the linestring
+        let mut mls = vec![1u8];
+        mls.extend_from_slice(&5u32.to_le_bytes());
+        mls.extend_from_slice(&1u32.to_le_bytes());
+        mls.extend_from_slice(&ls);
+        let f = decode_feature(0, &mls, None).unwrap();
+        assert!(matches!(f.geom, GeomKind::MultiLineString(ref parts) if parts.len() == 1 && parts[0].len() == 3));
+
+        // multipoint
+        let mut mp = vec![1u8];
+        mp.extend_from_slice(&4u32.to_le_bytes());
+        mp.extend_from_slice(&2u32.to_le_bytes());
+        for (x, y) in [(0.0_f64, 0.0_f64), (1.0_f64, 1.0_f64)] {
+            mp.push(1u8); // point header
+            mp.extend_from_slice(&1u32.to_le_bytes());
+            mp.extend_from_slice(&x.to_le_bytes());
+            mp.extend_from_slice(&y.to_le_bytes());
+        }
+        let f = decode_feature(0, &mp, None).unwrap();
+        assert!(matches!(f.geom, GeomKind::MultiPoint(ref pts) if pts.len() == 2));
     }
 }

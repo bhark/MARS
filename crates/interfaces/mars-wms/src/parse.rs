@@ -374,4 +374,64 @@ mod tests {
             WmsError::InvalidParam { name: "bbox", .. }
         ));
     }
+
+    #[test]
+    fn malformed_percent_encoding_passes_through() {
+        // %ZZ and %G are invalid hex → passed through literally in the value
+        let q = "request=GetMap&version=1.3.0&layers=foo%ZZ%G&crs=EPSG:25832&\
+                 bbox=0,0,1,1&width=1&height=1&format=image/png";
+        let plan = parse_get_map(q, &cfg()).unwrap();
+        assert_eq!(plan.layers[0].as_str(), "foo%ZZ%G");
+    }
+
+    #[test]
+    fn bbox_max_equals_min_rejected() {
+        let q = "request=GetMap&version=1.3.0&layers=a&crs=EPSG:25832&\
+                 bbox=0,0,0,1&width=1&height=1&format=image/png";
+        let err = parse_get_map(q, &cfg()).unwrap_err();
+        assert!(matches!(err, WmsError::InvalidParam { name: "bbox", .. }));
+    }
+
+    #[test]
+    fn empty_layer_name_filtered_out() {
+        let q = "request=GetMap&version=1.3.0&layers=a,,b&crs=EPSG:25832&\
+                 bbox=0,0,1,1&width=1&height=1&format=image/png";
+        let plan = parse_get_map(q, &cfg()).unwrap();
+        assert_eq!(plan.layers.len(), 2);
+    }
+
+    #[test]
+    fn multiple_equals_in_value() {
+        let q = "request=GetMap&version=1.3.0&layers=a&crs=EPSG:25832&\
+                 bbox=0,0,1,1&width=1&height=1&format=image/png&custom=val=ue";
+        let plan = parse_get_map(q, &cfg()).unwrap();
+        assert_eq!(plan.layers.len(), 1);
+    }
+
+    #[test]
+    fn unsupported_format_rejected() {
+        let q = "request=GetMap&version=1.3.0&layers=a&crs=EPSG:25832&\
+                 bbox=0,0,1,1&width=1&height=1&format=image/tiff";
+        let err = parse_get_map(q, &cfg()).unwrap_err();
+        assert!(matches!(err, WmsError::InvalidParam { name: "format", .. }));
+    }
+
+    #[test]
+    fn width_at_u32_max_parseable() {
+        let q = format!(
+            "request=GetMap&version=1.3.0&layers=a&crs=EPSG:25832&\
+             bbox=0,0,1,1&width={}&height=1&format=image/png",
+            u32::MAX
+        );
+        let err = parse_get_map(&q, &cfg()).unwrap_err();
+        assert!(matches!(err, WmsError::InvalidParam { name: "width|height", .. }));
+    }
+
+    #[test]
+    fn crs_not_in_allowlist_rejected() {
+        let q = "request=GetMap&version=1.3.0&layers=a&crs=EPSG:3857&\
+                 bbox=0,0,1,1&width=1&height=1&format=image/png";
+        let err = parse_get_map(q, &cfg()).unwrap_err();
+        assert!(matches!(err, WmsError::InvalidParam { name: "crs", .. }));
+    }
 }

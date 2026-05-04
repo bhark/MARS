@@ -29,3 +29,107 @@ pub fn first_match(
     }
     Ok(None)
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::panic)]
+mod tests {
+    use std::collections::HashMap;
+
+    use mars_expr::{AttributeAccess, Expr, Literal};
+
+    use super::{CompiledClass, first_match};
+
+    struct Map(HashMap<String, Literal>);
+    impl AttributeAccess for Map {
+        fn get(&self, name: &str) -> Option<Literal> {
+            self.0.get(name).cloned()
+        }
+    }
+    fn attrs(pairs: &[(&str, Literal)]) -> Map {
+        Map(pairs.iter().map(|(k, v)| ((*k).to_string(), v.clone())).collect())
+    }
+
+    fn compile_expr(s: &str) -> Expr {
+        mars_expr::parse(s).unwrap()
+    }
+
+    #[test]
+    fn no_classes_returns_none() {
+        assert_eq!(first_match(&[], &attrs(&[])).unwrap(), None);
+    }
+
+    #[test]
+    fn class_without_when_always_matches() {
+        let classes = vec![CompiledClass {
+            name: "default".into(),
+            when: None,
+            style_id: "s1".into(),
+            class_index: 0,
+        }];
+        assert_eq!(first_match(&classes, &attrs(&[])).unwrap(), Some(0));
+    }
+
+    #[test]
+    fn first_match_wins_ordering() {
+        let classes = vec![
+            CompiledClass {
+                name: "a".into(),
+                when: Some(compile_expr("x = 1")),
+                style_id: "s_a".into(),
+                class_index: 0,
+            },
+            CompiledClass {
+                name: "b".into(),
+                when: Some(compile_expr("x = 1")),
+                style_id: "s_b".into(),
+                class_index: 1,
+            },
+        ];
+        assert_eq!(first_match(&classes, &attrs(&[("x", Literal::Int(1))])).unwrap(), Some(0));
+    }
+
+    #[test]
+    fn no_match_returns_none() {
+        let classes = vec![CompiledClass {
+            name: "a".into(),
+            when: Some(compile_expr("x = 1")),
+            style_id: "s_a".into(),
+            class_index: 0,
+        }];
+        assert_eq!(first_match(&classes, &attrs(&[("x", Literal::Int(2))])).unwrap(), None);
+    }
+
+    #[test]
+    fn eval_error_bubbles_up() {
+        // unknown identifier causes ExprError::UnknownIdent
+        let classes = vec![CompiledClass {
+            name: "a".into(),
+            when: Some(compile_expr("missing = 1")),
+            style_id: "s_a".into(),
+            class_index: 0,
+        }];
+        assert!(first_match(&classes, &attrs(&[])).is_err());
+    }
+
+    #[test]
+    fn mixed_when_and_unconditional() {
+        let classes = vec![
+            CompiledClass {
+                name: "conditional".into(),
+                when: Some(compile_expr("x = 1")),
+                style_id: "s1".into(),
+                class_index: 0,
+            },
+            CompiledClass {
+                name: "fallback".into(),
+                when: None,
+                style_id: "s2".into(),
+                class_index: 1,
+            },
+        ];
+        // matches conditional
+        assert_eq!(first_match(&classes, &attrs(&[("x", Literal::Int(1))])).unwrap(), Some(0));
+        // falls through to fallback
+        assert_eq!(first_match(&classes, &attrs(&[("x", Literal::Int(2))])).unwrap(), Some(1));
+    }
+}

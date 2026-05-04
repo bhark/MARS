@@ -46,21 +46,33 @@ pub async fn run_task(
         let mut rows = rows;
         rows.sort_by_key(|r| r.feature_id);
 
-        let (src_entry, src_hash) = build_source_artifact(task, cell, &rows, store).await?;
+        let task = task.clone();
+        let cell = cell.clone();
+        let rows = rows.clone();
+        let (src_entry, src_bytes, layer_entry, layer_bytes) =
+            tokio::task::spawn_blocking(move || {
+                let (src_entry, src_bytes) = build_source_artifact(&task, &cell, &rows)?;
+                let (layer_entry, layer_bytes) =
+                    build_layer_artifact(&task, &cell, &rows, src_entry.hash)?;
+                Ok::<_, CompilerError>((src_entry, src_bytes, layer_entry, layer_bytes))
+            })
+            .await
+            .map_err(|e| CompilerError::Artifact(format!("build task panicked: {e}")))??;
+
+        store.put(&src_entry.key, src_bytes.into()).await?;
         out.source_artifacts.push(src_entry);
 
-        let layer_entry = build_layer_artifact(task, cell, &rows, src_hash, store).await?;
+        store.put(&layer_entry.key, layer_bytes.into()).await?;
         out.layer_artifacts.push(layer_entry);
     }
     Ok(out)
 }
 
-async fn build_source_artifact(
+fn build_source_artifact(
     task: &BuildTask,
     cell: &mars_types::Cell,
     rows: &[RowBytes],
-    store: &Arc<dyn ObjectStore>,
-) -> Result<(ArtifactEntry, ContentHash), CompilerError> {
+) -> Result<(ArtifactEntry, Vec<u8>), CompilerError> {
     let expected_srid = task
         .binding
         .crs
@@ -91,26 +103,20 @@ async fn build_source_artifact(
         cy = cell.y,
         hex = hex32(&hash.0),
     ));
-    let size = bytes.len() as u64;
-    let written = store.put(&key, bytes).await?;
-    debug_assert_eq!(written, hash);
-    Ok((
-        ArtifactEntry {
-            key,
-            hash,
-            size_bytes: size,
-        },
+    let entry = ArtifactEntry {
+        key,
         hash,
-    ))
+        size_bytes: bytes.len() as u64,
+    };
+    Ok((entry, bytes.to_vec()))
 }
 
-async fn build_layer_artifact(
+fn build_layer_artifact(
     task: &BuildTask,
     cell: &mars_types::Cell,
     rows: &[RowBytes],
     source_hash: ContentHash,
-    store: &Arc<dyn ObjectStore>,
-) -> Result<ArtifactEntry, CompilerError> {
+) -> Result<(ArtifactEntry, Vec<u8>), CompilerError> {
     let mut assignments: Vec<(u64, u16)> = Vec::with_capacity(rows.len());
     for row in rows {
         let attrs = RowAttrs::new(&row.attributes);
@@ -147,14 +153,12 @@ async fn build_layer_artifact(
         schema = LAYER_SCHEMA_VERSION,
         hex = hex32(&hash.0),
     ));
-    let size = bytes.len() as u64;
-    let written = store.put(&key, bytes).await?;
-    debug_assert_eq!(written, hash);
-    Ok(ArtifactEntry {
+    let entry = ArtifactEntry {
         key,
         hash,
-        size_bytes: size,
-    })
+        size_bytes: bytes.len() as u64,
+    };
+    Ok((entry, bytes.to_vec()))
 }
 
 struct BboxAcc {
