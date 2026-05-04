@@ -14,10 +14,7 @@ workspace = true
 [dependencies]
 mars-runtime       = { workspace = true }
 mars-wms           = { workspace = true }
-mars-wmts          = { workspace = true }
-mars-config        = { workspace = true }
 mars-types         = { workspace = true }
-mars-observability = { workspace = true }
 axum               = "0.8"
 tower              = "0.5"
 tower-http         = { version = "0.6", features = ["trace", "timeout", "limit"] }

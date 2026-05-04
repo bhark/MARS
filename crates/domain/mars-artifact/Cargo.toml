@@ -24,5 +24,8 @@ blake3     = "1"
 planus-codegen = "1"
 planus-translation = "1"
 
+[package.metadata.cargo-machete]
+ignored = ["serde"]
+
 [dev-dependencies]
-proptest = "1"
+proptest = { workspace = true }

@@ -17,9 +17,9 @@ mars-style  = { workspace = true }
 mars-expr   = { workspace = true }
 serde       = { workspace = true }
 thiserror   = { workspace = true }
-serde_yml   = "0.0.12"
+serde_yml = { workspace = true }
 humantime   = "2"
 regex       = "1"
 
 [dev-dependencies]
-tempfile    = "3"
+tempfile = { workspace = true }

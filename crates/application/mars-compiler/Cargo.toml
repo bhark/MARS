@@ -15,23 +15,20 @@ workspace = true
 mars-types         = { workspace = true }
 mars-grid          = { workspace = true }
 mars-expr          = { workspace = true }
-mars-style         = { workspace = true }
 mars-artifact      = { workspace = true }
 mars-source        = { workspace = true }
 mars-store         = { workspace = true }
 mars-config        = { workspace = true }
-mars-observability = { workspace = true }
 tokio              = { workspace = true }
 tokio-util         = { workspace = true }
 tracing            = { workspace = true }
 thiserror          = { workspace = true }
 bytes              = { workspace = true }
-serde_json         = { workspace = true }
 async-trait        = { workspace = true }
 futures-util       = { workspace = true }
 
 [dev-dependencies]
 mars-store-fs      = { workspace = true }
 tokio              = { workspace = true, features = ["rt-multi-thread", "macros"] }
-tempfile           = "3"
+tempfile = { workspace = true }
 futures-core       = { workspace = true }

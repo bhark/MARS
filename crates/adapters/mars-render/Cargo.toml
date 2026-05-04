@@ -14,10 +14,9 @@ workspace = true
 [dependencies]
 mars-render-port = { workspace = true }
 mars-style       = { workspace = true }
-thiserror        = { workspace = true }
 tracing          = { workspace = true }
 tiny-skia        = "0.12"
-png              = "0.18"
+png = { workspace = true }
 
 [dev-dependencies]
-png   = "0.18"
+png = { workspace = true }

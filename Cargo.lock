@@ -1693,11 +1693,9 @@ dependencies = [
  "mars-observability",
  "mars-render",
  "mars-runtime",
- "mars-source",
  "mars-source-postgres",
  "mars-store",
  "mars-store-fs",
- "mars-store-s3",
  "mars-style",
  "mars-types",
  "mars-wms",
@@ -1737,13 +1735,11 @@ dependencies = [
  "mars-compiler",
  "mars-config",
  "mars-observability",
- "mars-source",
  "mars-source-postgres",
  "mars-store",
  "mars-store-fs",
  "tokio",
  "tokio-util",
- "tracing",
 ]
 
 [[package]]
@@ -1758,13 +1754,10 @@ dependencies = [
  "mars-config",
  "mars-expr",
  "mars-grid",
- "mars-observability",
  "mars-source",
  "mars-store",
  "mars-store-fs",
- "mars-style",
  "mars-types",
- "serde_json",
  "tempfile",
  "thiserror",
  "tokio",
@@ -1809,14 +1802,11 @@ name = "mars-http"
 version = "0.0.1"
 dependencies = [
  "axum",
- "mars-config",
- "mars-observability",
  "mars-render-port",
  "mars-runtime",
  "mars-store",
  "mars-types",
  "mars-wms",
- "mars-wmts",
  "thiserror",
  "tokio",
  "tower",
@@ -1839,7 +1829,6 @@ name = "mars-observability"
 version = "0.0.1"
 dependencies = [
  "thiserror",
- "tracing",
  "tracing-subscriber",
 ]
 
@@ -1858,7 +1847,6 @@ dependencies = [
  "mars-render-port",
  "mars-style",
  "png",
- "thiserror",
  "tiny-skia",
  "tracing",
 ]
@@ -1883,10 +1871,7 @@ dependencies = [
  "mars-artifact",
  "mars-config",
  "mars-grid",
- "mars-observability",
- "mars-proj",
  "mars-render-port",
- "mars-source",
  "mars-store",
  "mars-store-fs",
  "mars-style",
@@ -1923,7 +1908,6 @@ dependencies = [
  "mars-types",
  "rand 0.8.6",
  "testcontainers",
- "thiserror",
  "tokio",
  "tokio-postgres",
  "tracing",
@@ -1934,6 +1918,7 @@ name = "mars-store"
 version = "0.0.1"
 dependencies = [
  "async-trait",
+ "blake3",
  "bytes",
  "futures-core",
  "mars-types",
@@ -1955,9 +1940,7 @@ dependencies = [
  "rand 0.8.6",
  "serde_json",
  "tempfile",
- "thiserror",
  "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -1968,7 +1951,6 @@ dependencies = [
  "bytes",
  "mars-store",
  "mars-types",
- "thiserror",
  "tokio",
 ]
 
@@ -1986,7 +1968,6 @@ version = "0.0.1"
 dependencies = [
  "serde",
  "serde_json",
- "thiserror",
 ]
 
 [[package]]

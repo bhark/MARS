@@ -16,7 +16,6 @@ mars-store  = { workspace = true }
 mars-types  = { workspace = true }
 async-trait = { workspace = true }
 bytes       = { workspace = true }
-thiserror   = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros"] }
