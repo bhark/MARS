@@ -224,6 +224,9 @@ mod tests {
         let cfg = WmsConfig {
             allowlist_crs: vec![CrsCode::new("EPSG:25832")],
             formats: vec![ImageFormat::Png],
+            max_image_dimension: 8192,
+            max_layers: 100,
+            max_bbox_coord: 1e9,
         };
         router(empty_runtime(), "<caps/>".into(), cfg)
     }
@@ -278,6 +281,9 @@ mod tests {
         let cfg = WmsConfig {
             allowlist_crs: vec![CrsCode::new("EPSG:25832")],
             formats: vec![ImageFormat::Png],
+            max_image_dimension: 8192,
+            max_layers: 100,
+            max_bbox_coord: 1e9,
         };
         let app = router(runtime.clone(), "<caps/>".into(), cfg);
         runtime.swap_state(Arc::new(ready_state()));

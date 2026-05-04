@@ -32,11 +32,15 @@ pub fn denom_from_plan(bbox_width: f64, width_px: u32) -> u32 {
     }
 }
 
+/// hard limit on cells a single request may cover. prevents oom from
+/// pathological bbox / tiny cell size combinations.
+const MAX_CELLS_PER_REQUEST: usize = 1_000_000;
+
 /// expand a `RenderPlan` into the flat list of cell-tasks to fetch + draw.
 pub(crate) fn resolve(plan: &RenderPlan, state: &RuntimeState) -> Result<Vec<LayerCellTask>, RuntimeError> {
     let denom = denom_from_plan(plan.bbox.width(), plan.width);
     let band = pick_band(denom, &state.bands)?;
-    let cells = cells_in_bbox(plan.bbox, band)?;
+    let cells = cells_in_bbox(plan.bbox, band, MAX_CELLS_PER_REQUEST)?;
 
     let mut out = Vec::with_capacity(plan.layers.len() * cells.len());
     for layer in &plan.layers {

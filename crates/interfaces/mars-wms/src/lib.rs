@@ -25,6 +25,18 @@ pub enum WmsError {
     NotImplemented { what: String },
 }
 
+/// hard upper bound on image dimensions to prevent oom from malicious
+/// width / height parameters.
+const DEFAULT_MAX_IMAGE_DIMENSION: u32 = 8192;
+
+/// hard upper bound on layers per request to prevent excessive allocation
+/// and artifact fetches.
+const DEFAULT_MAX_LAYERS: usize = 100;
+
+/// hard upper bound on absolute bbox coordinates to prevent infinite cell
+/// enumeration from astronomical values.
+const DEFAULT_MAX_BBOX_COORD: f64 = 1e9;
+
 /// Per-request configuration distilled from the service [`Config`]. The edge
 /// builds this once at startup and passes it by reference per request.
 #[derive(Debug, Clone)]
@@ -35,6 +47,12 @@ pub struct WmsConfig {
     /// Output formats the runtime advertises and accepts. Empty disables
     /// enforcement.
     pub formats: Vec<ImageFormat>,
+    /// maximum allowed width or height in pixels.
+    pub max_image_dimension: u32,
+    /// maximum number of layers per getmap request.
+    pub max_layers: usize,
+    /// maximum absolute value of any bbox coordinate.
+    pub max_bbox_coord: f64,
 }
 
 impl WmsConfig {
@@ -59,7 +77,13 @@ impl WmsConfig {
             })
             .filter(|v| !v.is_empty())
             .unwrap_or_else(|| vec![ImageFormat::Png]);
-        Self { allowlist_crs, formats }
+        Self {
+            allowlist_crs,
+            formats,
+            max_image_dimension: DEFAULT_MAX_IMAGE_DIMENSION,
+            max_layers: DEFAULT_MAX_LAYERS,
+            max_bbox_coord: DEFAULT_MAX_BBOX_COORD,
+        }
     }
 }
 

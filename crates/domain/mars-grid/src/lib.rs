@@ -13,6 +13,8 @@ pub enum GridError {
     NoBandForScale(u32),
     #[error("cell size must be positive (got {0})")]
     NonPositiveCellSize(f64),
+    #[error("bbox covers too many cells ({requested} > {limit})")]
+    TooManyCells { requested: usize, limit: usize },
 }
 
 /// Configuration of a single scale band: name, max-denominator threshold,
@@ -39,7 +41,10 @@ pub fn pick_band(denom: u32, bands: &[BandConfig]) -> Result<&BandConfig, GridEr
 }
 
 /// Enumerate every cell in `band` whose footprint intersects `bbox`.
-pub fn cells_in_bbox(bbox: Bbox, band: &BandConfig) -> Result<Vec<Cell>, GridError> {
+///
+/// `max_cells` bounds the output to prevent unbounded allocation from
+/// pathological or malicious requests. the caller decides the limit.
+pub fn cells_in_bbox(bbox: Bbox, band: &BandConfig, max_cells: usize) -> Result<Vec<Cell>, GridError> {
     if band.cell_size <= 0.0 {
         return Err(GridError::NonPositiveCellSize(band.cell_size));
     }
@@ -50,7 +55,20 @@ pub fn cells_in_bbox(bbox: Bbox, band: &BandConfig) -> Result<Vec<Cell>, GridErr
     let y0 = ((bbox.min_y - oy) / cs).floor() as i64;
     let y1 = ((bbox.max_y - oy) / cs).floor() as i64;
 
-    let mut out = Vec::with_capacity(((x1 - x0 + 1).max(0) * (y1 - y0 + 1).max(0)) as usize);
+    let nx = (x1.saturating_sub(x0).saturating_add(1)).max(0) as usize;
+    let ny = (y1.saturating_sub(y0).saturating_add(1)).max(0) as usize;
+    let count = nx.checked_mul(ny).ok_or(GridError::TooManyCells {
+        requested: usize::MAX,
+        limit: max_cells,
+    })?;
+    if count > max_cells {
+        return Err(GridError::TooManyCells {
+            requested: count,
+            limit: max_cells,
+        });
+    }
+
+    let mut out = Vec::with_capacity(count);
     for y in y0..=y1 {
         for x in x0..=x1 {
             out.push(Cell {
@@ -102,7 +120,15 @@ mod tests {
     fn cells_in_bbox_inclusive() {
         let bs = bands();
         let b = Bbox::new(0.0, 0.0, 4096.0, 4096.0);
-        let cells = cells_in_bbox(b, &bs[1]).unwrap();
+        let cells = cells_in_bbox(b, &bs[1], 1_000_000).unwrap();
         assert_eq!(cells.len(), 4); // (0,0)(1,0)(0,1)(1,1)
+    }
+
+    #[test]
+    fn cells_in_bbox_rejects_overflow() {
+        let bs = bands();
+        let b = Bbox::new(0.0, 0.0, 1e18, 1e18);
+        let err = cells_in_bbox(b, &bs[1], 1_000_000).unwrap_err();
+        assert!(matches!(err, GridError::TooManyCells { .. }));
     }
 }

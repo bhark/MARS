@@ -54,6 +54,12 @@ fn parse_get_map_inner(kvp: &Kvp, cfg: &WmsConfig) -> Result<RenderPlan, WmsErro
             reason: "no layer names".into(),
         });
     }
+    if layers.len() > cfg.max_layers {
+        return Err(WmsError::InvalidParam {
+            name: "layers",
+            reason: format!("{} exceeds max {}", layers.len(), cfg.max_layers),
+        });
+    }
 
     let crs_raw = require(kvp, "crs")?;
     let crs = CrsCode::new(crs_raw.clone());
@@ -65,7 +71,7 @@ fn parse_get_map_inner(kvp: &Kvp, cfg: &WmsConfig) -> Result<RenderPlan, WmsErro
     }
 
     let bbox_raw = require(kvp, "bbox")?;
-    let bbox = parse_bbox(&bbox_raw, &crs_raw)?;
+    let bbox = parse_bbox(&bbox_raw, &crs_raw, cfg.max_bbox_coord)?;
 
     let width = parse_u32(kvp, "width")?;
     let height = parse_u32(kvp, "height")?;
@@ -73,6 +79,15 @@ fn parse_get_map_inner(kvp: &Kvp, cfg: &WmsConfig) -> Result<RenderPlan, WmsErro
         return Err(WmsError::InvalidParam {
             name: "width|height",
             reason: "must be > 0".into(),
+        });
+    }
+    if width > cfg.max_image_dimension || height > cfg.max_image_dimension {
+        return Err(WmsError::InvalidParam {
+            name: "width|height",
+            reason: format!(
+                "max dimension is {}, got {}x{}",
+                cfg.max_image_dimension, width, height
+            ),
         });
     }
 
@@ -194,7 +209,7 @@ fn is_lat_lon_order(crs: &str) -> bool {
     matches!(crs, "EPSG:4326" | "urn:ogc:def:crs:EPSG::4326")
 }
 
-fn parse_bbox(raw: &str, crs: &str) -> Result<Bbox, WmsError> {
+fn parse_bbox(raw: &str, crs: &str, max_coord: f64) -> Result<Bbox, WmsError> {
     let parts: Vec<&str> = raw.split(',').collect();
     if parts.len() != 4 {
         return Err(WmsError::InvalidParam {
@@ -216,6 +231,20 @@ fn parse_bbox(raw: &str, crs: &str) -> Result<Bbox, WmsError> {
     } else {
         (nums[0], nums[1], nums[2], nums[3])
     };
+    for v in [min_x, min_y, max_x, max_y] {
+        if !v.is_finite() {
+            return Err(WmsError::InvalidParam {
+                name: "bbox",
+                reason: "coordinates must be finite".into(),
+            });
+        }
+        if v.abs() > max_coord {
+            return Err(WmsError::InvalidParam {
+                name: "bbox",
+                reason: format!("coordinate magnitude exceeds {max_coord}"),
+            });
+        }
+    }
     if !(max_x > min_x && max_y > min_y) {
         return Err(WmsError::InvalidParam {
             name: "bbox",
@@ -234,6 +263,9 @@ mod tests {
         WmsConfig {
             allowlist_crs: vec![CrsCode::new("EPSG:25832"), CrsCode::new("EPSG:4326")],
             formats: vec![ImageFormat::Png],
+            max_image_dimension: 8192,
+            max_layers: 100,
+            max_bbox_coord: 1e9,
         }
     }
 
@@ -291,5 +323,55 @@ mod tests {
                  bbox=0,0,1,1&width=1&height=1&format=image%2Fpng";
         let plan = parse_get_map(q, &cfg()).unwrap();
         assert_eq!(plan.crs.as_str(), "EPSG:25832");
+    }
+
+    #[test]
+    fn width_too_large() {
+        let q = "request=GetMap&version=1.3.0&layers=a&crs=EPSG:25832&\
+                 bbox=0,0,1,1&width=9000&height=1&format=image/png";
+        let err = parse_get_map(q, &cfg()).unwrap_err();
+        assert!(matches!(
+            err,
+            WmsError::InvalidParam {
+                name: "width|height",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn too_many_layers() {
+        let q = format!(
+            "request=GetMap&version=1.3.0&layers={}&crs=EPSG:25832&\
+             bbox=0,0,1,1&width=1&height=1&format=image/png",
+            (0..101).map(|i| i.to_string()).collect::<Vec<_>>().join(",")
+        );
+        let err = parse_get_map(&q, &cfg()).unwrap_err();
+        assert!(matches!(
+            err,
+            WmsError::InvalidParam { name: "layers", .. }
+        ));
+    }
+
+    #[test]
+    fn bbox_non_finite() {
+        let q = "request=GetMap&version=1.3.0&layers=a&crs=EPSG:25832&\
+                 bbox=0,0,1,inf&width=1&height=1&format=image/png";
+        let err = parse_get_map(q, &cfg()).unwrap_err();
+        assert!(matches!(
+            err,
+            WmsError::InvalidParam { name: "bbox", .. }
+        ));
+    }
+
+    #[test]
+    fn bbox_coord_too_large() {
+        let q = "request=GetMap&version=1.3.0&layers=a&crs=EPSG:25832&\
+                 bbox=0,0,1,1e10&width=1&height=1&format=image/png";
+        let err = parse_get_map(q, &cfg()).unwrap_err();
+        assert!(matches!(
+            err,
+            WmsError::InvalidParam { name: "bbox", .. }
+        ));
     }
 }

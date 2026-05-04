@@ -68,7 +68,7 @@ pub fn build_plan(cfg: &Config) -> Result<Vec<BuildTask>, PlanError> {
                     cell_size,
                 };
                 let extent_for_layer = layer.bbox.unwrap_or(extent);
-                let cells = cells_in_bbox(extent_for_layer, &band_cfg)?;
+                let cells = cells_in_bbox(extent_for_layer, &band_cfg, usize::MAX)?;
                 if cells.is_empty() {
                     continue;
                 }
