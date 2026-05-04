@@ -16,6 +16,9 @@ default = []
 # Polling-mode fallback for sources where logical decoding cannot be enabled.
 # SPEC §8.2.2 - second-class but supported.
 polling = []
+# E2E tests that spin up a postgis container via testcontainers. Optional
+# because docker is not always available; default `cargo test` skips them.
+e2e = ["dep:testcontainers"]
 
 [dependencies]
 mars-source = { workspace = true }
@@ -24,6 +27,13 @@ mars-expr   = { workspace = true }
 async-trait = { workspace = true }
 futures-core = { workspace = true }
 thiserror   = { workspace = true }
+bytes       = { workspace = true }
+tracing     = { workspace = true }
+tokio-postgres     = "0.7"
+deadpool-postgres  = "0.14"
+# optional, gated behind `e2e` feature; lives under [dependencies] because
+# cargo does not allow optional [dev-dependencies].
+testcontainers = { version = "0.20", optional = true }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt", "macros"] }
+tokio = { workspace = true, features = ["rt", "macros", "rt-multi-thread"] }

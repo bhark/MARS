@@ -89,8 +89,8 @@ async fn run_runtime(config_path: &Path) -> Result<()> {
     tracing::info!(?config_path, "starting runtime mode (Phase 0 stub)");
     let _cfg = mars_config::load(config_path);
     let renderer = Arc::new(mars_render::TinySkiaRenderer);
-    let store = Arc::new(mars_store_fs::StubFs::default());
-    let cache = Arc::new(mars_store_fs::StubFs::default());
+    let store = Arc::new(mars_store::stub::NotImplementedStore);
+    let cache = Arc::new(mars_store::stub::NotImplementedCache);
     let runtime = Arc::new(mars_runtime::Runtime::new(mars_runtime::Deps {
         store,
         cache,
@@ -111,7 +111,7 @@ async fn run_runtime(config_path: &Path) -> Result<()> {
 async fn run_compiler(config_path: &Path) -> Result<()> {
     tracing::info!(?config_path, "starting compiler mode (Phase 0 stub)");
     let _cfg = mars_config::load(config_path);
-    let pg = Arc::new(mars_source_postgres::StubPg::default());
+    let pg = Arc::new(mars_source::stub::NotImplementedSource);
     let store = Arc::new(mars_store_s3::StubS3::default());
     let manifest_pub: Arc<dyn mars_store::ManifestPublisher> =
         Arc::new(mars_store::stub::NotImplementedPublisher);

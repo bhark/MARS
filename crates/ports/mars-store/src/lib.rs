@@ -88,9 +88,10 @@ pub trait ManifestWatch: Send + Sync + 'static {
 /// Phase-0 stub adapters that satisfy the port traits with `NotImplemented`.
 /// Lets bins and tests compose the surface without naming a real backend.
 pub mod stub {
-    use super::{ManifestPublisher, StoreError};
+    use super::{LocalCache, ManifestPublisher, ObjectStore, StoreError};
     use async_trait::async_trait;
-    use mars_types::Manifest;
+    use bytes::Bytes;
+    use mars_types::{ArtifactKey, ContentHash, Manifest};
 
     /// `ManifestPublisher` impl that always returns `NotImplemented`.
     #[derive(Debug, Default)]
@@ -103,5 +104,53 @@ pub mod stub {
                 what: "mars-store::stub::NotImplementedPublisher::publish",
             })
         }
+    }
+
+    /// `ObjectStore` impl that always returns `NotImplemented`. Used by bins
+    /// before composition wires a real backend.
+    #[derive(Debug, Default)]
+    pub struct NotImplementedStore;
+
+    #[async_trait]
+    impl ObjectStore for NotImplementedStore {
+        async fn get(&self, _key: &ArtifactKey, _expected: ContentHash) -> Result<Bytes, StoreError> {
+            Err(StoreError::NotImplemented {
+                what: "mars-store::stub::NotImplementedStore::get",
+            })
+        }
+        async fn put(&self, _key: &ArtifactKey, _body: Bytes) -> Result<ContentHash, StoreError> {
+            Err(StoreError::NotImplemented {
+                what: "mars-store::stub::NotImplementedStore::put",
+            })
+        }
+        async fn delete(&self, _key: &ArtifactKey) -> Result<(), StoreError> {
+            Err(StoreError::NotImplemented {
+                what: "mars-store::stub::NotImplementedStore::delete",
+            })
+        }
+        async fn list(&self, _prefix: &str) -> Result<Vec<ArtifactKey>, StoreError> {
+            Err(StoreError::NotImplemented {
+                what: "mars-store::stub::NotImplementedStore::list",
+            })
+        }
+    }
+
+    /// `LocalCache` impl that always returns `NotImplemented`.
+    #[derive(Debug, Default)]
+    pub struct NotImplementedCache;
+
+    #[async_trait]
+    impl LocalCache for NotImplementedCache {
+        async fn get_or_fetch(
+            &self,
+            _key: &ArtifactKey,
+            _expected: ContentHash,
+            _origin: &dyn ObjectStore,
+        ) -> Result<Bytes, StoreError> {
+            Err(StoreError::NotImplemented {
+                what: "mars-store::stub::NotImplementedCache::get_or_fetch",
+            })
+        }
+        fn mark_evictable(&self, _key: &ArtifactKey) {}
     }
 }

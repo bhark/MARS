@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures_core::stream::BoxStream;
 use mars_expr::Expr;
-use mars_types::{Cell, CrsCode};
+use mars_types::{Bbox, Cell, CrsCode};
 
 pub use access::RowAttrs;
 pub use attrs::{AttrError, decode_row, encode_row};
@@ -40,6 +40,14 @@ pub enum SourceError {
     /// Invalid binding configuration.
     #[error("invalid binding: {0}")]
     InvalidBinding(String),
+    /// A filter expression referenced an identifier outside the binding's
+    /// allowlist (`binding.attributes ∪ {binding.id_column}`). SQL lowering
+    /// refuses to inject unknown identifiers.
+    #[error("unknown identifier: {name}")]
+    UnknownIdent {
+        /// Identifier that was not present in the allowlist.
+        name: String,
+    },
 }
 
 /// One change-feed event, lowered from a postgres logical-decoding message
@@ -197,10 +205,15 @@ pub trait Source: Send + Sync + 'static {
     /// by a `mars-expr` AST. The binding describes table mapping and
     /// attribute projection; `RowBytes.attributes` is returned in the same
     /// order as `binding.attributes`.
+    ///
+    /// `bbox` is the canonical-CRS extent of `cell`, precomputed by the
+    /// caller (the compiler knows the band's cell-size and origin; the
+    /// adapter does not need to). Adapters use it for the spatial predicate.
     async fn fetch_cell(
         &self,
         binding: &SourceBinding,
         cell: &Cell,
+        bbox: Bbox,
         filter: Option<&Expr>,
     ) -> Result<Vec<RowBytes>, SourceError>;
 }
@@ -216,6 +229,48 @@ pub struct RowBytes {
     pub geometry: Bytes,
     /// Decoded attributes, ordered to mirror `SourceBinding.attributes`.
     pub attributes: Vec<(String, AttrValue)>,
+}
+
+/// Phase-0 stub adapters that satisfy the port traits with `NotImplemented`.
+/// Lets bins and tests compose the surface without naming a real backend.
+pub mod stub {
+    use super::{
+        ChangeEvent, ChangeFeed, RowBytes, Source, SourceBinding, SourceError,
+    };
+    use async_trait::async_trait;
+    use futures_core::stream::BoxStream;
+    use mars_expr::Expr;
+    use mars_types::{Bbox, Cell};
+
+    /// `Source` + `ChangeFeed` impl that always returns `NotImplemented`.
+    #[derive(Debug, Default)]
+    pub struct NotImplementedSource;
+
+    #[async_trait]
+    impl Source for NotImplementedSource {
+        async fn fetch_cell(
+            &self,
+            _binding: &SourceBinding,
+            _cell: &Cell,
+            _bbox: Bbox,
+            _filter: Option<&Expr>,
+        ) -> Result<Vec<RowBytes>, SourceError> {
+            Err(SourceError::NotImplemented {
+                what: "mars-source::stub::NotImplementedSource::fetch_cell",
+            })
+        }
+    }
+
+    #[async_trait]
+    impl ChangeFeed for NotImplementedSource {
+        async fn subscribe(
+            &self,
+        ) -> Result<BoxStream<'static, Result<ChangeEvent, SourceError>>, SourceError> {
+            Err(SourceError::NotImplemented {
+                what: "mars-source::stub::NotImplementedSource::subscribe",
+            })
+        }
+    }
 }
 
 /// Subscription-side port: a stream of `ChangeEvent`s.
