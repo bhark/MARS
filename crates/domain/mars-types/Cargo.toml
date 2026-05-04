@@ -1,0 +1,19 @@
+[package]
+name        = "mars-types"
+version     = "0.0.1"
+edition.workspace     = true
+license.workspace     = true
+repository.workspace  = true
+authors.workspace     = true
+publish.workspace     = true
+description = "MARS core value types: Bbox, Cell, ScaleBand, ContentHash, RequestId, manifest DTOs."
+
+[lints]
+workspace = true
+
+[dependencies]
+serde      = { workspace = true }
+thiserror  = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

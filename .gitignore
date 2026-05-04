@@ -1,0 +1,30 @@
+# build output
+/target
+**/*.rs.bk
+
+# coverage / profiling
+/coverage
+*.profraw
+
+# local config / secrets
+.env
+.env.*
+!.env.example
+
+# editor / IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# test artifacts
+*.mars.local
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Notes and various
+ARCHITECTURE.md
+CONCEPT.md
+SPEC.md

@@ -1,0 +1,29 @@
+[package]
+name        = "mars-source-postgres"
+version     = "0.0.1"
+edition.workspace     = true
+license.workspace     = true
+repository.workspace  = true
+authors.workspace     = true
+publish.workspace     = true
+description = "PostgreSQL adapter for mars-source: pgoutput logical decoding plus a polling fallback. Owns SQL lowering for mars-expr ASTs."
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# Polling-mode fallback for sources where logical decoding cannot be enabled.
+# SPEC §8.2.2 — second-class but supported.
+polling = []
+
+[dependencies]
+mars-source = { workspace = true }
+mars-types  = { workspace = true }
+mars-expr   = { workspace = true }
+async-trait = { workspace = true }
+futures-core = { workspace = true }
+thiserror   = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros"] }

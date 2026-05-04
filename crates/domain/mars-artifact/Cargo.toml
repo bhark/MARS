@@ -1,0 +1,24 @@
+[package]
+name        = "mars-artifact"
+version     = "0.0.1"
+edition.workspace     = true
+license.workspace     = true
+repository.workspace  = true
+authors.workspace     = true
+publish.workspace     = true
+description = "MARS artifact container codec: header / sections / footer. Sync mmap reader and writer."
+build       = "build.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+mars-types = { workspace = true }
+bytes      = { workspace = true }
+serde      = { workspace = true }
+thiserror  = { workspace = true }
+
+[build-dependencies]
+# planus-codegen will be wired here as soon as the first real .fbs schema lands
+# in `schemas/`. For Phase 0 the build script just emits an empty placeholder
+# so the wiring is in place without taking on a tool dep we cannot exercise.

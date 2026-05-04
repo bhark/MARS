@@ -1,0 +1,22 @@
+[package]
+name        = "mars-store-s3"
+version     = "0.0.1"
+edition.workspace     = true
+license.workspace     = true
+repository.workspace  = true
+authors.workspace     = true
+publish.workspace     = true
+description = "Object-store adapter for mars-store backed by `object_store` (S3 / MinIO / R2 / GCS)."
+
+[lints]
+workspace = true
+
+[dependencies]
+mars-store  = { workspace = true }
+mars-types  = { workspace = true }
+async-trait = { workspace = true }
+bytes       = { workspace = true }
+thiserror   = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros"] }

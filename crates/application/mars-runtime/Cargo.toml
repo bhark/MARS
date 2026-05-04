@@ -1,0 +1,26 @@
+[package]
+name        = "mars-runtime"
+version     = "0.0.1"
+edition.workspace     = true
+license.workspace     = true
+repository.workspace  = true
+authors.workspace     = true
+publish.workspace     = true
+description = "MARS runtime use-case: render plan → resolve artifacts → label collide → call Renderer → encode."
+
+[lints]
+workspace = true
+
+[dependencies]
+mars-types         = { workspace = true }
+mars-grid          = { workspace = true }
+mars-style         = { workspace = true }
+mars-artifact      = { workspace = true }
+mars-store         = { workspace = true }
+mars-render-port   = { workspace = true }
+mars-config        = { workspace = true }
+mars-observability = { workspace = true }
+mars-proj          = { workspace = true }
+tokio              = { workspace = true }
+tracing            = { workspace = true }
+thiserror          = { workspace = true }

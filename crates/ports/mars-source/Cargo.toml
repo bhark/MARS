@@ -1,0 +1,20 @@
+[package]
+name        = "mars-source"
+version     = "0.0.1"
+edition.workspace     = true
+license.workspace     = true
+repository.workspace  = true
+authors.workspace     = true
+publish.workspace     = true
+description = "Port traits for source databases and change feeds. Runtime-agnostic."
+
+[lints]
+workspace = true
+
+[dependencies]
+mars-types    = { workspace = true }
+mars-expr     = { workspace = true }
+async-trait   = { workspace = true }
+bytes         = { workspace = true }
+futures-core  = { workspace = true }
+thiserror     = { workspace = true }

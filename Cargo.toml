@@ -1,0 +1,102 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/domain/mars-types",
+    "crates/domain/mars-grid",
+    "crates/domain/mars-expr",
+    "crates/domain/mars-style",
+    "crates/domain/mars-artifact",
+    "crates/ports/mars-source",
+    "crates/ports/mars-store",
+    "crates/ports/mars-render-port",
+    "crates/adapters/mars-source-postgres",
+    "crates/adapters/mars-store-s3",
+    "crates/adapters/mars-store-fs",
+    "crates/adapters/mars-render",
+    "crates/application/mars-compiler",
+    "crates/application/mars-runtime",
+    "crates/interfaces/mars-wms",
+    "crates/interfaces/mars-wmts",
+    "crates/interfaces/mars-http",
+    "crates/support/mars-config",
+    "crates/support/mars-observability",
+    "crates/support/mars-proj",
+    "bin/mars",
+    "bin/mars-import-mapfile",
+    "bin/mars-compile",
+]
+
+[workspace.package]
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/forn-dk/mars"
+authors = ["MARS contributors"]
+publish = false
+
+[workspace.dependencies]
+# domain primitives
+mars-types          = { path = "crates/domain/mars-types" }
+mars-grid           = { path = "crates/domain/mars-grid" }
+mars-expr           = { path = "crates/domain/mars-expr" }
+mars-style          = { path = "crates/domain/mars-style" }
+mars-artifact       = { path = "crates/domain/mars-artifact" }
+# ports
+mars-source         = { path = "crates/ports/mars-source" }
+mars-store          = { path = "crates/ports/mars-store" }
+mars-render-port    = { path = "crates/ports/mars-render-port" }
+# adapters
+mars-source-postgres = { path = "crates/adapters/mars-source-postgres" }
+mars-store-s3        = { path = "crates/adapters/mars-store-s3" }
+mars-store-fs        = { path = "crates/adapters/mars-store-fs" }
+mars-render          = { path = "crates/adapters/mars-render" }
+# application
+mars-compiler       = { path = "crates/application/mars-compiler" }
+mars-runtime        = { path = "crates/application/mars-runtime" }
+# interfaces
+mars-wms            = { path = "crates/interfaces/mars-wms" }
+mars-wmts           = { path = "crates/interfaces/mars-wmts" }
+mars-http           = { path = "crates/interfaces/mars-http" }
+# support
+mars-config         = { path = "crates/support/mars-config" }
+mars-observability  = { path = "crates/support/mars-observability" }
+mars-proj           = { path = "crates/support/mars-proj" }
+
+# third-party (single source of truth)
+async-trait         = "0.1"
+thiserror           = "2"
+serde               = { version = "1", features = ["derive"] }
+serde_json          = "1"
+tokio               = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "time", "fs", "net"] }
+tokio-util          = { version = "0.7", features = ["rt"] }
+clap                = { version = "4", features = ["derive", "env"] }
+tracing             = "0.1"
+tracing-subscriber  = { version = "0.3", features = ["env-filter", "json", "fmt"] }
+futures-core        = "0.3"
+bytes               = "1"
+anyhow              = "1"
+
+[workspace.lints.rust]
+unsafe_code              = "deny"
+unreachable_pub          = "warn"
+rust_2024_compatibility  = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+all                      = { level = "warn", priority = -1 }
+unwrap_used              = "warn"
+expect_used              = "warn"
+panic                    = "warn"
+todo                     = "warn"
+dbg_macro                = "warn"
+
+[profile.release]
+opt-level     = 3
+lto           = "thin"
+codegen-units = 1
+strip         = "symbols"
+panic         = "abort"
+
+[profile.dev]
+opt-level = 0
+
+[profile.test]
+opt-level = 1
