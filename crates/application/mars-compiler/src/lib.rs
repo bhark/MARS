@@ -1,14 +1,21 @@
-//! mars compiler use-case: change-feed → dirty cells → batch → rebuild
-//! artifacts → publish manifest. all wiring is via traits; no concrete adapter
-//! is named here.
+//! mars compiler use-case. Phase 0 ships the snapshot path only: read config,
+//! enumerate cells, fetch rows, build source + layer artifacts, publish a
+//! manifest. The change-feed dependency is held for forward-compat (Phase 1).
 
 #![forbid(unsafe_code)]
 
 use std::sync::Arc;
 
+use mars_config::Config;
 use mars_source::{ChangeFeed, Source};
 use mars_store::{ManifestPublisher, ObjectStore};
+use mars_types::Manifest;
 use tokio_util::sync::CancellationToken;
+
+pub mod class;
+pub mod plan;
+pub mod snapshot;
+pub mod wkb;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CompilerError {
@@ -16,8 +23,14 @@ pub enum CompilerError {
     Source(#[from] mars_source::SourceError),
     #[error(transparent)]
     Store(#[from] mars_store::StoreError),
-    #[error("not implemented: {what}")]
-    NotImplemented { what: &'static str },
+    #[error(transparent)]
+    Plan(#[from] plan::PlanError),
+    #[error("wkb: {0}")]
+    Wkb(String),
+    #[error("artifact: {0}")]
+    Artifact(String),
+    #[error("expr: {0}")]
+    Expr(String),
 }
 
 /// All ports the compiler depends on, bundled for easy composition by the bin.
@@ -28,24 +41,49 @@ pub struct Deps {
     pub manifest: Arc<dyn ManifestPublisher>,
 }
 
-/// The compiler service. `run` returns when the cancellation token fires.
+/// The compiler service.
 pub struct Compiler {
     deps: Deps,
+    config: Config,
 }
 
 impl Compiler {
     #[must_use]
-    pub fn new(deps: Deps) -> Self {
-        Self { deps }
+    pub fn new(deps: Deps, config: Config) -> Self {
+        Self { deps, config }
     }
 
-    /// Run the compiler loop. Phase 0 returns `NotImplemented` so the bin can
-    /// already wire composition without a real source.
-    pub async fn run(&self, _shutdown: CancellationToken) -> Result<(), CompilerError> {
-        let _ = &self.deps;
-        tracing::info!("compiler: stub run() invoked; returning NotImplemented (Phase 0)");
-        Err(CompilerError::NotImplemented {
-            what: "mars-compiler::Compiler::run",
-        })
+    /// Run one snapshot pass. The change-feed dependency is held but not
+    /// subscribed in Phase 0 (SPEC §8.2; deferred to Phase 1).
+    pub async fn run(&self, shutdown: CancellationToken) -> Result<(), CompilerError> {
+        tracing::warn!("phase-1: change feed deferred");
+        let _ = &self.deps.change_feed;
+
+        if shutdown.is_cancelled() {
+            return Ok(());
+        }
+
+        let tasks = plan::build_plan(&self.config)?;
+        tracing::info!(task_count = tasks.len(), "compiler: snapshot plan built");
+
+        let mut output = snapshot::SnapshotOutput::default();
+        for task in &tasks {
+            if shutdown.is_cancelled() {
+                return Ok(());
+            }
+            let part = snapshot::run_task(task, &self.deps.source, &self.deps.store).await?;
+            output.extend(part);
+        }
+
+        let manifest = Manifest {
+            version: 1,
+            service: self.config.service.name.clone(),
+            source_artifacts: output.source_artifacts,
+            layer_artifacts: output.layer_artifacts,
+            style_artifact: None,
+        };
+        let v = self.deps.manifest.publish(&manifest).await?;
+        tracing::info!(version = v, "compiler: manifest published");
+        Ok(())
     }
 }

@@ -1763,14 +1763,21 @@ dependencies = [
 name = "mars-compiler"
 version = "0.0.1"
 dependencies = [
+ "async-trait",
+ "bytes",
+ "futures-core",
  "mars-artifact",
  "mars-config",
+ "mars-expr",
  "mars-grid",
  "mars-observability",
  "mars-source",
  "mars-store",
+ "mars-store-fs",
  "mars-style",
  "mars-types",
+ "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
@@ -1877,15 +1884,20 @@ dependencies = [
 name = "mars-runtime"
 version = "0.0.1"
 dependencies = [
+ "async-trait",
+ "bytes",
  "mars-artifact",
  "mars-config",
  "mars-grid",
  "mars-observability",
  "mars-proj",
  "mars-render-port",
+ "mars-source",
  "mars-store",
+ "mars-store-fs",
  "mars-style",
  "mars-types",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",

@@ -171,6 +171,12 @@ pub struct Cells {
     pub origin: [f64; 2],
     /// Per-band cell size (unit-suffixed metres).
     pub size_per_band: BTreeMap<String, String>,
+    /// Optional service-wide extent in canonical CRS units. Phase 0 compiler
+    /// uses this to enumerate cells per band; if absent, a single cell at the
+    /// origin is enumerated. Phase 1 will derive this from the union of source
+    /// binding extents read from the database.
+    #[serde(default)]
+    pub extent: Option<Bbox>,
 }
 
 impl Cells {

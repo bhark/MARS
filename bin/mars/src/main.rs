@@ -86,41 +86,33 @@ async fn async_main(cli: Cli) -> Result<()> {
 }
 
 async fn run_runtime(config_path: &Path) -> Result<()> {
-    tracing::info!(?config_path, "starting runtime mode (Phase 0 stub)");
+    // composition root rewritten in slice i; this stub keeps the workspace
+    // building and returns a clear error rather than panicking.
+    tracing::info!(?config_path, "runtime mode wiring lands in slice i");
     let _cfg = mars_config::load(config_path);
-    let renderer = Arc::new(mars_render::TinySkiaRenderer);
-    let store = Arc::new(mars_store::stub::NotImplementedStore);
-    let cache = Arc::new(mars_store::stub::NotImplementedCache);
-    let runtime = Arc::new(mars_runtime::Runtime::new(mars_runtime::Deps {
-        store,
-        cache,
-        renderer,
-    }));
-    let cfg = mars_http::ServerConfig {
-        listen: "0.0.0.0:8080".parse()?,
-        debug_endpoints: false,
-    };
-    // phase 0: serve returns NotImplemented; that's the verification goal.
-    if let Err(e) = mars_http::serve(cfg, runtime).await {
-        tracing::error!(%e, "http serve returned error (expected in Phase 0)");
-        return Err(e.into());
-    }
-    Ok(())
+    let _ = mars_render::TinySkiaRenderer;
+    let _: mars_store::stub::NotImplementedStore = mars_store::stub::NotImplementedStore;
+    let _: mars_store::stub::NotImplementedCache = mars_store::stub::NotImplementedCache;
+    let _ = Arc::new(()); // silence unused arc import; slice i will wire concrete types
+    anyhow::bail!("mars runtime: composition root pending slice i")
 }
 
 async fn run_compiler(config_path: &Path) -> Result<()> {
     tracing::info!(?config_path, "starting compiler mode (Phase 0 stub)");
-    let _cfg = mars_config::load(config_path);
+    let cfg = mars_config::load(config_path)?;
     let pg = Arc::new(mars_source::stub::NotImplementedSource);
     let store = Arc::new(mars_store_s3::StubS3::default());
     let manifest_pub: Arc<dyn mars_store::ManifestPublisher> =
         Arc::new(mars_store::stub::NotImplementedPublisher);
-    let compiler = mars_compiler::Compiler::new(mars_compiler::Deps {
-        source: pg.clone(),
-        change_feed: pg,
-        store,
-        manifest: manifest_pub,
-    });
+    let compiler = mars_compiler::Compiler::new(
+        mars_compiler::Deps {
+            source: pg.clone(),
+            change_feed: pg,
+            store,
+            manifest: manifest_pub,
+        },
+        cfg,
+    );
     if let Err(e) = compiler.run(CancellationToken::new()).await {
         tracing::error!(%e, "compiler run returned error (expected in Phase 0)");
         return Err(e.into());
