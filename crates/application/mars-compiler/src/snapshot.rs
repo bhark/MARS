@@ -61,10 +61,17 @@ async fn build_source_artifact(
     rows: &[RowBytes],
     store: &Arc<dyn ObjectStore>,
 ) -> Result<(ArtifactEntry, ContentHash), CompilerError> {
+    let expected_srid = task
+        .binding
+        .crs
+        .as_str()
+        .strip_prefix("EPSG:")
+        .and_then(|s| s.parse::<u32>().ok());
     let mut features = Vec::with_capacity(rows.len());
     let mut acc = BboxAcc::new();
     for row in rows {
-        let f = wkb::decode_feature(row.feature_id, &row.geometry).map_err(|e| CompilerError::Wkb(e.to_string()))?;
+        let f = wkb::decode_feature(row.feature_id, &row.geometry, expected_srid)
+            .map_err(|e| CompilerError::Wkb(e.to_string()))?;
         acc.fold(f.bbox);
         features.push(f);
     }
