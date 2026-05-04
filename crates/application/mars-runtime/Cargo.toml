@@ -28,6 +28,5 @@ arc-swap           = { workspace = true }
 futures-util       = { workspace = true }
 
 [dev-dependencies]
-mars-store-fs = { workspace = true }
-tokio         = { workspace = true, features = ["macros", "rt-multi-thread"] }
-tempfile = { workspace = true }
+mars-store = { workspace = true, features = ["test-utils"] }
+tokio      = { workspace = true, features = ["macros", "rt-multi-thread"] }

@@ -10,6 +10,7 @@
 
 // no `forbid(unsafe_code)`: this crate exists to encapsulate FFI. It must
 // remain the *only* place in the workspace that does so.
+#![allow(unsafe_code)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
 use mars_types::{Bbox, CrsCode};

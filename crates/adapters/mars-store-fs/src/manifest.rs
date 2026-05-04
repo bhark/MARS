@@ -11,7 +11,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures_core::stream::BoxStream;
 use futures_util::stream;
-use mars_store::{ManifestPublisher, ManifestWatch, StoreError};
+use mars_store::{ManifestPublisher, ManifestReader, ManifestWatch, StoreError};
 use mars_types::Manifest;
 
 use crate::store::atomic_write;
@@ -114,6 +114,16 @@ impl ManifestPublisher for FsPublisher {
         })
         .await
         .map_err(|e| StoreError::Backend(format!("join: {e}")))?
+    }
+}
+
+#[async_trait]
+impl ManifestReader for FsPublisher {
+    async fn current_manifest(&self) -> Result<Option<Manifest>, StoreError> {
+        match Self::read_current_manifest(self.root.clone()).await? {
+            Some((_pointer, manifest)) => Ok(Some(manifest)),
+            None => Ok(None),
+        }
     }
 }
 

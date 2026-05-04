@@ -1,6 +1,6 @@
-//! integration tests for `mars_runtime::Runtime`. uses `FsStore`+`FsCache` from
-//! the `mars-store-fs` adapter (dev-dep) plus pre-baked artifacts written via
-//! `mars_artifact::ArtifactWriter`. the renderer is a recording mock.
+//! integration tests for `mars_runtime::Runtime`. uses in-memory store/cache
+//! doubles from `mars-store` (test-utils feature) plus pre-baked artifacts
+//! written via `mars_artifact::ArtifactWriter`. the renderer is a recording mock.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -21,10 +21,9 @@ use mars_runtime::{
     key::{layer_key, source_key},
 };
 use mars_store::{LocalCache, ObjectStore, StoreError};
-use mars_store_fs::{FsCache, FsStore};
+use mars_store::mem::{InMemoryCache, InMemoryStore};
 use mars_style::{Colour, Style, Stylesheet};
 use mars_types::{ArtifactEntry, Bbox, Cell, CrsCode, ImageFormat, LayerId, Manifest, ScaleBand};
-use tempfile::TempDir;
 use tokio::sync::Notify;
 
 use crate::support::mock_renderer::{CANNED_BYTES, MockRenderer};
@@ -113,22 +112,15 @@ fn stylesheet() -> Stylesheet {
 }
 
 struct Fixture {
-    _tmp: TempDir,
     runtime: Runtime,
     mock: Arc<MockRenderer>,
-    store: Arc<FsStore>,
+    store: Arc<InMemoryStore>,
     canonical_crs: CrsCode,
 }
 
 async fn build_fixture() -> Fixture {
-    let tmp = TempDir::new().unwrap();
-    let store_root = tmp.path().join("store");
-    let cache_root = tmp.path().join("cache");
-    std::fs::create_dir_all(&store_root).unwrap();
-    std::fs::create_dir_all(&cache_root).unwrap();
-
-    let store = Arc::new(FsStore::new(store_root).unwrap());
-    let cache = FsCache::new(cache_root, u64::MAX).unwrap();
+    let store = Arc::new(InMemoryStore::new());
+    let cache = InMemoryCache::new();
 
     let manifest = write_manifest(&store, 1, 0.0).await;
 
@@ -145,7 +137,6 @@ async fn build_fixture() -> Fixture {
     let runtime = Runtime::from_state(Arc::new(state), deps);
 
     Fixture {
-        _tmp: tmp,
         runtime,
         mock,
         store,
@@ -153,7 +144,7 @@ async fn build_fixture() -> Fixture {
     }
 }
 
-async fn write_manifest(store: &FsStore, version: u64, offset: f64) -> Manifest {
+async fn write_manifest(store: &InMemoryStore, version: u64, offset: f64) -> Manifest {
     let cell = Cell {
         band: ScaleBand::new(BAND),
         x: CELL_X,
@@ -228,7 +219,7 @@ fn hex(bytes: &[u8]) -> String {
 
 #[derive(Clone)]
 struct BlockingCache {
-    inner: FsCache,
+    inner: InMemoryCache,
     should_block: Arc<AtomicBool>,
     reached: Arc<Notify>,
     release: Arc<Notify>,
@@ -288,9 +279,8 @@ async fn renders_expected_paths() {
 
 #[tokio::test]
 async fn empty_runtime_returns_not_ready() {
-    let tmp = TempDir::new().unwrap();
-    let store = Arc::new(FsStore::new(tmp.path().join("store")).unwrap());
-    let cache = Arc::new(FsCache::new(tmp.path().join("cache"), u64::MAX).unwrap());
+    let store = Arc::new(InMemoryStore::new());
+    let cache = Arc::new(InMemoryCache::new());
     let mock = Arc::new(MockRenderer::default());
     let runtime = Runtime::empty(Deps {
         store,
@@ -311,7 +301,7 @@ async fn swap_state_makes_runtime_ready_and_renderable() {
     let fx = build_fixture().await;
     let runtime = Runtime::empty(Deps {
         store: fx.store.clone(),
-        cache: Arc::new(FsCache::new(fx._tmp.path().join("cache2"), u64::MAX).unwrap()),
+        cache: Arc::new(InMemoryCache::new()),
         renderer: fx.mock.clone(),
     });
     assert!(!runtime.is_ready());
@@ -339,14 +329,8 @@ async fn swap_state_changes_rendered_ops_without_rebuilding_runtime() {
 
 #[tokio::test]
 async fn render_pins_state_across_swap() {
-    let tmp = TempDir::new().unwrap();
-    let store_root = tmp.path().join("store");
-    let cache_root = tmp.path().join("cache");
-    std::fs::create_dir_all(&store_root).unwrap();
-    std::fs::create_dir_all(&cache_root).unwrap();
-
-    let store = Arc::new(FsStore::new(store_root).unwrap());
-    let cache = FsCache::new(cache_root, u64::MAX).unwrap();
+    let store = Arc::new(InMemoryStore::new());
+    let cache = InMemoryCache::new();
     let first_manifest = write_manifest(&store, 1, 0.0).await;
     let second_manifest = write_manifest(&store, 2, 100.0).await;
     let canonical_crs = CrsCode::new("EPSG:25832");
@@ -383,7 +367,7 @@ async fn render_pins_state_across_swap() {
         Arc::new(state_from_manifest(canonical_crs.clone(), first_manifest)),
         Deps {
             store: store.clone(),
-            cache: Arc::new(FsCache::new(tmp.path().join("expected-cache"), u64::MAX).unwrap()),
+            cache: Arc::new(InMemoryCache::new()),
             renderer: expected_renderer.clone(),
         },
     );

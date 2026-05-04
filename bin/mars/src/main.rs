@@ -18,7 +18,7 @@ use mars_config::{ClassStyle, Config, StyleEntry, config_dir};
 use mars_render::TinySkiaRenderer;
 use mars_runtime::{Deps as RuntimeDeps, Runtime, RuntimeState, run_manifest_reload_loop};
 use mars_source_postgres::{PgConfig, PgSource};
-use mars_store::{LocalCache, ObjectStore};
+use mars_store::{LocalCache, ManifestReader, ObjectStore};
 use mars_store_fs::{FsCache, FsPublisher, FsStore};
 use mars_style::Stylesheet;
 use mars_types::Manifest;
@@ -117,7 +117,7 @@ async fn run_runtime(config_path: &Path) -> Result<()> {
         renderer: Arc::new(TinySkiaRenderer),
     }));
 
-    let manifest_opt = match read_current_manifest(&publisher) {
+    let manifest_opt = match publisher.current_manifest().await {
         Ok(m) => m,
         Err(e) => {
             tracing::warn!(error = %e, "initial manifest unavailable");
@@ -297,17 +297,6 @@ fn build_publisher(cfg: &Config) -> Result<Arc<FsPublisher>> {
         .as_deref()
         .ok_or_else(|| anyhow!("artifacts.store.path required for manifest publisher"))?;
     Ok(Arc::new(FsPublisher::new(p).context("open fs publisher")?))
-}
-
-fn read_current_manifest(pub_: &FsPublisher) -> Result<Option<Manifest>> {
-    let Some(pointer) = pub_.read_current()? else {
-        return Ok(None);
-    };
-    let pointer = pointer.trim();
-    let body_path = pub_.manifests_dir().join(format!("{pointer}.json"));
-    let body = std::fs::read(&body_path).with_context(|| format!("read manifest body {}", body_path.display()))?;
-    let manifest: Manifest = serde_json::from_slice(&body).context("parse manifest")?;
-    Ok(Some(manifest))
 }
 
 fn build_stylesheet(cfg: &Config) -> Stylesheet {

@@ -1,0 +1,148 @@
+//! In-memory implementations of [`ObjectStore`], [`LocalCache`], [`ManifestPublisher`]
+//! and [`ManifestReader`] for use in unit / integration tests.
+//!
+//! These types avoid pulling concrete filesystem or network adapters into
+//! application-layer tests, keeping the test surface aligned with the port
+//! traits.
+
+#![allow(clippy::expect_used)]
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
+use async_trait::async_trait;
+use bytes::Bytes;
+use mars_types::{ArtifactKey, ContentHash, Manifest};
+
+use crate::{LocalCache, ManifestPublisher, ManifestReader, ObjectStore, StoreError};
+
+fn compute_hash(bytes: &[u8]) -> ContentHash {
+    let hash = blake3::hash(bytes);
+    ContentHash(hash.into())
+}
+
+/// In-memory [`ObjectStore`]. Backed by a `HashMap` protected by a `Mutex`.
+#[derive(Debug, Default)]
+pub struct InMemoryStore {
+    data: Mutex<HashMap<ArtifactKey, (Bytes, ContentHash)>>,
+}
+
+impl InMemoryStore {
+    /// Create an empty store.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[async_trait]
+impl ObjectStore for InMemoryStore {
+    async fn get(&self, key: &ArtifactKey, expected: ContentHash) -> Result<Bytes, StoreError> {
+        let lock = self.data.lock().expect("InMemoryStore lock poisoned");
+        let (bytes, hash) = lock
+            .get(key)
+            .ok_or_else(|| StoreError::NotFound(key.clone()))?;
+        if *hash != expected {
+            return Err(StoreError::HashMismatch { key: key.clone() });
+        }
+        Ok(bytes.clone())
+    }
+
+    async fn put(&self, key: &ArtifactKey, body: Bytes) -> Result<ContentHash, StoreError> {
+        let hash = compute_hash(&body);
+        let mut lock = self.data.lock().expect("InMemoryStore lock poisoned");
+        lock.insert(key.clone(), (body, hash));
+        Ok(hash)
+    }
+
+    async fn delete(&self, key: &ArtifactKey) -> Result<(), StoreError> {
+        let mut lock = self.data.lock().expect("InMemoryStore lock poisoned");
+        lock.remove(key);
+        Ok(())
+    }
+
+    async fn list(&self, prefix: &str) -> Result<Vec<ArtifactKey>, StoreError> {
+        let lock = self.data.lock().expect("InMemoryStore lock poisoned");
+        let keys: Vec<_> = lock
+            .keys()
+            .filter(|k| k.as_str().starts_with(prefix))
+            .cloned()
+            .collect();
+        Ok(keys)
+    }
+}
+
+/// In-memory [`LocalCache`]. Simply delegates to an inner [`ObjectStore`]-like
+/// map; no eviction logic (tests are short-lived).
+#[derive(Debug, Default, Clone)]
+pub struct InMemoryCache {
+    data: Arc<Mutex<HashMap<ArtifactKey, Bytes>>>,
+}
+
+impl InMemoryCache {
+    /// Create an empty cache.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[async_trait]
+impl LocalCache for InMemoryCache {
+    async fn get_or_fetch(
+        &self,
+        key: &ArtifactKey,
+        expected: ContentHash,
+        origin: &dyn ObjectStore,
+    ) -> Result<Bytes, StoreError> {
+        {
+            let lock = self.data.lock().expect("InMemoryCache lock poisoned");
+            if let Some(bytes) = lock.get(key) {
+                // verify hash on cached entry
+                let actual = compute_hash(bytes);
+                if actual == expected {
+                    return Ok(bytes.clone());
+                }
+            }
+        }
+        let bytes = origin.get(key, expected).await?;
+        let mut lock = self.data.lock().expect("InMemoryCache lock poisoned");
+        lock.insert(key.clone(), bytes.clone());
+        Ok(bytes)
+    }
+
+    fn mark_evictable(&self, _key: &ArtifactKey) {
+        // no-op: test caches are unbounded.
+    }
+}
+
+/// In-memory [`ManifestPublisher`] + [`ManifestReader`].
+#[derive(Debug, Default)]
+pub struct InMemoryPublisher {
+    manifest: Mutex<Option<Manifest>>,
+}
+
+impl InMemoryPublisher {
+    /// Create an empty publisher.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[async_trait]
+impl ManifestPublisher for InMemoryPublisher {
+    async fn publish(&self, manifest: &Manifest) -> Result<u64, StoreError> {
+        let mut lock = self.manifest.lock().expect("InMemoryPublisher lock poisoned");
+        *lock = Some(manifest.clone());
+        Ok(manifest.version)
+    }
+}
+
+#[async_trait]
+impl ManifestReader for InMemoryPublisher {
+    async fn current_manifest(&self) -> Result<Option<Manifest>, StoreError> {
+        let lock = self.manifest.lock().expect("InMemoryPublisher lock poisoned");
+        Ok(lock.clone())
+    }
+}

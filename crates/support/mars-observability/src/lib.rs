@@ -52,5 +52,5 @@ pub fn init_tracing(json: bool) -> Result<(), ObservabilityError> {
     } else {
         tracing_subscriber::fmt().with_env_filter(filter).try_init()
     };
-    result.map_err(|e| ObservabilityError::Subscriber(e))
+    result.map_err(ObservabilityError::Subscriber)
 }

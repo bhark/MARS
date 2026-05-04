@@ -14,6 +14,7 @@ use mars_config::{ClassStyle, Config, StyleEntry, config_dir};
 use mars_render::TinySkiaRenderer;
 use mars_runtime::{Deps as RuntimeDeps, RenderPlan, Runtime, RuntimeState};
 use mars_source_postgres::{PgConfig, PgSource};
+use mars_store::{ManifestPublisher, ManifestReader};
 use mars_store_fs::{FsCache, FsPublisher, FsStore};
 use mars_style::Stylesheet;
 use mars_types::{Bbox, CrsCode, ImageFormat, LayerId, Manifest};
@@ -80,15 +81,14 @@ async fn end_to_end_compile_and_render() -> Result<()> {
         return Err(anyhow::anyhow!("compile: {e}"));
     }
 
-    // verify manifest pointer is "v1" and load body
+    // verify manifest was published and load body
     let publisher = FsPublisher::new(store_dir.path()).context("open publisher")?;
-    let pointer = publisher
-        .read_current()
-        .context("read current")?
-        .context("manifest pointer absent")?;
-    assert_eq!(pointer.trim(), "v1", "expected manifest v1, got {pointer:?}");
-    let body = std::fs::read(publisher.manifests_dir().join("v1.json"))?;
-    let manifest: Manifest = serde_json::from_slice(&body)?;
+    let manifest = publisher
+        .current_manifest()
+        .await
+        .context("read current manifest")?
+        .context("manifest absent")?;
+    assert_eq!(manifest.version, 1, "expected manifest v1");
     assert!(!manifest.layer_artifacts.is_empty(), "no layer artifacts");
     assert!(!manifest.source_artifacts.is_empty(), "no source artifacts");
 

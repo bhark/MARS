@@ -14,10 +14,9 @@ use mars_config::{
     Source as CfgSource, SourceBinding as CfgBinding, model::Band,
 };
 use mars_source::{AttrValue, RowBytes, SourceCollectionId};
-use mars_store::ObjectStore;
-use mars_store_fs::{FsPublisher, FsStore};
+use mars_store::{ManifestReader, ObjectStore};
+use mars_store::mem::{InMemoryPublisher, InMemoryStore};
 use mars_types::{Bbox, Cell, CrsCode, LayerId, ScaleBand};
-use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
 use crate::support::mem_source::{MemSource, wkb_polygon};
@@ -135,9 +134,9 @@ fn make_rows_with_unmatched_class() -> Vec<RowBytes> {
     rows
 }
 
-fn build_deps(tmp: &TempDir, rows: Vec<RowBytes>) -> (Deps, Arc<FsStore>, Arc<FsPublisher>) {
-    let store = Arc::new(FsStore::new(tmp.path()).unwrap());
-    let publisher = Arc::new(FsPublisher::new(tmp.path()).unwrap());
+fn build_deps(rows: Vec<RowBytes>) -> (Deps, Arc<InMemoryStore>, Arc<InMemoryPublisher>) {
+    let store = Arc::new(InMemoryStore::new());
+    let publisher = Arc::new(InMemoryPublisher::new());
 
     let mut mem = MemSource::default();
     mem.insert(
@@ -162,9 +161,8 @@ fn build_deps(tmp: &TempDir, rows: Vec<RowBytes>) -> (Deps, Arc<FsStore>, Arc<Fs
 
 #[tokio::test]
 async fn snapshot_writes_artifacts_and_publishes_manifest() {
-    let tmp = TempDir::new().unwrap();
     let cfg = make_config();
-    let (deps, store, publisher) = build_deps(&tmp, make_rows());
+    let (deps, store, publisher) = build_deps(make_rows());
     let compiler = Compiler::new(deps, cfg);
     compiler.run(CancellationToken::new()).await.unwrap();
 
@@ -176,12 +174,12 @@ async fn snapshot_writes_artifacts_and_publishes_manifest() {
     assert!(src_keys[0].as_str().starts_with("src/public.roads/hi/0_0/"));
     assert!(lyr_keys[0].as_str().starts_with("lyr/roads/hi/0_0/v1/"));
 
-    let cur = publisher.read_current().unwrap().unwrap();
-    assert_eq!(cur, "v1");
+    let manifest = publisher.current_manifest().await.unwrap().unwrap();
+    assert_eq!(manifest.version, 1);
 
     // open the layer artifact and verify class_assignment
-    let lyr_path = publisher.root().join(lyr_keys[0].as_str());
-    let bytes = bytes::Bytes::from(std::fs::read(&lyr_path).unwrap());
+    let lyr_entry = &manifest.layer_artifacts[0];
+    let bytes = store.get(&lyr_entry.key, lyr_entry.hash).await.unwrap();
     let reader = ArtifactReader::open(bytes).unwrap();
     let payload = reader.section(SectionKind::ClassAssignment).unwrap();
     let assigns = decode_class_assignment(&payload).unwrap();
@@ -194,15 +192,14 @@ async fn snapshot_writes_artifacts_and_publishes_manifest() {
 
 #[tokio::test]
 async fn snapshot_omits_unmatched_rows_from_layer_assignment() {
-    let tmp = TempDir::new().unwrap();
     let cfg = make_config();
-    let (deps, store, publisher) = build_deps(&tmp, make_rows_with_unmatched_class());
+    let (deps, store, publisher) = build_deps(make_rows_with_unmatched_class());
     let compiler = Compiler::new(deps, cfg);
     compiler.run(CancellationToken::new()).await.unwrap();
 
-    let lyr_keys = store.list("lyr").await.unwrap();
-    let lyr_path = publisher.root().join(lyr_keys[0].as_str());
-    let bytes = bytes::Bytes::from(std::fs::read(&lyr_path).unwrap());
+    let manifest = publisher.current_manifest().await.unwrap().unwrap();
+    let lyr_entry = &manifest.layer_artifacts[0];
+    let bytes = store.get(&lyr_entry.key, lyr_entry.hash).await.unwrap();
     let reader = ArtifactReader::open(bytes).unwrap();
     let payload = reader.section(SectionKind::ClassAssignment).unwrap();
     let assigns = decode_class_assignment(&payload).unwrap();
@@ -215,8 +212,7 @@ async fn snapshot_omits_unmatched_rows_from_layer_assignment() {
 async fn snapshot_is_deterministic() {
     let cfg = make_config();
 
-    let tmp1 = TempDir::new().unwrap();
-    let (deps1, store1, _) = build_deps(&tmp1, make_rows());
+    let (deps1, store1, _) = build_deps(make_rows());
     Compiler::new(deps1, cfg.clone())
         .run(CancellationToken::new())
         .await
@@ -224,8 +220,7 @@ async fn snapshot_is_deterministic() {
     let lyr1 = store1.list("lyr").await.unwrap();
     let src1 = store1.list("src").await.unwrap();
 
-    let tmp2 = TempDir::new().unwrap();
-    let (deps2, store2, _) = build_deps(&tmp2, make_rows());
+    let (deps2, store2, _) = build_deps(make_rows());
     Compiler::new(deps2, cfg).run(CancellationToken::new()).await.unwrap();
     let lyr2 = store2.list("lyr").await.unwrap();
     let src2 = store2.list("src").await.unwrap();

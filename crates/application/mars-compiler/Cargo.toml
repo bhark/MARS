@@ -28,7 +28,6 @@ async-trait        = { workspace = true }
 futures-util       = { workspace = true }
 
 [dev-dependencies]
-mars-store-fs      = { workspace = true }
+mars-store         = { workspace = true, features = ["test-utils"] }
 tokio              = { workspace = true, features = ["rt-multi-thread", "macros"] }
-tempfile = { workspace = true }
 futures-core       = { workspace = true }

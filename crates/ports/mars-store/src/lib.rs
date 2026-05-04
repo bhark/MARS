@@ -85,6 +85,16 @@ pub trait ManifestWatch: Send + Sync + 'static {
     async fn watch(&self) -> Result<BoxStream<'static, Result<Manifest, StoreError>>, StoreError>;
 }
 
+/// Reads the currently published manifest without subscribing to changes.
+/// Kept decoupled from [`ManifestPublisher`] so read and write ports can be
+/// wired to different backends (e.g. publisher writes to S3, reader polls
+/// a local replica).
+#[async_trait]
+pub trait ManifestReader: Send + Sync + 'static {
+    /// Returns the current manifest, or `None` if none has been published yet.
+    async fn current_manifest(&self) -> Result<Option<Manifest>, StoreError>;
+}
+
 /// Phase-0 stub adapters that satisfy the port traits with `NotImplemented`.
 /// Lets bins and tests compose the surface without naming a real backend.
 pub mod stub {
@@ -154,3 +164,8 @@ pub mod stub {
         fn mark_evictable(&self, _key: &ArtifactKey) {}
     }
 }
+
+/// In-memory implementations of the store ports for unit / integration tests.
+/// Enabled by the `test-utils` feature or when compiling `mars-store` tests.
+#[cfg(any(test, feature = "test-utils"))]
+pub mod mem;

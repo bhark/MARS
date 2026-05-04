@@ -60,6 +60,7 @@ pub struct FsCache {
     state: Mutex<CacheState>,
 }
 
+#[allow(clippy::unwrap_used)]
 impl Clone for FsCache {
     fn clone(&self) -> Self {
         Self {
@@ -103,6 +104,7 @@ impl FsCache {
     }
 }
 
+#[allow(clippy::unwrap_used)]
 #[async_trait]
 impl LocalCache for FsCache {
     async fn get_or_fetch(
