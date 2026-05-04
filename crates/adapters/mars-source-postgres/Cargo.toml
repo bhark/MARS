@@ -37,3 +37,4 @@ testcontainers = { version = "0.20", optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros", "rt-multi-thread"] }
+rand = "0.8"

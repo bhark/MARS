@@ -138,6 +138,7 @@ mod e2e_tests {
     use bytes::Bytes;
     use mars_source::SourceCollectionId;
     use mars_types::{CrsCode, ScaleBand};
+    use rand::distributions::{Alphanumeric, DistString};
     use testcontainers::{
         GenericImage, ImageExt,
         core::{IntoContainerPort, WaitFor},
@@ -148,12 +149,13 @@ mod e2e_tests {
     async fn fetch_cell_returns_five_rows() {
         let _ = Bytes::new(); // ensure bytes is used in this cfg
 
+        let password = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
         let container = GenericImage::new("postgis/postgis", "16-3.4")
             .with_exposed_port(5432.tcp())
             .with_wait_for(WaitFor::message_on_stderr(
                 "database system is ready to accept connections",
             ))
-            .with_env_var("POSTGRES_PASSWORD", "pw")
+            .with_env_var("POSTGRES_PASSWORD", &password)
             .with_env_var("POSTGRES_USER", "mars")
             .with_env_var("POSTGRES_DB", "mars")
             .start()
@@ -161,7 +163,7 @@ mod e2e_tests {
             .expect("docker available");
 
         let port = container.get_host_port_ipv4(5432).await.unwrap();
-        let dsn = format!("host=127.0.0.1 port={port} user=mars password=pw dbname=mars");
+        let dsn = format!("host=127.0.0.1 port={port} user=mars password={password} dbname=mars");
 
         // setup table
         let setup = PgConfig {

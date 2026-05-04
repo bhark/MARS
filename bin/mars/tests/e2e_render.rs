@@ -17,6 +17,7 @@ use mars_source_postgres::{PgConfig, PgSource};
 use mars_store_fs::{FsCache, FsPublisher, FsStore};
 use mars_style::Stylesheet;
 use mars_types::{Bbox, CrsCode, ImageFormat, LayerId, Manifest};
+use rand::distributions::{Alphanumeric, DistString};
 use tempfile::TempDir;
 use testcontainers::{
     GenericImage, ImageExt,
@@ -35,19 +36,20 @@ const FILL_B: (u8, u8, u8) = (38, 139, 210); // blue-ish
 #[tokio::test(flavor = "multi_thread")]
 async fn end_to_end_compile_and_render() -> Result<()> {
     // start postgis
+    let password = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
     let container = GenericImage::new("postgis/postgis", "16-3.4")
         .with_exposed_port(5432.tcp())
         .with_wait_for(WaitFor::message_on_stderr(
             "database system is ready to accept connections",
         ))
-        .with_env_var("POSTGRES_PASSWORD", "pw")
+        .with_env_var("POSTGRES_PASSWORD", &password)
         .with_env_var("POSTGRES_USER", "mars")
         .with_env_var("POSTGRES_DB", "mars")
         .start()
         .await
         .context("start postgis container")?;
     let port = container.get_host_port_ipv4(5432).await.context("host port")?;
-    let dsn = format!("host=127.0.0.1 port={port} user=mars password=pw dbname=mars");
+    let dsn = format!("host=127.0.0.1 port={port} user=mars password={password} dbname=mars");
 
     if let Err(e) = setup_database(&dsn).await {
         dump_logs(&container).await;
