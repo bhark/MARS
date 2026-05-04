@@ -20,7 +20,7 @@ mars-types         = { workspace = true }
 mars-observability = { workspace = true }
 axum               = "0.7"
 tower              = "0.5"
-tower-http         = { version = "0.5", features = ["trace"] }
+tower-http         = { version = "0.5", features = ["trace", "timeout", "limit"] }
 tokio              = { workspace = true }
 tracing            = { workspace = true }
 thiserror          = { workspace = true }

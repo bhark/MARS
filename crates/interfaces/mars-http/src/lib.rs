@@ -16,6 +16,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use axum::Router;
 use axum::extract::State;
@@ -24,6 +25,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use mars_runtime::{Runtime, RuntimeError};
 use mars_wms::{WmsConfig, WmsError, WmsRequest};
+use tower_http::limit::RequestBodyLimitLayer;
+use tower_http::timeout::TimeoutLayer;
 use tracing::Instrument;
 
 #[derive(Debug, thiserror::Error)]
@@ -62,6 +65,8 @@ pub fn router(runtime: Arc<Runtime>, capabilities: String, wms_cfg: WmsConfig) -
         .route("/readyz", get(handle_ready))
         .route("/metrics", get(handle_metrics))
         .with_state(state)
+        .layer(RequestBodyLimitLayer::new(1 << 20))
+        .layer(TimeoutLayer::new(Duration::from_secs(60)))
 }
 
 /// Run the HTTP server until ctrl_c.
@@ -173,7 +178,12 @@ fn runtime_error_response(e: RuntimeError) -> Response {
         RuntimeError::NotReady => tracing::warn!(error = %e, "render failed"),
         _ => tracing::error!(error = %e, "render failed"),
     }
-    (status, e.to_string()).into_response()
+    let body = if status == StatusCode::INTERNAL_SERVER_ERROR {
+        "internal server error".to_owned()
+    } else {
+        e.to_string()
+    };
+    (status, body).into_response()
 }
 
 #[cfg(test)]
@@ -238,7 +248,7 @@ mod tests {
     }
 
     async fn body_str(resp: Response) -> String {
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
         String::from_utf8_lossy(&bytes).into_owned()
     }
 
