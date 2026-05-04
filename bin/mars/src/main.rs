@@ -6,11 +6,22 @@
 //! `mars validate <path>` and `mars inspect <path>` are operational tooling
 //! subcommands. Providing both `--mode` and a subcommand is a parse error.
 
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand, ValueEnum};
+use mars_compiler::{Compiler, Deps as CompilerDeps};
+use mars_config::{Config, ClassStyle, StyleEntry, config_dir};
+use mars_render::TinySkiaRenderer;
+use mars_runtime::{Deps as RuntimeDeps, Runtime, RuntimeState};
+use mars_source_postgres::{PgConfig, PgSource};
+use mars_store::{LocalCache, ObjectStore};
+use mars_store_fs::{FsCache, FsPublisher, FsStore};
+use mars_style::Stylesheet;
+use mars_types::Manifest;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Parser)]
@@ -72,77 +83,256 @@ fn main() -> Result<()> {
 async fn async_main(cli: Cli) -> Result<()> {
     match (cli.mode, cli.tool) {
         (Some(_), Some(_)) => {
-            anyhow::bail!("mars: --mode and a subcommand are mutually exclusive; provide exactly one")
+            Err(anyhow!("mars: --mode and a subcommand are mutually exclusive; provide exactly one"))
         }
         (None, None) => {
-            anyhow::bail!("mars: provide --mode <runtime|compiler|all-in-one> or one of: validate, inspect")
+            Err(anyhow!("mars: provide --mode <runtime|compiler|all-in-one> or one of: validate, inspect"))
         }
         (Some(Mode::Runtime), None) => run_runtime(&cli.config).await,
-        (Some(Mode::Compiler), None) => run_compiler(&cli.config).await,
+        (Some(Mode::Compiler), None) => run_compiler_mode(&cli.config).await,
         (Some(Mode::AllInOne), None) => run_all_in_one(&cli.config).await,
         (None, Some(Tool::Validate { path })) => tool_validate(&path).await,
         (None, Some(Tool::Inspect { path })) => tool_inspect(&path).await,
     }
 }
 
+// ---------- runtime mode ----------
+
 async fn run_runtime(config_path: &Path) -> Result<()> {
-    // composition root rewritten in slice i; this stub keeps the workspace
-    // building and returns a clear error rather than panicking.
-    tracing::info!(?config_path, "runtime mode wiring lands in slice i");
-    let _cfg = mars_config::load(config_path);
-    let _ = mars_render::TinySkiaRenderer;
-    let _: mars_store::stub::NotImplementedStore = mars_store::stub::NotImplementedStore;
-    let _: mars_store::stub::NotImplementedCache = mars_store::stub::NotImplementedCache;
-    let _ = Arc::new(()); // silence unused arc import; slice i will wire concrete types
-    anyhow::bail!("mars runtime: composition root pending slice i")
+    let cfg = load_and_validate(config_path)?;
+
+    let store = build_store(&cfg)?;
+    let cache = build_cache(&cfg)?;
+    let publisher = build_publisher(&cfg)?;
+
+    let listen = resolve_listen(&cfg)?;
+    let wms_cfg = mars_wms::WmsConfig::from_config(&cfg);
+
+    // try to load a current manifest; absence means /readyz returns 503.
+    let (runtime, manifest_for_caps) = match read_current_manifest(&publisher)? {
+        Some(manifest) => {
+            let stylesheet = build_stylesheet(&cfg);
+            let state =
+                RuntimeState::from_config_and_manifest(&cfg, stylesheet, manifest.clone())
+                    .map_err(|e| anyhow!("runtime state: {e}"))?;
+            let rt = Arc::new(Runtime::from_state(
+                Arc::new(state),
+                RuntimeDeps {
+                    store,
+                    cache,
+                    renderer: Arc::new(TinySkiaRenderer),
+                },
+            ));
+            (Some(rt), manifest)
+        }
+        None => {
+            tracing::warn!("no manifest published yet; readyz will return 503");
+            (None, empty_manifest(&cfg))
+        }
+    };
+
+    let caps = mars_wms::capabilities_xml(&cfg, &manifest_for_caps)
+        .map_err(|e| anyhow!("capabilities: {e}"))?;
+
+    mars_http::serve(
+        mars_http::ServerConfig {
+            listen,
+            debug_endpoints: false,
+        },
+        runtime,
+        caps,
+        wms_cfg,
+    )
+    .await
+    .map_err(Into::into)
 }
 
-async fn run_compiler(config_path: &Path) -> Result<()> {
-    tracing::info!(?config_path, "starting compiler mode (Phase 0 stub)");
-    let cfg = mars_config::load(config_path)?;
-    let pg = Arc::new(mars_source::stub::NotImplementedSource);
-    let store = Arc::new(mars_store_s3::StubS3::default());
-    let manifest_pub: Arc<dyn mars_store::ManifestPublisher> =
-        Arc::new(mars_store::stub::NotImplementedPublisher);
-    let compiler = mars_compiler::Compiler::new(
-        mars_compiler::Deps {
-            source: pg.clone(),
-            change_feed: pg,
+// ---------- compiler mode ----------
+
+async fn run_compiler_mode(config_path: &Path) -> Result<()> {
+    let cfg = load_and_validate(config_path)?;
+    run_compiler(cfg).await
+}
+
+async fn run_compiler(cfg: Config) -> Result<()> {
+    let source = build_source(&cfg).await?;
+    let store = build_store(&cfg)?;
+    let publisher = build_publisher(&cfg)?;
+
+    let compiler = Compiler::new(
+        CompilerDeps {
+            source: source.clone(),
+            change_feed: source,
             store,
-            manifest: manifest_pub,
+            manifest: publisher,
         },
         cfg,
     );
-    if let Err(e) = compiler.run(CancellationToken::new()).await {
-        tracing::error!(%e, "compiler run returned error (expected in Phase 0)");
-        return Err(e.into());
-    }
-    Ok(())
+    compiler
+        .run(CancellationToken::new())
+        .await
+        .map_err(|e| anyhow!(e))
 }
 
 async fn run_all_in_one(config_path: &Path) -> Result<()> {
-    tracing::info!(?config_path, "starting all-in-one mode (Phase 0 stub)");
-    let (a, b) = tokio::join!(run_compiler(config_path), run_runtime(config_path));
-    a.and(b)
+    let cfg = load_and_validate(config_path)?;
+    run_compiler(cfg).await?;
+    run_runtime(config_path).await
 }
 
+// ---------- tooling ----------
+
 async fn tool_validate(path: &Path) -> Result<()> {
-    tracing::info!(?path, "validate (Phase 0 stub)");
-    match mars_config::load(path) {
-        Ok(_) => {
-            println!("ok");
-            Ok(())
-        }
-        Err(e) => Err(e.into()),
-    }
+    let cfg = mars_config::load(path).with_context(|| format!("load {}", path.display()))?;
+    mars_config::validate(&cfg, &config_dir(path)).context("validate")?;
+    println!("ok");
+    Ok(())
 }
 
 async fn tool_inspect(path: &Path) -> Result<()> {
-    tracing::info!(?path, "inspect (Phase 0 stub)");
     let bytes = tokio::fs::read(path)
         .await
-        .map_err(|e| anyhow::anyhow!("read {}: {}", path.display(), e))?;
-    let _reader = mars_artifact::ArtifactReader::open(bytes::Bytes::from(bytes))?;
-    println!("opened artifact ok");
+        .map_err(|e| anyhow!("read {}: {}", path.display(), e))?;
+    let reader = mars_artifact::ArtifactReader::open(bytes::Bytes::from(bytes))?;
+    let bbox = reader.bbox();
+    println!("kind: {:?}", reader.kind());
+    println!("bbox: [{}, {}, {}, {}]", bbox.min_x, bbox.min_y, bbox.max_x, bbox.max_y);
+    println!("feature_count: {}", reader.feature_count());
+    if let Some(sr) = reader.source_ref() {
+        println!(
+            "source_ref: collection={} band={} cell=({},{})",
+            sr.collection, sr.band, sr.cell_x, sr.cell_y
+        );
+    }
+    println!("sections:");
+    for kind in [
+        mars_artifact::SectionKind::GeometryIndex,
+        mars_artifact::SectionKind::GeometryPayload,
+        mars_artifact::SectionKind::Attributes,
+        mars_artifact::SectionKind::LabelCandidates,
+        mars_artifact::SectionKind::ClassAssignment,
+        mars_artifact::SectionKind::StyleRefs,
+    ] {
+        match reader.section(kind) {
+            Ok(b) => println!("  - {kind:?}: {} bytes", b.len()),
+            Err(mars_artifact::ArtifactError::SectionMissing(_)) => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
     Ok(())
+}
+
+// ---------- composition helpers ----------
+
+fn load_and_validate(path: &Path) -> Result<Config> {
+    let cfg = mars_config::load(path).with_context(|| format!("load {}", path.display()))?;
+    mars_config::validate(&cfg, &config_dir(path)).context("validate config")?;
+    Ok(cfg)
+}
+
+async fn build_source(cfg: &Config) -> Result<Arc<PgSource>> {
+    if cfg.source.kind != "postgis" {
+        return Err(anyhow!(
+            "source.type='{}' not supported in Phase 0; only 'postgis'",
+            cfg.source.kind
+        ));
+    }
+    let feed = cfg.source.change_feed.as_ref();
+    let pg_cfg = PgConfig {
+        dsn: cfg.source.dsn.clone(),
+        publication: feed.and_then(|f| f.publication.clone()).unwrap_or_default(),
+        slot: feed.and_then(|f| f.slot.clone()).unwrap_or_default(),
+    };
+    Ok(Arc::new(PgSource::connect(pg_cfg).await.context("connect postgres")?))
+}
+
+fn build_store(cfg: &Config) -> Result<Arc<dyn ObjectStore>> {
+    match cfg.artifacts.store.kind.as_str() {
+        "fs" => {
+            let p = cfg
+                .artifacts
+                .store
+                .path
+                .as_deref()
+                .ok_or_else(|| anyhow!("artifacts.store.path required for type=fs"))?;
+            Ok(Arc::new(FsStore::new(p).context("open fs store")?))
+        }
+        other => Err(anyhow!(
+            "artifacts.store.type='{other}' not supported in Phase 0; use type=fs"
+        )),
+    }
+}
+
+fn build_cache(cfg: &Config) -> Result<Arc<dyn LocalCache>> {
+    Ok(Arc::new(
+        FsCache::new(&cfg.artifacts.cache.path).context("open fs cache")?,
+    ))
+}
+
+fn build_publisher(cfg: &Config) -> Result<Arc<FsPublisher>> {
+    let p = cfg
+        .artifacts
+        .store
+        .path
+        .as_deref()
+        .ok_or_else(|| anyhow!("artifacts.store.path required for manifest publisher"))?;
+    Ok(Arc::new(FsPublisher::new(p).context("open fs publisher")?))
+}
+
+fn read_current_manifest(pub_: &FsPublisher) -> Result<Option<Manifest>> {
+    let Some(pointer) = pub_.read_current()? else {
+        return Ok(None);
+    };
+    let pointer = pointer.trim();
+    let body_path = pub_.manifests_dir().join(format!("{pointer}.json"));
+    let body = std::fs::read(&body_path)
+        .with_context(|| format!("read manifest body {}", body_path.display()))?;
+    let manifest: Manifest = serde_json::from_slice(&body).context("parse manifest")?;
+    Ok(Some(manifest))
+}
+
+fn build_stylesheet(cfg: &Config) -> Stylesheet {
+    let mut ss = Stylesheet::default();
+    for (name, entry) in &cfg.styles {
+        match entry {
+            StyleEntry::Geometry(s) => {
+                ss.geometry.insert(name.clone(), s.clone());
+            }
+            StyleEntry::Label(l) => {
+                ss.labels.insert(name.clone(), l.style.clone());
+            }
+        }
+    }
+    // also collect inline class styles under `<layer>::<class>` so runtime can
+    // resolve them via the same map; refs are already covered above.
+    for layer in &cfg.layers {
+        for class in &layer.classes {
+            if let ClassStyle::Inline(s) = &class.style {
+                let key = format!("{}::{}", layer.name, class.name);
+                ss.geometry.insert(key, s.clone());
+            }
+        }
+    }
+    ss
+}
+
+fn empty_manifest(cfg: &Config) -> Manifest {
+    Manifest {
+        version: 0,
+        service: cfg.service.name.clone(),
+        source_artifacts: vec![],
+        layer_artifacts: vec![],
+        style_artifact: None,
+    }
+}
+
+fn resolve_listen(cfg: &Config) -> Result<SocketAddr> {
+    let raw = cfg
+        .interfaces
+        .wms
+        .as_ref()
+        .and_then(|w| w.listen.clone())
+        .or_else(|| std::env::var("MARS_HTTP_LISTEN").ok())
+        .unwrap_or_else(|| "0.0.0.0:8080".to_owned());
+    SocketAddr::from_str(&raw).with_context(|| format!("parse listen addr {raw:?}"))
 }

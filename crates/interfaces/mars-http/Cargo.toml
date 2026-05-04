@@ -12,10 +12,18 @@ description = "axum HTTP edge: /wms /wmts /healthz /readyz /metrics /debug/*."
 workspace = true
 
 [dependencies]
-mars-runtime      = { workspace = true }
-mars-wms          = { workspace = true }
-mars-wmts         = { workspace = true }
+mars-runtime       = { workspace = true }
+mars-wms           = { workspace = true }
+mars-wmts          = { workspace = true }
+mars-config        = { workspace = true }
+mars-types         = { workspace = true }
 mars-observability = { workspace = true }
-tokio             = { workspace = true }
-tracing           = { workspace = true }
-thiserror         = { workspace = true }
+axum               = "0.7"
+tower              = "0.5"
+tower-http         = { version = "0.5", features = ["trace"] }
+tokio              = { workspace = true }
+tracing            = { workspace = true }
+thiserror          = { workspace = true }
+
+[dev-dependencies]
+tower              = { version = "0.5", features = ["util"] }

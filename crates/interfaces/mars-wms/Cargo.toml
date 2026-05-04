@@ -13,4 +13,10 @@ workspace = true
 
 [dependencies]
 mars-runtime  = { workspace = true }
+mars-config   = { workspace = true }
+mars-types    = { workspace = true }
+quick-xml     = "0.36"
 thiserror     = { workspace = true }
+
+[dev-dependencies]
+serde_yml     = "0.0.12"
