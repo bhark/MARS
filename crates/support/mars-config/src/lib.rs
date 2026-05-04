@@ -32,11 +32,23 @@ pub use model::*;
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
     /// Filesystem error (read, canonicalize).
-    #[error("io error: {0}")]
-    Io(String),
+    #[error("io error: {context}")]
+    Io {
+        /// what operation failed.
+        context: String,
+        /// underlying std::io error.
+        #[source]
+        source: std::io::Error,
+    },
     /// YAML parse error.
-    #[error("yaml parse error: {0}")]
-    Parse(String),
+    #[error("yaml parse error in {path}")]
+    Parse {
+        /// file being parsed.
+        path: String,
+        /// underlying serde_yml error.
+        #[source]
+        source: serde_yml::Error,
+    },
     /// Required env var was unset and had no default.
     #[error("env var not set and no default: {0}")]
     EnvMissing(String),
@@ -57,8 +69,10 @@ pub fn load(path: impl AsRef<Path>) -> Result<Config, ConfigError> {
     let path = path.as_ref();
     let root = config_dir(path);
     let value = include::load_with_includes(path, &root)?;
-    let config: Config =
-        serde_yml::from_value(value).map_err(|e| ConfigError::Parse(format!("{}: {e}", path.display())))?;
+    let config: Config = serde_yml::from_value(value).map_err(|e| ConfigError::Parse {
+        path: path.display().to_string(),
+        source: e,
+    })?;
     Ok(config)
 }
 

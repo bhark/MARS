@@ -327,7 +327,13 @@ mod tests {
     #[test]
     fn rejects_ewkb_srid_mismatch() {
         let err = decode_feature(0, &ewkb_point_le(25832), Some(4326)).unwrap_err();
-        assert!(matches!(err, WkbError::SridMismatch { expected: 4326, actual: 25832 }));
+        assert!(matches!(
+            err,
+            WkbError::SridMismatch {
+                expected: 4326,
+                actual: 25832
+            }
+        ));
     }
 
     #[test]
@@ -401,7 +407,12 @@ mod tests {
         poly_with_srid.extend_from_slice(&25832u32.to_le_bytes());
         poly_with_srid.extend_from_slice(&1u32.to_le_bytes()); // 1 ring
         poly_with_srid.extend_from_slice(&4u32.to_le_bytes()); // 4 points
-        for (x, y) in [(0.0_f64, 0.0_f64), (1.0_f64, 0.0_f64), (1.0_f64, 1.0_f64), (0.0_f64, 0.0_f64)] {
+        for (x, y) in [
+            (0.0_f64, 0.0_f64),
+            (1.0_f64, 0.0_f64),
+            (1.0_f64, 1.0_f64),
+            (0.0_f64, 0.0_f64),
+        ] {
             poly_with_srid.extend_from_slice(&x.to_le_bytes());
             poly_with_srid.extend_from_slice(&y.to_le_bytes());
         }

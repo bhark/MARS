@@ -19,7 +19,10 @@ pub(crate) enum ParsedKey {
 pub(crate) fn parse(key: &ArtifactKey) -> Result<ParsedKey, RuntimeError> {
     let s = key.as_str();
     let parts: Vec<&str> = s.split('/').collect();
-    let bad = || RuntimeError::BadKey(s.to_owned());
+    let bad = || RuntimeError::BadKey {
+        key: s.to_owned(),
+        reason: "unexpected key format".into(),
+    };
     match parts.as_slice() {
         // lyr/{layer}/{band}/{cx}_{cy}/v{schema}/{hash}.mars
         ["lyr", layer, band, cell, vseg, leaf] => {

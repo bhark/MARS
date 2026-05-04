@@ -53,10 +53,10 @@ pub enum RuntimeError {
         band: String,
         cell: (i64, i64),
     },
-    #[error("malformed manifest key: {0}")]
-    BadKey(String),
-    #[error("config error: {0}")]
-    Config(String),
+    #[error("malformed manifest key '{key}': {reason}")]
+    BadKey { key: String, reason: String },
+    #[error(transparent)]
+    Config(#[from] mars_config::ConfigError),
     #[error("not implemented: {what}")]
     NotImplemented { what: &'static str },
 }
@@ -148,7 +148,10 @@ impl Runtime {
             )
             .await?;
             let source_ref = layer_art.source_ref().cloned().ok_or_else(|| {
-                RuntimeError::Config(format!("layer artifact '{}' is missing source_ref footer", task.layer))
+                RuntimeError::Config(mars_config::ConfigError::Invalid(format!(
+                    "layer artifact '{}' is missing source_ref footer",
+                    task.layer
+                )))
             })?;
             let source_cell = mars_types::Cell {
                 band: mars_types::ScaleBand::new(source_ref.band.clone()),
@@ -177,7 +180,11 @@ impl Runtime {
         let format = plan.format;
         let bytes = tokio::task::spawn_blocking(move || renderer.render(canvas, &ops, format))
             .await
-            .map_err(|e| RuntimeError::Render(mars_render_port::RenderError::Backend(format!("render task panicked: {e}"))))??;
+            .map_err(|e| {
+                RuntimeError::Render(mars_render_port::RenderError::Backend(format!(
+                    "render task panicked: {e}"
+                )))
+            })??;
         Ok(bytes)
     }
 }

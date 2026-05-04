@@ -85,7 +85,10 @@ mod tests {
                 class_index: 1,
             },
         ];
-        assert_eq!(first_match(&classes, &attrs(&[("x", Literal::Int(1))])).unwrap(), Some(0));
+        assert_eq!(
+            first_match(&classes, &attrs(&[("x", Literal::Int(1))])).unwrap(),
+            Some(0)
+        );
     }
 
     #[test]
@@ -128,8 +131,14 @@ mod tests {
             },
         ];
         // matches conditional
-        assert_eq!(first_match(&classes, &attrs(&[("x", Literal::Int(1))])).unwrap(), Some(0));
+        assert_eq!(
+            first_match(&classes, &attrs(&[("x", Literal::Int(1))])).unwrap(),
+            Some(0)
+        );
         // falls through to fallback
-        assert_eq!(first_match(&classes, &attrs(&[("x", Literal::Int(2))])).unwrap(), Some(1));
+        assert_eq!(
+            first_match(&classes, &attrs(&[("x", Literal::Int(2))])).unwrap(),
+            Some(1)
+        );
     }
 }

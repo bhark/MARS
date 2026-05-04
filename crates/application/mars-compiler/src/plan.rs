@@ -168,7 +168,15 @@ mod tests {
 
     #[test]
     fn cell_bbox_negative_coords() {
-        let b = cell_bbox((0.0, 0.0), 1024.0, &Cell { band: ScaleBand::new("hi"), x: -1, y: -2 });
+        let b = cell_bbox(
+            (0.0, 0.0),
+            1024.0,
+            &Cell {
+                band: ScaleBand::new("hi"),
+                x: -1,
+                y: -2,
+            },
+        );
         assert_eq!(b.min_x, -1024.0);
         assert_eq!(b.min_y, -2048.0);
         assert_eq!(b.max_x, 0.0);
@@ -177,7 +185,15 @@ mod tests {
 
     #[test]
     fn cell_bbox_origin() {
-        let b = cell_bbox((100.0, 200.0), 50.0, &Cell { band: ScaleBand::new("hi"), x: 0, y: 0 });
+        let b = cell_bbox(
+            (100.0, 200.0),
+            50.0,
+            &Cell {
+                band: ScaleBand::new("hi"),
+                x: 0,
+                y: 0,
+            },
+        );
         assert_eq!(b.min_x, 100.0);
         assert_eq!(b.min_y, 200.0);
         assert_eq!(b.max_x, 150.0);
@@ -186,29 +202,50 @@ mod tests {
 
     #[test]
     fn window_intersects_no_window() {
-        let band = Band { name: "hi".into(), max_denom: 25000 };
+        let band = Band {
+            name: "hi".into(),
+            max_denom: 25000,
+        };
         assert!(window_intersects(&None, &band));
     }
 
     #[test]
     fn window_intersects_min_at_threshold_rejected() {
         // band covers [0, 25000); window.min = 25000 means no overlap
-        let band = Band { name: "hi".into(), max_denom: 25000 };
-        let w = ScaleWindow { min: Some(25000), max: None };
+        let band = Band {
+            name: "hi".into(),
+            max_denom: 25000,
+        };
+        let w = ScaleWindow {
+            min: Some(25000),
+            max: None,
+        };
         assert!(!window_intersects(&Some(w), &band));
     }
 
     #[test]
     fn window_intersects_min_below_threshold_accepted() {
-        let band = Band { name: "hi".into(), max_denom: 25000 };
-        let w = ScaleWindow { min: Some(24999), max: None };
+        let band = Band {
+            name: "hi".into(),
+            max_denom: 25000,
+        };
+        let w = ScaleWindow {
+            min: Some(24999),
+            max: None,
+        };
         assert!(window_intersects(&Some(w), &band));
     }
 
     #[test]
     fn window_intersects_max_zero_rejected() {
-        let band = Band { name: "hi".into(), max_denom: 25000 };
-        let w = ScaleWindow { min: None, max: Some(0) };
+        let band = Band {
+            name: "hi".into(),
+            max_denom: 25000,
+        };
+        let w = ScaleWindow {
+            min: None,
+            max: Some(0),
+        };
         assert!(!window_intersects(&Some(w), &band));
     }
 
@@ -225,8 +262,18 @@ mod tests {
             bbox: None,
             sources: vec![],
             classes: vec![
-                Class { name: "a".into(), title: String::new(), when: Some("x = 1".into()), style: ClassStyle::Ref { ref_: "s1".into() } },
-                Class { name: "b".into(), title: String::new(), when: Some("x = 2".into()), style: ClassStyle::Ref { ref_: "s2".into() } },
+                Class {
+                    name: "a".into(),
+                    title: String::new(),
+                    when: Some("x = 1".into()),
+                    style: ClassStyle::Ref { ref_: "s1".into() },
+                },
+                Class {
+                    name: "b".into(),
+                    title: String::new(),
+                    when: Some("x = 2".into()),
+                    style: ClassStyle::Ref { ref_: "s2".into() },
+                },
             ],
             label: None,
         };
@@ -250,9 +297,12 @@ mod tests {
             enable_get_feature_info: false,
             bbox: None,
             sources: vec![],
-            classes: vec![
-                Class { name: "a".into(), title: String::new(), when: None, style: ClassStyle::Inline(Default::default()) },
-            ],
+            classes: vec![Class {
+                name: "a".into(),
+                title: String::new(),
+                when: None,
+                style: ClassStyle::Inline(Default::default()),
+            }],
             label: None,
         };
         let compiled = compile_classes(&layer).unwrap();

@@ -26,12 +26,14 @@ pub enum CompilerError {
     Store(#[from] mars_store::StoreError),
     #[error(transparent)]
     Plan(#[from] plan::PlanError),
-    #[error("wkb: {0}")]
-    Wkb(String),
-    #[error("artifact: {0}")]
-    Artifact(String),
-    #[error("expr: {0}")]
-    Expr(String),
+    #[error(transparent)]
+    Wkb(#[from] crate::wkb::WkbError),
+    #[error(transparent)]
+    Artifact(#[from] mars_artifact::ArtifactError),
+    #[error(transparent)]
+    Expr(#[from] mars_expr::ExprError),
+    #[error("build task panicked: {reason}")]
+    BuildTaskPanic { reason: String },
 }
 
 /// All ports the compiler depends on, bundled for easy composition by the bin.

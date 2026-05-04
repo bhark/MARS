@@ -80,8 +80,7 @@ impl FsCache {
     pub fn new(root: impl Into<PathBuf>, max_size_bytes: u64) -> Result<Self, StoreError> {
         let raw = root.into();
         if !raw.exists() {
-            std::fs::create_dir_all(&raw)
-                .map_err(|e| StoreError::Backend(format!("create cache root: {e}")))?;
+            std::fs::create_dir_all(&raw).map_err(|e| StoreError::Backend(format!("create cache root: {e}")))?;
         }
         let root = raw
             .canonicalize()
@@ -148,8 +147,7 @@ impl LocalCache for FsCache {
         let _root = self.root.clone();
         let size = tokio::task::spawn_blocking(move || {
             atomic_write(&path, &body)?;
-            let meta = std::fs::metadata(&path)
-                .map_err(|e| StoreError::Backend(format!("cache stat: {e}")))?;
+            let meta = std::fs::metadata(&path).map_err(|e| StoreError::Backend(format!("cache stat: {e}")))?;
             Ok::<_, StoreError>(meta.len())
         })
         .await

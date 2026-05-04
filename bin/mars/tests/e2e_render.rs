@@ -131,7 +131,7 @@ async fn end_to_end_compile_and_render() -> Result<()> {
     let info = reader.info().clone();
     assert_eq!(info.width, RENDER_PX);
     assert_eq!(info.height, RENDER_PX);
-    let mut buf = vec![0u8; reader.output_buffer_size()];
+    let mut buf = vec![0u8; reader.output_buffer_size().context("png output buffer too large")?];
     let frame = reader.next_frame(&mut buf)?;
     let pixels = &buf[..frame.buffer_size()];
     assert!(

@@ -84,10 +84,7 @@ fn parse_get_map_inner(kvp: &Kvp, cfg: &WmsConfig) -> Result<RenderPlan, WmsErro
     if width > cfg.max_image_dimension || height > cfg.max_image_dimension {
         return Err(WmsError::InvalidParam {
             name: "width|height",
-            reason: format!(
-                "max dimension is {}, got {}x{}",
-                cfg.max_image_dimension, width, height
-            ),
+            reason: format!("max dimension is {}, got {}x{}", cfg.max_image_dimension, width, height),
         });
     }
 
@@ -347,10 +344,7 @@ mod tests {
             (0..101).map(|i| i.to_string()).collect::<Vec<_>>().join(",")
         );
         let err = parse_get_map(&q, &cfg()).unwrap_err();
-        assert!(matches!(
-            err,
-            WmsError::InvalidParam { name: "layers", .. }
-        ));
+        assert!(matches!(err, WmsError::InvalidParam { name: "layers", .. }));
     }
 
     #[test]
@@ -358,10 +352,7 @@ mod tests {
         let q = "request=GetMap&version=1.3.0&layers=a&crs=EPSG:25832&\
                  bbox=0,0,1,inf&width=1&height=1&format=image/png";
         let err = parse_get_map(q, &cfg()).unwrap_err();
-        assert!(matches!(
-            err,
-            WmsError::InvalidParam { name: "bbox", .. }
-        ));
+        assert!(matches!(err, WmsError::InvalidParam { name: "bbox", .. }));
     }
 
     #[test]
@@ -369,10 +360,7 @@ mod tests {
         let q = "request=GetMap&version=1.3.0&layers=a&crs=EPSG:25832&\
                  bbox=0,0,1,1e10&width=1&height=1&format=image/png";
         let err = parse_get_map(q, &cfg()).unwrap_err();
-        assert!(matches!(
-            err,
-            WmsError::InvalidParam { name: "bbox", .. }
-        ));
+        assert!(matches!(err, WmsError::InvalidParam { name: "bbox", .. }));
     }
 
     #[test]
@@ -424,7 +412,13 @@ mod tests {
             u32::MAX
         );
         let err = parse_get_map(&q, &cfg()).unwrap_err();
-        assert!(matches!(err, WmsError::InvalidParam { name: "width|height", .. }));
+        assert!(matches!(
+            err,
+            WmsError::InvalidParam {
+                name: "width|height",
+                ..
+            }
+        ));
     }
 
     #[test]

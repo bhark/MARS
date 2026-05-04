@@ -23,18 +23,26 @@ const INCLUDE_TAG: &str = "!include";
 /// directory) to prevent directory traversal.
 pub(crate) fn load_with_includes(path: &Path, root: &Path) -> Result<Value, ConfigError> {
     let root = if root.as_os_str().is_empty() {
-        std::env::current_dir().map_err(|e| ConfigError::Io(format!("current dir: {e}")))?
+        std::env::current_dir().map_err(|e| ConfigError::Io {
+            context: "current dir".into(),
+            source: e,
+        })?
     } else {
         root.to_path_buf()
     };
-    let root = fs::canonicalize(&root)
-        .map_err(|e| ConfigError::Io(format!("canonicalize config root {}: {e}", root.display())))?;
+    let root = fs::canonicalize(&root).map_err(|e| ConfigError::Io {
+        context: format!("canonicalize config root {}", root.display()),
+        source: e,
+    })?;
     let mut stack: HashSet<PathBuf> = HashSet::new();
     load_inner(path, &root, &mut stack)
 }
 
 fn load_inner(path: &Path, root: &Path, stack: &mut HashSet<PathBuf>) -> Result<Value, ConfigError> {
-    let canon = fs::canonicalize(path).map_err(|e| ConfigError::Io(format!("canonicalize {}: {e}", path.display())))?;
+    let canon = fs::canonicalize(path).map_err(|e| ConfigError::Io {
+        context: format!("canonicalize {}", path.display()),
+        source: e,
+    })?;
     if !canon.starts_with(root) {
         return Err(ConfigError::Invalid(format!(
             "include path {} escapes config directory {}",
@@ -49,10 +57,15 @@ fn load_inner(path: &Path, root: &Path, stack: &mut HashSet<PathBuf>) -> Result<
         )));
     }
 
-    let raw = fs::read_to_string(&canon).map_err(|e| ConfigError::Io(format!("read {}: {e}", canon.display())))?;
+    let raw = fs::read_to_string(&canon).map_err(|e| ConfigError::Io {
+        context: format!("read {}", canon.display()),
+        source: e,
+    })?;
     let expanded = substitute(&raw)?;
-    let mut value: Value =
-        serde_yml::from_str(&expanded).map_err(|e| ConfigError::Parse(format!("{}: {e}", canon.display())))?;
+    let mut value: Value = serde_yml::from_str(&expanded).map_err(|e| ConfigError::Parse {
+        path: canon.display().to_string(),
+        source: e,
+    })?;
 
     let dir = canon.parent().map(Path::to_path_buf).unwrap_or_default();
     resolve(&mut value, &dir, root, stack)?;
@@ -71,8 +84,10 @@ fn resolve(value: &mut Value, base_dir: &Path, root: &Path, stack: &mut HashSet<
             .as_str()
             .ok_or_else(|| ConfigError::Invalid("!include argument must be a string path".into()))?;
         let target = base_dir.join(rel);
-        let target_canon = fs::canonicalize(&target)
-            .map_err(|e| ConfigError::Io(format!("canonicalize {}: {e}", target.display())))?;
+        let target_canon = fs::canonicalize(&target).map_err(|e| ConfigError::Io {
+            context: format!("canonicalize {}", target.display()),
+            source: e,
+        })?;
         if !target_canon.starts_with(root) {
             return Err(ConfigError::Invalid(format!(
                 "include path {} escapes config directory {}",

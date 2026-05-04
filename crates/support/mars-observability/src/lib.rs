@@ -10,8 +10,8 @@ use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ObservabilityError {
-    #[error("subscriber init: {0}")]
-    Subscriber(String),
+    #[error("subscriber init error")]
+    Subscriber(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
 /// Stable metric names. Use constants so dashboards survive refactors.
@@ -52,5 +52,5 @@ pub fn init_tracing(json: bool) -> Result<(), ObservabilityError> {
     } else {
         tracing_subscriber::fmt().with_env_filter(filter).try_init()
     };
-    result.map_err(|e| ObservabilityError::Subscriber(e.to_string()))
+    result.map_err(|e| ObservabilityError::Subscriber(e))
 }

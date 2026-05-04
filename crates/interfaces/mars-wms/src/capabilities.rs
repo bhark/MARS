@@ -233,7 +233,10 @@ layers:
             style_artifact: None,
         };
         let xml = capabilities_xml(&cfg, &m).unwrap();
-        assert!(!xml.contains("<CRS>"), "expected no CRS elements when allowlist is empty");
+        assert!(
+            !xml.contains("<CRS>"),
+            "expected no CRS elements when allowlist is empty"
+        );
     }
 
     #[test]
@@ -248,6 +251,9 @@ layers:
             style_artifact: None,
         };
         let xml = capabilities_xml(&cfg, &m).unwrap();
-        assert!(!xml.contains("ContactInformation"), "expected no contact block when email empty");
+        assert!(
+            !xml.contains("ContactInformation"),
+            "expected no contact block when email empty"
+        );
     }
 }

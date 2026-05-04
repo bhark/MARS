@@ -29,7 +29,9 @@ struct Cli {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    mars_observability::init_tracing(false).ok();
+    if let Err(e) = mars_observability::init_tracing(false) {
+        eprintln!("warning: tracing init failed: {e}");
+    }
     let _ = cli.once; // accepted for forward-compat; phase-0 pipeline is single-shot.
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     runtime.block_on(async move {

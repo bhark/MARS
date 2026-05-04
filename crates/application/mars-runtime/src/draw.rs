@@ -230,7 +230,12 @@ mod tests {
 
     fn red_style() -> Style {
         Style {
-            fill: Some(Colour { r: 255, g: 0, b: 0, a: 255 }),
+            fill: Some(Colour {
+                r: 255,
+                g: 0,
+                b: 0,
+                a: 255,
+            }),
             ..Default::default()
         }
     }
