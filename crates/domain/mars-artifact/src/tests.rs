@@ -64,6 +64,7 @@ prop_compose! {
 
 prop_compose! {
     fn features_strategy()(geoms in prop::collection::vec(geom_strategy(), 0..16)) -> Vec<FeatureGeom> {
+        // ids must be strictly ascending and unique per encoder contract.
         let mut out = Vec::with_capacity(geoms.len());
         for (i, g) in geoms.into_iter().enumerate() {
             out.push(FeatureGeom { id: i as u64, bbox: [0.0; 4], geom: g });
@@ -147,7 +148,6 @@ fn build_simple_artifact() -> Bytes {
     }];
     let mut w = ArtifactWriter::new(ArtifactKind::Source);
     w.add_geometry_payload(&features)
-        .unwrap()
         .set_bbox(Bbox::new(0.0, 0.0, 10.0, 10.0))
         .set_feature_count(1);
     w.finish().unwrap()
@@ -257,4 +257,123 @@ fn rejects_compressed_section_flag() {
 #[test]
 fn magic_constant_matches_spec() {
     assert_eq!(MAGIC, b"MARS\0\0\0\0");
+}
+
+#[test]
+fn writer_requires_bbox() {
+    let mut w = ArtifactWriter::new(ArtifactKind::Source);
+    w.set_feature_count(0);
+    assert!(matches!(w.finish(), Err(ArtifactError::InvalidWriterState(_))));
+}
+
+#[test]
+fn writer_rejects_source_ref_on_source_kind() {
+    let mut w = ArtifactWriter::new(ArtifactKind::Source);
+    w.set_bbox(Bbox::new(0.0, 0.0, 1.0, 1.0)).set_source_ref(SourceRef {
+        collection: "c".into(),
+        band: "b".into(),
+        cell_x: 0,
+        cell_y: 0,
+        content_hash: ContentHash([0u8; 32]),
+    });
+    assert!(matches!(w.finish(), Err(ArtifactError::InvalidWriterState(_))));
+}
+
+#[test]
+fn writer_validates_feature_count_against_payload() {
+    let features = vec![FeatureGeom {
+        id: 1,
+        bbox: [0.0; 4],
+        geom: GeomKind::Point((0.0, 0.0)),
+    }];
+    let mut w = ArtifactWriter::new(ArtifactKind::Source);
+    w.add_geometry_payload(&features)
+        .set_bbox(Bbox::new(0.0, 0.0, 1.0, 1.0))
+        .set_feature_count(99);
+    assert!(matches!(w.finish(), Err(ArtifactError::InvalidWriterState(_))));
+}
+
+#[test]
+fn class_assignment_rejects_unsorted() {
+    // hand-build: count=2, ids 5,1 (decreasing)
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&2u32.to_le_bytes());
+    buf.extend_from_slice(&5u64.to_le_bytes());
+    buf.extend_from_slice(&0u16.to_le_bytes());
+    buf.extend_from_slice(&1u64.to_le_bytes());
+    buf.extend_from_slice(&1u16.to_le_bytes());
+    assert!(matches!(decode_class_assignment(&buf), Err(ArtifactError::Malformed(_))));
+}
+
+#[test]
+fn class_assignment_rejects_duplicate() {
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&2u32.to_le_bytes());
+    buf.extend_from_slice(&5u64.to_le_bytes());
+    buf.extend_from_slice(&0u16.to_le_bytes());
+    buf.extend_from_slice(&5u64.to_le_bytes());
+    buf.extend_from_slice(&1u16.to_le_bytes());
+    assert!(matches!(decode_class_assignment(&buf), Err(ArtifactError::Malformed(_))));
+}
+
+#[test]
+fn class_assignment_rejects_trailing_bytes() {
+    let mut buf = crate::encode_class_assignment(&[(1u64, 0u16)]).to_vec();
+    buf.push(0);
+    let err = decode_class_assignment(&buf).unwrap_err();
+    assert!(matches!(err, ArtifactError::Malformed(_)));
+}
+
+#[test]
+fn style_refs_rejects_huge_count() {
+    // declare u32::MAX entries in a 4-byte buffer; must not OOM
+    let mut buf = Vec::new();
+    buf.extend_from_slice(&u32::MAX.to_le_bytes());
+    assert!(matches!(decode_style_refs(&buf), Err(ArtifactError::Truncated)));
+}
+
+#[test]
+fn geometry_rejects_unsorted_features() {
+    let features = vec![
+        FeatureGeom {
+            id: 5,
+            bbox: [0.0; 4],
+            geom: GeomKind::Point((0.0, 0.0)),
+        },
+        FeatureGeom {
+            id: 1,
+            bbox: [0.0; 4],
+            geom: GeomKind::Point((1.0, 1.0)),
+        },
+    ];
+    assert!(matches!(
+        encode_geometry_payload(&features),
+        Err(ArtifactError::UnsortedFeatures)
+    ));
+}
+
+#[test]
+fn geometry_rejects_non_finite_coord() {
+    let features = vec![FeatureGeom {
+        id: 0,
+        bbox: [0.0; 4],
+        geom: GeomKind::Point((f64::NAN, 0.0)),
+    }];
+    assert!(matches!(
+        encode_geometry_payload(&features),
+        Err(ArtifactError::CoordOutOfRange(_))
+    ));
+}
+
+#[test]
+fn geometry_rejects_oversize_coord() {
+    let features = vec![FeatureGeom {
+        id: 0,
+        bbox: [0.0; 4],
+        geom: GeomKind::Point((1e20, 0.0)),
+    }];
+    assert!(matches!(
+        encode_geometry_payload(&features),
+        Err(ArtifactError::CoordOutOfRange(_))
+    ));
 }

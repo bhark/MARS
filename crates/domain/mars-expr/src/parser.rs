@@ -171,21 +171,24 @@ fn parse_err(pos: usize, msg: &str) -> ExprError {
 }
 
 fn read_string(bytes: &[u8], start: usize) -> Result<(String, usize), ExprError> {
+    // walk by char_indices on the post-quote slice so multi-byte utf-8 (e.g.
+    // danish 'ø' in 'Foreløbig') is preserved instead of being byte-as-char'd.
+    let body_start = start + 1;
+    let s = std::str::from_utf8(&bytes[body_start..]).map_err(|_| parse_err(start, "invalid utf-8 in string literal"))?;
     let mut out = String::new();
-    let mut i = start + 1;
-    while i < bytes.len() {
-        let b = bytes[i];
-        if b == b'\'' {
-            // doubled '' is an escape
-            if i + 1 < bytes.len() && bytes[i + 1] == b'\'' {
+    let mut iter = s.char_indices().peekable();
+    while let Some((rel, c)) = iter.next() {
+        if c == '\'' {
+            if let Some(&(_, '\'')) = iter.peek() {
                 out.push('\'');
-                i += 2;
+                iter.next();
                 continue;
             }
-            return Ok((out, i + 1));
+            // end_pos = absolute byte index just past the closing quote
+            let end = body_start + rel + 1;
+            return Ok((out, end));
         }
-        out.push(b as char);
-        i += 1;
+        out.push(c);
     }
     Err(parse_err(start, "unterminated string literal"))
 }
@@ -214,6 +217,9 @@ fn read_number(bytes: &[u8], start: usize) -> Result<(Tok, usize), ExprError> {
     let s = std::str::from_utf8(&bytes[start..i]).map_err(|_| parse_err(start, "invalid number"))?;
     if has_dot || has_exp {
         let v: f64 = s.parse().map_err(|_| parse_err(start, "invalid float"))?;
+        if !v.is_finite() {
+            return Err(parse_err(start, "float literal must be finite"));
+        }
         Ok((Tok::Float(v), i))
     } else {
         let v: i64 = s.parse().map_err(|_| parse_err(start, "invalid integer"))?;
@@ -231,7 +237,10 @@ fn read_ident(bytes: &[u8], start: usize) -> (Tok, usize) {
             break;
         }
     }
-    let raw = std::str::from_utf8(&bytes[start..i]).unwrap_or("");
+    // tokenizer only enters here on ascii alpha/underscore and consumes ascii
+    // alnum+underscore, so the slice is guaranteed ascii (and thus utf-8).
+    #[expect(clippy::expect_used, reason = "ascii-alnum slice is structurally utf-8")]
+    let raw = std::str::from_utf8(&bytes[start..i]).expect("ascii alnum slice is valid utf8");
     let tok = match raw.to_ascii_uppercase().as_str() {
         "AND" => Tok::KwAnd,
         "OR" => Tok::KwOr,
@@ -247,10 +256,16 @@ fn read_ident(bytes: &[u8], start: usize) -> (Tok, usize) {
     (tok, i)
 }
 
+/// Maximum recursive depth across `parse_or` / `parse_and` / `parse_not` /
+/// `parse_primary`. Bounds stack growth on adversarial input like `NOT NOT...`
+/// or `(((...)))`. 64 levels is well above any sane filter expression.
+const MAX_DEPTH: u32 = 64;
+
 struct Parser {
     toks: Vec<Spanned>,
     i: usize,
     end_pos: usize,
+    depth: u32,
 }
 
 impl Parser {
@@ -283,7 +298,26 @@ impl Parser {
         }
     }
 
+    fn enter(&mut self) -> Result<(), ExprError> {
+        if self.depth >= MAX_DEPTH {
+            return Err(ExprError::TooDeep { max: MAX_DEPTH });
+        }
+        self.depth += 1;
+        Ok(())
+    }
+
+    fn leave(&mut self) {
+        self.depth -= 1;
+    }
+
     fn parse_or(&mut self) -> Result<Expr, ExprError> {
+        self.enter()?;
+        let r = self.parse_or_inner();
+        self.leave();
+        r
+    }
+
+    fn parse_or_inner(&mut self) -> Result<Expr, ExprError> {
         let mut lhs = self.parse_and()?;
         while self.eat(&Tok::KwOr) {
             let rhs = self.parse_and()?;
@@ -326,12 +360,14 @@ impl Parser {
     }
 
     fn parse_not(&mut self) -> Result<Expr, ExprError> {
-        if self.eat(&Tok::KwNot) {
-            let inner = self.parse_not()?;
-            Ok(Expr::Not(Box::new(inner)))
+        self.enter()?;
+        let r = if self.eat(&Tok::KwNot) {
+            self.parse_not().map(|inner| Expr::Not(Box::new(inner)))
         } else {
             self.parse_predicate()
-        }
+        };
+        self.leave();
+        r
     }
 
     fn parse_predicate(&mut self) -> Result<Expr, ExprError> {
@@ -484,6 +520,13 @@ impl Parser {
     }
 
     fn parse_primary(&mut self) -> Result<Expr, ExprError> {
+        self.enter()?;
+        let r = self.parse_primary_inner();
+        self.leave();
+        r
+    }
+
+    fn parse_primary_inner(&mut self) -> Result<Expr, ExprError> {
         let pos = self.pos();
         match self.peek().cloned() {
             Some(Tok::LParen) => {
@@ -541,7 +584,12 @@ pub(crate) fn parse(input: &str) -> Result<Expr, ExprError> {
     }
     let toks = tokenize(input)?;
     let end_pos = input.len();
-    let mut p = Parser { toks, i: 0, end_pos };
+    let mut p = Parser {
+        toks,
+        i: 0,
+        end_pos,
+        depth: 0,
+    };
     let expr = p.parse_or()?;
     if p.i < p.toks.len() {
         return Err(parse_err(p.pos(), "trailing tokens after expression"));

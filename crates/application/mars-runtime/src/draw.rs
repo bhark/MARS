@@ -215,7 +215,9 @@ mod tests {
 
     fn build_source(features: &[FeatureGeom]) -> ArtifactReader {
         let mut w = ArtifactWriter::new(ArtifactKind::Source);
-        w.add_geometry_payload(features).unwrap();
+        w.add_geometry_payload(features)
+            .set_bbox(Bbox::new(0.0, 0.0, 10.0, 10.0))
+            .set_feature_count(features.len() as u64);
         ArtifactReader::open(w.finish().unwrap()).unwrap()
     }
 

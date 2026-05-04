@@ -15,6 +15,12 @@ pub enum GridError {
     NonPositiveCellSize(f64),
     #[error("bbox covers too many cells ({requested} > {limit})")]
     TooManyCells { requested: usize, limit: usize },
+    #[error("bbox coordinates must be finite")]
+    NonFiniteBbox,
+    #[error("bbox is inverted: min must be <= max on both axes")]
+    InvertedBbox,
+    #[error("cell index would overflow i64 representable range")]
+    CellCountOverflow,
 }
 
 /// Configuration of a single scale band: name, max-denominator threshold,
@@ -28,15 +34,16 @@ pub struct BandConfig {
 }
 
 /// Pick the scale band whose `max_denom` is the smallest one strictly greater
-/// than the requested `denom`. Bands must be passed sorted by `max_denom` ascending.
+/// than the requested `denom`. SPEC §7.2 defines bands as half-open intervals
+/// `[prev_max, max_denom)`, so `denom == max_denom` falls into the next band.
+///
+/// Bands need not be pre-sorted; the function performs the smallest-strictly-
+/// greater scan in O(n). Caller convenience over micro-optimisation.
 pub fn pick_band(denom: u32, bands: &[BandConfig]) -> Result<&BandConfig, GridError> {
-    debug_assert!(
-        bands.windows(2).all(|w| w[0].max_denom <= w[1].max_denom),
-        "bands must be sorted by max_denom ascending",
-    );
     bands
         .iter()
-        .find(|b| denom < b.max_denom)
+        .filter(|b| denom < b.max_denom)
+        .min_by_key(|b| b.max_denom)
         .ok_or(GridError::NoBandForScale(denom))
 }
 
@@ -48,19 +55,26 @@ pub fn cells_in_bbox(bbox: Bbox, band: &BandConfig, max_cells: usize) -> Result<
     if band.cell_size <= 0.0 {
         return Err(GridError::NonPositiveCellSize(band.cell_size));
     }
+    if !(bbox.min_x.is_finite() && bbox.max_x.is_finite() && bbox.min_y.is_finite() && bbox.max_y.is_finite()) {
+        return Err(GridError::NonFiniteBbox);
+    }
+    if bbox.min_x > bbox.max_x || bbox.min_y > bbox.max_y {
+        return Err(GridError::InvertedBbox);
+    }
     let (ox, oy) = band.origin;
     let cs = band.cell_size;
-    let x0 = ((bbox.min_x - ox) / cs).floor() as i64;
-    let x1 = ((bbox.max_x - ox) / cs).floor() as i64;
-    let y0 = ((bbox.min_y - oy) / cs).floor() as i64;
-    let y1 = ((bbox.max_y - oy) / cs).floor() as i64;
 
-    let nx = (x1.saturating_sub(x0).saturating_add(1)).max(0) as usize;
-    let ny = (y1.saturating_sub(y0).saturating_add(1)).max(0) as usize;
-    let count = nx.checked_mul(ny).ok_or(GridError::TooManyCells {
-        requested: usize::MAX,
-        limit: max_cells,
-    })?;
+    // floor + range-check before the cast: silent saturation on out-of-range
+    // f64-to-i64 would otherwise produce a huge `nx*ny` lie below.
+    let x0 = floor_to_i64((bbox.min_x - ox) / cs)?;
+    let x1 = floor_to_i64((bbox.max_x - ox) / cs)?;
+    let y0 = floor_to_i64((bbox.min_y - oy) / cs)?;
+    let y1 = floor_to_i64((bbox.max_y - oy) / cs)?;
+
+    // bbox validation above guarantees x1>=x0, y1>=y0 (origin/cs are finite by config).
+    let nx = usize::try_from(x1 - x0 + 1).map_err(|_| GridError::CellCountOverflow)?;
+    let ny = usize::try_from(y1 - y0 + 1).map_err(|_| GridError::CellCountOverflow)?;
+    let count = nx.checked_mul(ny).ok_or(GridError::CellCountOverflow)?;
     if count > max_cells {
         return Err(GridError::TooManyCells {
             requested: count,
@@ -79,6 +93,20 @@ pub fn cells_in_bbox(bbox: Bbox, band: &BandConfig, max_cells: usize) -> Result<
         }
     }
     Ok(out)
+}
+
+#[inline]
+fn floor_to_i64(v: f64) -> Result<i64, GridError> {
+    if !v.is_finite() {
+        return Err(GridError::NonFiniteBbox);
+    }
+    let f = v.floor();
+    // i64 covers ±2^63; f64 representable integers go up to 2^53 exactly,
+    // beyond that the floor is meaningless for cell indexing anyway.
+    if f < i64::MIN as f64 || f > i64::MAX as f64 {
+        return Err(GridError::CellCountOverflow);
+    }
+    Ok(f as i64)
 }
 
 #[cfg(test)]
@@ -127,8 +155,57 @@ mod tests {
     #[test]
     fn cells_in_bbox_rejects_overflow() {
         let bs = bands();
-        let b = Bbox::new(0.0, 0.0, 1e18, 1e18);
+        // a moderately-sized bbox above the cap returns TooManyCells
+        let b = Bbox::new(0.0, 0.0, 4096.0 * 2_000.0, 4096.0 * 2_000.0);
         let err = cells_in_bbox(b, &bs[1], 1_000_000).unwrap_err();
         assert!(matches!(err, GridError::TooManyCells { .. }));
+        // a truly extreme bbox overflows i64-representable cell space
+        let b2 = Bbox::new(0.0, 0.0, 1e30, 1e30);
+        let err2 = cells_in_bbox(b2, &bs[1], 1_000_000).unwrap_err();
+        assert!(matches!(err2, GridError::CellCountOverflow));
+    }
+
+    #[test]
+    fn cells_in_bbox_rejects_inverted() {
+        let bs = bands();
+        let b = Bbox::new(10.0, 0.0, 0.0, 10.0);
+        assert!(matches!(cells_in_bbox(b, &bs[1], 100), Err(GridError::InvertedBbox)));
+    }
+
+    #[test]
+    fn cells_in_bbox_rejects_non_finite() {
+        let bs = bands();
+        let b = Bbox::new(0.0, 0.0, f64::NAN, 10.0);
+        assert!(matches!(cells_in_bbox(b, &bs[1], 100), Err(GridError::NonFiniteBbox)));
+        let b = Bbox::new(0.0, 0.0, f64::INFINITY, 10.0);
+        assert!(matches!(cells_in_bbox(b, &bs[1], 100), Err(GridError::NonFiniteBbox)));
+    }
+
+    #[test]
+    fn cells_in_bbox_rejects_extreme_floats() {
+        let bs = bands();
+        // far beyond i64 representable cell coordinates
+        let b = Bbox::new(0.0, 0.0, 1e30, 1e30);
+        let err = cells_in_bbox(b, &bs[1], 100).unwrap_err();
+        assert!(matches!(err, GridError::CellCountOverflow));
+    }
+
+    #[test]
+    fn pick_band_boundary_at_max_denom() {
+        let bs = bands();
+        // max_denom is exclusive: denom == 4_000 must fall into "hi", not "ultra"
+        assert_eq!(pick_band(4_000, &bs).unwrap().name.as_str(), "hi");
+        // and one less stays in "ultra"
+        assert_eq!(pick_band(3_999, &bs).unwrap().name.as_str(), "ultra");
+        // top boundary is no band at all
+        assert!(matches!(pick_band(25_000, &bs), Err(GridError::NoBandForScale(_))));
+    }
+
+    #[test]
+    fn pick_band_works_unsorted() {
+        let mut bs = bands();
+        bs.swap(0, 1);
+        assert_eq!(pick_band(1_000, &bs).unwrap().name.as_str(), "ultra");
+        assert_eq!(pick_band(10_000, &bs).unwrap().name.as_str(), "hi");
     }
 }

@@ -51,7 +51,7 @@ pub async fn run_task(
         let rows = rows.clone();
         let (src_entry, src_bytes, layer_entry, layer_bytes) = tokio::task::spawn_blocking(move || {
             let (src_entry, src_bytes) = build_source_artifact(&task, &cell, &rows)?;
-            let (layer_entry, layer_bytes) = build_layer_artifact(&task, &cell, &rows, src_entry.hash)?;
+            let (layer_entry, layer_bytes) = build_layer_artifact(&task, &cell, &rows, src_entry.hash, bbox)?;
             Ok::<_, CompilerError>((src_entry, src_bytes, layer_entry, layer_bytes))
         })
         .await
@@ -85,7 +85,7 @@ fn build_source_artifact(
         features.push(f);
     }
     let mut writer = ArtifactWriter::new(ArtifactKind::Source);
-    writer.add_geometry_payload(&features)?;
+    writer.add_geometry_payload(&features);
     writer.set_bbox(acc.into_bbox());
     writer.set_feature_count(features.len() as u64);
     let bytes = writer.finish()?;
@@ -111,6 +111,7 @@ fn build_layer_artifact(
     cell: &mars_types::Cell,
     rows: &[RowBytes],
     source_hash: ContentHash,
+    bbox: mars_types::Bbox,
 ) -> Result<(ArtifactEntry, Vec<u8>), CompilerError> {
     let mut assignments: Vec<(u64, u16)> = Vec::with_capacity(rows.len());
     for row in rows {
@@ -129,6 +130,7 @@ fn build_layer_artifact(
     let mut writer = ArtifactWriter::new(ArtifactKind::Layer);
     writer.add_class_assignment(&assignments);
     writer.add_style_refs(&style_refs);
+    writer.set_bbox(bbox);
     writer.set_feature_count(assignments.len() as u64);
     writer.set_source_ref(SourceRef {
         collection: task.binding.collection.as_str().to_string(),

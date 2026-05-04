@@ -202,7 +202,9 @@ impl ArtifactReader {
             .try_into()
             .map_err(|_| ArtifactError::Malformed("section length too large"))?;
         let start = file_offset;
-        let end = start + length;
+        let end = start
+            .checked_add(length)
+            .ok_or(ArtifactError::Malformed("section span overflow"))?;
         Ok(self.bytes.slice(start..end))
     }
 }

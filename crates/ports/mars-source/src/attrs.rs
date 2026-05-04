@@ -1,5 +1,9 @@
 //! Tag-prefixed binary encoding for a row's attribute block.
 //!
+//! NOTE: this informal codec is used by tests and Phase-0 stubs; SPEC §9.3
+//! mandates Apache Arrow IPC for the on-disk attribute block. File / crate
+//! restructuring lands in Pass B (arrow-migration).
+//!
 //! On-disk contract (little-endian, lengths as `u32`):
 //!   block := count:u32, entry*
 //!   entry := name_len:u32, name:utf8, tag:u8, payload
@@ -26,7 +30,7 @@ const TAG_INT: u8 = 2;
 const TAG_FLOAT: u8 = 3;
 const TAG_STRING: u8 = 4;
 
-/// Errors raised while decoding an attribute block.
+/// Errors raised while decoding or encoding an attribute block.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum AttrError {
     /// Block exceeds `MAX_ROW_BYTES`.
@@ -36,6 +40,13 @@ pub enum AttrError {
         got: usize,
         /// Configured cap.
         max: usize,
+    },
+    /// A field exceeds the encoder's representable size (e.g. >4 GiB string,
+    /// or row count beyond `u32::MAX`). `kind` names the offending field.
+    #[error("input too large to encode: {kind}")]
+    InputTooLarge {
+        /// Human-readable label of the field (e.g. "string", "row count").
+        kind: &'static str,
     },
     /// Buffer ended mid-record.
     #[error("unexpected end of input")]
@@ -55,15 +66,16 @@ pub enum AttrError {
 }
 
 /// Encode an ordered slice of `(name, AttrValue)` pairs to bytes.
-#[must_use]
-pub fn encode_row(values: &[(String, AttrValue)]) -> Bytes {
+///
+/// Returns `AttrError::InputTooLarge` if the row count exceeds `u32::MAX` or
+/// any string field exceeds `u32::MAX` bytes.
+pub fn encode_row(values: &[(String, AttrValue)]) -> Result<Bytes, AttrError> {
+    let count = u32::try_from(values.len()).map_err(|_| AttrError::InputTooLarge { kind: "row count" })?;
     let cap = estimate_size(values);
     let mut out = Vec::with_capacity(cap);
-    // entry count
-    let count = u32::try_from(values.len()).unwrap_or(u32::MAX);
     out.extend_from_slice(&count.to_le_bytes());
-    for (name, v) in values.iter().take(count as usize) {
-        write_string(&mut out, name);
+    for (name, v) in values {
+        write_string(&mut out, name)?;
         match v {
             AttrValue::Null => out.push(TAG_NULL),
             AttrValue::Bool(b) => {
@@ -80,11 +92,11 @@ pub fn encode_row(values: &[(String, AttrValue)]) -> Bytes {
             }
             AttrValue::String(s) => {
                 out.push(TAG_STRING);
-                write_string(&mut out, s);
+                write_string(&mut out, s)?;
             }
         }
     }
-    Bytes::from(out)
+    Ok(Bytes::from(out))
 }
 
 /// Decode a `(name, AttrValue)` block. Rejects blocks larger than
@@ -98,7 +110,14 @@ pub fn decode_row(bytes: &[u8]) -> Result<Vec<(String, AttrValue)>, AttrError> {
     }
     let mut c = Cursor::new(bytes);
     let count = c.read_u32()? as usize;
-    let mut out = Vec::with_capacity(count.min(bytes.len()));
+    // refuse to allocate beyond the buffer-bound estimate; an entry is
+    // minimally a 4-byte name length, a 1-byte tag, and a 0-byte name.
+    const MIN_ENTRY_LEN: usize = 4 + 1;
+    let max_possible = bytes.len().saturating_sub(4) / MIN_ENTRY_LEN;
+    if count > max_possible {
+        return Err(AttrError::UnexpectedEof);
+    }
+    let mut out = Vec::with_capacity(count);
     for _ in 0..count {
         let name = c.read_string()?;
         let tag = c.read_u8()?;
@@ -132,10 +151,11 @@ fn estimate_size(values: &[(String, AttrValue)]) -> usize {
     n
 }
 
-fn write_string(out: &mut Vec<u8>, s: &str) {
-    let len = u32::try_from(s.len()).unwrap_or(u32::MAX);
+fn write_string(out: &mut Vec<u8>, s: &str) -> Result<(), AttrError> {
+    let len = u32::try_from(s.len()).map_err(|_| AttrError::InputTooLarge { kind: "string" })?;
     out.extend_from_slice(&len.to_le_bytes());
-    out.extend_from_slice(&s.as_bytes()[..len as usize]);
+    out.extend_from_slice(s.as_bytes());
+    Ok(())
 }
 
 struct Cursor<'a> {
@@ -209,15 +229,23 @@ mod tests {
             ("f".into(), AttrValue::Float(2.5)),
             ("s".into(), AttrValue::String("hello".into())),
         ];
-        let bytes = encode_row(&row);
+        let bytes = encode_row(&row).unwrap();
         let back = decode_row(&bytes).unwrap();
         assert_eq!(back, row);
     }
 
     #[test]
     fn empty_row_roundtrips() {
-        let bytes = encode_row(&[]);
+        let bytes = encode_row(&[]).unwrap();
         assert_eq!(decode_row(&bytes).unwrap(), Vec::new());
+    }
+
+    #[test]
+    fn huge_row_count_in_header_rejected() {
+        // declare u32::MAX entries in a tiny buffer; must not allocate
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&u32::MAX.to_le_bytes());
+        assert!(matches!(decode_row(&buf), Err(AttrError::UnexpectedEof)));
     }
 
     #[test]
@@ -240,7 +268,7 @@ mod tests {
     #[test]
     fn truncated_input_rejected() {
         let row = vec![("k".into(), AttrValue::Int(1))];
-        let bytes = encode_row(&row);
+        let bytes = encode_row(&row).unwrap();
         let truncated = &bytes[..bytes.len() - 1];
         assert!(matches!(decode_row(truncated), Err(AttrError::UnexpectedEof)));
     }
@@ -260,7 +288,7 @@ mod tests {
     proptest! {
         #[test]
         fn roundtrip_random(rows in proptest::collection::vec(("[a-z]{1,8}".prop_map(String::from), arb_attr()), 0..16)) {
-            let bytes = encode_row(&rows);
+            let bytes = encode_row(&rows).unwrap();
             prop_assume!(bytes.len() <= MAX_ROW_BYTES);
             let back = decode_row(&bytes).unwrap();
             prop_assert_eq!(back, rows);

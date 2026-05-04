@@ -26,6 +26,8 @@ pub enum ExprError {
     UnknownIdent(String),
     #[error("not implemented: {what}")]
     NotImplemented { what: &'static str },
+    #[error("expression nesting too deep (max {max})")]
+    TooDeep { max: u32 },
 }
 
 /// Filter-expression AST. Scope is intentionally narrow (SPEC §5.6).
@@ -108,11 +110,21 @@ impl fmt::Display for Literal {
             Literal::Bool(false) => f.write_str("FALSE"),
             Literal::Int(n) => write!(f, "{n}"),
             Literal::Float(v) => {
-                // ensure float renders with a dot so the lexer reads it as Float
-                if v.is_finite() && v.fract() == 0.0 {
+                // must always emit '.' or 'e' so the lexer reparses as Float, not Int.
+                // bare `{v}` for 1e20 yields "100000000000000000000" which round-trips
+                // as Int and silently loses the Float type.
+                if !v.is_finite() {
+                    return Err(fmt::Error);
+                }
+                if v.fract() == 0.0 {
                     write!(f, "{v:.1}")
                 } else {
-                    write!(f, "{v}")
+                    let s = format!("{v}");
+                    if s.contains('.') || s.contains('e') || s.contains('E') {
+                        f.write_str(&s)
+                    } else {
+                        write!(f, "{s}.0")
+                    }
                 }
             }
             Literal::String(s) => write_quoted(f, s),
@@ -121,12 +133,13 @@ impl fmt::Display for Literal {
 }
 
 fn write_quoted(f: &mut fmt::Formatter<'_>, s: &str) -> fmt::Result {
+    use std::fmt::Write as _;
     f.write_str("'")?;
     for c in s.chars() {
         if c == '\'' {
             f.write_str("''")?;
         } else {
-            f.write_str(&c.to_string())?;
+            f.write_char(c)?;
         }
     }
     f.write_str("'")
@@ -412,6 +425,59 @@ mod tests {
     fn eval_unknown_ident() {
         let e = parse("missing = 1").unwrap();
         assert!(matches!(eval(&e, &attrs(&[])), Err(ExprError::UnknownIdent(n)) if n == "missing"));
+    }
+
+    #[test]
+    fn parse_string_with_utf8_multibyte() {
+        // SPEC §5.3 explicitly uses 'Foreløbig'; byte-as-char would mangle 'ø'.
+        let e = parse("status = 'Foreløbig'").unwrap();
+        match e {
+            Expr::Cmp { rhs, .. } => match *rhs {
+                Expr::Literal(Literal::String(s)) => assert_eq!(s, "Foreløbig"),
+                _ => panic!("expected string"),
+            },
+            _ => panic!("expected cmp"),
+        }
+    }
+
+    #[test]
+    fn parse_rejects_deeply_nested_parens() {
+        let s = format!("{}x{}", "(".repeat(100), ")".repeat(100));
+        assert!(matches!(parse(&s), Err(ExprError::TooDeep { .. })));
+    }
+
+    #[test]
+    fn parse_rejects_deeply_nested_not() {
+        let mut s = String::new();
+        for _ in 0..100 {
+            s.push_str("NOT ");
+        }
+        s.push_str("x = 1");
+        assert!(matches!(parse(&s), Err(ExprError::TooDeep { .. })));
+    }
+
+    #[test]
+    fn parse_rejects_non_finite_float() {
+        // tokenizer never produces NaN literally (no 'NaN' keyword), but
+        // overflow into Inf during parse must be rejected.
+        assert!(matches!(parse("x = 1e400"), Err(ExprError::Parse(_))));
+    }
+
+    #[test]
+    fn float_display_roundtrips_large_value() {
+        // 1e20 used to format as "100000000000000000000" and round-trip as Int.
+        let lit = Literal::Float(1e20);
+        let s = format!("{lit}");
+        // must contain '.' or 'e' so reparse stays Float
+        assert!(s.contains('.') || s.contains('e') || s.contains('E'), "got {s}");
+        let e = parse(&format!("x = {s}")).unwrap();
+        match e {
+            Expr::Cmp { rhs, .. } => match *rhs {
+                Expr::Literal(Literal::Float(_)) => {}
+                other => panic!("expected Float, got {other:?}"),
+            },
+            _ => panic!("expected cmp"),
+        }
     }
 
     #[test]

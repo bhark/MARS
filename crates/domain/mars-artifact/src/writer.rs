@@ -24,9 +24,12 @@ pub struct SourceRef {
 pub struct ArtifactWriter {
     kind: ArtifactKind,
     sections: Vec<(SectionKind, Bytes)>,
-    bbox: Bbox,
-    feature_count: u64,
+    bbox: Option<Bbox>,
+    feature_count: Option<u64>,
     source_ref: Option<SourceRef>,
+    // deferred geometry features so we can validate feature_count against the
+    // payload at finish() rather than in the infallible add_* call.
+    pending_features: Option<Vec<FeatureGeom>>,
 }
 
 impl ArtifactWriter {
@@ -35,9 +38,10 @@ impl ArtifactWriter {
         Self {
             kind,
             sections: Vec::new(),
-            bbox: Bbox::new(0.0, 0.0, 0.0, 0.0),
-            feature_count: 0,
+            bbox: None,
+            feature_count: None,
             source_ref: None,
+            pending_features: None,
         }
     }
 
@@ -46,9 +50,11 @@ impl ArtifactWriter {
         self
     }
 
-    pub fn add_geometry_payload(&mut self, features: &[FeatureGeom]) -> Result<&mut Self, ArtifactError> {
-        let bytes = geometry::encode_geometry_payload(features)?;
-        Ok(self.add_section(SectionKind::GeometryPayload, bytes))
+    /// Stage geometry features. Encoding (and any errors) is deferred to
+    /// `finish()` so that the builder API stays uniformly infallible.
+    pub fn add_geometry_payload(&mut self, features: &[FeatureGeom]) -> &mut Self {
+        self.pending_features = Some(features.to_vec());
+        self
     }
 
     pub fn add_class_assignment(&mut self, items: &[(u64, u16)]) -> &mut Self {
@@ -62,12 +68,12 @@ impl ArtifactWriter {
     }
 
     pub fn set_bbox(&mut self, bbox: Bbox) -> &mut Self {
-        self.bbox = bbox;
+        self.bbox = Some(bbox);
         self
     }
 
     pub fn set_feature_count(&mut self, n: u64) -> &mut Self {
-        self.feature_count = n;
+        self.feature_count = Some(n);
         self
     }
 
@@ -78,7 +84,39 @@ impl ArtifactWriter {
 
     /// finalize and produce the artifact bytes. determinism: identical inputs
     /// yield byte-identical output (planus serializes tables in a fixed order).
-    pub fn finish(self) -> Result<Bytes, ArtifactError> {
+    ///
+    /// All cross-field invariants are validated here:
+    /// - bbox must have been set
+    /// - source artifacts must not carry a source_ref (SPEC §9.2)
+    /// - feature_count, when present alongside geometry, must equal the
+    ///   actual feature count encoded in the payload
+    pub fn finish(mut self) -> Result<Bytes, ArtifactError> {
+        let bbox = self
+            .bbox
+            .ok_or(ArtifactError::InvalidWriterState("bbox not set"))?;
+
+        if matches!(self.kind, ArtifactKind::Source) && self.source_ref.is_some() {
+            return Err(ArtifactError::InvalidWriterState(
+                "source artifacts must not carry a source_ref",
+            ));
+        }
+
+        // resolve pending geometry now: the encoder both validates input
+        // ordering and lets us cross-check feature_count.
+        if let Some(features) = self.pending_features.take() {
+            if let Some(declared) = self.feature_count
+                && declared != features.len() as u64
+            {
+                return Err(ArtifactError::InvalidWriterState(
+                    "feature_count does not match encoded feature count",
+                ));
+            }
+            let bytes = geometry::encode_geometry_payload(&features)?;
+            self.sections.push((SectionKind::GeometryPayload, bytes));
+        }
+
+        let feature_count = self.feature_count.unwrap_or(0);
+
         let mut out = Vec::new();
         // header
         out.extend_from_slice(MAGIC);
@@ -114,12 +152,12 @@ impl ArtifactWriter {
                     .collect(),
             ),
             bbox: Some(fb::Bbox {
-                min_x: self.bbox.min_x,
-                min_y: self.bbox.min_y,
-                max_x: self.bbox.max_x,
-                max_y: self.bbox.max_y,
+                min_x: bbox.min_x,
+                min_y: bbox.min_y,
+                max_x: bbox.max_x,
+                max_y: bbox.max_y,
             }),
-            feature_count: self.feature_count,
+            feature_count,
             source_artifact_ref: self.source_ref.as_ref().map(|s| {
                 Box::new(fb::SourceRef {
                     collection: Some(s.collection.clone()),

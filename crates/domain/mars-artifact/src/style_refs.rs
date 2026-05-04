@@ -16,11 +16,20 @@ pub fn encode_style_refs(refs: &[String]) -> Bytes {
     Bytes::from(out)
 }
 
+// smallest possible entry: u32 length prefix with zero-byte string body
+const MIN_ENTRY_LEN: usize = 4;
+
 pub fn decode_style_refs(bytes: &[u8]) -> Result<Vec<String>, ArtifactError> {
     if bytes.len() < 4 {
         return Err(ArtifactError::Truncated);
     }
     let n = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
+    // cap allocation: even an empty entry is MIN_ENTRY_LEN bytes; refuse to
+    // pre-size beyond what the buffer could possibly hold.
+    let max_possible = bytes.len().saturating_sub(4) / MIN_ENTRY_LEN;
+    if n > max_possible {
+        return Err(ArtifactError::Truncated);
+    }
     let mut pos = 4;
     let mut out = Vec::with_capacity(n);
     for _ in 0..n {

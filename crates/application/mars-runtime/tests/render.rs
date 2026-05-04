@@ -55,7 +55,6 @@ fn build_source_bytes(offset: f64) -> Bytes {
     let bbox = Bbox::new(offset, 0.0, offset + 100.0, 10.0);
     let mut w = ArtifactWriter::new(ArtifactKind::Source);
     w.add_geometry_payload(&features)
-        .unwrap()
         .set_bbox(bbox)
         .set_feature_count(features.len() as u64);
     w.finish().unwrap()

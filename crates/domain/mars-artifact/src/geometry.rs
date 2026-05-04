@@ -1,4 +1,10 @@
 //! geometry payload v1 codec. see FORMAT.md.
+//!
+//! ZERO-COPY CAVEAT: SPEC §9.3 promises that `geometry_index` can be mmap'd
+//! and zero-copy cast to a typed slice. This is NOT possible with the current
+//! 33-byte stride per `FEATURE_INDEX_ENTRY_LEN` (no field is naturally aligned
+//! after the leading u64). The decoder copies each field via
+//! `from_le_bytes`. SPEC §9.3 must be amended in a future format-bump pass.
 
 use bytes::Bytes;
 
@@ -22,6 +28,11 @@ pub enum GeomKind {
 #[derive(Debug, Clone, PartialEq)]
 pub struct FeatureGeom {
     pub id: u64,
+    /// Per-feature bounding box stored as f32 per SPEC §9.3. At canonical-CRS
+    /// magnitudes (~6e5 m for Danish UTM-32) this is ~0.05 m of precision,
+    /// so the index bbox is APPROXIMATE: feature-level filtering must not
+    /// rely on it for sub-meter discrimination - re-test against the decoded
+    /// geometry when accuracy matters.
     pub bbox: [f32; 4],
     pub geom: GeomKind,
 }
@@ -33,9 +44,21 @@ const GT_MULTIPOINT: u8 = 4;
 const GT_MULTILINESTRING: u8 = 5;
 const GT_MULTIPOLYGON: u8 = 6;
 
+// quantization is mm-precision fixed point. i64 holds ±9.2e18 mm = ±9.2e15 m
+// of representable canonical-CRS extent; anything beyond is a coding bug or
+// corrupt input and surfaces as ArtifactError::CoordOutOfRange.
+const QUANT_MAX: f64 = (i64::MAX / 1000) as f64;
+const QUANT_MIN: f64 = (i64::MIN / 1000) as f64;
+
 #[inline]
-fn quantize(c: f64) -> i64 {
-    (c * 1000.0).round() as i64
+fn quantize(c: f64) -> Result<i64, ArtifactError> {
+    if !c.is_finite() {
+        return Err(ArtifactError::CoordOutOfRange(c));
+    }
+    if !(QUANT_MIN..=QUANT_MAX).contains(&c) {
+        return Err(ArtifactError::CoordOutOfRange(c));
+    }
+    Ok((c * 1000.0).round() as i64)
 }
 
 #[inline]
@@ -43,21 +66,24 @@ fn dequantize(q: i64) -> f64 {
     (q as f64) / 1000.0
 }
 
-fn write_ring(out: &mut Vec<u8>, ring: &[Coord]) {
+fn write_ring(out: &mut Vec<u8>, ring: &[Coord]) -> Result<(), ArtifactError> {
     write_uvarint(out, ring.len() as u64);
     if ring.is_empty() {
-        return;
+        return Ok(());
     }
-    let (mut px, mut py) = (quantize(ring[0].0), quantize(ring[0].1));
+    let (mut px, mut py) = (quantize(ring[0].0)?, quantize(ring[0].1)?);
     write_ivarint(out, px);
     write_ivarint(out, py);
     for &(x, y) in &ring[1..] {
-        let (qx, qy) = (quantize(x), quantize(y));
-        write_ivarint(out, qx - px);
-        write_ivarint(out, qy - py);
+        let (qx, qy) = (quantize(x)?, quantize(y)?);
+        let dx = qx.checked_sub(px).ok_or(ArtifactError::CoordOutOfRange(x))?;
+        let dy = qy.checked_sub(py).ok_or(ArtifactError::CoordOutOfRange(y))?;
+        write_ivarint(out, dx);
+        write_ivarint(out, dy);
         px = qx;
         py = qy;
     }
+    Ok(())
 }
 
 fn read_uvarint_usize(buf: &[u8], pos: &mut usize) -> Result<usize, ArtifactError> {
@@ -83,30 +109,30 @@ fn read_ring(buf: &[u8], pos: &mut usize) -> Result<Vec<Coord>, ArtifactError> {
     Ok(out)
 }
 
-fn write_geom(out: &mut Vec<u8>, g: &GeomKind) {
+fn write_geom(out: &mut Vec<u8>, g: &GeomKind) -> Result<(), ArtifactError> {
     match g {
         GeomKind::Point((x, y)) => {
-            write_ivarint(out, quantize(*x));
-            write_ivarint(out, quantize(*y));
+            write_ivarint(out, quantize(*x)?);
+            write_ivarint(out, quantize(*y)?);
         }
-        GeomKind::LineString(verts) => write_ring(out, verts),
+        GeomKind::LineString(verts) => write_ring(out, verts)?,
         GeomKind::Polygon(rings) => {
             write_uvarint(out, rings.len() as u64);
             for r in rings {
-                write_ring(out, r);
+                write_ring(out, r)?;
             }
         }
         GeomKind::MultiPoint(parts) => {
             write_uvarint(out, parts.len() as u64);
             for &(x, y) in parts {
-                write_ivarint(out, quantize(x));
-                write_ivarint(out, quantize(y));
+                write_ivarint(out, quantize(x)?);
+                write_ivarint(out, quantize(y)?);
             }
         }
         GeomKind::MultiLineString(parts) => {
             write_uvarint(out, parts.len() as u64);
             for p in parts {
-                write_ring(out, p);
+                write_ring(out, p)?;
             }
         }
         GeomKind::MultiPolygon(parts) => {
@@ -114,11 +140,12 @@ fn write_geom(out: &mut Vec<u8>, g: &GeomKind) {
             for poly in parts {
                 write_uvarint(out, poly.len() as u64);
                 for r in poly {
-                    write_ring(out, r);
+                    write_ring(out, r)?;
                 }
             }
         }
     }
+    Ok(())
 }
 
 fn read_geom(geom_type: u8, buf: &[u8], pos: &mut usize) -> Result<GeomKind, ArtifactError> {
@@ -183,17 +210,29 @@ fn geom_type_byte(g: &GeomKind) -> u8 {
     }
 }
 
+/// Length in bytes of one feature index entry.
+///
+/// Layout: u64 id, [f32; 4] bbox, u8 geom_type, u32 coord_offset, u32 coord_len.
+/// Stride 33 is unaligned: the index is decoded by copying each field through
+/// `from_le_bytes`. Zero-copy cast to `&[FeatureEntry]` is NOT supported with
+/// the current stride. SPEC §9.3 must be amended in a future format-bump pass.
 const FEATURE_INDEX_ENTRY_LEN: usize = 8 + 4 * 4 + 1 + 4 + 4;
 
 /// encode features into the geometry-payload section bytes.
-/// requires features sorted by id ascending (caller's responsibility for determinism).
+///
+/// Features must be sorted by `id` ascending (required for determinism and
+/// for the index to support binary search). Violation returns
+/// `ArtifactError::UnsortedFeatures` in release; debug builds also assert.
 pub fn encode_geometry_payload(features: &[FeatureGeom]) -> Result<Bytes, ArtifactError> {
+    if !features.windows(2).all(|w| w[0].id < w[1].id) {
+        return Err(ArtifactError::UnsortedFeatures);
+    }
     // pack coord blocks first to learn their offsets, then write index + blocks
     let mut coord_blocks: Vec<Vec<u8>> = Vec::with_capacity(features.len());
     let mut total_coord_bytes: usize = 0;
     for f in features {
         let mut buf = Vec::new();
-        write_geom(&mut buf, &f.geom);
+        write_geom(&mut buf, &f.geom)?;
         total_coord_bytes = total_coord_bytes
             .checked_add(buf.len())
             .ok_or(ArtifactError::Malformed("geometry payload too large"))?;
@@ -236,61 +275,57 @@ pub fn encode_geometry_payload(features: &[FeatureGeom]) -> Result<Bytes, Artifa
     Ok(Bytes::from(out))
 }
 
+/// Read a fixed-size little-endian array out of `slice` at `offset`.
+///
+/// Returns `Truncated` if the read would go out of bounds. Caller may have
+/// already validated the entire region's bound; this helper still checks
+/// defensively because the cost is negligible vs the noise of inlined slicing.
+#[inline]
+fn read_array<const N: usize>(slice: &[u8], offset: usize) -> Result<[u8; N], ArtifactError> {
+    slice
+        .get(offset..offset.checked_add(N).ok_or(ArtifactError::Truncated)?)
+        .ok_or(ArtifactError::Truncated)?
+        .try_into()
+        .map_err(|_| ArtifactError::Truncated)
+}
+
 pub fn decode_geometry_payload(bytes: &[u8]) -> Result<Vec<FeatureGeom>, ArtifactError> {
     if bytes.len() < 4 {
         return Err(ArtifactError::Truncated);
     }
     let count = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
-    let header_len = 4 + count * FEATURE_INDEX_ENTRY_LEN;
+    let header_len = 4usize
+        .checked_add(
+            count
+                .checked_mul(FEATURE_INDEX_ENTRY_LEN)
+                .ok_or(ArtifactError::Truncated)?,
+        )
+        .ok_or(ArtifactError::Truncated)?;
     if bytes.len() < header_len {
         return Err(ArtifactError::Truncated);
     }
-    let coord_base = header_len;
-    let coord_area = &bytes[coord_base..];
+    let coord_area = &bytes[header_len..];
 
     let mut out = Vec::with_capacity(count);
     for i in 0..count {
         let off = 4 + i * FEATURE_INDEX_ENTRY_LEN;
-        let id = u64::from_le_bytes(bytes[off..off + 8].try_into().map_err(|_| ArtifactError::Truncated)?);
+        let id = u64::from_le_bytes(read_array::<8>(bytes, off)?);
         let bbox = [
-            f32::from_le_bytes(
-                bytes[off + 8..off + 12]
-                    .try_into()
-                    .map_err(|_| ArtifactError::Truncated)?,
-            ),
-            f32::from_le_bytes(
-                bytes[off + 12..off + 16]
-                    .try_into()
-                    .map_err(|_| ArtifactError::Truncated)?,
-            ),
-            f32::from_le_bytes(
-                bytes[off + 16..off + 20]
-                    .try_into()
-                    .map_err(|_| ArtifactError::Truncated)?,
-            ),
-            f32::from_le_bytes(
-                bytes[off + 20..off + 24]
-                    .try_into()
-                    .map_err(|_| ArtifactError::Truncated)?,
-            ),
+            f32::from_le_bytes(read_array::<4>(bytes, off + 8)?),
+            f32::from_le_bytes(read_array::<4>(bytes, off + 12)?),
+            f32::from_le_bytes(read_array::<4>(bytes, off + 16)?),
+            f32::from_le_bytes(read_array::<4>(bytes, off + 20)?),
         ];
         let geom_type = bytes[off + 24];
-        let coff = u32::from_le_bytes(
-            bytes[off + 25..off + 29]
-                .try_into()
-                .map_err(|_| ArtifactError::Truncated)?,
-        ) as usize;
-        let clen = u32::from_le_bytes(
-            bytes[off + 29..off + 33]
-                .try_into()
-                .map_err(|_| ArtifactError::Truncated)?,
-        ) as usize;
-        if coff.checked_add(clen).is_none_or(|end| end > coord_area.len()) {
+        let coff = u32::from_le_bytes(read_array::<4>(bytes, off + 25)?) as usize;
+        let clen = u32::from_le_bytes(read_array::<4>(bytes, off + 29)?) as usize;
+        let coord_end = coff.checked_add(clen).ok_or(ArtifactError::Truncated)?;
+        if coord_end > coord_area.len() {
             return Err(ArtifactError::Truncated);
         }
         let mut pos = coff;
         let geom = read_geom(geom_type, coord_area, &mut pos)?;
-        if pos != coff + clen {
+        if pos != coord_end {
             return Err(ArtifactError::Malformed("coord block length mismatch"));
         }
         out.push(FeatureGeom { id, bbox, geom });

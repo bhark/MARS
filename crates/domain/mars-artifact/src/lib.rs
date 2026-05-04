@@ -58,6 +58,12 @@ pub enum ArtifactError {
     SectionMissing(SectionKind),
     #[error("compressed sections are not supported in v1")]
     CompressedNotSupported,
+    #[error("invalid writer state: {0}")]
+    InvalidWriterState(&'static str),
+    #[error("coordinate {0} out of representable range for quantization")]
+    CoordOutOfRange(f64),
+    #[error("features must be sorted by id ascending")]
+    UnsortedFeatures,
 }
 
 #[repr(u8)]

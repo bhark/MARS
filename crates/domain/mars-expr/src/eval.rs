@@ -82,6 +82,13 @@ pub(crate) fn eval(expr: &Expr, attrs: &dyn AttributeAccess) -> Result<Literal, 
     }
 }
 
+/// Three-valued-logic comparator used by both `Expr::Cmp` and `Expr::In`.
+///
+/// Mixed Int/Float comparisons cast the int to f64. For ints whose magnitude
+/// exceeds 2^53 this loses precision: e.g. `i64::MAX` and `i64::MAX - 1` both
+/// promote to the same f64 and compare equal. SPEC §5.6 does not pin mixed-
+/// type comparison semantics, so the lossy cast is accepted; callers needing
+/// exact comparison should keep both sides Int.
 fn cmp(op: CmpOp, l: &Literal, r: &Literal) -> Result<Literal, ExprError> {
     if matches!(l, Literal::Null) || matches!(r, Literal::Null) {
         return Ok(Literal::Null);
