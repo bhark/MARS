@@ -14,10 +14,10 @@ use mars_config::{ClassStyle, Config, StyleEntry, config_dir};
 use mars_render::TinySkiaRenderer;
 use mars_runtime::{Deps as RuntimeDeps, RenderPlan, Runtime, RuntimeState};
 use mars_source_postgres::{PgConfig, PgSource};
-use mars_store::{ManifestPublisher, ManifestReader};
+use mars_store::ManifestReader;
 use mars_store_fs::{FsCache, FsPublisher, FsStore};
 use mars_style::Stylesheet;
-use mars_types::{Bbox, CrsCode, ImageFormat, LayerId, Manifest};
+use mars_types::{Bbox, CrsCode, ImageFormat, LayerId};
 use rand::distributions::{Alphanumeric, DistString};
 use tempfile::TempDir;
 use testcontainers::{
