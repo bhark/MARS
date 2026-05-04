@@ -24,6 +24,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use mars_runtime::{Runtime, RuntimeError};
 use mars_wms::{WmsConfig, WmsError, WmsRequest};
+use tracing::Instrument;
 
 #[derive(Debug, thiserror::Error)]
 pub enum HttpError {
@@ -97,33 +98,36 @@ async fn handle_wms(
 ) -> Response {
     let req_id = request_id(&state, &headers);
     let span = tracing::info_span!("wms", req_id = %req_id);
-    let _g = span.enter();
 
-    let raw = raw_query.and_then(|q| q.0).unwrap_or_default();
+    async move {
+        let raw = raw_query.and_then(|q| q.0).unwrap_or_default();
 
-    let parsed = match mars_wms::parse_request(&raw, &state.wms_cfg) {
-        Ok(r) => r,
-        Err(e) => return wms_error_response(e),
-    };
+        let parsed = match mars_wms::parse_request(&raw, &state.wms_cfg) {
+            Ok(r) => r,
+            Err(e) => return wms_error_response(e),
+        };
 
-    match parsed {
-        WmsRequest::GetCapabilities => {
-            let mut h = HeaderMap::new();
-            h.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/xml"));
-            (StatusCode::OK, h, state.capabilities.as_str().to_owned()).into_response()
-        }
-        WmsRequest::GetMap(plan) => {
-            let mime = plan.format.mime();
-            match state.runtime.render(&plan).await {
-                Ok(bytes) => {
-                    let mut h = HeaderMap::new();
-                    h.insert(header::CONTENT_TYPE, HeaderValue::from_static(mime));
-                    (StatusCode::OK, h, bytes).into_response()
+        match parsed {
+            WmsRequest::GetCapabilities => {
+                let mut h = HeaderMap::new();
+                h.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/xml"));
+                (StatusCode::OK, h, state.capabilities.as_str().to_owned()).into_response()
+            }
+            WmsRequest::GetMap(plan) => {
+                let mime = plan.format.mime();
+                match state.runtime.render(&plan).await {
+                    Ok(bytes) => {
+                        let mut h = HeaderMap::new();
+                        h.insert(header::CONTENT_TYPE, HeaderValue::from_static(mime));
+                        (StatusCode::OK, h, bytes).into_response()
+                    }
+                    Err(e) => runtime_error_response(e),
                 }
-                Err(e) => runtime_error_response(e),
             }
         }
     }
+    .instrument(span)
+    .await
 }
 
 async fn handle_ready(State(state): State<AppState>) -> Response {
