@@ -14,8 +14,8 @@
 use async_trait::async_trait;
 use futures_core::stream::BoxStream;
 use mars_expr::Expr;
-use mars_source::{ChangeEvent, ChangeFeed, RowBytes, Source, SourceError};
-use mars_types::Bbox;
+use mars_source::{ChangeEvent, ChangeFeed, RowBytes, Source, SourceBinding, SourceError};
+use mars_types::Cell;
 
 /// Connection / topology configuration. Filled in during Phase 1.
 #[derive(Debug, Clone, Default)]
@@ -47,8 +47,8 @@ impl StubPg {
 impl Source for StubPg {
     async fn fetch_cell(
         &self,
-        _collection: &str,
-        _bbox: Bbox,
+        _binding: &SourceBinding,
+        _cell: &Cell,
         _filter: Option<&Expr>,
     ) -> Result<Vec<RowBytes>, SourceError> {
         // todo(SPEC §8.1) materialise rows for one cell from postgis
@@ -72,7 +72,7 @@ impl ChangeFeed for StubPg {
 /// its bind parameters. Returns `NotImplemented` in Phase 0.
 pub fn lower_to_sql(_expr: &Expr) -> Result<(String, Vec<SqlParam>), SourceError> {
     Err(SourceError::NotImplemented {
-        what: "mars-source-postgres::lower_to_sql — Phase 1 (SPEC §5.6)",
+        what: "mars-source-postgres::lower_to_sql - Phase 1 (SPEC §5.6)",
     })
 }
 
@@ -90,11 +90,28 @@ pub enum SqlParam {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+    use mars_source::SourceCollectionId;
+    use mars_types::{CrsCode, ScaleBand};
 
     #[tokio::test]
     async fn stub_returns_not_implemented() {
         let s = StubPg::default();
-        let r = s.fetch_cell("x", Bbox::new(0.0, 0.0, 1.0, 1.0), None).await;
+        let binding = SourceBinding::new(
+            SourceCollectionId::new("x"),
+            "public",
+            "x",
+            "geom",
+            "gid",
+            vec![],
+            CrsCode::new("EPSG:25832"),
+        )
+        .unwrap();
+        let cell = Cell {
+            band: ScaleBand::new("hi"),
+            x: 0,
+            y: 0,
+        };
+        let r = s.fetch_cell(&binding, &cell, None).await;
         assert!(matches!(r, Err(SourceError::NotImplemented { .. })));
     }
 }

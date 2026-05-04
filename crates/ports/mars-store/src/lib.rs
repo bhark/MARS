@@ -1,8 +1,8 @@
 //! port traits for artifact storage and manifest pub/sub.
 //!
-//! - [`ObjectStore`] — the shared, cloud-grade artifact bucket (S3 / R2 / GCS / FS).
-//! - [`LocalCache`]  — the per-pod SSD cache (mirrored key layout, mmap-friendly).
-//! - [`ManifestPublisher`] / [`ManifestWatch`] — atomically swap the current
+//! - [`ObjectStore`] - the shared, cloud-grade artifact bucket (S3 / R2 / GCS / FS).
+//! - [`LocalCache`]  - the per-pod SSD cache (mirrored key layout, mmap-friendly).
+//! - [`ManifestPublisher`] / [`ManifestWatch`] - atomically swap the current
 //!   manifest pointer and notify subscribers (SPEC §8.5 / §10.5).
 //!
 //! adapters live under `crates/adapters/mars-store-*`.

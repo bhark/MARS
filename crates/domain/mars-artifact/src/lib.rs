@@ -1,17 +1,47 @@
-//! mars artifact container codec. on-disk layout per SPEC §9.3.
-//! synchronous reader over `&[u8]` / `bytes::Bytes`; async i/o stays in adapters.
+//! mars artifact container codec. on-disk layout per SPEC §9.3 / FORMAT.md.
+//! synchronous codec over `&[u8]` / `bytes::Bytes`; async i/o stays in adapters.
 
-#![forbid(unsafe_code)]
 
-use bytes::Bytes;
-
-/// MARS magic bytes — also used as the trailer.
+/// MARS magic bytes - also used as the trailer.
 pub const MAGIC: &[u8; 8] = b"MARS\0\0\0\0";
 
 /// Format version of the on-disk container. Bumped on incompatible changes.
 pub const FORMAT_VERSION: u32 = 1;
 
-include!(concat!(env!("OUT_DIR"), "/generated.rs"));
+// generated planus code uses `unsafe` for zero-copy reads; it is the only
+// place we permit unsafe in this crate. all hand-written code below is safe.
+#[allow(
+    clippy::all,
+    clippy::pedantic,
+    clippy::nursery,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::todo,
+    dead_code,
+    unused_imports,
+    unreachable_pub,
+    unsafe_code
+)]
+mod generated {
+    include!(concat!(env!("OUT_DIR"), "/generated.rs"));
+}
+
+mod class_assignment;
+mod geometry;
+mod hash;
+mod reader;
+mod section;
+mod style_refs;
+mod varint;
+mod writer;
+
+pub use class_assignment::{decode_class_assignment, encode_class_assignment};
+pub use geometry::{Coord, FeatureGeom, GeomKind, decode_geometry_payload, encode_geometry_payload};
+pub use hash::compute_content_hash;
+pub use reader::ArtifactReader;
+pub use style_refs::{decode_style_refs, encode_style_refs};
+pub use writer::{ArtifactWriter, SourceRef};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ArtifactError {
@@ -21,8 +51,14 @@ pub enum ArtifactError {
     UnsupportedVersion(u32),
     #[error("truncated artifact")]
     Truncated,
-    #[error("not implemented: {what}")]
-    NotImplemented { what: &'static str },
+    #[error("malformed artifact: {0}")]
+    Malformed(&'static str),
+    #[error("unknown artifact kind {0}")]
+    UnknownKind(u8),
+    #[error("section {0:?} not present")]
+    SectionMissing(SectionKind),
+    #[error("compressed sections are not supported in v1")]
+    CompressedNotSupported,
 }
 
 #[repr(u8)]
@@ -36,67 +72,39 @@ pub enum SectionKind {
     StyleRefs = 0x06,
 }
 
-/// Synchronous mmap reader over an artifact's bytes.
-#[derive(Debug)]
-pub struct ArtifactReader {
-    // held for phase 1 section access; only read by `open` today
-    #[allow(dead_code)]
-    bytes: Bytes,
+/// artifact role at the container level. mirrors the planus enum but lives in
+/// rust as a stable public type so consumers don't import generated code.
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ArtifactKind {
+    Source = 0,
+    Layer = 1,
+    Style = 2,
 }
 
-impl ArtifactReader {
-    /// Parses the artifact header and returns a reader. Phase 0: validates
-    /// magic + version only; section access lands in Phase 1.
-    pub fn open(bytes: Bytes) -> Result<Self, ArtifactError> {
-        if bytes.len() < MAGIC.len() + 4 + 4 {
-            return Err(ArtifactError::Truncated);
+impl From<ArtifactKind> for generated::mars::artifact::ArtifactKind {
+    fn from(k: ArtifactKind) -> Self {
+        match k {
+            ArtifactKind::Source => Self::Source,
+            ArtifactKind::Layer => Self::Layer,
+            ArtifactKind::Style => Self::Style,
         }
-        if &bytes[..MAGIC.len()] != MAGIC {
-            return Err(ArtifactError::BadMagic);
-        }
-        let version = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]);
-        if version != FORMAT_VERSION {
-            return Err(ArtifactError::UnsupportedVersion(version));
-        }
-        Ok(Self { bytes })
     }
+}
 
-    pub fn section(&self, _kind: SectionKind) -> Result<&[u8], ArtifactError> {
-        Err(ArtifactError::NotImplemented {
-            what: "ArtifactReader::section",
+impl TryFrom<generated::mars::artifact::ArtifactKind> for ArtifactKind {
+    type Error = ArtifactError;
+
+    fn try_from(k: generated::mars::artifact::ArtifactKind) -> Result<Self, Self::Error> {
+        use generated::mars::artifact::ArtifactKind as G;
+        Ok(match k {
+            G::Source => Self::Source,
+            G::Layer => Self::Layer,
+            G::Style => Self::Style,
         })
     }
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn open_rejects_truncated() {
-        let r = ArtifactReader::open(Bytes::from_static(b"abc"));
-        assert!(matches!(r, Err(ArtifactError::Truncated)));
-    }
-
-    #[test]
-    fn open_rejects_bad_magic() {
-        let mut buf = vec![0u8; 16];
-        buf[..8].copy_from_slice(b"NOTMARS!");
-        let r = ArtifactReader::open(Bytes::from(buf));
-        assert!(matches!(r, Err(ArtifactError::BadMagic)));
-    }
-
-    #[test]
-    fn open_accepts_valid_header() {
-        let mut buf = Vec::new();
-        buf.extend_from_slice(MAGIC);
-        buf.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
-        buf.extend_from_slice(&0u32.to_le_bytes()); // flags
-        let r = ArtifactReader::open(Bytes::from(buf)).unwrap();
-        assert!(matches!(
-            r.section(SectionKind::GeometryIndex),
-            Err(ArtifactError::NotImplemented { .. })
-        ));
-    }
-}
+mod tests;

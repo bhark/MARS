@@ -36,7 +36,7 @@ pub struct ServerConfig {
 
 /// Run the HTTP server until `shutdown` fires.
 pub async fn serve(_cfg: ServerConfig, _runtime: Arc<Runtime>) -> Result<(), HttpError> {
-    tracing::info!("http: stub serve() — Phase 0");
+    tracing::info!("http: stub serve() - Phase 0");
     Err(HttpError::NotImplemented {
         what: "mars-http::serve",
     })

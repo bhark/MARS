@@ -50,7 +50,7 @@ impl Runtime {
     /// Execute one render plan and return encoded image bytes. Phase 0 stub.
     pub async fn render(&self, _plan: &RenderPlan) -> Result<Vec<u8>, RuntimeError> {
         let _ = &self.deps;
-        tracing::debug!("runtime: stub render() — Phase 0");
+        tracing::debug!("runtime: stub render() - Phase 0");
         Err(RuntimeError::NotImplemented {
             what: "mars-runtime::Runtime::render",
         })

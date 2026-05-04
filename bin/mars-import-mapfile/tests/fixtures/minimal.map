@@ -1,0 +1,32 @@
+# minimal MapServer mapfile fixture for mars-import-mapfile tests
+MAP
+  NAME "test"
+  TITLE "Test Service"
+  EXTENT -180 -90 180 90
+  UNITS DD
+
+  SYMBOL
+    NAME "dot"
+    TYPE ELLIPSE
+    POINTS 1 1 END
+    FILLED TRUE
+  END
+
+  LAYER
+    NAME "roads"
+    TYPE LINE
+    STATUS ON
+  END
+
+  LAYER
+    NAME "buildings"
+    TYPE POLYGON
+    STATUS ON
+  END
+
+  LAYER
+    NAME "labels"
+    TYPE POINT
+    STATUS ON
+  END
+END

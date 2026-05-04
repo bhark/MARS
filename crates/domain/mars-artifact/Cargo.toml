@@ -17,8 +17,12 @@ mars-types = { workspace = true }
 bytes      = { workspace = true }
 serde      = { workspace = true }
 thiserror  = { workspace = true }
+planus     = "1"
+blake3     = "1"
 
 [build-dependencies]
-# planus-codegen will be wired here as soon as the first real .fbs schema lands
-# in `schemas/`. For Phase 0 the build script just emits an empty placeholder
-# so the wiring is in place without taking on a tool dep we cannot exercise.
+planus-codegen = "1"
+planus-translation = "1"
+
+[dev-dependencies]
+proptest = "1"

@@ -1,5 +1,5 @@
 //! mars-compile: standalone snapshot compile CLI. Reuses `mars-compiler`
-//! over a static source snapshot — useful for local dev, CI fixtures and
+//! over a static source snapshot - useful for local dev, CI fixtures and
 //! offline rebuilds. SPEC §18.2.
 
 use std::path::PathBuf;

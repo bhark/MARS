@@ -1,0 +1,180 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, unsafe_code)]
+
+use std::env;
+use std::fs;
+use std::path::PathBuf;
+
+use mars_config::{ConfigError, load, validate};
+
+fn fixtures_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+}
+
+#[test]
+fn loads_minimal_fixture() {
+    let path = fixtures_dir().join("demo_minimal.yaml");
+    let cfg = load(&path).expect("load minimal");
+    assert_eq!(cfg.service.name, "demo");
+    assert_eq!(cfg.scales.bands.len(), 1);
+    assert_eq!(cfg.layers.len(), 1);
+    assert_eq!(cfg.layers[0].classes.len(), 2);
+
+    let cache_bytes = cfg.artifacts.cache.max_size_bytes().unwrap();
+    assert_eq!(cache_bytes, 50u64 * 1024 * 1024 * 1024);
+
+    let sizes = cfg.cells.size_per_band_m().unwrap();
+    assert!((sizes["hi"] - 4096.0).abs() < f64::EPSILON);
+
+    validate(&cfg, &fixtures_dir()).expect("validate minimal");
+}
+
+#[test]
+fn missing_style_ref_is_rejected() {
+    let path = fixtures_dir().join("demo_minimal.yaml");
+    let mut cfg = load(&path).unwrap();
+    if let mars_config::ClassStyle::Ref { ref_ } = &mut cfg.layers[0].classes[0].style {
+        *ref_ = "no_such_style".into();
+    } else {
+        panic!("expected ref");
+    }
+    let err = validate(&cfg, &fixtures_dir()).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("bygning"), "error should name layer: {msg}");
+    assert!(msg.contains("no_such_style"), "error should name style: {msg}");
+}
+
+#[test]
+fn unknown_band_in_source_binding_is_rejected() {
+    let path = fixtures_dir().join("demo_minimal.yaml");
+    let mut cfg = load(&path).unwrap();
+    cfg.layers[0].sources[0].band = Some("ghost".into());
+    let err = validate(&cfg, &fixtures_dir()).unwrap_err();
+    assert!(err.to_string().contains("ghost"));
+}
+
+#[test]
+fn env_default_used_when_unset() {
+    unsafe {
+        env::remove_var("MARS_TEST_DSN_FORVALTNING");
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let yaml = r#"
+service: { name: t }
+source:
+  type: postgis
+  dsn: ${MARS_TEST_DSN_FORVALTNING:-postgres://default/x}
+  native_crs: EPSG:25832
+artifacts:
+  store: { type: fs, path: /tmp/s }
+  cache: { path: /tmp/c, max_size: 1MiB }
+scales: { bands: [{ name: hi, max_denom: 1 }] }
+cells: { grid: regular, origin: [0, 0], size_per_band: { hi: 1m } }
+interfaces: {}
+"#;
+    let p = dir.path().join("c.yaml");
+    fs::write(&p, yaml).unwrap();
+    let cfg = load(&p).unwrap();
+    assert_eq!(cfg.source.dsn, "postgres://default/x");
+}
+
+#[test]
+fn env_unset_no_default_errors() {
+    unsafe {
+        env::remove_var("MARS_TEST_REQUIRED_VAR");
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let yaml = r#"
+service: { name: t }
+source:
+  type: postgis
+  dsn: ${MARS_TEST_REQUIRED_VAR}
+  native_crs: EPSG:25832
+artifacts:
+  store: { type: fs, path: /tmp/s }
+  cache: { path: /tmp/c, max_size: 1MiB }
+scales: { bands: [{ name: hi, max_denom: 1 }] }
+cells: { grid: regular, origin: [0, 0], size_per_band: { hi: 1m } }
+interfaces: {}
+"#;
+    let p = dir.path().join("c.yaml");
+    fs::write(&p, yaml).unwrap();
+    let err = load(&p).unwrap_err();
+    assert!(matches!(err, ConfigError::EnvMissing(name) if name == "MARS_TEST_REQUIRED_VAR"));
+}
+
+#[test]
+fn include_resolves_relative() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = r#"
+service: { name: t }
+source:
+  type: postgis
+  dsn: x
+  native_crs: EPSG:25832
+artifacts:
+  store: { type: fs, path: /tmp/s }
+  cache: { path: /tmp/c, max_size: 1MiB }
+scales: { bands: [{ name: hi, max_denom: 1 }] }
+cells: { grid: regular, origin: [0, 0], size_per_band: { hi: 1m } }
+interfaces: {}
+layers: !include layers.yaml
+"#;
+    let layers = r#"
+- name: foo
+  type: polygon
+  sources:
+    - band: hi
+      from: t.foo
+      geometry_column: geom
+  classes: []
+"#;
+    fs::write(dir.path().join("c.yaml"), main).unwrap();
+    fs::write(dir.path().join("layers.yaml"), layers).unwrap();
+    let cfg = load(dir.path().join("c.yaml")).unwrap();
+    assert_eq!(cfg.layers.len(), 1);
+    assert_eq!(cfg.layers[0].name.as_str(), "foo");
+}
+
+#[test]
+fn include_cycle_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    // a.yaml includes b.yaml under layers; b.yaml includes a.yaml under layers.
+    fs::write(
+        dir.path().join("a.yaml"),
+        r#"
+service: { name: t }
+source: { type: postgis, dsn: x, native_crs: EPSG:25832 }
+artifacts:
+  store: { type: fs, path: /tmp/s }
+  cache: { path: /tmp/c, max_size: 1MiB }
+scales: { bands: [{ name: hi, max_denom: 1 }] }
+cells: { grid: regular, origin: [0, 0], size_per_band: { hi: 1m } }
+interfaces: {}
+layers: !include b.yaml
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("b.yaml"),
+        r#"!include a.yaml
+"#,
+    )
+    .unwrap();
+    let err = load(dir.path().join("a.yaml")).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("cycle"), "expected cycle error, got {msg}");
+}
+
+#[test]
+fn unit_roundtrip() {
+    use mars_config::units::{parse_bytes, parse_distance_m, parse_duration};
+    use std::time::Duration;
+    assert_eq!(parse_bytes("12.5KiB").unwrap(), 12_800);
+    assert_eq!(parse_bytes("1MiB").unwrap(), 1024 * 1024);
+    assert_eq!(parse_bytes("2GiB").unwrap(), 2 * 1024 * 1024 * 1024);
+    assert!((parse_distance_m("4096m").unwrap() - 4096.0).abs() < f64::EPSILON);
+    assert_eq!(parse_duration("5min").unwrap(), Duration::from_secs(300));
+    assert_eq!(parse_duration("30s").unwrap(), Duration::from_secs(30));
+}

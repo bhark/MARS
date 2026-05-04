@@ -1,29 +1,21 @@
-//! build script: writes an empty `generated.rs` until planus codegen lands.
-//! when the first `.fbs` schema is added, swap the body for a planus_codegen call.
+//! build script: compiles `schemas/footer.fbs` into `$OUT_DIR/generated.rs`
+//! using planus-translation + planus-codegen (the public planus pipeline).
 
 #![allow(clippy::expect_used)]
 
 use std::{env, fs, path::PathBuf};
 
 fn main() {
-    let out_dir = env::var("OUT_DIR").expect("cargo always sets OUT_DIR");
-    let schemas_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("schemas");
-    println!("cargo:rerun-if-changed={}", schemas_dir.display());
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let schema = manifest_dir.join("schemas/footer.fbs");
+    println!("cargo:rerun-if-changed={}", schema.display());
 
-    if let Ok(entries) = fs::read_dir(&schemas_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().is_some_and(|e| e == "fbs") {
-                println!("cargo:rerun-if-changed={}", path.display());
-                println!(
-                    "cargo:warning=mars-artifact: schema {} present but planus codegen not wired",
-                    path.display()
-                );
-            }
-        }
-    }
+    let declarations =
+        planus_translation::translate_files(&[&schema]).expect("translate footer.fbs");
+    let generated =
+        planus_codegen::generate_rust(&declarations, true).expect("planus rust codegen");
 
+    let out_dir = env::var_os("OUT_DIR").expect("OUT_DIR");
     let dest = PathBuf::from(out_dir).join("generated.rs");
-    fs::write(&dest, "// auto-generated: empty until planus codegen is wired.\n")
-        .expect("write generated.rs");
+    fs::write(&dest, generated).expect("write generated.rs");
 }

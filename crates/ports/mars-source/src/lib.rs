@@ -3,17 +3,23 @@
 //! `Source` is the read interface used by the compiler to materialise
 //! geometries and attributes for a `(source_collection, scale_band, cell)`.
 //! `ChangeFeed` is the subscription interface that produces dirty-cell
-//! events (SPEC §8.2). Both are runtime-agnostic — concrete adapters live
+//! events (SPEC §8.2). Both are runtime-agnostic - concrete adapters live
 //! in `crates/adapters/mars-source-*`.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod access;
+pub mod attrs;
+
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_core::stream::BoxStream;
 use mars_expr::Expr;
-use mars_types::{Bbox, Cell};
+use mars_types::{Cell, CrsCode};
+
+pub use access::RowAttrs;
+pub use attrs::{AttrError, decode_row, encode_row};
 
 /// Errors produced by source adapters.
 #[derive(Debug, thiserror::Error)]
@@ -31,6 +37,9 @@ pub enum SourceError {
     /// snapshot compile (SPEC §8.2.3).
     #[error("change feed gone; full snapshot required")]
     ChangeFeedGone,
+    /// Invalid binding configuration.
+    #[error("invalid binding: {0}")]
+    InvalidBinding(String),
 }
 
 /// One change-feed event, lowered from a postgres logical-decoding message
@@ -65,30 +74,148 @@ pub enum ChangeEvent {
     },
 }
 
+/// Stable identifier for a source collection (logical name shared between
+/// the binding, change feed, and compiled artifact metadata).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SourceCollectionId(String);
+
+impl SourceCollectionId {
+    /// Construct from any string-like value.
+    #[must_use]
+    pub fn new(name: impl Into<String>) -> Self {
+        Self(name.into())
+    }
+
+    /// Borrow as a `&str`.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for SourceCollectionId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Source-side binding: maps a logical `SourceCollectionId` onto the physical
+/// table, geometry/id columns, attribute projection, and CRS. Lives in
+/// `mars-source` because every field is database-vocabulary, not domain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceBinding {
+    /// Logical collection name.
+    pub collection: SourceCollectionId,
+    /// Source schema (e.g. `public`).
+    pub from_schema: String,
+    /// Source table.
+    pub from_table: String,
+    /// Geometry column name.
+    pub geometry_column: String,
+    /// Stable feature-id column name.
+    pub id_column: String,
+    /// Ordered, deduplicated attribute projection.
+    pub attributes: Vec<String>,
+    /// Source CRS.
+    pub crs: CrsCode,
+}
+
+impl SourceBinding {
+    /// Construct after validating attribute uniqueness and non-empty
+    /// schema/table/column names.
+    pub fn new(
+        collection: SourceCollectionId,
+        from_schema: impl Into<String>,
+        from_table: impl Into<String>,
+        geometry_column: impl Into<String>,
+        id_column: impl Into<String>,
+        attributes: Vec<String>,
+        crs: CrsCode,
+    ) -> Result<Self, SourceError> {
+        let from_schema = from_schema.into();
+        let from_table = from_table.into();
+        let geometry_column = geometry_column.into();
+        let id_column = id_column.into();
+
+        for (label, v) in [
+            ("from_schema", &from_schema),
+            ("from_table", &from_table),
+            ("geometry_column", &geometry_column),
+            ("id_column", &id_column),
+        ] {
+            if v.is_empty() {
+                return Err(SourceError::InvalidBinding(format!("{label} is empty")));
+            }
+        }
+
+        // dedup check, preserves order
+        let mut seen = std::collections::HashSet::with_capacity(attributes.len());
+        for a in &attributes {
+            if a.is_empty() {
+                return Err(SourceError::InvalidBinding("empty attribute name".into()));
+            }
+            if !seen.insert(a.as_str()) {
+                return Err(SourceError::InvalidBinding(format!(
+                    "duplicate attribute: {a}"
+                )));
+            }
+        }
+
+        Ok(Self {
+            collection,
+            from_schema,
+            from_table,
+            geometry_column,
+            id_column,
+            attributes,
+            crs,
+        })
+    }
+}
+
+/// Decoded attribute value. Mirrors `mars_expr::Literal` 1:1, lives in
+/// `mars-source` because the source layer is where rows are materialised
+/// before evaluator handoff.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AttrValue {
+    /// SQL NULL.
+    Null,
+    /// Boolean.
+    Bool(bool),
+    /// 64-bit signed integer.
+    Int(i64),
+    /// 64-bit float.
+    Float(f64),
+    /// UTF-8 string.
+    String(String),
+}
+
 /// Read-side port: query geometry and attributes for a cell.
 #[async_trait]
 pub trait Source: Send + Sync + 'static {
-    /// Materialise the rows for `collection` whose geometry intersects
-    /// `bbox`, optionally filtered by a `mars-expr` AST.
+    /// Materialise rows whose geometry intersects `cell`, optionally filtered
+    /// by a `mars-expr` AST. The binding describes table mapping and
+    /// attribute projection; `RowBytes.attributes` is returned in the same
+    /// order as `binding.attributes`.
     async fn fetch_cell(
         &self,
-        collection: &str,
-        bbox: Bbox,
+        binding: &SourceBinding,
+        cell: &Cell,
         filter: Option<&Expr>,
     ) -> Result<Vec<RowBytes>, SourceError>;
 }
 
-/// Opaque per-row bytes returned by `Source`. The exact shape (WKB vs
-/// adapter-native) is up to the adapter; the compiler treats it as opaque
-/// and re-encodes into the artifact format.
+/// Per-row record returned by `Source`. Geometry is opaque adapter-native
+/// bytes (typically WKB); attributes are decoded into `(name, AttrValue)`
+/// pairs ordered to match the binding's projection.
 #[derive(Debug, Clone)]
 pub struct RowBytes {
     /// Stable identifier of the row inside the source collection.
     pub feature_id: u64,
-    /// Encoded geometry payload.
+    /// Encoded geometry payload (opaque to the compiler).
     pub geometry: Bytes,
-    /// Encoded attribute payload.
-    pub attributes: Bytes,
+    /// Decoded attributes, ordered to mirror `SourceBinding.attributes`.
+    pub attributes: Vec<(String, AttrValue)>,
 }
 
 /// Subscription-side port: a stream of `ChangeEvent`s.
@@ -98,4 +225,59 @@ pub trait ChangeFeed: Send + Sync + 'static {
     /// lifetime of the compiler process; transient errors are reported
     /// inline as `Result::Err`.
     async fn subscribe(&self) -> Result<BoxStream<'static, Result<ChangeEvent, SourceError>>, SourceError>;
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn binding_constructor_accepts_valid() {
+        let b = SourceBinding::new(
+            SourceCollectionId::new("roads"),
+            "public",
+            "roads",
+            "geom",
+            "gid",
+            vec!["name".into(), "class".into()],
+            CrsCode::new("EPSG:25832"),
+        )
+        .unwrap();
+        assert_eq!(b.collection.as_str(), "roads");
+        assert_eq!(b.from_schema, "public");
+        assert_eq!(b.from_table, "roads");
+        assert_eq!(b.geometry_column, "geom");
+        assert_eq!(b.id_column, "gid");
+        assert_eq!(b.attributes, vec!["name".to_string(), "class".to_string()]);
+        assert_eq!(b.crs.as_str(), "EPSG:25832");
+    }
+
+    #[test]
+    fn binding_rejects_duplicate_attribute() {
+        let r = SourceBinding::new(
+            SourceCollectionId::new("c"),
+            "s",
+            "t",
+            "g",
+            "id",
+            vec!["a".into(), "a".into()],
+            CrsCode::new("EPSG:4326"),
+        );
+        assert!(matches!(r, Err(SourceError::InvalidBinding(_))));
+    }
+
+    #[test]
+    fn binding_rejects_empty_field() {
+        let r = SourceBinding::new(
+            SourceCollectionId::new("c"),
+            "",
+            "t",
+            "g",
+            "id",
+            vec![],
+            CrsCode::new("EPSG:4326"),
+        );
+        assert!(matches!(r, Err(SourceError::InvalidBinding(_))));
+    }
 }

@@ -1,4 +1,4 @@
-//! MARS style model. SPEC §5.4 / §5.5 — a small fixed vocabulary close to SVG.
+//! MARS style model. SPEC §5.4 / §5.5 - a small fixed vocabulary close to SVG.
 //!
 //! No rendering happens here; the renderer adapter consumes the compiled form.
 

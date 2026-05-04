@@ -1,0 +1,96 @@
+service:
+  name: demo
+  title: "Sagsbehandlingskort"
+  abstract: "Minimal Phase-0 fixture"
+  contact_email: ops@example.org
+
+source:
+  type: postgis
+  dsn: "postgres://localhost/demo"
+  native_crs: EPSG:25832
+  change_feed:
+    type: pgoutput
+    publication: mars_demo
+    slot: mars_demo
+
+artifacts:
+  store:
+    type: fs
+    path: /var/lib/mars/store
+  cache:
+    path: /var/cache/mars
+    max_size: 50GiB
+    eviction: lru
+
+scales:
+  bands:
+    - { name: hi,  max_denom: 25000 }
+
+cells:
+  grid: regular
+  origin: [120000, 5900000]
+  size_per_band:
+    hi: 4096m
+
+interfaces:
+  wms:
+    enabled: true
+    versions: ["1.3.0"]
+    formats: ["image/png"]
+  wmts:
+    enabled: true
+    versions: ["1.0.0"]
+    tile_matrix_sets: [dk_25832]
+    formats: ["image/png"]
+  tile_cache:
+    enabled: true
+    path: /var/cache/mars/tiles
+    max_size: 20GiB
+
+tile_matrix_sets:
+  dk_25832:
+    crs: EPSG:25832
+    top_left: [120000, 6500000]
+    tile_size: [256, 256]
+    levels:
+      - { id: 0, scale_denominator: 25000000 }
+      - { id: 1, scale_denominator: 12500000 }
+
+reprojection:
+  allowlist: [EPSG:25832, EPSG:4326, EPSG:3857]
+
+styles:
+  bygning_normal:
+    fill: { r: 210, g: 210, b: 210, a: 255 }
+    stroke: { r: 160, g: 160, b: 160, a: 255 }
+    stroke_width: 0.6
+  bygning_drivhus:
+    fill: { r: 250, g: 250, b: 250, a: 255 }
+    stroke: { r: 180, g: 180, b: 180, a: 255 }
+    stroke_width: 0.6
+
+layers:
+  - name: bygning
+    title: "Bygning"
+    type: polygon
+    scale: { min: 1, max: 12500 }
+    sources:
+      - band: hi
+        from: geodanmark_latest.bygning
+        geometry_column: geometri
+        id_column: ogc_fid
+        attributes: [bygningstype]
+    classes:
+      - name: drivhus
+        title: "Drivhus"
+        when: "bygningstype = 'Drivhus'"
+        style: { ref: bygning_drivhus }
+      - name: bygning_normal
+        title: "Bygning"
+        when: "bygningstype != 'Drivhus'"
+        style: { ref: bygning_normal }
+
+observability:
+  log_level: info
+  log_format: json
+  metrics_listen: 0.0.0.0:9090

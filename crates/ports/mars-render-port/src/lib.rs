@@ -36,7 +36,7 @@ pub struct Path {
     pub rings: Vec<Vec<(f32, f32)>>,
 }
 
-/// One draw operation. Intentionally narrow — adding shapes goes through this enum.
+/// One draw operation. Intentionally narrow - adding shapes goes through this enum.
 #[derive(Debug, Clone)]
 pub enum DrawOp {
     /// Fill or stroke a path with the given style.

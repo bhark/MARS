@@ -88,7 +88,7 @@ async fn async_main(cli: Cli) -> Result<()> {
 async fn run_runtime(config_path: &Path) -> Result<()> {
     tracing::info!(?config_path, "starting runtime mode (Phase 0 stub)");
     let _cfg = mars_config::load(config_path);
-    let renderer = Arc::new(mars_render::StubRenderer);
+    let renderer = Arc::new(mars_render::TinySkiaRenderer);
     let store = Arc::new(mars_store_fs::StubFs::default());
     let cache = Arc::new(mars_store_fs::StubFs::default());
     let runtime = Arc::new(mars_runtime::Runtime::new(mars_runtime::Deps {

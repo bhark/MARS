@@ -1,7 +1,7 @@
 //! WMS 1.3.0 interface adapter.
 //!
 //! Translates WMS request parameters into a `mars_runtime::RenderPlan` and
-//! generates the capabilities document. SPEC §12 — full GetMap, GetFeatureInfo,
+//! generates the capabilities document. SPEC §12 - full GetMap, GetFeatureInfo,
 //! GetLegendGraphic. Out of scope for v1: SLD / SLD_BODY, DescribeLayer.
 
 #![forbid(unsafe_code)]

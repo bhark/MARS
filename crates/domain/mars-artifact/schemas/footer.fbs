@@ -1,0 +1,41 @@
+// MARS artifact footer schema. compiled by planus_build into generated.rs.
+
+namespace mars.artifact;
+
+enum ArtifactKind : ubyte {
+  Source = 0,
+  Layer  = 1,
+  Style  = 2,
+}
+
+struct SectionEntry {
+  kind: uint16;
+  file_offset: uint64;
+  length: uint64;
+  uncompressed_length: uint64;
+}
+
+struct Bbox {
+  min_x: float64;
+  min_y: float64;
+  max_x: float64;
+  max_y: float64;
+}
+
+table SourceRef {
+  collection: string;
+  band: string;
+  cell_x: int64;
+  cell_y: int64;
+  content_hash: [ubyte];
+}
+
+table Footer {
+  kind: ArtifactKind;
+  sections: [SectionEntry];
+  bbox: Bbox;
+  feature_count: uint64;
+  source_artifact_ref: SourceRef;
+}
+
+root_type Footer;

@@ -14,5 +14,12 @@ workspace = true
 [dependencies]
 mars-types  = { workspace = true }
 mars-style  = { workspace = true }
+mars-expr   = { workspace = true }
 serde       = { workspace = true }
 thiserror   = { workspace = true }
+serde_yml   = "0.0.12"
+humantime   = "2"
+regex       = "1"
+
+[dev-dependencies]
+tempfile    = "3"
