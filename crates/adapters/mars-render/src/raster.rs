@@ -84,6 +84,9 @@ pub(crate) fn draw_path(pm: &mut Pixmap, path: &PortPath, style: &Style) {
                 && !dashes.is_empty()
             {
                 stroke.dash = StrokeDash::new(dashes.clone(), 0.0);
+                if stroke.dash.is_none() {
+                    tracing::warn!(dashes = ?dashes, "invalid stroke dash array: odd length, rendering solid");
+                }
             }
             pm.stroke_path(&tsk_path, &paint, &stroke, Transform::identity(), None);
         }
