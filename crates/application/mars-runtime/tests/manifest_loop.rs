@@ -137,6 +137,7 @@ fn build_runtime() -> Arc<Runtime> {
         cache,
         renderer,
         encoder,
+        metrics: mars_observability::Metrics::new().expect("metrics"),
     }))
 }
 

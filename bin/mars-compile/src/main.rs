@@ -15,16 +15,18 @@ use mars_store_fs::{FsPublisher, FsStore};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Parser)]
-#[command(name = "mars-compile", version, about = "Standalone snapshot compile.")]
+#[command(
+    name = "mars-compile",
+    version,
+    about = "Snapshot compile: build artifacts once and exit.",
+    long_about = "Standalone snapshot compile. Builds artifacts once from the configured \
+                  source and exits. The long-running compiler loop lives in the `mars` binary \
+                  under `--mode compiler`."
+)]
 struct Cli {
     /// Path to the service configuration.
     #[arg(long, default_value = "/etc/mars/mars.yaml")]
     config: PathBuf,
-
-    /// Phase-0 hint; the snapshot pipeline always runs once. Reserved for the
-    /// long-running `--watch` mode that lands in Phase 1.
-    #[arg(long, default_value_t = false)]
-    once: bool,
 }
 
 fn main() -> Result<()> {
@@ -32,7 +34,6 @@ fn main() -> Result<()> {
     if let Err(e) = mars_observability::init_tracing(false) {
         eprintln!("warning: tracing init failed: {e}");
     }
-    let _ = cli.once; // accepted for forward-compat; phase-0 pipeline is single-shot.
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     runtime.block_on(async move {
         let cfg = mars_config::load(&cli.config).with_context(|| format!("load {}", cli.config.display()))?;

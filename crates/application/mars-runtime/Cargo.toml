@@ -19,6 +19,7 @@ mars-artifact      = { workspace = true }
 mars-store         = { workspace = true }
 mars-render-port   = { workspace = true }
 mars-config        = { workspace = true }
+mars-observability = { workspace = true }
 tokio              = { workspace = true }
 tracing            = { workspace = true }
 thiserror          = { workspace = true }

@@ -133,6 +133,7 @@ async fn build_fixture() -> Fixture {
         cache: Arc::new(cache),
         renderer,
         encoder: Arc::new(CannedEncoder),
+        metrics: mars_observability::Metrics::new().unwrap(),
     };
     let runtime = Runtime::from_state(Arc::new(state), deps);
 
@@ -283,6 +284,7 @@ async fn empty_runtime_returns_not_ready() {
         cache,
         renderer: mock,
         encoder: Arc::new(CannedEncoder),
+        metrics: mars_observability::Metrics::new().unwrap(),
     });
     assert!(!runtime.is_ready());
 
@@ -301,6 +303,7 @@ async fn swap_state_makes_runtime_ready_and_renderable() {
         cache: Arc::new(InMemoryCache::new()),
         renderer: fx.mock.clone(),
         encoder: Arc::new(CannedEncoder),
+        metrics: mars_observability::Metrics::new().unwrap(),
     });
     assert!(!runtime.is_ready());
     runtime.swap_state(fx.runtime.current_state().unwrap());
@@ -351,6 +354,7 @@ async fn render_pins_state_across_swap() {
             cache: Arc::new(blocking_cache),
             renderer: mock.clone(),
             encoder: Arc::new(CannedEncoder),
+            metrics: mars_observability::Metrics::new().unwrap(),
         },
     ));
     let plan = RenderPlan {
@@ -369,6 +373,7 @@ async fn render_pins_state_across_swap() {
             cache: Arc::new(InMemoryCache::new()),
             renderer: expected_renderer.clone(),
             encoder: Arc::new(CannedEncoder),
+            metrics: mars_observability::Metrics::new().unwrap(),
         },
     );
     expected_runtime.render(&plan).await.unwrap();

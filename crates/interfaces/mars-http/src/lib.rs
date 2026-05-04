@@ -6,7 +6,7 @@
 //! /wms        WMS 1.3.0
 //! /healthz    liveness
 //! /readyz     readiness (gated on a usable manifest)
-//! /metrics    Prometheus scrape (placeholder body in Phase 0)
+//! /metrics    Prometheus scrape
 //! ```
 //!
 //! WMTS lands in Phase 1 alongside the tile-cache.
@@ -16,13 +16,16 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use arc_swap::ArcSwap;
 use axum::Router;
-use axum::extract::State;
+use axum::extract::{Request, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
+use mars_observability::Metrics;
 use mars_runtime::{Runtime, RuntimeError};
 use mars_wms::{WmsConfig, WmsError, WmsRequest};
 use tower_http::limit::RequestBodyLimitLayer;
@@ -42,21 +45,37 @@ pub struct ServerConfig {
     pub debug_endpoints: bool,
 }
 
+/// Atomically swappable capabilities document. Cheap clone, lock-free reads.
+pub type CapabilitiesHandle = Arc<ArcSwap<Arc<String>>>;
+
+/// Helper to build a fresh [`CapabilitiesHandle`] seeded with `body`.
+#[must_use]
+pub fn capabilities_handle(body: String) -> CapabilitiesHandle {
+    Arc::new(ArcSwap::from(Arc::new(Arc::new(body))))
+}
+
 /// Shared per-request state.
 #[derive(Clone)]
 struct AppState {
     runtime: Arc<Runtime>,
-    capabilities: Arc<String>,
+    capabilities: CapabilitiesHandle,
     wms_cfg: Arc<WmsConfig>,
+    metrics: Metrics,
     request_counter: Arc<AtomicU64>,
 }
 
 /// Build the router. Exposed for in-process testing via `tower::ServiceExt`.
-pub fn router(runtime: Arc<Runtime>, capabilities: String, wms_cfg: WmsConfig) -> Router {
+pub fn router(
+    runtime: Arc<Runtime>,
+    capabilities: CapabilitiesHandle,
+    wms_cfg: WmsConfig,
+    metrics: Metrics,
+) -> Router {
     let state = AppState {
         runtime,
-        capabilities: Arc::new(capabilities),
+        capabilities,
         wms_cfg: Arc::new(wms_cfg),
+        metrics,
         request_counter: Arc::new(AtomicU64::new(0)),
     };
     Router::new()
@@ -64,7 +83,8 @@ pub fn router(runtime: Arc<Runtime>, capabilities: String, wms_cfg: WmsConfig) -
         .route("/healthz", get(|| async { (StatusCode::OK, "ok") }))
         .route("/readyz", get(handle_ready))
         .route("/metrics", get(handle_metrics))
-        .with_state(state)
+        .with_state(state.clone())
+        .layer(middleware::from_fn_with_state(state, observe_request))
         .layer(RequestBodyLimitLayer::new(1 << 20))
         .layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
@@ -76,10 +96,11 @@ pub fn router(runtime: Arc<Runtime>, capabilities: String, wms_cfg: WmsConfig) -
 pub async fn serve(
     cfg: ServerConfig,
     runtime: Arc<Runtime>,
-    capabilities_body: String,
+    capabilities: CapabilitiesHandle,
     wms_cfg: WmsConfig,
+    metrics: Metrics,
 ) -> Result<(), HttpError> {
-    let app = router(runtime, capabilities_body, wms_cfg);
+    let app = router(runtime, capabilities, wms_cfg, metrics);
     let listener = tokio::net::TcpListener::bind(cfg.listen)
         .await
         .map_err(|e| HttpError::Listen(format!("bind {}: {e}", cfg.listen)))?;
@@ -95,6 +116,35 @@ async fn shutdown_signal() {
         tracing::warn!(%e, "ctrl_c handler failed");
     }
     tracing::info!("http: shutdown requested");
+}
+
+// ---------- middleware ----------
+
+async fn observe_request(State(state): State<AppState>, req: Request, next: Next) -> Response {
+    let interface = interface_label(req.uri().path());
+    let start = Instant::now();
+    let resp = next.run(req).await;
+    let status = resp.status().as_u16();
+    state.metrics.observe_request(interface, status, start.elapsed());
+    resp
+}
+
+fn interface_label(path: &str) -> &'static str {
+    // strict prefix match; anything outside the known set is bucketed as "other"
+    // to keep cardinality flat regardless of probing/garbage requests.
+    if path == "/healthz" {
+        "health"
+    } else if path == "/readyz" {
+        "ready"
+    } else if path == "/metrics" {
+        "metrics"
+    } else if path.starts_with("/wms") {
+        "wms"
+    } else if path.starts_with("/wmts") {
+        "wmts"
+    } else {
+        "other"
+    }
 }
 
 // ---------- handlers ----------
@@ -115,7 +165,8 @@ async fn handle_wms(State(state): State<AppState>, headers: HeaderMap, raw_query
             WmsRequest::GetCapabilities => {
                 let mut h = HeaderMap::new();
                 h.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/xml"));
-                (StatusCode::OK, h, state.capabilities.as_str().to_owned()).into_response()
+                let body = state.capabilities.load_full();
+                (StatusCode::OK, h, body.as_str().to_owned()).into_response()
             }
             WmsRequest::GetMap(plan) => {
                 let mime = plan.format.mime();
@@ -142,10 +193,21 @@ async fn handle_ready(State(state): State<AppState>) -> Response {
     }
 }
 
-async fn handle_metrics() -> Response {
-    let mut h = HeaderMap::new();
-    h.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/plain"));
-    (StatusCode::OK, h, "# phase-0 metrics not yet wired\n".to_owned()).into_response()
+async fn handle_metrics(State(state): State<AppState>) -> Response {
+    match state.metrics.encode_text() {
+        Ok(body) => {
+            let mut h = HeaderMap::new();
+            h.insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/plain; version=0.0.4"),
+            );
+            (StatusCode::OK, h, body).into_response()
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "metrics encode failed");
+            (StatusCode::INTERNAL_SERVER_ERROR, "metrics encode failed").into_response()
+        }
+    }
 }
 
 // ---------- helpers ----------
@@ -219,12 +281,13 @@ mod tests {
         }
     }
 
-    fn empty_runtime() -> Arc<Runtime> {
+    fn empty_runtime(metrics: &Metrics) -> Arc<Runtime> {
         Arc::new(Runtime::empty(Deps {
             store: Arc::new(NotImplementedStore),
             cache: Arc::new(NotImplementedCache),
             renderer: Arc::new(NoopRenderer),
             encoder: Arc::new(NoopEncoder),
+            metrics: metrics.clone(),
         }))
     }
 
@@ -236,7 +299,13 @@ mod tests {
             max_layers: 100,
             max_bbox_coord: 1e9,
         };
-        router(empty_runtime(), "<caps/>".into(), cfg)
+        let metrics = Metrics::new().unwrap();
+        router(
+            empty_runtime(&metrics),
+            capabilities_handle("<caps/>".into()),
+            cfg,
+            metrics,
+        )
     }
 
     fn ready_state() -> RuntimeState {
@@ -279,7 +348,8 @@ mod tests {
 
     #[tokio::test]
     async fn readyz_200_after_swap_state() {
-        let runtime = empty_runtime();
+        let metrics = Metrics::new().unwrap();
+        let runtime = empty_runtime(&metrics);
         let cfg = WmsConfig {
             allowlist_crs: vec![CrsCode::new("EPSG:25832")],
             formats: vec![ImageFormat::Png],
@@ -287,7 +357,12 @@ mod tests {
             max_layers: 100,
             max_bbox_coord: 1e9,
         };
-        let app = router(runtime.clone(), "<caps/>".into(), cfg);
+        let app = router(
+            runtime.clone(),
+            capabilities_handle("<caps/>".into()),
+            cfg,
+            metrics,
+        );
         runtime.swap_state(Arc::new(ready_state()));
 
         let resp = app
@@ -312,6 +387,32 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let ct = resp.headers().get(header::CONTENT_TYPE).cloned();
         assert_eq!(ct.unwrap(), "application/xml");
+    }
+
+    #[tokio::test]
+    async fn wms_capabilities_reflects_swap() {
+        let metrics = Metrics::new().unwrap();
+        let caps = capabilities_handle("<caps>v1</caps>".into());
+        let cfg = WmsConfig {
+            allowlist_crs: vec![CrsCode::new("EPSG:25832")],
+            formats: vec![ImageFormat::Png],
+            max_image_dimension: 8192,
+            max_layers: 100,
+            max_bbox_coord: 1e9,
+        };
+        let app = router(empty_runtime(&metrics), caps.clone(), cfg, metrics);
+        caps.store(Arc::new(Arc::new("<caps>v2</caps>".to_owned())));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/wms?service=WMS&version=1.3.0&request=GetCapabilities")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(body_str(resp).await.contains("v2"));
     }
 
     #[tokio::test]
@@ -345,13 +446,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn metrics_placeholder() {
+    async fn metrics_emits_prometheus_text() {
         let app = empty_router();
+        // first request populates a counter line
+        let _ = app
+            .clone()
+            .oneshot(Request::builder().uri("/healthz").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
         let resp = app
             .oneshot(Request::builder().uri("/metrics").body(Body::empty()).unwrap())
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        assert!(body_str(resp).await.contains("phase-0 metrics"));
+        let ct = resp.headers().get(header::CONTENT_TYPE).cloned().unwrap();
+        assert!(ct.to_str().unwrap().starts_with("text/plain"));
+        let body = body_str(resp).await;
+        assert!(body.contains("mars_request_total"));
+        assert!(body.contains("interface=\"health\""));
     }
 }

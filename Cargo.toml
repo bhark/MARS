@@ -26,6 +26,12 @@ members = [
     "bin/mars-compile",
 ]
 
+# fuzz crate excluded from workspace builds: it requires nightly + libfuzzer
+# linker flags. Run via `cargo +nightly fuzz run <target>`; see fuzz/README.md.
+exclude = [
+    "fuzz",
+]
+
 [workspace.package]
 edition = "2024"
 license = "MIT OR Apache-2.0"
@@ -82,6 +88,8 @@ serde_yml           = "0.0.12"
 rand                = "0.8"
 png                 = "0.18"
 tokio-postgres      = "0.7"
+prometheus          = "0.14"
+libfuzzer-sys       = "0.4"
 
 [workspace.lints.rust]
 unsafe_code              = "deny"

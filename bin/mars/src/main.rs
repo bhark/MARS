@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand, ValueEnum};
+use futures_util::StreamExt;
 use mars_compiler::{Compiler, Deps as CompilerDeps};
 use mars_config::{ClassStyle, Config, config_dir};
 use mars_render::{TinySkiaEncoder, TinySkiaRenderer};
@@ -74,12 +75,30 @@ enum Tool {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    if let Err(e) = mars_observability::init_tracing(false) {
+
+    // tracing-subscriber's global registry can only be installed once; we read
+    // log_format from the config when a service mode is selected, otherwise we
+    // fall back to plain text for tooling subcommands.
+    let json = wants_json_logs(&cli);
+    if let Err(e) = mars_observability::init_tracing(json) {
         eprintln!("warning: tracing init failed: {e}");
     }
 
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     runtime.block_on(async_main(cli))
+}
+
+fn wants_json_logs(cli: &Cli) -> bool {
+    if cli.tool.is_some() {
+        return false;
+    }
+    // pre-parse the config purely for log_format. errors are non-fatal here;
+    // the real load_and_validate runs again inside the chosen mode and reports
+    // the error with full context.
+    let Ok(cfg) = mars_config::load(&cli.config) else {
+        return false;
+    };
+    matches!(cfg.observability.log_format.as_deref(), Some("json"))
 }
 
 async fn async_main(cli: Cli) -> Result<()> {
@@ -111,11 +130,13 @@ async fn run_runtime(config_path: &Path) -> Result<()> {
 
     let listen = resolve_listen(&cfg)?;
     let wms_cfg = mars_wms::WmsConfig::from_config(&cfg);
+    let metrics = mars_observability::Metrics::new().context("init metrics")?;
     let runtime = Arc::new(Runtime::empty(RuntimeDeps {
         store,
         cache,
         renderer: Arc::new(TinySkiaRenderer),
         encoder: Arc::new(TinySkiaEncoder),
+        metrics: metrics.clone(),
     }));
 
     let manifest_opt = match publisher.current().await {
@@ -140,6 +161,8 @@ async fn run_runtime(config_path: &Path) -> Result<()> {
     let _reload_task = tokio::spawn({
         let runtime = runtime.clone();
         let cfg = cfg.clone();
+        let stylesheet = stylesheet.clone();
+        let manifests = manifests.clone();
         async move {
             if let Err(e) = run_manifest_reload_loop(runtime, manifests, cfg, stylesheet).await {
                 tracing::error!(error = %e, "manifest reload loop stopped");
@@ -147,11 +170,18 @@ async fn run_runtime(config_path: &Path) -> Result<()> {
         }
     });
 
-    let caps = match &manifest_opt {
+    let initial_caps = match &manifest_opt {
         Some(manifest) => mars_wms::capabilities_xml(&cfg, manifest),
         None => mars_wms::capabilities_xml(&cfg, &empty_manifest(&cfg)),
     }
     .map_err(|e| anyhow!("capabilities: {e}"))?;
+    let caps_handle = mars_http::capabilities_handle(initial_caps);
+
+    let _caps_task = tokio::spawn(rebuild_capabilities_loop(
+        manifests.clone(),
+        cfg.clone(),
+        caps_handle.clone(),
+    ));
 
     mars_http::serve(
         mars_http::ServerConfig {
@@ -159,11 +189,43 @@ async fn run_runtime(config_path: &Path) -> Result<()> {
             debug_endpoints: false,
         },
         runtime,
-        caps,
+        caps_handle,
         wms_cfg,
+        metrics,
     )
     .await
     .map_err(Into::into)
+}
+
+/// Subscribe to the manifest watch stream and atomically swap the cached
+/// capabilities body whenever the manifest changes. Errors on the watch are
+/// logged; the task keeps running so transient adapter failures do not freeze
+/// the capabilities document.
+async fn rebuild_capabilities_loop(
+    manifests: Arc<dyn ManifestStore>,
+    cfg: Arc<Config>,
+    handle: mars_http::CapabilitiesHandle,
+) {
+    let mut stream = match manifests.watch().await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(error = %e, "capabilities: manifest watch unavailable");
+            return;
+        }
+    };
+    while let Some(next) = stream.next().await {
+        let manifest = match next {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!(error = %e, "capabilities: ignoring invalid snapshot");
+                continue;
+            }
+        };
+        match mars_wms::capabilities_xml(&cfg, &manifest) {
+            Ok(body) => handle.store(Arc::new(Arc::new(body))),
+            Err(e) => tracing::error!(error = %e, "capabilities: rebuild failed"),
+        }
+    }
 }
 
 // ---------- compiler mode ----------
@@ -333,6 +395,6 @@ fn resolve_listen(cfg: &Config) -> Result<SocketAddr> {
         .as_ref()
         .and_then(|w| w.listen.clone())
         .or_else(|| std::env::var("MARS_HTTP_LISTEN").ok())
-        .unwrap_or_else(|| "127.0.0.1:1337".to_owned());
+        .unwrap_or_else(|| "0.0.0.0:8080".to_owned());
     SocketAddr::from_str(&raw).with_context(|| format!("parse listen addr {raw:?}"))
 }

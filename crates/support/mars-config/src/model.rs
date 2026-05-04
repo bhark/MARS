@@ -215,7 +215,7 @@ pub struct WmsConfig {
     #[serde(default)]
     pub formats: Vec<String>,
     /// Optional `host:port` to bind the WMS HTTP edge on. When unset the bin
-    /// falls back to `MARS_HTTP_LISTEN` and finally `0.0.0.0:1337`.
+    /// falls back to `MARS_HTTP_LISTEN` and finally `0.0.0.0:8080`.
     #[serde(default)]
     pub listen: Option<String>,
 }

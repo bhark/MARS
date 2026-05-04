@@ -105,6 +105,7 @@ async fn end_to_end_compile_and_render() -> Result<()> {
             cache,
             renderer: Arc::new(TinySkiaRenderer),
             encoder: Arc::new(TinySkiaEncoder),
+            metrics: mars_observability::Metrics::new().expect("metrics"),
         },
     );
 
@@ -244,6 +245,8 @@ fn render_fixture_yaml(dsn_kv: &str, store_path: &str, cache_path: &str) -> Stri
     // accepts both kv and url syntax, so the kv DSN is fine here too.
     let (a_r, a_g, a_b) = FILL_A;
     let (b_r, b_g, b_b) = FILL_B;
+    let a_hex = format!("{a_r:02x}{a_g:02x}{a_b:02x}");
+    let b_hex = format!("{b_r:02x}{b_g:02x}{b_b:02x}");
     format!(
         r#"service:
   name: e2e
@@ -292,13 +295,13 @@ reprojection:
 styles:
   cls_a:
     type: polygon
-    fill: {{ r: {a_r}, g: {a_g}, b: {a_b}, a: 255 }}
-    stroke: {{ r: 0, g: 0, b: 0, a: 255 }}
+    fill: "#{a_hex}"
+    stroke: "#000000"
     stroke_width: 0.5
   cls_b:
     type: polygon
-    fill: {{ r: {b_r}, g: {b_g}, b: {b_b}, a: 255 }}
-    stroke: {{ r: 0, g: 0, b: 0, a: 255 }}
+    fill: "#{b_hex}"
+    stroke: "#000000"
     stroke_width: 0.5
 
 layers:

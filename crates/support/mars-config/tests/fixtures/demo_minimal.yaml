@@ -62,13 +62,13 @@ reprojection:
 styles:
   bygning_normal:
     type: polygon
-    fill: { r: 210, g: 210, b: 210, a: 255 }
-    stroke: { r: 160, g: 160, b: 160, a: 255 }
+    fill: "#d2d2d2"
+    stroke: "#a0a0a0"
     stroke_width: 0.6
   bygning_drivhus:
     type: polygon
-    fill: { r: 250, g: 250, b: 250, a: 255 }
-    stroke: { r: 180, g: 180, b: 180, a: 255 }
+    fill: "#fafafa"
+    stroke: "#b4b4b4"
     stroke_width: 0.6
 
 layers:

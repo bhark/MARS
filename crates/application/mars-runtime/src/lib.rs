@@ -15,8 +15,9 @@ use std::time::Duration;
 
 use arc_swap::ArcSwapOption;
 use futures_util::{StreamExt, stream};
+use mars_observability::{Metrics, reject_reason};
 use mars_render_port::{Canvas, Encoder, Renderer};
-use mars_store::{LocalCache, ManifestStore, ObjectStore};
+use mars_store::{LocalCache, ManifestStore, ObjectStore, StoreError};
 use mars_style::Stylesheet;
 use mars_types::{ArtifactEntry, ArtifactKey, Bbox, CrsCode, ImageFormat, LayerId};
 use tokio::task::JoinHandle;
@@ -70,6 +71,7 @@ pub struct Deps {
     pub cache: Arc<dyn LocalCache>,
     pub renderer: Arc<dyn Renderer>,
     pub encoder: Arc<dyn Encoder>,
+    pub metrics: Metrics,
 }
 
 /// The render plan as produced by the interface adapter (WMS / WMTS).
@@ -231,8 +233,10 @@ pub async fn run_manifest_reload_loop(
         let manifest = match next {
             Ok(manifest) => manifest,
             Err(e) => {
+                let label = classify_store_error(&e);
                 let reason = format!("invalid snapshot: {e}");
                 tracing::error!(error = %e, "manifest watch: ignoring invalid snapshot");
+                runtime.deps.metrics.inc_manifest_reject(label);
                 runtime.record_reject(reason);
                 continue;
             }
@@ -254,6 +258,7 @@ pub async fn run_manifest_reload_loop(
                     current_version = current.manifest.version,
                     "manifest watch: rejecting older manifest"
                 );
+                runtime.deps.metrics.inc_manifest_reject(reject_reason::BACKWARDS_VERSION);
                 runtime.record_reject(reason);
                 continue;
             }
@@ -265,6 +270,10 @@ pub async fn run_manifest_reload_loop(
             Err(e) => {
                 let reason = format!("manifest v{new_version} rejected: {e}");
                 tracing::error!(version = new_version, error = %e, "manifest watch: rejecting manifest");
+                runtime
+                    .deps
+                    .metrics
+                    .inc_manifest_reject(reject_reason::VALIDATION_ERROR);
                 runtime.record_reject(reason);
                 continue;
             }
@@ -281,6 +290,7 @@ pub async fn run_manifest_reload_loop(
 
         runtime.swap_state(state);
         runtime.clear_reject();
+        runtime.deps.metrics.set_manifest_version(new_version);
 
         if let Some(task) = warming.take() {
             task.abort();
@@ -294,6 +304,17 @@ pub async fn run_manifest_reload_loop(
     }
 
     Ok(())
+}
+
+/// classify a `StoreError` produced during manifest watch into a bounded
+/// reject-reason label. anything not specifically recognised falls back to
+/// `parse_error`.
+fn classify_store_error(err: &StoreError) -> &'static str {
+    match err {
+        StoreError::UnsupportedManifestVersion { .. } => reject_reason::UNSUPPORTED_FORMAT_VERSION,
+        StoreError::HashMismatch { .. } | StoreError::NotFound(_) => reject_reason::INVALID_SNAPSHOT,
+        _ => reject_reason::PARSE_ERROR,
+    }
 }
 
 fn referenced_entries(state: &RuntimeState) -> Vec<ArtifactEntry> {

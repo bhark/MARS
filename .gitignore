@@ -20,6 +20,12 @@
 # test artifacts
 *.mars.local
 
+# cargo-fuzz local data; targets + Cargo.toml are committed
+fuzz/corpus
+fuzz/artifacts
+fuzz/coverage
+fuzz/target
+
 # OS junk
 .DS_Store
 Thumbs.db
