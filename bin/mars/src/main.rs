@@ -345,6 +345,6 @@ fn resolve_listen(cfg: &Config) -> Result<SocketAddr> {
         .as_ref()
         .and_then(|w| w.listen.clone())
         .or_else(|| std::env::var("MARS_HTTP_LISTEN").ok())
-        .unwrap_or_else(|| "0.0.0.0:8080".to_owned());
+        .unwrap_or_else(|| "127.0.0.1:8080".to_owned());
     SocketAddr::from_str(&raw).with_context(|| format!("parse listen addr {raw:?}"))
 }
