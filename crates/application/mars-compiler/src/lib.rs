@@ -9,7 +9,7 @@ use std::sync::Arc;
 use futures_util::stream::{self, StreamExt};
 use mars_config::Config;
 use mars_source::{ChangeFeed, Source};
-use mars_store::{ManifestPublisher, ObjectStore};
+use mars_store::{ManifestStore, ObjectStore};
 use mars_types::Manifest;
 use tokio_util::sync::CancellationToken;
 
@@ -41,7 +41,7 @@ pub struct Deps {
     pub source: Arc<dyn Source>,
     pub change_feed: Arc<dyn ChangeFeed>,
     pub store: Arc<dyn ObjectStore>,
-    pub manifest: Arc<dyn ManifestPublisher>,
+    pub manifest: Arc<dyn ManifestStore>,
 }
 
 /// The compiler service.
@@ -87,13 +87,13 @@ impl Compiler {
             output.extend(part);
         }
 
-        let manifest = Manifest {
-            version: 1,
-            service: self.config.service.name.clone(),
-            source_artifacts: output.source_artifacts,
-            layer_artifacts: output.layer_artifacts,
-            style_artifact: None,
-        };
+        let manifest = Manifest::new(
+            1,
+            self.config.service.name.clone(),
+            output.source_artifacts,
+            output.layer_artifacts,
+            None,
+        );
         let v = self.deps.manifest.publish(&manifest).await?;
         tracing::info!(version = v, "compiler: manifest published");
         Ok(())

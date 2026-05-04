@@ -5,7 +5,7 @@ use std::time::Duration;
 use bytes::Bytes;
 use futures_util::StreamExt;
 use mars_artifact::compute_content_hash;
-use mars_store::{LocalCache, ManifestPublisher, ManifestWatch, ObjectStore, StoreError};
+use mars_store::{LocalCache, ManifestStore, ObjectStore, StoreError};
 use mars_types::{ArtifactKey, ContentHash, Manifest};
 use tempfile::TempDir;
 
@@ -16,13 +16,7 @@ fn k(s: &str) -> ArtifactKey {
 }
 
 fn manifest(version: u64) -> Manifest {
-    Manifest {
-        version,
-        service: "svc".into(),
-        source_artifacts: vec![],
-        layer_artifacts: vec![],
-        style_artifact: None,
-    }
+    Manifest::new(version, "svc", vec![], vec![], None)
 }
 
 #[tokio::test]
@@ -112,11 +106,11 @@ async fn publish_atomicity_and_recovery() {
     assert_eq!(pub1.read_current().unwrap().as_deref(), Some("v2"));
 
     // simulate a crash mid-publish: write v3 body but skip the pointer swap.
-    let v3_body = serde_json::to_vec_pretty(&Manifest {
+    let m3 = Manifest {
         version: 3,
         ..m1.clone()
-    })
-    .unwrap();
+    };
+    let v3_body = serde_json::to_vec_pretty(&m3).unwrap();
     let v3_path = pub1.manifests_dir().join("v3.json");
     std::fs::write(&v3_path, &v3_body).unwrap();
 

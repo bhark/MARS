@@ -13,19 +13,25 @@ use mars_artifact::compute_content_hash;
 use mars_config::{
     ArtifactCache, ArtifactStore, Artifacts, Band, Cells, Config, Scales, ServiceMeta, Source,
 };
-use mars_render_port::{Canvas, DrawOp, Renderer};
+use mars_render_port::{Canvas, DrawOp, EncodeError, Encoder, ImageFormat, Pixmap, Renderer};
 use mars_runtime::{Deps, Runtime, run_manifest_reload_loop};
 use mars_store::mem::{InMemoryCache, InMemoryStore};
-use mars_store::{ManifestWatch, ObjectStore, StoreError};
+use mars_store::{ManifestStore, ObjectStore, StoreError};
 use mars_style::Stylesheet;
-use mars_types::{ArtifactEntry, ArtifactKey, CrsCode, ImageFormat, Manifest};
+use mars_types::{ArtifactEntry, ArtifactKey, CrsCode, Manifest};
 
 struct VecWatch {
     items: std::sync::Mutex<Option<Vec<Result<Manifest, StoreError>>>>,
 }
 
 #[async_trait]
-impl ManifestWatch for VecWatch {
+impl ManifestStore for VecWatch {
+    async fn publish(&self, _manifest: &Manifest) -> Result<u64, StoreError> {
+        unreachable!("VecWatch is read-only");
+    }
+    async fn current(&self) -> Result<Option<Manifest>, StoreError> {
+        Ok(None)
+    }
     async fn watch(&self) -> Result<BoxStream<'static, Result<Manifest, StoreError>>, StoreError> {
         let items = self.items.lock().unwrap().take().unwrap_or_default();
         Ok(Box::pin(stream::iter(items)))
@@ -34,12 +40,18 @@ impl ManifestWatch for VecWatch {
 
 struct NopRenderer;
 impl Renderer for NopRenderer {
-    fn render(
-        &self,
-        _canvas: Canvas,
-        _ops: &[DrawOp],
-        _format: ImageFormat,
-    ) -> Result<Vec<u8>, mars_render_port::RenderError> {
+    fn render(&self, canvas: Canvas, _ops: &[DrawOp]) -> Result<Pixmap, mars_render_port::RenderError> {
+        Ok(Pixmap {
+            width: canvas.width,
+            height: canvas.height,
+            premultiplied_rgba: Vec::new(),
+        })
+    }
+}
+
+struct NopEncoder;
+impl Encoder for NopEncoder {
+    fn encode(&self, _pixmap: &Pixmap, _format: ImageFormat) -> Result<Vec<u8>, EncodeError> {
         Ok(Vec::new())
     }
 }
@@ -94,13 +106,7 @@ fn minimal_config() -> Arc<Config> {
 }
 
 fn manifest(version: u64) -> Manifest {
-    Manifest {
-        version,
-        service: "t".into(),
-        source_artifacts: vec![],
-        layer_artifacts: vec![],
-        style_artifact: None,
-    }
+    Manifest::new(version, "t", vec![], vec![], None)
 }
 
 fn manifest_with_bad_key(version: u64) -> Manifest {
@@ -108,27 +114,29 @@ fn manifest_with_bad_key(version: u64) -> Manifest {
     let key = ArtifactKey::new("lyr/whatever/hi/0_0/v1/abcd.mars");
     let body = Bytes::from_static(b"x");
     let hash = compute_content_hash(&body);
-    Manifest {
+    Manifest::new(
         version,
-        service: "t".into(),
-        source_artifacts: vec![ArtifactEntry {
+        "t",
+        vec![ArtifactEntry {
             key,
             hash,
             size_bytes: 1,
         }],
-        layer_artifacts: vec![],
-        style_artifact: None,
-    }
+        vec![],
+        None,
+    )
 }
 
 fn build_runtime() -> Arc<Runtime> {
     let store: Arc<dyn ObjectStore> = Arc::new(InMemoryStore::new());
     let cache = Arc::new(InMemoryCache::new());
     let renderer = Arc::new(NopRenderer);
+    let encoder = Arc::new(NopEncoder);
     Arc::new(Runtime::empty(Deps {
         store,
         cache,
         renderer,
+        encoder,
     }))
 }
 

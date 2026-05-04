@@ -284,35 +284,40 @@ pub struct Reprojection {
     pub allowlist: Vec<CrsCode>,
 }
 
-/// Style entry as seen on the YAML wire. Either a geometry style or a label
-/// style; the discriminator is the `type` field (defaulting to geometry).
+/// Style entry as seen on the YAML wire. The `type:` field discriminates
+/// (SPEC §5.4: `line | polygon | point | label`); geometry kinds all share
+/// the same flat shape, label has its own field set.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
+#[serde(tag = "type", rename_all = "lowercase")]
 pub enum StyleEntry {
-    /// A label-typed style (`type: label`).
-    Label(LabelStyleEntry),
-    /// A geometry style (line/polygon/point).
-    Geometry(Style),
+    /// `type: label` - label glyph style.
+    Label(LabelStyle),
+    /// `type: line` - stroked line style.
+    Line(Style),
+    /// `type: polygon` - filled+stroked polygon style.
+    Polygon(Style),
+    /// `type: point` - point/marker style.
+    Point(Style),
 }
 
-/// Label-typed style on the wire. The `type: label` discriminator routes
-/// here; the rest mirrors [`mars_style::LabelStyle`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LabelStyleEntry {
-    /// Discriminator (always `label`).
-    #[serde(rename = "type")]
-    pub kind: LabelKind,
-    /// Inner label style fields.
-    #[serde(flatten)]
-    pub style: LabelStyle,
-}
+impl StyleEntry {
+    /// Borrow the inner geometry style for line/polygon/point variants.
+    #[must_use]
+    pub fn as_geometry(&self) -> Option<&Style> {
+        match self {
+            Self::Line(s) | Self::Polygon(s) | Self::Point(s) => Some(s),
+            Self::Label(_) => None,
+        }
+    }
 
-/// Discriminator for label-typed style entries.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum LabelKind {
-    /// `type: label`
-    #[serde(rename = "label")]
-    Label,
+    /// Borrow the inner label style for the `label` variant.
+    #[must_use]
+    pub fn as_label(&self) -> Option<&LabelStyle> {
+        match self {
+            Self::Label(l) => Some(l),
+            _ => None,
+        }
+    }
 }
 
 /// Layer definition. SPEC §5.3.
@@ -398,17 +403,17 @@ pub struct Class {
     pub style: ClassStyle,
 }
 
-/// Style attachment for a class: ref or inline.
+/// Style attachment for a class. Wire form is internally tagged on `type:`:
+/// `type: ref` for a named reference, `type: inline` for an embedded style.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
+#[serde(tag = "type", rename_all = "lowercase")]
 pub enum ClassStyle {
-    /// Reference to a named style.
+    /// Reference to a named style entry (`type: ref`, `name: <id>`).
     Ref {
         /// Name of the style entry referenced.
-        #[serde(rename = "ref")]
-        ref_: String,
+        name: String,
     },
-    /// Inline geometry style.
+    /// Inline geometry style (`type: inline`, plus all `Style` fields flat).
     Inline(Style),
 }
 
@@ -424,17 +429,17 @@ pub struct LayerLabel {
     pub placement: Option<serde_yml::Value>,
 }
 
-/// Style attachment for a label: ref or inline.
+/// Style attachment for a label. Wire form mirrors [`ClassStyle`]:
+/// `type: ref` plus `name`, or `type: inline` plus all `LabelStyle` fields flat.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
+#[serde(tag = "type", rename_all = "lowercase")]
 pub enum LabelStyleAttach {
-    /// Reference to a named label style.
+    /// Reference to a named label style (`type: ref`).
     Ref {
         /// Name of the label style referenced.
-        #[serde(rename = "ref")]
-        ref_: String,
+        name: String,
     },
-    /// Inline label style.
+    /// Inline label style (`type: inline`).
     Inline(LabelStyle),
 }
 

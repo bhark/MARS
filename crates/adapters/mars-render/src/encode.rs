@@ -1,23 +1,22 @@
 //! image encoding. PNG only at Phase 0; JPEG deferred to Phase 1.
 
-use mars_render_port::RenderError;
-use tiny_skia::Pixmap;
+use mars_render_port::{EncodeError, Pixmap};
 
-pub(crate) fn encode_png(pm: &Pixmap) -> Result<Vec<u8>, RenderError> {
-    let mut out = Vec::with_capacity(pm.data().len() / 2);
+pub(crate) fn encode_png(pm: &Pixmap) -> Result<Vec<u8>, EncodeError> {
+    let mut out = Vec::with_capacity(pm.premultiplied_rgba.len() / 2);
     {
-        let mut enc = png::Encoder::new(&mut out, pm.width(), pm.height());
+        let mut enc = png::Encoder::new(&mut out, pm.width, pm.height);
         enc.set_color(png::ColorType::Rgba);
         enc.set_depth(png::BitDepth::Eight);
         enc.set_compression(png::Compression::Balanced);
         let mut writer = enc
             .write_header()
-            .map_err(|e| RenderError::Encode(format!("png header: {e}")))?;
+            .map_err(|e| EncodeError::Backend(format!("png header: {e}")))?;
         // tiny-skia stores premultiplied rgba; demultiply for spec-correct png.
-        let demul = demultiply(pm.data());
+        let demul = demultiply(&pm.premultiplied_rgba);
         writer
             .write_image_data(&demul)
-            .map_err(|e| RenderError::Encode(format!("png write: {e}")))?;
+            .map_err(|e| EncodeError::Backend(format!("png write: {e}")))?;
     }
     Ok(out)
 }

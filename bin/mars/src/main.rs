@@ -14,11 +14,11 @@ use std::sync::Arc;
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand, ValueEnum};
 use mars_compiler::{Compiler, Deps as CompilerDeps};
-use mars_config::{ClassStyle, Config, StyleEntry, config_dir};
-use mars_render::TinySkiaRenderer;
+use mars_config::{ClassStyle, Config, config_dir};
+use mars_render::{TinySkiaEncoder, TinySkiaRenderer};
 use mars_runtime::{Deps as RuntimeDeps, Runtime, RuntimeState, run_manifest_reload_loop};
 use mars_source_postgres::{PgConfig, PgSource};
-use mars_store::{LocalCache, ManifestReader, ObjectStore};
+use mars_store::{LocalCache, ManifestStore, ObjectStore};
 use mars_store_fs::{FsCache, FsPublisher, FsStore};
 use mars_style::Stylesheet;
 use mars_types::Manifest;
@@ -115,9 +115,10 @@ async fn run_runtime(config_path: &Path) -> Result<()> {
         store,
         cache,
         renderer: Arc::new(TinySkiaRenderer),
+        encoder: Arc::new(TinySkiaEncoder),
     }));
 
-    let manifest_opt = match publisher.current_manifest().await {
+    let manifest_opt = match publisher.current().await {
         Ok(m) => m,
         Err(e) => {
             tracing::warn!(error = %e, "initial manifest unavailable");
@@ -135,12 +136,12 @@ async fn run_runtime(config_path: &Path) -> Result<()> {
         }
     }
 
-    let watcher: Arc<dyn mars_store::ManifestWatch> = publisher.clone();
+    let manifests: Arc<dyn ManifestStore> = publisher.clone();
     let _reload_task = tokio::spawn({
         let runtime = runtime.clone();
         let cfg = cfg.clone();
         async move {
-            if let Err(e) = run_manifest_reload_loop(runtime, watcher, cfg, stylesheet).await {
+            if let Err(e) = run_manifest_reload_loop(runtime, manifests, cfg, stylesheet).await {
                 tracing::error!(error = %e, "manifest reload loop stopped");
             }
         }
@@ -295,20 +296,17 @@ fn build_publisher(cfg: &Config) -> Result<Arc<FsPublisher>> {
         .store
         .path
         .as_deref()
-        .ok_or_else(|| anyhow!("artifacts.store.path required for manifest publisher"))?;
-    Ok(Arc::new(FsPublisher::new(p).context("open fs publisher")?))
+        .ok_or_else(|| anyhow!("artifacts.store.path required for manifest store"))?;
+    Ok(Arc::new(FsPublisher::new(p).context("open fs manifest store")?))
 }
 
 fn build_stylesheet(cfg: &Config) -> Stylesheet {
     let mut ss = Stylesheet::default();
     for (name, entry) in &cfg.styles {
-        match entry {
-            StyleEntry::Geometry(s) => {
-                ss.geometry.insert(name.clone(), s.clone());
-            }
-            StyleEntry::Label(l) => {
-                ss.labels.insert(name.clone(), l.style.clone());
-            }
+        if let Some(s) = entry.as_geometry() {
+            ss.geometry.insert(name.clone(), s.clone());
+        } else if let Some(l) = entry.as_label() {
+            ss.labels.insert(name.clone(), l.clone());
         }
     }
     // also collect inline class styles under `<layer>::<class>` so runtime can
@@ -325,13 +323,7 @@ fn build_stylesheet(cfg: &Config) -> Stylesheet {
 }
 
 fn empty_manifest(cfg: &Config) -> Manifest {
-    Manifest {
-        version: 0,
-        service: cfg.service.name.clone(),
-        source_artifacts: vec![],
-        layer_artifacts: vec![],
-        style_artifact: None,
-    }
+    Manifest::new(0, cfg.service.name.clone(), vec![], vec![], None)
 }
 
 fn resolve_listen(cfg: &Config) -> Result<SocketAddr> {

@@ -14,7 +14,7 @@ use mars_config::{
     Source as CfgSource, SourceBinding as CfgBinding, model::Band,
 };
 use mars_source::{AttrValue, RowBytes, SourceCollectionId};
-use mars_store::{ManifestReader, ObjectStore};
+use mars_store::{ManifestStore, ObjectStore};
 use mars_store::mem::{InMemoryPublisher, InMemoryStore};
 use mars_types::{Bbox, Cell, CrsCode, LayerId, ScaleBand};
 use tokio_util::sync::CancellationToken;
@@ -90,7 +90,7 @@ fn make_config() -> Config {
                     title: String::new(),
                     when: Some("attr = 'a'".to_string()),
                     style: ClassStyle::Ref {
-                        ref_: "style_a".to_string(),
+                        name: "style_a".to_string(),
                     },
                 },
                 Class {
@@ -98,7 +98,7 @@ fn make_config() -> Config {
                     title: String::new(),
                     when: Some("attr = 'b'".to_string()),
                     style: ClassStyle::Ref {
-                        ref_: "style_b".to_string(),
+                        name: "style_b".to_string(),
                     },
                 },
             ],
@@ -154,7 +154,7 @@ fn build_deps(rows: Vec<RowBytes>) -> (Deps, Arc<InMemoryStore>, Arc<InMemoryPub
         source: mem.clone() as Arc<dyn mars_source::Source>,
         change_feed: mem as Arc<dyn mars_source::ChangeFeed>,
         store: store.clone() as Arc<dyn ObjectStore>,
-        manifest: publisher.clone() as Arc<dyn mars_store::ManifestPublisher>,
+        manifest: publisher.clone() as Arc<dyn ManifestStore>,
     };
     (deps, store, publisher)
 }
@@ -174,7 +174,7 @@ async fn snapshot_writes_artifacts_and_publishes_manifest() {
     assert!(src_keys[0].as_str().starts_with("src/public.roads/hi/0_0/"));
     assert!(lyr_keys[0].as_str().starts_with("lyr/roads/hi/0_0/v1/"));
 
-    let manifest = publisher.current_manifest().await.unwrap().unwrap();
+    let manifest = publisher.current().await.unwrap().unwrap();
     assert_eq!(manifest.version, 1);
 
     // open the layer artifact and verify class_assignment
@@ -197,7 +197,7 @@ async fn snapshot_omits_unmatched_rows_from_layer_assignment() {
     let compiler = Compiler::new(deps, cfg);
     compiler.run(CancellationToken::new()).await.unwrap();
 
-    let manifest = publisher.current_manifest().await.unwrap().unwrap();
+    let manifest = publisher.current().await.unwrap().unwrap();
     let lyr_entry = &manifest.layer_artifacts[0];
     let bytes = store.get(&lyr_entry.key, lyr_entry.hash).await.unwrap();
     let reader = ArtifactReader::open(bytes).unwrap();

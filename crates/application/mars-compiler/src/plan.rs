@@ -124,7 +124,7 @@ pub(crate) fn compile_classes(layer: &Layer) -> Result<Vec<CompiledClass>, PlanE
             None => None,
         };
         let style_id = match &c.style {
-            ClassStyle::Ref { ref_ } => ref_.clone(),
+            ClassStyle::Ref { name } => name.clone(),
             ClassStyle::Inline(_) => format!("{}::{}", layer.name, c.name),
         };
         out.push(CompiledClass {
@@ -266,13 +266,13 @@ mod tests {
                     name: "a".into(),
                     title: String::new(),
                     when: Some("x = 1".into()),
-                    style: ClassStyle::Ref { ref_: "s1".into() },
+                    style: ClassStyle::Ref { name: "s1".into() },
                 },
                 Class {
                     name: "b".into(),
                     title: String::new(),
                     when: Some("x = 2".into()),
-                    style: ClassStyle::Ref { ref_: "s2".into() },
+                    style: ClassStyle::Ref { name: "s2".into() },
                 },
             ],
             label: None,
@@ -317,7 +317,7 @@ mod tests {
                 name: format!("c{i}"),
                 title: String::new(),
                 when: None,
-                style: ClassStyle::Ref { ref_: "s".into() },
+                style: ClassStyle::Ref { name: "s".into() },
             });
         }
         let layer = Layer {

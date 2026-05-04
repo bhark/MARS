@@ -10,11 +10,11 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use mars_compiler::{Compiler, Deps as CompilerDeps};
-use mars_config::{ClassStyle, Config, StyleEntry, config_dir};
-use mars_render::TinySkiaRenderer;
+use mars_config::{ClassStyle, Config, config_dir};
+use mars_render::{TinySkiaEncoder, TinySkiaRenderer};
 use mars_runtime::{Deps as RuntimeDeps, RenderPlan, Runtime, RuntimeState};
 use mars_source_postgres::{PgConfig, PgSource};
-use mars_store::ManifestReader;
+use mars_store::ManifestStore;
 use mars_store_fs::{FsCache, FsPublisher, FsStore};
 use mars_style::Stylesheet;
 use mars_types::{Bbox, CrsCode, ImageFormat, LayerId};
@@ -84,7 +84,7 @@ async fn end_to_end_compile_and_render() -> Result<()> {
     // verify manifest was published and load body
     let publisher = FsPublisher::new(store_dir.path()).context("open publisher")?;
     let manifest = publisher
-        .current_manifest()
+        .current()
         .await
         .context("read current manifest")?
         .context("manifest absent")?;
@@ -104,6 +104,7 @@ async fn end_to_end_compile_and_render() -> Result<()> {
             store,
             cache,
             renderer: Arc::new(TinySkiaRenderer),
+            encoder: Arc::new(TinySkiaEncoder),
         },
     );
 
@@ -224,7 +225,7 @@ async fn run_compile(cfg: &Config) -> Result<()> {
 fn build_stylesheet(cfg: &Config) -> Stylesheet {
     let mut ss = Stylesheet::default();
     for (name, entry) in &cfg.styles {
-        if let StyleEntry::Geometry(s) = entry {
+        if let Some(s) = entry.as_geometry() {
             ss.geometry.insert(name.clone(), s.clone());
         }
     }
@@ -290,10 +291,12 @@ reprojection:
 
 styles:
   cls_a:
+    type: polygon
     fill: {{ r: {a_r}, g: {a_g}, b: {a_b}, a: 255 }}
     stroke: {{ r: 0, g: 0, b: 0, a: 255 }}
     stroke_width: 0.5
   cls_b:
+    type: polygon
     fill: {{ r: {b_r}, g: {b_g}, b: {b_b}, a: 255 }}
     stroke: {{ r: 0, g: 0, b: 0, a: 255 }}
     stroke_width: 0.5
@@ -312,11 +315,11 @@ layers:
       - name: a
         title: "A"
         when: "klass = 'a'"
-        style: {{ ref: cls_a }}
+        style: {{ type: ref, name: cls_a }}
       - name: b
         title: "B"
         when: "klass = 'b'"
-        style: {{ ref: cls_b }}
+        style: {{ type: ref, name: cls_b }}
 
 observability:
   log_level: info

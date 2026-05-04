@@ -269,10 +269,6 @@ impl LocalCache for FsCache {
         Ok(bytes)
     }
 
-    fn mark_evictable(&self, _key: &ArtifactKey) {
-        // lru treats all cached keys uniformly; this hint is not needed for
-        // correctness but may be used later for eager cleanup.
-    }
 }
 
 #[cfg(test)]

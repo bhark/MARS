@@ -123,11 +123,11 @@ pub fn validate(config: &Config, config_dir: &Path) -> Result<(), ConfigError> {
 
         for class in &layer.classes {
             match &class.style {
-                ClassStyle::Ref { ref_ } => {
-                    if !config.styles.contains_key(ref_) {
+                ClassStyle::Ref { name } => {
+                    if !config.styles.contains_key(name) {
                         return Err(ConfigError::Invalid(format!(
                             "layer {} class {:?} references unknown style {:?}",
-                            layer.name, class.name, ref_
+                            layer.name, class.name, name
                         )));
                     }
                 }
@@ -153,12 +153,12 @@ pub fn validate(config: &Config, config_dir: &Path) -> Result<(), ConfigError> {
         }
 
         if let Some(label) = &layer.label
-            && let LabelStyleAttach::Ref { ref_ } = &label.style
-            && !matches!(config.styles.get(ref_), Some(StyleEntry::Label(_)))
+            && let LabelStyleAttach::Ref { name } = &label.style
+            && !matches!(config.styles.get(name), Some(StyleEntry::Label(_)))
         {
             return Err(ConfigError::Invalid(format!(
                 "layer {} label references unknown or non-label style {:?}",
-                layer.name, ref_
+                layer.name, name
             )));
         }
     }

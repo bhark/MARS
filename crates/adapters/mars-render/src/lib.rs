@@ -6,24 +6,21 @@
 mod encode;
 mod raster;
 
-use mars_render_port::{Canvas, DrawOp, ImageFormat, RenderError, Renderer};
-use tiny_skia::Pixmap;
+use mars_render_port::{
+    Canvas, DrawOp, EncodeError, Encoder, ImageFormat, Pixmap, RenderError, Renderer,
+};
+use tiny_skia::Pixmap as SkPixmap;
 
 #[derive(Debug, Default)]
 pub struct TinySkiaRenderer;
 
 impl Renderer for TinySkiaRenderer {
-    fn render(&self, canvas: Canvas, ops: &[DrawOp], format: ImageFormat) -> Result<Vec<u8>, RenderError> {
-        if !matches!(format, ImageFormat::Png) {
-            return Err(RenderError::NotImplemented {
-                what: "jpeg encoding deferred to Phase 1",
-            });
-        }
+    fn render(&self, canvas: Canvas, ops: &[DrawOp]) -> Result<Pixmap, RenderError> {
         if canvas.width == 0 || canvas.height == 0 {
             return Err(RenderError::Backend("canvas has zero dimension".into()));
         }
 
-        let mut pm = Pixmap::new(canvas.width, canvas.height)
+        let mut pm = SkPixmap::new(canvas.width, canvas.height)
             .ok_or_else(|| RenderError::Backend(format!("pixmap alloc {}x{}", canvas.width, canvas.height)))?;
 
         if let Some(bg) = canvas.background {
@@ -43,7 +40,27 @@ impl Renderer for TinySkiaRenderer {
             }
         }
 
-        encode::encode_png(&pm)
+        Ok(Pixmap {
+            width: pm.width(),
+            height: pm.height(),
+            premultiplied_rgba: pm.data().to_vec(),
+        })
+    }
+}
+
+/// PNG encoder; JPEG deferred to Phase 1. Lives next to the rasteriser so the
+/// in-process pipeline does not pay an extra copy crossing crate boundaries.
+#[derive(Debug, Default)]
+pub struct TinySkiaEncoder;
+
+impl Encoder for TinySkiaEncoder {
+    fn encode(&self, pixmap: &Pixmap, format: ImageFormat) -> Result<Vec<u8>, EncodeError> {
+        match format {
+            ImageFormat::Png => encode::encode_png(pixmap),
+            ImageFormat::Jpeg => Err(EncodeError::NotImplemented {
+                what: "jpeg encoding deferred to Phase 1",
+            }),
+        }
     }
 }
 
@@ -82,6 +99,11 @@ mod tests {
         }
     }
 
+    fn render_png(canvas: Canvas, ops: &[DrawOp]) -> Vec<u8> {
+        let pm = TinySkiaRenderer.render(canvas, ops).unwrap();
+        TinySkiaEncoder.encode(&pm, ImageFormat::Png).unwrap()
+    }
+
     fn decode(bytes: &[u8]) -> (u32, u32, Vec<u8>) {
         let dec = png::Decoder::new(std::io::Cursor::new(bytes));
         let mut reader = dec.read_info().unwrap();
@@ -93,7 +115,6 @@ mod tests {
 
     #[test]
     fn determinism_byte_exact() {
-        let r = TinySkiaRenderer;
         let canvas = Canvas {
             width: 64,
             height: 64,
@@ -106,14 +127,13 @@ mod tests {
                 ..Default::default()
             },
         }];
-        let a = r.render(canvas, &ops, ImageFormat::Png).unwrap();
-        let b = r.render(canvas, &ops, ImageFormat::Png).unwrap();
+        let a = render_png(canvas, &ops);
+        let b = render_png(canvas, &ops);
         assert_eq!(a, b, "renderer must be deterministic");
     }
 
     #[test]
     fn filled_polygon_red_pixels() {
-        let r = TinySkiaRenderer;
         let canvas = Canvas {
             width: 64,
             height: 64,
@@ -126,7 +146,7 @@ mod tests {
                 ..Default::default()
             },
         }];
-        let png_bytes = r.render(canvas, &ops, ImageFormat::Png).unwrap();
+        let png_bytes = render_png(canvas, &ops);
         let (_, _, rgba) = decode(&png_bytes);
         let red_count = rgba
             .chunks_exact(4)
@@ -137,7 +157,6 @@ mod tests {
 
     #[test]
     fn stroked_line_has_pixels() {
-        let r = TinySkiaRenderer;
         let canvas = Canvas {
             width: 64,
             height: 64,
@@ -154,7 +173,7 @@ mod tests {
                 ..Default::default()
             },
         }];
-        let png_bytes = r.render(canvas, &ops, ImageFormat::Png).unwrap();
+        let png_bytes = render_png(canvas, &ops);
         let (w, _, rgba) = decode(&png_bytes);
         let row = 32usize * w as usize * 4;
         let on_row: usize = rgba[row..row + w as usize * 4]
@@ -166,31 +185,28 @@ mod tests {
 
     #[test]
     fn transparent_vs_opaque_background() {
-        let r = TinySkiaRenderer;
-
         let c1 = Canvas {
             width: 4,
             height: 4,
             background: None,
         };
-        let png1 = r.render(c1, &[], ImageFormat::Png).unwrap();
+        let png1 = render_png(c1, &[]);
         let (_, _, rgba1) = decode(&png1);
-        assert_eq!(rgba1[3], 0, "transparent bg → first pixel alpha 0");
+        assert_eq!(rgba1[3], 0, "transparent bg first pixel alpha 0");
 
         let c2 = Canvas {
             width: 4,
             height: 4,
             background: Some(white()),
         };
-        let png2 = r.render(c2, &[], ImageFormat::Png).unwrap();
+        let png2 = render_png(c2, &[]);
         let (_, _, rgba2) = decode(&png2);
-        assert_eq!(rgba2[3], 255, "opaque bg → first pixel alpha 255");
+        assert_eq!(rgba2[3], 255, "opaque bg first pixel alpha 255");
         assert_eq!(&rgba2[0..3], &[255, 255, 255]);
     }
 
     #[test]
     fn label_op_is_skipped_not_errored() {
-        let r = TinySkiaRenderer;
         let canvas = Canvas {
             width: 8,
             height: 8,
@@ -201,25 +217,24 @@ mod tests {
             text: "hi".into(),
             style_ref: "x".into(),
         }];
-        let res = r.render(canvas, &ops, ImageFormat::Png);
-        assert!(res.is_ok(), "label op should be skipped, not error: {res:?}");
+        let pm = TinySkiaRenderer.render(canvas, &ops);
+        assert!(pm.is_ok(), "label op should be skipped, not error: {pm:?}");
     }
 
     #[test]
     fn jpeg_returns_not_implemented() {
-        let r = TinySkiaRenderer;
         let canvas = Canvas {
             width: 4,
             height: 4,
             background: None,
         };
-        let res = r.render(canvas, &[], ImageFormat::Jpeg);
-        assert!(matches!(res, Err(RenderError::NotImplemented { .. })));
+        let pm = TinySkiaRenderer.render(canvas, &[]).unwrap();
+        let res = TinySkiaEncoder.encode(&pm, ImageFormat::Jpeg);
+        assert!(matches!(res, Err(EncodeError::NotImplemented { .. })));
     }
 
     #[test]
     fn golden_square_matches() {
-        let r = TinySkiaRenderer;
         let canvas = Canvas {
             width: 64,
             height: 64,
@@ -232,7 +247,7 @@ mod tests {
                 ..Default::default()
             },
         }];
-        let actual = r.render(canvas, &ops, ImageFormat::Png).unwrap();
+        let actual = render_png(canvas, &ops);
 
         let golden_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/square.png");
         if std::env::var("MARS_UPDATE_GOLDEN").is_ok() || !golden_path.exists() {

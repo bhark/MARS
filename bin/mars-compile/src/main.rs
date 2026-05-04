@@ -10,7 +10,7 @@ use clap::Parser;
 use mars_compiler::{Compiler, Deps};
 use mars_config::{Config, config_dir};
 use mars_source_postgres::{PgConfig, PgSource};
-use mars_store::{ManifestPublisher, ObjectStore};
+use mars_store::{ManifestStore, ObjectStore};
 use mars_store_fs::{FsPublisher, FsStore};
 use tokio_util::sync::CancellationToken;
 
@@ -92,12 +92,12 @@ fn build_store(cfg: &Config) -> Result<Arc<dyn ObjectStore>> {
     }
 }
 
-fn build_publisher(cfg: &Config) -> Result<Arc<dyn ManifestPublisher>> {
+fn build_publisher(cfg: &Config) -> Result<Arc<dyn ManifestStore>> {
     let path = cfg
         .artifacts
         .store
         .path
         .as_deref()
-        .ok_or_else(|| anyhow!("artifacts.store.path required for manifest publisher"))?;
-    Ok(Arc::new(FsPublisher::new(path).context("open fs publisher")?))
+        .ok_or_else(|| anyhow!("artifacts.store.path required for manifest store"))?;
+    Ok(Arc::new(FsPublisher::new(path).context("open fs manifest store")?))
 }

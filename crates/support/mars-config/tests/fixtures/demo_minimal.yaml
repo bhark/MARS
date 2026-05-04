@@ -61,10 +61,12 @@ reprojection:
 
 styles:
   bygning_normal:
+    type: polygon
     fill: { r: 210, g: 210, b: 210, a: 255 }
     stroke: { r: 160, g: 160, b: 160, a: 255 }
     stroke_width: 0.6
   bygning_drivhus:
+    type: polygon
     fill: { r: 250, g: 250, b: 250, a: 255 }
     stroke: { r: 180, g: 180, b: 180, a: 255 }
     stroke_width: 0.6
@@ -84,11 +86,11 @@ layers:
       - name: drivhus
         title: "Drivhus"
         when: "bygningstype = 'Drivhus'"
-        style: { ref: bygning_drivhus }
+        style: { type: ref, name: bygning_drivhus }
       - name: bygning_normal
         title: "Bygning"
         when: "bygningstype != 'Drivhus'"
-        style: { ref: bygning_normal }
+        style: { type: ref, name: bygning_normal }
 
 observability:
   log_level: info

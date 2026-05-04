@@ -32,8 +32,8 @@ fn loads_minimal_fixture() {
 fn missing_style_ref_is_rejected() {
     let path = fixtures_dir().join("demo_minimal.yaml");
     let mut cfg = load(&path).unwrap();
-    if let mars_config::ClassStyle::Ref { ref_ } = &mut cfg.layers[0].classes[0].style {
-        *ref_ = "no_such_style".into();
+    if let mars_config::ClassStyle::Ref { name } = &mut cfg.layers[0].classes[0].style {
+        *name = "no_such_style".into();
     } else {
         panic!("expected ref");
     }

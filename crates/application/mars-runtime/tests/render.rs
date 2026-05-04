@@ -26,7 +26,7 @@ use mars_style::{Colour, Style, Stylesheet};
 use mars_types::{ArtifactEntry, Bbox, Cell, CrsCode, ImageFormat, LayerId, Manifest, ScaleBand};
 use tokio::sync::Notify;
 
-use crate::support::mock_renderer::{CANNED_BYTES, MockRenderer};
+use crate::support::mock_renderer::{CANNED_BYTES, CannedEncoder, MockRenderer};
 
 const COLLECTION: &str = "parcels_src";
 const LAYER: &str = "parcels";
@@ -132,6 +132,7 @@ async fn build_fixture() -> Fixture {
         store: store.clone(),
         cache: Arc::new(cache),
         renderer,
+        encoder: Arc::new(CannedEncoder),
     };
     let runtime = Runtime::from_state(Arc::new(state), deps);
 
@@ -161,21 +162,21 @@ async fn write_manifest(store: &InMemoryStore, version: u64, offset: f64) -> Man
     store.put(&source_key_v, source_bytes.clone()).await.unwrap();
     store.put(&layer_key_v, layer_bytes.clone()).await.unwrap();
 
-    Manifest {
+    Manifest::new(
         version,
-        service: "test".into(),
-        source_artifacts: vec![ArtifactEntry {
+        "test",
+        vec![ArtifactEntry {
             key: source_key_v,
             hash: source_hash,
             size_bytes: source_bytes.len() as u64,
         }],
-        layer_artifacts: vec![ArtifactEntry {
+        vec![ArtifactEntry {
             key: layer_key_v,
             hash: layer_hash,
             size_bytes: layer_bytes.len() as u64,
         }],
-        style_artifact: None,
-    }
+        None,
+    )
 }
 
 fn state_from_manifest(canonical_crs: CrsCode, manifest: Manifest) -> RuntimeState {
@@ -238,10 +239,6 @@ impl LocalCache for BlockingCache {
         }
         self.inner.get_or_fetch(key, expected, origin).await
     }
-
-    fn mark_evictable(&self, key: &mars_types::ArtifactKey) {
-        self.inner.mark_evictable(key);
-    }
 }
 
 fn plan_for(fixture: &Fixture) -> RenderPlan {
@@ -285,6 +282,7 @@ async fn empty_runtime_returns_not_ready() {
         store,
         cache,
         renderer: mock,
+        encoder: Arc::new(CannedEncoder),
     });
     assert!(!runtime.is_ready());
 
@@ -302,6 +300,7 @@ async fn swap_state_makes_runtime_ready_and_renderable() {
         store: fx.store.clone(),
         cache: Arc::new(InMemoryCache::new()),
         renderer: fx.mock.clone(),
+        encoder: Arc::new(CannedEncoder),
     });
     assert!(!runtime.is_ready());
     runtime.swap_state(fx.runtime.current_state().unwrap());
@@ -351,6 +350,7 @@ async fn render_pins_state_across_swap() {
             store: store.clone(),
             cache: Arc::new(blocking_cache),
             renderer: mock.clone(),
+            encoder: Arc::new(CannedEncoder),
         },
     ));
     let plan = RenderPlan {
@@ -368,6 +368,7 @@ async fn render_pins_state_across_swap() {
             store: store.clone(),
             cache: Arc::new(InMemoryCache::new()),
             renderer: expected_renderer.clone(),
+            encoder: Arc::new(CannedEncoder),
         },
     );
     expected_runtime.render(&plan).await.unwrap();

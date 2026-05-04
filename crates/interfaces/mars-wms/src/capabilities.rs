@@ -146,13 +146,7 @@ layers:
     #[test]
     fn parses_clean() {
         let cfg = minimal_cfg();
-        let m = Manifest {
-            version: 1,
-            service: cfg.service.name.clone(),
-            source_artifacts: vec![],
-            layer_artifacts: vec![],
-            style_artifact: None,
-        };
+        let m = Manifest::new(1, cfg.service.name.clone(), vec![], vec![], None);
         let xml = capabilities_xml(&cfg, &m).unwrap();
         assert!(xml.contains("WMS_Capabilities"));
         assert!(xml.contains("EPSG:25832"));
@@ -178,13 +172,7 @@ layers:
     fn escapes_xml_special_chars() {
         let mut cfg = minimal_cfg();
         cfg.layers[0].title = "A & B <C>".into();
-        let m = Manifest {
-            version: 1,
-            service: cfg.service.name.clone(),
-            source_artifacts: vec![],
-            layer_artifacts: vec![],
-            style_artifact: None,
-        };
+        let m = Manifest::new(1, cfg.service.name.clone(), vec![], vec![], None);
         let xml = capabilities_xml(&cfg, &m).unwrap();
         // special chars must be escaped, not raw
         assert!(!xml.contains("A & B <C>"), "raw unescaped special chars found");
@@ -195,13 +183,7 @@ layers:
     fn empty_layers_produces_valid_xml() {
         let mut cfg = minimal_cfg();
         cfg.layers.clear();
-        let m = Manifest {
-            version: 1,
-            service: cfg.service.name.clone(),
-            source_artifacts: vec![],
-            layer_artifacts: vec![],
-            style_artifact: None,
-        };
+        let m = Manifest::new(1, cfg.service.name.clone(), vec![], vec![], None);
         let xml = capabilities_xml(&cfg, &m).unwrap();
         assert!(xml.contains("<Layer>"));
         assert!(xml.contains("</Layer>"));
@@ -225,13 +207,7 @@ layers:
     fn empty_allowlist_omits_crs() {
         let mut cfg = minimal_cfg();
         cfg.reprojection.allowlist.clear();
-        let m = Manifest {
-            version: 1,
-            service: cfg.service.name.clone(),
-            source_artifacts: vec![],
-            layer_artifacts: vec![],
-            style_artifact: None,
-        };
+        let m = Manifest::new(1, cfg.service.name.clone(), vec![], vec![], None);
         let xml = capabilities_xml(&cfg, &m).unwrap();
         assert!(
             !xml.contains("<CRS>"),
@@ -243,13 +219,7 @@ layers:
     fn omits_contact_when_email_empty() {
         let mut cfg = minimal_cfg();
         cfg.service.contact_email = String::new();
-        let m = Manifest {
-            version: 1,
-            service: cfg.service.name.clone(),
-            source_artifacts: vec![],
-            layer_artifacts: vec![],
-            style_artifact: None,
-        };
+        let m = Manifest::new(1, cfg.service.name.clone(), vec![], vec![], None);
         let xml = capabilities_xml(&cfg, &m).unwrap();
         assert!(
             !xml.contains("ContactInformation"),

@@ -10,7 +10,6 @@
 #![deny(missing_docs)]
 
 pub mod access;
-pub mod attrs;
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -19,7 +18,6 @@ use mars_expr::Expr;
 use mars_types::{Bbox, Cell, CrsCode};
 
 pub use access::RowAttrs;
-pub use attrs::{AttrError, decode_row, encode_row};
 
 /// Errors produced by source adapters.
 #[derive(Debug, thiserror::Error)]

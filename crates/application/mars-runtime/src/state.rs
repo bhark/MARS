@@ -171,31 +171,31 @@ mod tests {
     }
 
     fn manifest_with_layer_key(key: &str) -> Manifest {
-        Manifest {
-            version: 1,
-            service: "t".into(),
-            source_artifacts: vec![],
-            layer_artifacts: vec![ArtifactEntry {
+        Manifest::new(
+            1,
+            "t",
+            vec![],
+            vec![ArtifactEntry {
                 key: ArtifactKey::new(key),
                 hash: ContentHash::zero(),
                 size_bytes: 0,
             }],
-            style_artifact: None,
-        }
+            None,
+        )
     }
 
     fn manifest_with_source_key(key: &str) -> Manifest {
-        Manifest {
-            version: 1,
-            service: "t".into(),
-            source_artifacts: vec![ArtifactEntry {
+        Manifest::new(
+            1,
+            "t",
+            vec![ArtifactEntry {
                 key: ArtifactKey::new(key),
                 hash: ContentHash::zero(),
                 size_bytes: 0,
             }],
-            layer_artifacts: vec![],
-            style_artifact: None,
-        }
+            vec![],
+            None,
+        )
     }
 
     #[test]

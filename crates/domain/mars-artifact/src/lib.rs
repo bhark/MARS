@@ -26,6 +26,7 @@ mod generated {
     include!(concat!(env!("OUT_DIR"), "/generated.rs"));
 }
 
+pub mod attrs;
 mod class_assignment;
 mod geometry;
 mod hash;
@@ -35,6 +36,7 @@ mod style_refs;
 mod varint;
 mod writer;
 
+pub use attrs::{AttrError, AttrValue, MAX_ROW_BYTES, decode_row, encode_row};
 pub use class_assignment::{decode_class_assignment, encode_class_assignment};
 pub use geometry::{Coord, FeatureGeom, GeomKind, decode_geometry_payload, encode_geometry_payload};
 pub use hash::compute_content_hash;

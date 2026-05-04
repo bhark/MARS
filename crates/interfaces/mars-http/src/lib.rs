@@ -191,7 +191,7 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::Request;
-    use mars_render_port::{Canvas, ImageFormat as RenderImageFormat, RenderError, Renderer};
+    use mars_render_port::{Canvas, EncodeError, Encoder, ImageFormat as RenderImageFormat, Pixmap, RenderError, Renderer};
     use mars_runtime::{Deps, RuntimeState};
     use mars_store::stub::{NotImplementedCache, NotImplementedStore};
     use mars_types::{CrsCode, ImageFormat, Manifest};
@@ -201,12 +201,20 @@ mod tests {
     struct NoopRenderer;
 
     impl Renderer for NoopRenderer {
-        fn render(
-            &self,
-            _canvas: Canvas,
-            _ops: &[mars_render_port::DrawOp],
-            _format: RenderImageFormat,
-        ) -> Result<Vec<u8>, RenderError> {
+        fn render(&self, canvas: Canvas, _ops: &[mars_render_port::DrawOp]) -> Result<Pixmap, RenderError> {
+            Ok(Pixmap {
+                width: canvas.width,
+                height: canvas.height,
+                premultiplied_rgba: Vec::new(),
+            })
+        }
+    }
+
+    #[derive(Debug)]
+    struct NoopEncoder;
+
+    impl Encoder for NoopEncoder {
+        fn encode(&self, _pixmap: &Pixmap, _format: RenderImageFormat) -> Result<Vec<u8>, EncodeError> {
             Ok(Vec::new())
         }
     }
@@ -216,6 +224,7 @@ mod tests {
             store: Arc::new(NotImplementedStore),
             cache: Arc::new(NotImplementedCache),
             renderer: Arc::new(NoopRenderer),
+            encoder: Arc::new(NoopEncoder),
         }))
     }
 
@@ -236,13 +245,7 @@ mod tests {
             bands: Vec::new(),
             layer_order: Vec::new(),
             stylesheet: Default::default(),
-            manifest: Manifest {
-                version: 1,
-                service: "test".into(),
-                source_artifacts: Vec::new(),
-                layer_artifacts: Vec::new(),
-                style_artifact: None,
-            },
+            manifest: Manifest::new(1, "test", Vec::new(), Vec::new(), None),
             layer_index: Default::default(),
             source_index: Default::default(),
         }

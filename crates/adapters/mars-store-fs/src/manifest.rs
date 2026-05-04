@@ -11,8 +11,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures_core::stream::BoxStream;
 use futures_util::stream;
-use mars_store::{ManifestPublisher, ManifestReader, ManifestWatch, StoreError};
-use mars_types::Manifest;
+use mars_store::{ManifestStore, StoreError};
+use mars_types::{MANIFEST_FORMAT_VERSION, Manifest};
 
 use crate::store::atomic_write;
 
@@ -91,14 +91,20 @@ impl FsPublisher {
         let body = tokio::fs::read(&body_path)
             .await
             .map_err(|e| StoreError::Backend(format!("read manifest {pointer}: {e}")))?;
-        let manifest =
+        let manifest: Manifest =
             serde_json::from_slice(&body).map_err(|e| StoreError::Backend(format!("parse manifest {pointer}: {e}")))?;
+        if manifest.format_version > MANIFEST_FORMAT_VERSION {
+            return Err(StoreError::UnsupportedManifestVersion {
+                found: manifest.format_version,
+                supported: MANIFEST_FORMAT_VERSION,
+            });
+        }
         Ok(Some((pointer, manifest)))
     }
 }
 
 #[async_trait]
-impl ManifestPublisher for FsPublisher {
+impl ManifestStore for FsPublisher {
     async fn publish(&self, manifest: &Manifest) -> Result<u64, StoreError> {
         let n = manifest.version;
         let body =
@@ -115,20 +121,14 @@ impl ManifestPublisher for FsPublisher {
         .await
         .map_err(|e| StoreError::Backend(format!("join: {e}")))?
     }
-}
 
-#[async_trait]
-impl ManifestReader for FsPublisher {
-    async fn current_manifest(&self) -> Result<Option<Manifest>, StoreError> {
+    async fn current(&self) -> Result<Option<Manifest>, StoreError> {
         match Self::read_current_manifest(self.root.clone()).await? {
             Some((_pointer, manifest)) => Ok(Some(manifest)),
             None => Ok(None),
         }
     }
-}
 
-#[async_trait]
-impl ManifestWatch for FsPublisher {
     async fn watch(&self) -> Result<BoxStream<'static, Result<Manifest, StoreError>>, StoreError> {
         #[derive(Debug)]
         struct WatchState {

@@ -2,8 +2,9 @@
 //!
 //! - [`ObjectStore`] - the shared, cloud-grade artifact bucket (S3 / R2 / GCS / FS).
 //! - [`LocalCache`]  - the per-pod SSD cache (mirrored key layout, mmap-friendly).
-//! - [`ManifestPublisher`] / [`ManifestWatch`] - atomically swap the current
-//!   manifest pointer and notify subscribers (SPEC §8.5 / §10.5).
+//! - [`ManifestStore`] - publish, read, and watch the current manifest pointer
+//!   (SPEC §8.5 / §10.5). The single trait collapses what used to be three
+//!   sibling traits with identical impl sites.
 //!
 //! adapters live under `crates/adapters/mars-store-*`.
 
@@ -36,6 +37,14 @@ pub enum StoreError {
         /// Key whose contents did not match the expected hash.
         key: ArtifactKey,
     },
+    /// Manifest envelope is at a `format_version` this binary cannot decode.
+    #[error("unsupported manifest format_version {found}; this binary supports {supported}")]
+    UnsupportedManifestVersion {
+        /// `format_version` read from the manifest body.
+        found: u32,
+        /// Highest `format_version` this binary understands.
+        supported: u32,
+    },
 }
 
 /// Read/write port for the shared artifact object store.
@@ -64,55 +73,56 @@ pub trait LocalCache: Send + Sync + 'static {
         expected: ContentHash,
         origin: &dyn ObjectStore,
     ) -> Result<Bytes, StoreError>;
-
-    /// Hint that `key` is no longer needed by the live manifest.
-    fn mark_evictable(&self, key: &ArtifactKey);
 }
 
-/// Publishes a new manifest atomically (SPEC §8.5).
+/// Single port for manifest pub/sub. Replaces the older split into
+/// `ManifestPublisher` / `ManifestReader` / `ManifestWatch` - every concrete
+/// adapter implemented all three on the same struct, and consumers now hold
+/// one `Arc<dyn ManifestStore>` instead of three separate trait objects.
 #[async_trait]
-pub trait ManifestPublisher: Send + Sync + 'static {
+pub trait ManifestStore: Send + Sync + 'static {
     /// Write the manifest body and atomically swap `manifests/current`.
     /// Returns the version that was published.
     async fn publish(&self, manifest: &Manifest) -> Result<u64, StoreError>;
-}
 
-/// Subscribes to manifest-pointer changes.
-#[async_trait]
-pub trait ManifestWatch: Send + Sync + 'static {
+    /// Returns the current manifest, or `None` if none has been published yet.
+    async fn current(&self) -> Result<Option<Manifest>, StoreError>;
+
     /// Stream of `Manifest` snapshots; the stream yields the current manifest
     /// once on subscribe, then again whenever the pointer changes.
     async fn watch(&self) -> Result<BoxStream<'static, Result<Manifest, StoreError>>, StoreError>;
 }
 
-/// Reads the currently published manifest without subscribing to changes.
-/// Kept decoupled from [`ManifestPublisher`] so read and write ports can be
-/// wired to different backends (e.g. publisher writes to S3, reader polls
-/// a local replica).
-#[async_trait]
-pub trait ManifestReader: Send + Sync + 'static {
-    /// Returns the current manifest, or `None` if none has been published yet.
-    async fn current_manifest(&self) -> Result<Option<Manifest>, StoreError>;
-}
-
 /// Phase-0 stub adapters that satisfy the port traits with `NotImplemented`.
 /// Lets bins and tests compose the surface without naming a real backend.
 pub mod stub {
-    use super::{LocalCache, ManifestPublisher, ObjectStore, StoreError};
+    use super::{LocalCache, ManifestStore, ObjectStore, StoreError};
     use async_trait::async_trait;
     use bytes::Bytes;
+    use futures_core::stream::BoxStream;
+    use futures_util::stream;
     use mars_types::{ArtifactKey, ContentHash, Manifest};
 
-    /// `ManifestPublisher` impl that always returns `NotImplemented`.
+    /// `ManifestStore` impl that always returns `NotImplemented`.
     #[derive(Debug, Default)]
-    pub struct NotImplementedPublisher;
+    pub struct NotImplementedManifestStore;
 
     #[async_trait]
-    impl ManifestPublisher for NotImplementedPublisher {
+    impl ManifestStore for NotImplementedManifestStore {
         async fn publish(&self, _manifest: &Manifest) -> Result<u64, StoreError> {
             Err(StoreError::NotImplemented {
-                what: "mars-store::stub::NotImplementedPublisher::publish",
+                what: "mars-store::stub::NotImplementedManifestStore::publish",
             })
+        }
+        async fn current(&self) -> Result<Option<Manifest>, StoreError> {
+            Err(StoreError::NotImplemented {
+                what: "mars-store::stub::NotImplementedManifestStore::current",
+            })
+        }
+        async fn watch(&self) -> Result<BoxStream<'static, Result<Manifest, StoreError>>, StoreError> {
+            // empty stream is valid for a stub: consumers will simply observe
+            // no manifest swaps.
+            Ok(Box::pin(stream::empty()))
         }
     }
 
@@ -161,7 +171,6 @@ pub mod stub {
                 what: "mars-store::stub::NotImplementedCache::get_or_fetch",
             })
         }
-        fn mark_evictable(&self, _key: &ArtifactKey) {}
     }
 }
 

@@ -6,16 +6,12 @@ use std::sync::Arc;
 use mars_artifact::{ArtifactKind, ArtifactWriter, SourceRef, compute_content_hash};
 use mars_source::{RowAttrs, RowBytes, Source};
 use mars_store::ObjectStore;
-use mars_types::{ArtifactEntry, ArtifactKey, Bbox, ContentHash};
+use mars_types::{ArtifactEntry, ArtifactKey, Bbox, Cell, ContentHash, LayerId, ScaleBand};
 
 use crate::CompilerError;
 use crate::class::{CompiledClass, first_match};
 use crate::plan::{BuildTask, cell_bbox};
 use crate::wkb;
-
-/// `schema_version` lives only on layer artifacts (SPEC §9.2). Bumped when the
-/// layer artifact's payload format changes.
-pub const LAYER_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Default)]
 pub struct SnapshotOutput {
@@ -68,7 +64,7 @@ pub async fn run_task(
 
 fn build_source_artifact(
     task: &BuildTask,
-    cell: &mars_types::Cell,
+    cell: &Cell,
     rows: &[RowBytes],
 ) -> Result<(ArtifactEntry, Vec<u8>), CompilerError> {
     let expected_srid = task
@@ -90,14 +86,12 @@ fn build_source_artifact(
     writer.set_feature_count(features.len() as u64);
     let bytes = writer.finish()?;
     let hash = compute_content_hash(&bytes);
-    let key = ArtifactKey::new(format!(
-        "src/{coll}/{band}/{cx}_{cy}/{hex}.mars",
-        coll = task.binding.collection.as_str(),
-        band = task.band.as_str(),
-        cx = cell.x,
-        cy = cell.y,
-        hex = hex32(&hash.0),
-    ));
+    let cell_with_band = Cell {
+        band: ScaleBand::new(task.band.as_str()),
+        x: cell.x,
+        y: cell.y,
+    };
+    let key = ArtifactKey::build_source(task.binding.collection.as_str(), &cell_with_band, hash);
     let entry = ArtifactEntry {
         key,
         hash,
@@ -108,10 +102,10 @@ fn build_source_artifact(
 
 fn build_layer_artifact(
     task: &BuildTask,
-    cell: &mars_types::Cell,
+    cell: &Cell,
     rows: &[RowBytes],
     source_hash: ContentHash,
-    bbox: mars_types::Bbox,
+    bbox: Bbox,
 ) -> Result<(ArtifactEntry, Vec<u8>), CompilerError> {
     let mut assignments: Vec<(u64, u16)> = Vec::with_capacity(rows.len());
     for row in rows {
@@ -141,15 +135,13 @@ fn build_layer_artifact(
     });
     let bytes = writer.finish()?;
     let hash = compute_content_hash(&bytes);
-    let key = ArtifactKey::new(format!(
-        "lyr/{layer}/{band}/{cx}_{cy}/v{schema}/{hex}.mars",
-        layer = task.layer.as_str(),
-        band = task.band.as_str(),
-        cx = cell.x,
-        cy = cell.y,
-        schema = LAYER_SCHEMA_VERSION,
-        hex = hex32(&hash.0),
-    ));
+    let layer_id = LayerId::new(task.layer.as_str());
+    let cell_with_band = Cell {
+        band: ScaleBand::new(task.band.as_str()),
+        x: cell.x,
+        y: cell.y,
+    };
+    let key = ArtifactKey::build_layer(&layer_id, &cell_with_band, hash);
     let entry = ArtifactEntry {
         key,
         hash,
@@ -203,12 +195,3 @@ impl BboxAcc {
     }
 }
 
-fn hex32(b: &[u8; 32]) -> String {
-    use std::fmt::Write;
-    let mut s = String::with_capacity(64);
-    for byte in b {
-        // infallible: pre-allocated string
-        let _ = write!(s, "{byte:02x}");
-    }
-    s
-}

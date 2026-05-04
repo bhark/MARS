@@ -1,10 +1,11 @@
-//! Tag-prefixed binary encoding for a row's attribute block.
+//! tag-prefixed binary encoding for a row's attribute block.
 //!
-//! NOTE: this informal codec is used by tests and Phase-0 stubs; SPEC §9.3
-//! mandates Apache Arrow IPC for the on-disk attribute block. File / crate
-//! restructuring lands in Pass B (arrow-migration).
+//! TODO: replace with apache arrow ipc per SPEC §9.3. this informal codec
+//! is a phase-0 stub used by tests only; it lives here next to the geometry
+//! codec because both encode artifact-side payloads. moving it later is
+//! purely a port-vocabulary change.
 //!
-//! On-disk contract (little-endian, lengths as `u32`):
+//! on-disk contract (little-endian, lengths as `u32`):
 //!   block := count:u32, entry*
 //!   entry := name_len:u32, name:utf8, tag:u8, payload
 //!   payload by tag:
@@ -14,12 +15,27 @@
 //!     3 Float   -> f64 LE (IEEE 754 bits)
 //!     4 String  -> u32 len, utf8 bytes
 //!
-//! Per-row block is bounded at 64 KiB to keep one bad row from exhausting
+//! per-row block is bounded at 64 KiB to keep one bad row from exhausting
 //! memory; oversize blocks return `AttrError::TooLarge`.
 
 use bytes::Bytes;
 
-use crate::AttrValue;
+/// on-disk attribute value vocabulary for the phase-0 codec. mirrors what
+/// adapters and the expression layer already speak; conversions live at the
+/// boundary (e.g. `From<mars_source::AttrValue>`).
+#[derive(Debug, Clone, PartialEq)]
+pub enum AttrValue {
+    /// SQL NULL.
+    Null,
+    /// Boolean.
+    Bool(bool),
+    /// 64-bit signed integer.
+    Int(i64),
+    /// 64-bit float.
+    Float(f64),
+    /// UTF-8 string.
+    String(String),
+}
 
 /// Maximum encoded size of a single row's attribute block.
 pub const MAX_ROW_BYTES: usize = 64 * 1024;

@@ -1,5 +1,5 @@
-//! filesystem-backed adapter for `mars-store::ObjectStore` and `LocalCache`,
-//! plus an atomic `ManifestPublisher`. SPEC §8.5 / §10.2 / §10.3.
+//! filesystem-backed adapter for `mars-store::ObjectStore`, `LocalCache`,
+//! and `ManifestStore`. SPEC §8.5 / §10.2 / §10.3.
 
 #![forbid(unsafe_code)]
 

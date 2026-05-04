@@ -1,5 +1,5 @@
-//! In-memory implementations of [`ObjectStore`], [`LocalCache`], [`ManifestPublisher`]
-//! and [`ManifestReader`] for use in unit / integration tests.
+//! In-memory implementations of [`ObjectStore`], [`LocalCache`], and
+//! [`ManifestStore`] for use in unit / integration tests.
 //!
 //! These types avoid pulling concrete filesystem or network adapters into
 //! application-layer tests, keeping the test surface aligned with the port
@@ -12,9 +12,11 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures_core::stream::BoxStream;
+use futures_util::stream;
 use mars_types::{ArtifactKey, ContentHash, Manifest};
 
-use crate::{LocalCache, ManifestPublisher, ManifestReader, ObjectStore, StoreError};
+use crate::{LocalCache, ManifestStore, ObjectStore, StoreError};
 
 fn compute_hash(bytes: &[u8]) -> ContentHash {
     let hash = blake3::hash(bytes);
@@ -110,13 +112,11 @@ impl LocalCache for InMemoryCache {
         lock.insert(key.clone(), bytes.clone());
         Ok(bytes)
     }
-
-    fn mark_evictable(&self, _key: &ArtifactKey) {
-        // no-op: test caches are unbounded.
-    }
 }
 
-/// In-memory [`ManifestPublisher`] + [`ManifestReader`].
+/// In-memory [`ManifestStore`]. Records the latest published manifest; `watch`
+/// emits a one-shot stream of the current value (tests rebuild the watch when
+/// they want to observe further updates).
 #[derive(Debug, Default)]
 pub struct InMemoryPublisher {
     manifest: Mutex<Option<Manifest>>,
@@ -131,18 +131,21 @@ impl InMemoryPublisher {
 }
 
 #[async_trait]
-impl ManifestPublisher for InMemoryPublisher {
+impl ManifestStore for InMemoryPublisher {
     async fn publish(&self, manifest: &Manifest) -> Result<u64, StoreError> {
         let mut lock = self.manifest.lock().expect("InMemoryPublisher lock poisoned");
         *lock = Some(manifest.clone());
         Ok(manifest.version)
     }
-}
 
-#[async_trait]
-impl ManifestReader for InMemoryPublisher {
-    async fn current_manifest(&self) -> Result<Option<Manifest>, StoreError> {
+    async fn current(&self) -> Result<Option<Manifest>, StoreError> {
         let lock = self.manifest.lock().expect("InMemoryPublisher lock poisoned");
         Ok(lock.clone())
+    }
+
+    async fn watch(&self) -> Result<BoxStream<'static, Result<Manifest, StoreError>>, StoreError> {
+        let snapshot = self.current().await?;
+        let items: Vec<Result<Manifest, StoreError>> = snapshot.into_iter().map(Ok).collect();
+        Ok(Box::pin(stream::iter(items)))
     }
 }

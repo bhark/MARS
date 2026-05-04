@@ -15,8 +15,8 @@ use std::time::Duration;
 
 use arc_swap::ArcSwapOption;
 use futures_util::{StreamExt, stream};
-use mars_render_port::{Canvas, Renderer};
-use mars_store::{LocalCache, ManifestWatch, ObjectStore};
+use mars_render_port::{Canvas, Encoder, Renderer};
+use mars_store::{LocalCache, ManifestStore, ObjectStore};
 use mars_style::Stylesheet;
 use mars_types::{ArtifactEntry, ArtifactKey, Bbox, CrsCode, ImageFormat, LayerId};
 use tokio::task::JoinHandle;
@@ -35,6 +35,8 @@ pub enum RuntimeError {
     Store(#[from] mars_store::StoreError),
     #[error(transparent)]
     Render(#[from] mars_render_port::RenderError),
+    #[error(transparent)]
+    Encode(#[from] mars_render_port::EncodeError),
     #[error(transparent)]
     Artifact(#[from] mars_artifact::ArtifactError),
     #[error(transparent)]
@@ -67,6 +69,7 @@ pub struct Deps {
     pub store: Arc<dyn ObjectStore>,
     pub cache: Arc<dyn LocalCache>,
     pub renderer: Arc<dyn Renderer>,
+    pub encoder: Arc<dyn Encoder>,
 }
 
 /// The render plan as produced by the interface adapter (WMS / WMTS).
@@ -196,16 +199,20 @@ impl Runtime {
             background: None,
         };
         let renderer = self.deps.renderer.clone();
+        let encoder = self.deps.encoder.clone();
         let format = plan.format;
         // move ownership directly into the closure; the `ops` binding is dead
         // after this line, so peak memory is one Vec<DrawOp> not two.
-        let bytes = tokio::task::spawn_blocking(move || renderer.render(canvas, &ops, format))
-            .await
-            .map_err(|e| {
-                RuntimeError::Render(mars_render_port::RenderError::Backend(format!(
-                    "render task panicked: {e}"
-                )))
-            })??;
+        let bytes = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, RuntimeError> {
+            let pixmap = renderer.render(canvas, &ops)?;
+            Ok(encoder.encode(&pixmap, format)?)
+        })
+        .await
+        .map_err(|e| {
+            RuntimeError::Render(mars_render_port::RenderError::Backend(format!(
+                "render task panicked: {e}"
+            )))
+        })??;
         Ok(bytes)
     }
 }
@@ -213,11 +220,11 @@ impl Runtime {
 /// Consume a manifest watch stream and atomically hot-swap valid runtime states.
 pub async fn run_manifest_reload_loop(
     runtime: Arc<Runtime>,
-    watcher: Arc<dyn ManifestWatch>,
+    manifests: Arc<dyn ManifestStore>,
     config: Arc<mars_config::Config>,
     stylesheet: Stylesheet,
 ) -> Result<(), RuntimeError> {
-    let mut manifests = watcher.watch().await?;
+    let mut manifests = manifests.watch().await?;
     let mut warming: Option<JoinHandle<()>> = None;
 
     while let Some(next) = manifests.next().await {
@@ -265,18 +272,15 @@ pub async fn run_manifest_reload_loop(
 
         let previous = runtime.current_state();
         let previous_keys = previous.as_deref().map(referenced_keys).unwrap_or_default();
-        let next_keys = referenced_keys(&state);
         let warm_entries = referenced_entries(&state)
             .into_iter()
             .filter(|entry| !previous_keys.contains(&entry.key))
             .collect::<Vec<_>>();
-        let evictable_keys = previous_keys.difference(&next_keys).cloned().collect::<Vec<_>>();
+        // eviction priority hint goes here when the runtime tracks per-key
+        // refcounts; lru in the fs cache covers correctness today.
 
         runtime.swap_state(state);
         runtime.clear_reject();
-        for key in &evictable_keys {
-            runtime.deps.cache.mark_evictable(key);
-        }
 
         if let Some(task) = warming.take() {
             task.abort();

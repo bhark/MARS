@@ -1887,7 +1887,6 @@ dependencies = [
  "futures-core",
  "mars-expr",
  "mars-types",
- "proptest",
  "thiserror",
 ]
 
@@ -1917,6 +1916,7 @@ dependencies = [
  "blake3",
  "bytes",
  "futures-core",
+ "futures-util",
  "mars-types",
  "thiserror",
 ]
@@ -1965,6 +1965,7 @@ version = "0.0.1"
 dependencies = [
  "serde",
  "serde_json",
+ "thiserror",
 ]
 
 [[package]]
