@@ -10,25 +10,28 @@
 //! semantics.
 
 use std::env;
+use std::sync::LazyLock;
 
 use regex::Regex;
 
 use crate::ConfigError;
+
+static ENV_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\$\$|\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
+        .expect("env regex is valid")
+});
 
 /// Apply env substitution to `src`. Unknown variables without a default
 /// produce `EnvMissing`. Double-dollar `$$` is preserved as literal `$`.
 /// Each substituted value is checked for characters that would break YAML
 /// structure (colon-space, space-hash, newlines, unbalanced quotes).
 pub(crate) fn substitute(src: &str) -> Result<String, ConfigError> {
-    // placeholder: ${NAME} or ${NAME:-default}. names are POSIX-ish.
-    let re = Regex::new(r"\$\$|\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
-        .map_err(|e| ConfigError::Parse(format!("env regex: {e}")))?;
 
     let mut missing: Option<String> = None;
     let mut out = String::with_capacity(src.len());
     let mut last_end = 0;
 
-    for caps in re.captures_iter(src) {
+    for caps in ENV_RE.captures_iter(src) {
         let Some(m) = caps.get(0) else {
             continue;
         };
@@ -72,6 +75,9 @@ fn validate_yaml_safe(value: &str) -> Result<(), &'static str> {
     if value.contains('\n') || value.contains('\r') {
         return Err("contains newline");
     }
+    if value.contains('\t') {
+        return Err("contains tab");
+    }
     // colon-space introduces a mapping in unquoted YAML scalars
     if value.contains(": ") {
         return Err("contains ': ' which is invalid in a YAML scalar");
@@ -79,6 +85,13 @@ fn validate_yaml_safe(value: &str) -> Result<(), &'static str> {
     // space-hash starts a comment in unquoted YAML scalars
     if value.contains(" #") {
         return Err("contains ' #' which is invalid in a YAML scalar");
+    }
+    // yaml tags and document separators can change semantics
+    if value.contains("!!") {
+        return Err("contains YAML tag indicator");
+    }
+    if value.contains("---") {
+        return Err("contains YAML document separator");
     }
     // unbalanced quotes could break a quoted string context in the template
     let double_quotes = value.chars().filter(|&c| c == '"').count();
