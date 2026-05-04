@@ -97,28 +97,50 @@ pub(crate) fn build_query(
     Ok((sql, params))
 }
 
-/// shifts every `$N` token by `offset` positions. assumes the only `$` chars
-/// in the lowered fragment come from our placeholders (true: identifiers are
-/// quoted with `"`, string literals are parameters).
+/// shifts placeholder `$N` tokens by `offset` positions.
 fn renumber_params(s: &str, offset: usize) -> String {
     let mut out = String::with_capacity(s.len() + 4);
     let bytes = s.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'$' {
-            let mut j = i + 1;
-            while j < bytes.len() && bytes[j].is_ascii_digit() {
-                j += 1;
+        match bytes[i] {
+            b'\'' | b'"' => {
+                let quote = bytes[i];
+                let start = i;
+                i += 1;
+                while i < bytes.len() {
+                    if bytes[i] == quote {
+                        i += 1;
+                        if i < bytes.len() && bytes[i] == quote {
+                            i += 1;
+                            continue;
+                        }
+                        break;
+                    }
+                    i += 1;
+                }
+                out.push_str(&s[start..i]);
             }
-            if j > i + 1 {
-                let n: usize = s[i + 1..j].parse().unwrap_or(0);
-                out.push_str(&format!("${}", n + offset));
-                i = j;
-                continue;
+            b'$' => {
+                let mut j = i + 1;
+                while j < bytes.len() && bytes[j].is_ascii_digit() {
+                    j += 1;
+                }
+                if j > i + 1 {
+                    let n: usize = s[i + 1..j].parse().unwrap_or(0);
+                    out.push_str(&format!("${}", n + offset));
+                    i = j;
+                } else {
+                    out.push('$');
+                    i += 1;
+                }
+            }
+            _ => {
+                let ch = s[i..].chars().next().unwrap_or_default();
+                out.push(ch);
+                i += ch.len_utf8();
             }
         }
-        out.push(bytes[i] as char);
-        i += 1;
     }
     out
 }
@@ -337,6 +359,31 @@ mod tests {
         let bbox = Bbox::new(0.0, 0.0, 1.0, 1.0);
         let (sql, params) = build_query(&binding, bbox, 25832, Some(&e)).unwrap();
         assert!(sql.contains("AND (\"gid\" > $6)"));
+        assert_eq!(params.len(), 6);
+    }
+
+    #[test]
+    fn query_renumbering_ignores_dollars_inside_quoted_identifiers() {
+        let binding = SourceBinding::new(
+            SourceCollectionId::new("c"),
+            "public",
+            "t",
+            "geom",
+            "gid",
+            vec!["cost$1".into()],
+            CrsCode::new("EPSG:25832"),
+        )
+        .unwrap();
+        let e = Expr::Cmp {
+            op: mars_expr::CmpOp::Eq,
+            lhs: Box::new(Expr::Ident("cost$1".into())),
+            rhs: Box::new(Expr::Literal(mars_expr::Literal::Int(10))),
+        };
+
+        let bbox = Bbox::new(0.0, 0.0, 1.0, 1.0);
+        let (sql, params) = build_query(&binding, bbox, 25832, Some(&e)).unwrap();
+
+        assert!(sql.contains("AND (\"cost$1\" = $6)"), "{sql}");
         assert_eq!(params.len(), 6);
     }
 }

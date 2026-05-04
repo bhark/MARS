@@ -124,6 +124,17 @@ fn make_rows() -> Vec<RowBytes> {
     out
 }
 
+fn make_rows_with_unmatched_class() -> Vec<RowBytes> {
+    let mut rows = make_rows();
+    let coords = [(60.0, 60.0), (65.0, 60.0), (65.0, 65.0), (60.0, 65.0), (60.0, 60.0)];
+    rows.push(RowBytes {
+        feature_id: 6,
+        geometry: wkb_polygon(&coords),
+        attributes: vec![("attr".to_string(), AttrValue::String("c".to_string()))],
+    });
+    rows
+}
+
 fn build_deps(tmp: &TempDir, rows: Vec<RowBytes>) -> (Deps, Arc<FsStore>, Arc<FsPublisher>) {
     let store = Arc::new(FsStore::new(tmp.path()).unwrap());
     let publisher = Arc::new(FsPublisher::new(tmp.path()).unwrap());
@@ -179,6 +190,25 @@ async fn snapshot_writes_artifacts_and_publishes_manifest() {
         vec![(1, 0u16), (2, 0), (3, 0), (4, 1), (5, 1)],
         "first-match-wins assignment in id order",
     );
+}
+
+#[tokio::test]
+async fn snapshot_omits_unmatched_rows_from_layer_assignment() {
+    let tmp = TempDir::new().unwrap();
+    let cfg = make_config();
+    let (deps, store, publisher) = build_deps(&tmp, make_rows_with_unmatched_class());
+    let compiler = Compiler::new(deps, cfg);
+    compiler.run(CancellationToken::new()).await.unwrap();
+
+    let lyr_keys = store.list("lyr").await.unwrap();
+    let lyr_path = publisher.root().join(lyr_keys[0].as_str());
+    let bytes = bytes::Bytes::from(std::fs::read(&lyr_path).unwrap());
+    let reader = ArtifactReader::open(bytes).unwrap();
+    let payload = reader.section(SectionKind::ClassAssignment).unwrap();
+    let assigns = decode_class_assignment(&payload).unwrap();
+
+    assert_eq!(assigns, vec![(1, 0u16), (2, 0), (3, 0), (4, 1), (5, 1)]);
+    assert_eq!(reader.feature_count(), 5);
 }
 
 #[tokio::test]
