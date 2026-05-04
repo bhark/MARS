@@ -122,26 +122,35 @@ fn cmp(op: CmpOp, l: &Literal, r: &Literal) -> Result<Literal, ExprError> {
 }
 
 fn like_match(s: &str, pattern: &str) -> bool {
-    // classic dp over chars; '%' matches any (incl empty), '_' matches one
+    // greedy linear scan: '%' matches any sequence, '_' matches one char.
+    // O(n + m) time, O(1) space. behaves like sql LIKE (no escape char).
     let s: Vec<char> = s.chars().collect();
     let p: Vec<char> = pattern.chars().collect();
-    let n = s.len();
-    let m = p.len();
-    let mut dp = vec![vec![false; m + 1]; n + 1];
-    dp[0][0] = true;
-    for j in 1..=m {
-        if p[j - 1] == '%' {
-            dp[0][j] = dp[0][j - 1];
+    let mut si = 0;
+    let mut pi = 0;
+    let mut star_idx: Option<usize> = None;
+    let mut match_idx = 0;
+
+    while si < s.len() {
+        if pi < p.len() && (p[pi] == '_' || p[pi] == s[si]) {
+            si += 1;
+            pi += 1;
+        } else if pi < p.len() && p[pi] == '%' {
+            star_idx = Some(pi);
+            match_idx = si;
+            pi += 1;
+        } else if let Some(star) = star_idx {
+            pi = star + 1;
+            match_idx += 1;
+            si = match_idx;
+        } else {
+            return false;
         }
     }
-    for i in 1..=n {
-        for j in 1..=m {
-            dp[i][j] = match p[j - 1] {
-                '%' => dp[i - 1][j] || dp[i][j - 1],
-                '_' => dp[i - 1][j - 1],
-                c => dp[i - 1][j - 1] && s[i - 1] == c,
-            };
-        }
+
+    while pi < p.len() && p[pi] == '%' {
+        pi += 1;
     }
-    dp[n][m]
+
+    pi == p.len()
 }
