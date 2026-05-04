@@ -97,7 +97,7 @@ async fn end_to_end_compile_and_render() -> Result<()> {
     let state = RuntimeState::from_config_and_manifest(&cfg, stylesheet, manifest)
         .map_err(|e| anyhow::anyhow!("runtime state: {e}"))?;
     let store = Arc::new(FsStore::new(store_dir.path()).context("open store")?);
-    let cache = Arc::new(FsCache::new(cache_dir.path()).context("open cache")?);
+    let cache = Arc::new(FsCache::new(cache_dir.path(), u64::MAX).context("open cache")?);
     let runtime = Runtime::from_state(
         Arc::new(state),
         RuntimeDeps {

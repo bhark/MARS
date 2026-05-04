@@ -277,8 +277,13 @@ fn build_store(cfg: &Config) -> Result<Arc<dyn ObjectStore>> {
 }
 
 fn build_cache(cfg: &Config) -> Result<Arc<dyn LocalCache>> {
+    let max = cfg
+        .artifacts
+        .cache
+        .max_size_bytes()
+        .map_err(|e| anyhow!("parse cache max_size: {e}"))?;
     Ok(Arc::new(
-        FsCache::new(&cfg.artifacts.cache.path).context("open fs cache")?,
+        FsCache::new(&cfg.artifacts.cache.path, max).context("open fs cache")?,
     ))
 }
 

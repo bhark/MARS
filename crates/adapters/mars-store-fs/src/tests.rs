@@ -246,7 +246,7 @@ async fn cache_miss_then_hit_then_recover() {
     let store_dir = TempDir::new().unwrap();
     let cache_dir = TempDir::new().unwrap();
     let store = FsStore::new(store_dir.path()).unwrap();
-    let cache = FsCache::new(cache_dir.path()).unwrap();
+    let cache = FsCache::new(cache_dir.path(), u64::MAX).unwrap();
 
     let key = k("a/b.bin");
     let body = b"some bytes here".to_vec();

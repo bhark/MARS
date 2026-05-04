@@ -128,7 +128,7 @@ async fn build_fixture() -> Fixture {
     std::fs::create_dir_all(&cache_root).unwrap();
 
     let store = Arc::new(FsStore::new(store_root).unwrap());
-    let cache = FsCache::new(cache_root).unwrap();
+    let cache = FsCache::new(cache_root, u64::MAX).unwrap();
 
     let manifest = write_manifest(&store, 1, 0.0).await;
 
@@ -290,7 +290,7 @@ async fn renders_expected_paths() {
 async fn empty_runtime_returns_not_ready() {
     let tmp = TempDir::new().unwrap();
     let store = Arc::new(FsStore::new(tmp.path().join("store")).unwrap());
-    let cache = Arc::new(FsCache::new(tmp.path().join("cache")).unwrap());
+    let cache = Arc::new(FsCache::new(tmp.path().join("cache"), u64::MAX).unwrap());
     let mock = Arc::new(MockRenderer::default());
     let runtime = Runtime::empty(Deps {
         store,
@@ -311,7 +311,7 @@ async fn swap_state_makes_runtime_ready_and_renderable() {
     let fx = build_fixture().await;
     let runtime = Runtime::empty(Deps {
         store: fx.store.clone(),
-        cache: Arc::new(FsCache::new(fx._tmp.path().join("cache2")).unwrap()),
+        cache: Arc::new(FsCache::new(fx._tmp.path().join("cache2"), u64::MAX).unwrap()),
         renderer: fx.mock.clone(),
     });
     assert!(!runtime.is_ready());
@@ -346,7 +346,7 @@ async fn render_pins_state_across_swap() {
     std::fs::create_dir_all(&cache_root).unwrap();
 
     let store = Arc::new(FsStore::new(store_root).unwrap());
-    let cache = FsCache::new(cache_root).unwrap();
+    let cache = FsCache::new(cache_root, u64::MAX).unwrap();
     let first_manifest = write_manifest(&store, 1, 0.0).await;
     let second_manifest = write_manifest(&store, 2, 100.0).await;
     let canonical_crs = CrsCode::new("EPSG:25832");
@@ -383,7 +383,7 @@ async fn render_pins_state_across_swap() {
         Arc::new(state_from_manifest(canonical_crs.clone(), first_manifest)),
         Deps {
             store: store.clone(),
-            cache: Arc::new(FsCache::new(tmp.path().join("expected-cache")).unwrap()),
+            cache: Arc::new(FsCache::new(tmp.path().join("expected-cache"), u64::MAX).unwrap()),
             renderer: expected_renderer.clone(),
         },
     );
