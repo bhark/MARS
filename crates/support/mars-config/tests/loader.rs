@@ -136,6 +136,26 @@ layers: !include layers.yaml
 }
 
 #[test]
+fn include_escapes_config_dir_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let main = r#"
+service: { name: t }
+source: { type: postgis, dsn: x, native_crs: EPSG:25832 }
+artifacts:
+  store: { type: fs, path: /tmp/s }
+  cache: { path: /tmp/c, max_size: 1MiB }
+scales: { bands: [{ name: hi, max_denom: 1 }] }
+cells: { grid: regular, origin: [0, 0], size_per_band: { hi: 1m } }
+interfaces: {}
+layers: !include /etc/passwd
+"#;
+    fs::write(dir.path().join("c.yaml"), main).unwrap();
+    let err = load(dir.path().join("c.yaml")).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("escapes"), "expected escape error, got {msg}");
+}
+
+#[test]
 fn include_cycle_is_rejected() {
     let dir = tempfile::tempdir().unwrap();
     // a.yaml includes b.yaml under layers; b.yaml includes a.yaml under layers.

@@ -19,13 +19,29 @@ use crate::env_subst::substitute;
 const INCLUDE_TAG: &str = "!include";
 
 /// Read+parse YAML with includes resolved. `path` must exist.
-pub(crate) fn load_with_includes(path: &Path) -> Result<Value, ConfigError> {
+/// All included files must reside under `root` (typically the config file's
+/// directory) to prevent directory traversal.
+pub(crate) fn load_with_includes(path: &Path, root: &Path) -> Result<Value, ConfigError> {
+    let root = if root.as_os_str().is_empty() {
+        std::env::current_dir().map_err(|e| ConfigError::Io(format!("current dir: {e}")))?
+    } else {
+        root.to_path_buf()
+    };
+    let root = fs::canonicalize(&root)
+        .map_err(|e| ConfigError::Io(format!("canonicalize config root {}: {e}", root.display())))?;
     let mut stack: HashSet<PathBuf> = HashSet::new();
-    load_inner(path, &mut stack)
+    load_inner(path, &root, &mut stack)
 }
 
-fn load_inner(path: &Path, stack: &mut HashSet<PathBuf>) -> Result<Value, ConfigError> {
+fn load_inner(path: &Path, root: &Path, stack: &mut HashSet<PathBuf>) -> Result<Value, ConfigError> {
     let canon = fs::canonicalize(path).map_err(|e| ConfigError::Io(format!("canonicalize {}: {e}", path.display())))?;
+    if !canon.starts_with(root) {
+        return Err(ConfigError::Invalid(format!(
+            "include path {} escapes config directory {}",
+            canon.display(),
+            root.display()
+        )));
+    }
     if !stack.insert(canon.clone()) {
         return Err(ConfigError::Invalid(format!(
             "include cycle detected at {}",
@@ -39,13 +55,13 @@ fn load_inner(path: &Path, stack: &mut HashSet<PathBuf>) -> Result<Value, Config
         serde_yml::from_str(&expanded).map_err(|e| ConfigError::Parse(format!("{}: {e}", canon.display())))?;
 
     let dir = canon.parent().map(Path::to_path_buf).unwrap_or_default();
-    resolve(&mut value, &dir, stack)?;
+    resolve(&mut value, &dir, root, stack)?;
 
     stack.remove(&canon);
     Ok(value)
 }
 
-fn resolve(value: &mut Value, base_dir: &Path, stack: &mut HashSet<PathBuf>) -> Result<(), ConfigError> {
+fn resolve(value: &mut Value, base_dir: &Path, root: &Path, stack: &mut HashSet<PathBuf>) -> Result<(), ConfigError> {
     // tagged scalars surface via Value::Tagged in serde_yml
     if let Value::Tagged(tagged) = value
         && tagged.tag == INCLUDE_TAG
@@ -55,7 +71,16 @@ fn resolve(value: &mut Value, base_dir: &Path, stack: &mut HashSet<PathBuf>) -> 
             .as_str()
             .ok_or_else(|| ConfigError::Invalid("!include argument must be a string path".into()))?;
         let target = base_dir.join(rel);
-        let included = load_inner(&target, stack)?;
+        let target_canon = fs::canonicalize(&target)
+            .map_err(|e| ConfigError::Io(format!("canonicalize {}: {e}", target.display())))?;
+        if !target_canon.starts_with(root) {
+            return Err(ConfigError::Invalid(format!(
+                "include path {} escapes config directory {}",
+                target.display(),
+                root.display()
+            )));
+        }
+        let included = load_inner(&target, root, stack)?;
         *value = included;
         return Ok(());
     }
@@ -66,7 +91,7 @@ fn resolve(value: &mut Value, base_dir: &Path, stack: &mut HashSet<PathBuf>) -> 
             // sequences; flatten those one level.
             let mut out: Vec<Value> = Vec::with_capacity(seq.len());
             for mut item in std::mem::take(seq) {
-                resolve(&mut item, base_dir, stack)?;
+                resolve(&mut item, base_dir, root, stack)?;
                 if let Value::Sequence(inner) = item {
                     out.extend(inner);
                 } else {
@@ -83,11 +108,11 @@ fn resolve(value: &mut Value, base_dir: &Path, stack: &mut HashSet<PathBuf>) -> 
             // position, we just substitute the value (no merging). merging
             // is reserved for sequence position (e.g. layers: !include ...).
             for (_, v) in map.iter_mut() {
-                resolve(v, base_dir, stack)?;
+                resolve(v, base_dir, root, stack)?;
             }
         }
         Value::Tagged(tagged) => {
-            resolve(&mut tagged.value, base_dir, stack)?;
+            resolve(&mut tagged.value, base_dir, root, stack)?;
         }
         _ => {}
     }

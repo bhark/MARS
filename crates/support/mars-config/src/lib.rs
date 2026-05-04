@@ -55,7 +55,8 @@ pub enum ConfigError {
 /// and `${ENV}` substitutions.
 pub fn load(path: impl AsRef<Path>) -> Result<Config, ConfigError> {
     let path = path.as_ref();
-    let value = include::load_with_includes(path)?;
+    let root = config_dir(path);
+    let value = include::load_with_includes(path, &root)?;
     let config: Config =
         serde_yml::from_value(value).map_err(|e| ConfigError::Parse(format!("{}: {e}", path.display())))?;
     Ok(config)
