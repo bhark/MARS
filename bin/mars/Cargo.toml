@@ -49,9 +49,9 @@ serde_json  = { workspace = true }
 
 [dev-dependencies]
 mars-grid           = { workspace = true }
-testcontainers = "0.20"
+testcontainers = "0.27"
 tokio-postgres = "0.7"
-png            = "0.17"
+png            = "0.18"
 tempfile       = "3"
 serde_yml      = "0.0.12"
 rand           = "0.8"

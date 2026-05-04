@@ -66,7 +66,10 @@ pub fn router(runtime: Arc<Runtime>, capabilities: String, wms_cfg: WmsConfig) -
         .route("/metrics", get(handle_metrics))
         .with_state(state)
         .layer(RequestBodyLimitLayer::new(1 << 20))
-        .layer(TimeoutLayer::new(Duration::from_secs(60)))
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            Duration::from_secs(60),
+        ))
 }
 
 /// Run the HTTP server until ctrl_c.
@@ -96,16 +99,12 @@ async fn shutdown_signal() {
 
 // ---------- handlers ----------
 
-async fn handle_wms(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    raw_query: Option<axum::extract::RawQuery>,
-) -> Response {
+async fn handle_wms(State(state): State<AppState>, headers: HeaderMap, raw_query: axum::extract::RawQuery) -> Response {
     let req_id = request_id(&state, &headers);
     let span = tracing::info_span!("wms", req_id = %req_id);
 
     async move {
-        let raw = raw_query.and_then(|q| q.0).unwrap_or_default();
+        let raw = raw_query.0.unwrap_or_default();
 
         let parsed = match mars_wms::parse_request(&raw, &state.wms_cfg) {
             Ok(r) => r,

@@ -87,10 +87,10 @@ fn read_geom(c: &mut Cursor<'_>, allow_srid: bool, expected_srid: Option<u32>) -
             return Err(WkbError::NestedSrid);
         }
         let srid = c.u32(le)?;
-        if let Some(expected) = expected_srid {
-            if srid != expected {
-                return Err(WkbError::SridMismatch { expected, actual: srid });
-            }
+        if let Some(expected) = expected_srid
+            && srid != expected
+        {
+            return Err(WkbError::SridMismatch { expected, actual: srid });
         }
     }
     let gtype = raw_type & 0x0000_00FF;
@@ -254,6 +254,9 @@ mod tests {
     fn rejects_unknown_type() {
         let mut v = vec![1u8];
         v.extend_from_slice(&99u32.to_le_bytes());
-        assert!(matches!(decode_feature(0, &v, None), Err(WkbError::UnsupportedType(99))));
+        assert!(matches!(
+            decode_feature(0, &v, None),
+            Err(WkbError::UnsupportedType(99))
+        ));
     }
 }

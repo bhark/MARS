@@ -16,17 +16,15 @@ use regex::Regex;
 
 use crate::ConfigError;
 
-static ENV_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\$\$|\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
-        .expect("env regex is valid")
-});
+#[allow(clippy::expect_used)]
+static ENV_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\$\$|\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}").expect("env regex is valid"));
 
 /// Apply env substitution to `src`. Unknown variables without a default
 /// produce `EnvMissing`. Double-dollar `$$` is preserved as literal `$`.
 /// Each substituted value is checked for characters that would break YAML
 /// structure (colon-space, space-hash, newlines, unbalanced quotes).
 pub(crate) fn substitute(src: &str) -> Result<String, ConfigError> {
-
     let mut missing: Option<String> = None;
     let mut out = String::with_capacity(src.len());
     let mut last_end = 0;

@@ -33,7 +33,7 @@ tokio-postgres     = "0.7"
 deadpool-postgres  = "0.14"
 # optional, gated behind `e2e` feature; lives under [dependencies] because
 # cargo does not allow optional [dev-dependencies].
-testcontainers = { version = "0.20", optional = true }
+testcontainers = { version = "0.27", optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros", "rt-multi-thread"] }

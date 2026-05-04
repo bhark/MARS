@@ -85,9 +85,9 @@ mod tests {
     }
 
     fn decode(bytes: &[u8]) -> (u32, u32, Vec<u8>) {
-        let dec = png::Decoder::new(bytes);
+        let dec = png::Decoder::new(std::io::Cursor::new(bytes));
         let mut reader = dec.read_info().unwrap();
-        let mut buf = vec![0; reader.output_buffer_size()];
+        let mut buf = vec![0; reader.output_buffer_size().unwrap()];
         let info = reader.next_frame(&mut buf).unwrap();
         buf.truncate(info.buffer_size());
         (info.width, info.height, buf)

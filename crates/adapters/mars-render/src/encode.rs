@@ -9,7 +9,7 @@ pub(crate) fn encode_png(pm: &Pixmap) -> Result<Vec<u8>, RenderError> {
         let mut enc = png::Encoder::new(&mut out, pm.width(), pm.height());
         enc.set_color(png::ColorType::Rgba);
         enc.set_depth(png::BitDepth::Eight);
-        enc.set_compression(png::Compression::Default);
+        enc.set_compression(png::Compression::Balanced);
         let mut writer = enc
             .write_header()
             .map_err(|e| RenderError::Encode(format!("png header: {e}")))?;

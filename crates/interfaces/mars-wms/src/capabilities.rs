@@ -103,7 +103,7 @@ fn text_element<W: std::io::Write>(w: &mut Writer<W>, name: &str, text: &str) ->
     Ok(())
 }
 
-fn xml_err(e: quick_xml::Error) -> WmsError {
+fn xml_err(e: std::io::Error) -> WmsError {
     WmsError::InvalidParam {
         name: "capabilities",
         reason: e.to_string(),
