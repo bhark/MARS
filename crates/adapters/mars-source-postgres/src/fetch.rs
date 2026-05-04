@@ -240,7 +240,23 @@ impl ToSql for SqlParam {
         match self {
             SqlParam::Null => Ok(tokio_postgres::types::IsNull::Yes),
             SqlParam::Bool(b) => b.to_sql(ty, out),
-            SqlParam::Int(i) => i.to_sql(ty, out),
+            SqlParam::Int(i) => match *ty {
+                // postgres binds parameters by exact wire type; an i64 sent
+                // for an INT4 slot trips "incorrect binary data format". narrow
+                // when we know the target is smaller. lossy conversions are
+                // rejected up front rather than silently truncating.
+                Type::INT2 => i16::try_from(*i)
+                    .map_err(|_| -> Box<dyn std::error::Error + Sync + Send> {
+                        format!("int {i} out of range for INT2").into()
+                    })?
+                    .to_sql(ty, out),
+                Type::INT4 => i32::try_from(*i)
+                    .map_err(|_| -> Box<dyn std::error::Error + Sync + Send> {
+                        format!("int {i} out of range for INT4").into()
+                    })?
+                    .to_sql(ty, out),
+                _ => i.to_sql(ty, out),
+            },
             SqlParam::Float(f) => f.to_sql(ty, out),
             SqlParam::Text(s) => s.to_sql(ty, out),
         }
