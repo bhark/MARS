@@ -6,6 +6,7 @@
 
 use std::sync::Arc;
 
+use futures_util::stream::{self, StreamExt};
 use mars_config::Config;
 use mars_source::{ChangeFeed, Source};
 use mars_store::{ManifestPublisher, ObjectStore};
@@ -67,11 +68,20 @@ impl Compiler {
         tracing::info!(task_count = tasks.len(), "compiler: snapshot plan built");
 
         let mut output = snapshot::SnapshotOutput::default();
-        for task in &tasks {
+        let source = self.deps.source.clone();
+        let store = self.deps.store.clone();
+        let mut stream = stream::iter(tasks)
+            .map(|task| {
+                let source = source.clone();
+                let store = store.clone();
+                async move { snapshot::run_task(&task, &source, &store).await }
+            })
+            .buffer_unordered(4);
+        while let Some(result) = stream.next().await {
             if shutdown.is_cancelled() {
                 return Ok(());
             }
-            let part = snapshot::run_task(task, &self.deps.source, &self.deps.store).await?;
+            let part = result?;
             output.extend(part);
         }
 

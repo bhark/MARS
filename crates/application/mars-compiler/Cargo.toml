@@ -28,6 +28,7 @@ thiserror          = { workspace = true }
 bytes              = { workspace = true }
 serde_json         = { workspace = true }
 async-trait        = { workspace = true }
+futures-util       = { workspace = true }
 
 [dev-dependencies]
 mars-store-fs      = { workspace = true }
