@@ -11,6 +11,7 @@ pub mod state;
 
 use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::Duration;
 
 use arc_swap::ArcSwapOption;
 use futures_util::{StreamExt, stream};
@@ -19,6 +20,7 @@ use mars_store::{LocalCache, ManifestWatch, ObjectStore};
 use mars_style::Stylesheet;
 use mars_types::{ArtifactEntry, ArtifactKey, Bbox, CrsCode, ImageFormat, LayerId};
 use tokio::task::JoinHandle;
+use tokio::time::timeout;
 
 pub use plan::denom_from_plan;
 pub use state::RuntimeState;
@@ -225,6 +227,7 @@ pub async fn run_manifest_reload_loop(
 
         if let Some(task) = warming.take() {
             task.abort();
+            let _ = timeout(Duration::from_secs(30), task).await;
         }
         warming = Some(spawn_warming(
             runtime.deps.cache.clone(),
