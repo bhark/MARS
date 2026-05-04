@@ -129,7 +129,14 @@ impl ArtifactReader {
                 .file_offset
                 .checked_add(s.length)
                 .ok_or(ArtifactError::Malformed("section span overflow"))?;
-            if (s.file_offset as usize) < HEADER_LEN || (end as usize) > footer_start {
+            let file_offset: usize = s
+                .file_offset
+                .try_into()
+                .map_err(|_| ArtifactError::Malformed("file_offset too large"))?;
+            let end_usize: usize = end
+                .try_into()
+                .map_err(|_| ArtifactError::Malformed("section end too large"))?;
+            if file_offset < HEADER_LEN || end_usize > footer_start {
                 return Err(ArtifactError::Malformed("section out of range"));
             }
         }
@@ -175,7 +182,11 @@ impl ArtifactReader {
             .ok_or(ArtifactError::SectionMissing(kind))?;
 
         // re-read the section header to enforce compressed-flag check
-        let hdr_off = (entry.file_offset as usize)
+        let file_offset: usize = entry
+            .file_offset
+            .try_into()
+            .map_err(|_| ArtifactError::Malformed("section offset too large"))?;
+        let hdr_off = file_offset
             .checked_sub(crate::section::SECTION_HEADER_LEN)
             .ok_or(ArtifactError::Malformed("section header underflow"))?;
         let hdr = crate::section::SectionHeader::read(&self.bytes[hdr_off..])?;
@@ -186,8 +197,12 @@ impl ArtifactReader {
             return Err(ArtifactError::CompressedNotSupported);
         }
 
-        let start = entry.file_offset as usize;
-        let end = start + entry.length as usize;
+        let length: usize = entry
+            .length
+            .try_into()
+            .map_err(|_| ArtifactError::Malformed("section length too large"))?;
+        let start = file_offset;
+        let end = start + length;
         Ok(self.bytes.slice(start..end))
     }
 }

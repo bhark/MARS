@@ -60,8 +60,14 @@ fn write_ring(out: &mut Vec<u8>, ring: &[Coord]) {
     }
 }
 
+fn read_uvarint_usize(buf: &[u8], pos: &mut usize) -> Result<usize, ArtifactError> {
+    read_uvarint(buf, pos)?
+        .try_into()
+        .map_err(|_| ArtifactError::Malformed("count exceeds usize"))
+}
+
 fn read_ring(buf: &[u8], pos: &mut usize) -> Result<Vec<Coord>, ArtifactError> {
-    let n = read_uvarint(buf, pos)? as usize;
+    let n = read_uvarint_usize(buf, pos)?;
     if n == 0 {
         return Ok(Vec::new());
     }
@@ -124,7 +130,7 @@ fn read_geom(geom_type: u8, buf: &[u8], pos: &mut usize) -> Result<GeomKind, Art
         }
         GT_LINESTRING => GeomKind::LineString(read_ring(buf, pos)?),
         GT_POLYGON => {
-            let n = read_uvarint(buf, pos)? as usize;
+            let n = read_uvarint_usize(buf, pos)?;
             let mut rings = Vec::with_capacity(n);
             for _ in 0..n {
                 rings.push(read_ring(buf, pos)?);
@@ -132,7 +138,7 @@ fn read_geom(geom_type: u8, buf: &[u8], pos: &mut usize) -> Result<GeomKind, Art
             GeomKind::Polygon(rings)
         }
         GT_MULTIPOINT => {
-            let n = read_uvarint(buf, pos)? as usize;
+            let n = read_uvarint_usize(buf, pos)?;
             let mut pts = Vec::with_capacity(n);
             for _ in 0..n {
                 let x = read_ivarint(buf, pos)?;
@@ -142,7 +148,7 @@ fn read_geom(geom_type: u8, buf: &[u8], pos: &mut usize) -> Result<GeomKind, Art
             GeomKind::MultiPoint(pts)
         }
         GT_MULTILINESTRING => {
-            let n = read_uvarint(buf, pos)? as usize;
+            let n = read_uvarint_usize(buf, pos)?;
             let mut parts = Vec::with_capacity(n);
             for _ in 0..n {
                 parts.push(read_ring(buf, pos)?);
@@ -150,10 +156,10 @@ fn read_geom(geom_type: u8, buf: &[u8], pos: &mut usize) -> Result<GeomKind, Art
             GeomKind::MultiLineString(parts)
         }
         GT_MULTIPOLYGON => {
-            let n = read_uvarint(buf, pos)? as usize;
+            let n = read_uvarint_usize(buf, pos)?;
             let mut polys = Vec::with_capacity(n);
             for _ in 0..n {
-                let m = read_uvarint(buf, pos)? as usize;
+                let m = read_uvarint_usize(buf, pos)?;
                 let mut rings = Vec::with_capacity(m);
                 for _ in 0..m {
                     rings.push(read_ring(buf, pos)?);
