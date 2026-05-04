@@ -73,7 +73,9 @@ async fn build_source_artifact(
         features.push(f);
     }
     let mut writer = ArtifactWriter::new(ArtifactKind::Source);
-    writer.add_geometry_payload(&features);
+    writer
+        .add_geometry_payload(&features)
+        .map_err(|e| CompilerError::Artifact(e.to_string()))?;
     writer.set_bbox(acc.into_bbox());
     writer.set_feature_count(features.len() as u64);
     let bytes = writer
@@ -204,9 +206,11 @@ impl BboxAcc {
 }
 
 fn hex32(b: &[u8; 32]) -> String {
+    use std::fmt::Write;
     let mut s = String::with_capacity(64);
     for byte in b {
-        s.push_str(&format!("{byte:02x}"));
+        // infallible: pre-allocated string
+        let _ = write!(s, "{byte:02x}");
     }
     s
 }

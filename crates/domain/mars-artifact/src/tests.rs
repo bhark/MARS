@@ -79,7 +79,7 @@ proptest! {
 
     #[test]
     fn geometry_payload_roundtrip(features in features_strategy()) {
-        let bytes = encode_geometry_payload(&features);
+        let bytes = encode_geometry_payload(&features).unwrap();
         let back = decode_geometry_payload(&bytes).unwrap();
         prop_assert_eq!(features.len(), back.len());
         for (a, b) in features.iter().zip(&back) {
@@ -91,8 +91,8 @@ proptest! {
 
     #[test]
     fn geometry_payload_deterministic(features in features_strategy()) {
-        let a = encode_geometry_payload(&features);
-        let b = encode_geometry_payload(&features);
+        let a = encode_geometry_payload(&features).unwrap();
+        let b = encode_geometry_payload(&features).unwrap();
         prop_assert_eq!(a, b);
     }
 }
@@ -104,7 +104,7 @@ fn empty_geometries_roundtrip() {
         FeatureGeom { id: 1, bbox: [0.0; 4], geom: GeomKind::Polygon(vec![]) },
         FeatureGeom { id: 2, bbox: [0.0; 4], geom: GeomKind::MultiPolygon(vec![]) },
     ];
-    let bytes = encode_geometry_payload(&features);
+    let bytes = encode_geometry_payload(&features).unwrap();
     let back = decode_geometry_payload(&bytes).unwrap();
     assert_eq!(features.len(), back.len());
     for (a, b) in features.iter().zip(&back) {
@@ -138,7 +138,7 @@ fn build_simple_artifact() -> Bytes {
         },
     ];
     let mut w = ArtifactWriter::new(ArtifactKind::Source);
-    w.add_geometry_payload(&features)
+    w.add_geometry_payload(&features).unwrap()
         .set_bbox(Bbox::new(0.0, 0.0, 10.0, 10.0))
         .set_feature_count(1);
     w.finish().unwrap()

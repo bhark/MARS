@@ -20,7 +20,7 @@ pub fn parse_request(query: &str, cfg: &WmsConfig) -> Result<WmsRequest, WmsErro
         )?)),
         s if s.eq_ignore_ascii_case("GetCapabilities") => Ok(WmsRequest::GetCapabilities),
         other => Err(WmsError::NotImplemented {
-            what: leak_static(&format!("WMS request={other}")),
+            what: format!("WMS request={other}"),
         }),
     }
 }
@@ -224,11 +224,6 @@ fn parse_bbox(raw: &str, crs: &str) -> Result<Bbox, WmsError> {
         });
     }
     Ok(Bbox::new(min_x, min_y, max_x, max_y))
-}
-
-// for NotImplemented we need a 'static str; this is a rare diagnostic path.
-fn leak_static(s: &str) -> &'static str {
-    Box::leak(s.to_owned().into_boxed_str())
 }
 
 #[cfg(test)]

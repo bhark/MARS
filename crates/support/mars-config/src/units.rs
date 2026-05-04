@@ -38,7 +38,7 @@ pub fn parse_bytes(input: &str) -> Result<u64, ConfigError> {
     if !bytes.is_finite() || bytes > (u64::MAX as f64) {
         return Err(ConfigError::Invalid(format!("size out of range: {input}")));
     }
-    Ok(bytes as u64)
+    Ok(bytes.round() as u64)
 }
 
 /// Parse a metric distance like `4096m`, `2.5km`. Returns metres.

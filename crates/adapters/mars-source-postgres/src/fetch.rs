@@ -239,7 +239,10 @@ impl ToSql for SqlParam {
     {
         match self {
             SqlParam::Null => Ok(tokio_postgres::types::IsNull::Yes),
-            SqlParam::Bool(b) => b.to_sql(ty, out),
+            SqlParam::Bool(b) => match *ty {
+                Type::BOOL => b.to_sql(ty, out),
+                _ => Err(format!("cannot bind bool to {ty}").into()),
+            },
             SqlParam::Int(i) => match *ty {
                 // postgres binds parameters by exact wire type; an i64 sent
                 // for an INT4 slot trips "incorrect binary data format". narrow
@@ -255,10 +258,20 @@ impl ToSql for SqlParam {
                         format!("int {i} out of range for INT4").into()
                     })?
                     .to_sql(ty, out),
-                _ => i.to_sql(ty, out),
+                Type::INT8 => i.to_sql(ty, out),
+                _ => Err(format!("cannot bind integer to {ty}").into()),
             },
-            SqlParam::Float(f) => f.to_sql(ty, out),
-            SqlParam::Text(s) => s.to_sql(ty, out),
+            SqlParam::Float(f) => match *ty {
+                Type::FLOAT4 => (*f as f32).to_sql(ty, out),
+                Type::FLOAT8 => f.to_sql(ty, out),
+                _ => Err(format!("cannot bind float to {ty}").into()),
+            },
+            SqlParam::Text(s) => match *ty {
+                Type::TEXT | Type::VARCHAR | Type::BPCHAR | Type::NAME => {
+                    s.to_sql(ty, out)
+                }
+                _ => Err(format!("cannot bind text to {ty}").into()),
+            },
         }
     }
 

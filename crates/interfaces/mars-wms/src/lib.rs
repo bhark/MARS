@@ -22,7 +22,7 @@ pub enum WmsError {
     #[error("invalid parameter `{name}`: {reason}")]
     InvalidParam { name: &'static str, reason: String },
     #[error("not implemented: {what}")]
-    NotImplemented { what: &'static str },
+    NotImplemented { what: String },
 }
 
 /// Per-request configuration distilled from the service [`Config`]. The edge

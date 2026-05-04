@@ -62,7 +62,7 @@ fn build_source_bytes() -> Bytes {
     let features: Vec<FeatureGeom> = (0..5).map(|i| make_polygon(i, 20.0 * i as f64)).collect();
     let bbox = Bbox::new(0.0, 0.0, 100.0, 10.0);
     let mut w = ArtifactWriter::new(ArtifactKind::Source);
-    w.add_geometry_payload(&features)
+    w.add_geometry_payload(&features).unwrap()
         .set_bbox(bbox)
         .set_feature_count(features.len() as u64);
     w.finish().unwrap()

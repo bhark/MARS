@@ -182,20 +182,36 @@ const FEATURE_INDEX_ENTRY_LEN: usize = 8 + 4 * 4 + 1 + 4 + 4;
 /// encode features into the geometry-payload section bytes.
 /// requires features sorted by id ascending (caller's responsibility for determinism).
 #[must_use]
-pub fn encode_geometry_payload(features: &[FeatureGeom]) -> Bytes {
+pub fn encode_geometry_payload(features: &[FeatureGeom]) -> Result<Bytes, ArtifactError> {
     // pack coord blocks first to learn their offsets, then write index + blocks
     let mut coord_blocks: Vec<Vec<u8>> = Vec::with_capacity(features.len());
-    let mut total_coord_bytes = 0u32;
+    let mut total_coord_bytes: usize = 0;
     for f in features {
         let mut buf = Vec::new();
         write_geom(&mut buf, &f.geom);
-        total_coord_bytes = total_coord_bytes.saturating_add(buf.len() as u32);
+        total_coord_bytes = total_coord_bytes
+            .checked_add(buf.len())
+            .ok_or(ArtifactError::Malformed("geometry payload too large"))?;
         coord_blocks.push(buf);
     }
 
-    let header_len = 4 + features.len() * FEATURE_INDEX_ENTRY_LEN;
-    let mut out = Vec::with_capacity(header_len + total_coord_bytes as usize);
-    out.extend_from_slice(&(features.len() as u32).to_le_bytes());
+    let header_len = 4usize
+        .checked_add(
+            features
+                .len()
+                .checked_mul(FEATURE_INDEX_ENTRY_LEN)
+                .ok_or(ArtifactError::Malformed("geometry payload too large"))?,
+        )
+        .ok_or(ArtifactError::Malformed("geometry payload too large"))?;
+    let total_len = header_len
+        .checked_add(total_coord_bytes)
+        .ok_or(ArtifactError::Malformed("geometry payload too large"))?;
+    let mut out = Vec::with_capacity(total_len);
+    out.extend_from_slice(
+        &(u32::try_from(features.len())
+            .map_err(|_| ArtifactError::Malformed("too many features"))?)
+        .to_le_bytes(),
+    );
 
     let mut running_offset: u32 = 0;
     for (f, block) in features.iter().zip(&coord_blocks) {
@@ -205,14 +221,17 @@ pub fn encode_geometry_payload(features: &[FeatureGeom]) -> Bytes {
         }
         out.push(geom_type_byte(&f.geom));
         out.extend_from_slice(&running_offset.to_le_bytes());
-        let len = block.len() as u32;
+        let len = u32::try_from(block.len())
+            .map_err(|_| ArtifactError::Malformed("geometry section too large"))?;
         out.extend_from_slice(&len.to_le_bytes());
-        running_offset = running_offset.saturating_add(len);
+        running_offset = running_offset
+            .checked_add(len)
+            .ok_or(ArtifactError::Malformed("geometry payload too large"))?;
     }
     for block in &coord_blocks {
         out.extend_from_slice(block);
     }
-    Bytes::from(out)
+    Ok(Bytes::from(out))
 }
 
 pub fn decode_geometry_payload(bytes: &[u8]) -> Result<Vec<FeatureGeom>, ArtifactError> {

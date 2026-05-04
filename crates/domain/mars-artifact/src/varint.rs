@@ -19,12 +19,27 @@ pub(crate) fn read_uvarint(buf: &[u8], pos: &mut usize) -> Result<u64, ArtifactE
         }
         let b = buf[*pos];
         *pos += 1;
-        result |= u64::from(b & 0x7F) << shift;
+        let payload = u64::from(b & 0x7F);
+
+        if shift == 63 {
+            // 10th and final byte: only bit 63 remains; payload must be 0 or 1,
+            // and there must be no continuation bit.
+            if b & 0x80 != 0 {
+                return Err(ArtifactError::Malformed("varint overflow"));
+            }
+            if payload > 1 {
+                return Err(ArtifactError::Malformed("varint overflow"));
+            }
+            result |= payload << shift;
+            return Ok(result);
+        }
+
+        result |= payload << shift;
         if b & 0x80 == 0 {
             return Ok(result);
         }
         shift += 7;
-        if shift >= 64 {
+        if shift > 63 {
             return Err(ArtifactError::Malformed("varint overflow"));
         }
     }

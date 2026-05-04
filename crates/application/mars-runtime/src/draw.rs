@@ -21,8 +21,8 @@ pub(crate) struct Viewport {
 
 impl Viewport {
     fn project(self, x: f64, y: f64) -> (f32, f32) {
-        let w = self.bbox.width().max(f64::EPSILON);
-        let h = self.bbox.height().max(f64::EPSILON);
+        let w = self.bbox.width();
+        let h = self.bbox.height();
         let px = (x - self.bbox.min_x) / w * f64::from(self.width);
         // invert Y: world y grows up, pixel y grows down
         let py = (self.bbox.max_y - y) / h * f64::from(self.height);
@@ -49,6 +49,12 @@ pub(crate) fn emit_layer_cell(
     viewport: Viewport,
     out: &mut Vec<DrawOp>,
 ) -> Result<(), RuntimeError> {
+    if viewport.bbox.width() == 0.0 || viewport.bbox.height() == 0.0 {
+        // defensive: zero-area viewport produces no draw ops. upstream parsers
+        // (wms) already reject this, but non-wms callers may construct a plan
+        // directly.
+        return Ok(());
+    }
     let geom_section = source.section(SectionKind::GeometryPayload)?;
     let features = decode_geometry_payload(&geom_section)?;
 

@@ -196,6 +196,9 @@ impl ArtifactReader {
             .checked_sub(crate::section::SECTION_HEADER_LEN)
             .ok_or(ArtifactError::Malformed("section header underflow"))?;
         let hdr = crate::section::SectionHeader::read(&self.bytes[hdr_off..])?;
+        if hdr.kind != target {
+            return Err(ArtifactError::Malformed("section kind mismatch"));
+        }
         if hdr.flags & FLAG_COMPRESSED != 0 {
             return Err(ArtifactError::CompressedNotSupported);
         }

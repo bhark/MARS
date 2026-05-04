@@ -46,9 +46,9 @@ impl ArtifactWriter {
         self
     }
 
-    pub fn add_geometry_payload(&mut self, features: &[FeatureGeom]) -> &mut Self {
-        let bytes = geometry::encode_geometry_payload(features);
-        self.add_section(SectionKind::GeometryPayload, bytes)
+    pub fn add_geometry_payload(&mut self, features: &[FeatureGeom]) -> Result<&mut Self, ArtifactError> {
+        let bytes = geometry::encode_geometry_payload(features)?;
+        Ok(self.add_section(SectionKind::GeometryPayload, bytes))
     }
 
     pub fn add_class_assignment(&mut self, items: &[(u64, u16)]) -> &mut Self {
