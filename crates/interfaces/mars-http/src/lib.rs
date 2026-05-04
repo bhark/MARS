@@ -200,9 +200,8 @@ mod tests {
     #[derive(Debug)]
     struct NoopRenderer;
 
-    #[async_trait::async_trait]
     impl Renderer for NoopRenderer {
-        async fn render(
+        fn render(
             &self,
             _canvas: Canvas,
             _ops: &[mars_render_port::DrawOp],

@@ -14,5 +14,4 @@ workspace = true
 [dependencies]
 mars-types  = { workspace = true }
 mars-style  = { workspace = true }
-async-trait = { workspace = true }
 thiserror   = { workspace = true }

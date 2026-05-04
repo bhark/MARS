@@ -14,12 +14,10 @@ workspace = true
 [dependencies]
 mars-render-port = { workspace = true }
 mars-style       = { workspace = true }
-async-trait      = { workspace = true }
 thiserror        = { workspace = true }
 tracing          = { workspace = true }
 tiny-skia        = "0.12"
 png              = "0.18"
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt", "macros"] }
 png   = "0.18"

@@ -172,7 +172,12 @@ impl Runtime {
             height: plan.height,
             background: None,
         };
-        let bytes = self.deps.renderer.render(canvas, &ops, plan.format).await?;
+        let renderer = self.deps.renderer.clone();
+        let ops = ops.clone();
+        let format = plan.format;
+        let bytes = tokio::task::spawn_blocking(move || renderer.render(canvas, &ops, format))
+            .await
+            .map_err(|e| RuntimeError::Render(mars_render_port::RenderError::Backend(format!("render task panicked: {e}"))))??;
         Ok(bytes)
     }
 }

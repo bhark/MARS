@@ -6,7 +6,6 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-use async_trait::async_trait;
 use mars_style::Style;
 
 pub use mars_types::ImageFormat;
@@ -70,9 +69,11 @@ pub struct Canvas {
 
 /// Renderer port. Implementations may keep internal scratch buffers across
 /// calls and must remain `Send + Sync` for use from the runtime task pool.
-#[async_trait]
+///
+/// `render` is intentionally synchronous: rasterisation is cpu-bound work
+/// that should run on a blocking thread pool, not the async executor.
 pub trait Renderer: Send + Sync + 'static {
     /// Rasterise `ops` onto `canvas` and encode to `format`. Returns the
     /// encoded image bytes.
-    async fn render(&self, canvas: Canvas, ops: &[DrawOp], format: ImageFormat) -> Result<Vec<u8>, RenderError>;
+    fn render(&self, canvas: Canvas, ops: &[DrawOp], format: ImageFormat) -> Result<Vec<u8>, RenderError>;
 }

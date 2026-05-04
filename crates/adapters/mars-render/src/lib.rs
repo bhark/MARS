@@ -6,16 +6,14 @@
 mod encode;
 mod raster;
 
-use async_trait::async_trait;
 use mars_render_port::{Canvas, DrawOp, ImageFormat, RenderError, Renderer};
 use tiny_skia::Pixmap;
 
 #[derive(Debug, Default)]
 pub struct TinySkiaRenderer;
 
-#[async_trait]
 impl Renderer for TinySkiaRenderer {
-    async fn render(&self, canvas: Canvas, ops: &[DrawOp], format: ImageFormat) -> Result<Vec<u8>, RenderError> {
+    fn render(&self, canvas: Canvas, ops: &[DrawOp], format: ImageFormat) -> Result<Vec<u8>, RenderError> {
         if !matches!(format, ImageFormat::Png) {
             return Err(RenderError::NotImplemented {
                 what: "jpeg encoding deferred to Phase 1",
@@ -93,8 +91,8 @@ mod tests {
         (info.width, info.height, buf)
     }
 
-    #[tokio::test]
-    async fn determinism_byte_exact() {
+    #[test]
+    fn determinism_byte_exact() {
         let r = TinySkiaRenderer;
         let canvas = Canvas {
             width: 64,
@@ -108,13 +106,13 @@ mod tests {
                 ..Default::default()
             },
         }];
-        let a = r.render(canvas, &ops, ImageFormat::Png).await.unwrap();
-        let b = r.render(canvas, &ops, ImageFormat::Png).await.unwrap();
+        let a = r.render(canvas, &ops, ImageFormat::Png).unwrap();
+        let b = r.render(canvas, &ops, ImageFormat::Png).unwrap();
         assert_eq!(a, b, "renderer must be deterministic");
     }
 
-    #[tokio::test]
-    async fn filled_polygon_red_pixels() {
+    #[test]
+    fn filled_polygon_red_pixels() {
         let r = TinySkiaRenderer;
         let canvas = Canvas {
             width: 64,
@@ -128,7 +126,7 @@ mod tests {
                 ..Default::default()
             },
         }];
-        let png_bytes = r.render(canvas, &ops, ImageFormat::Png).await.unwrap();
+        let png_bytes = r.render(canvas, &ops, ImageFormat::Png).unwrap();
         let (_, _, rgba) = decode(&png_bytes);
         let red_count = rgba
             .chunks_exact(4)
@@ -137,8 +135,8 @@ mod tests {
         assert!(red_count > 800, "expected >800 red pixels, got {red_count}");
     }
 
-    #[tokio::test]
-    async fn stroked_line_has_pixels() {
+    #[test]
+    fn stroked_line_has_pixels() {
         let r = TinySkiaRenderer;
         let canvas = Canvas {
             width: 64,
@@ -156,7 +154,7 @@ mod tests {
                 ..Default::default()
             },
         }];
-        let png_bytes = r.render(canvas, &ops, ImageFormat::Png).await.unwrap();
+        let png_bytes = r.render(canvas, &ops, ImageFormat::Png).unwrap();
         let (w, _, rgba) = decode(&png_bytes);
         let row = 32usize * w as usize * 4;
         let on_row: usize = rgba[row..row + w as usize * 4]
@@ -166,8 +164,8 @@ mod tests {
         assert!(on_row >= 40, "expected stroked pixels on row 32, got {on_row}");
     }
 
-    #[tokio::test]
-    async fn transparent_vs_opaque_background() {
+    #[test]
+    fn transparent_vs_opaque_background() {
         let r = TinySkiaRenderer;
 
         let c1 = Canvas {
@@ -175,7 +173,7 @@ mod tests {
             height: 4,
             background: None,
         };
-        let png1 = r.render(c1, &[], ImageFormat::Png).await.unwrap();
+        let png1 = r.render(c1, &[], ImageFormat::Png).unwrap();
         let (_, _, rgba1) = decode(&png1);
         assert_eq!(rgba1[3], 0, "transparent bg → first pixel alpha 0");
 
@@ -184,14 +182,14 @@ mod tests {
             height: 4,
             background: Some(white()),
         };
-        let png2 = r.render(c2, &[], ImageFormat::Png).await.unwrap();
+        let png2 = r.render(c2, &[], ImageFormat::Png).unwrap();
         let (_, _, rgba2) = decode(&png2);
         assert_eq!(rgba2[3], 255, "opaque bg → first pixel alpha 255");
         assert_eq!(&rgba2[0..3], &[255, 255, 255]);
     }
 
-    #[tokio::test]
-    async fn label_op_is_skipped_not_errored() {
+    #[test]
+    fn label_op_is_skipped_not_errored() {
         let r = TinySkiaRenderer;
         let canvas = Canvas {
             width: 8,
@@ -203,24 +201,24 @@ mod tests {
             text: "hi".into(),
             style_ref: "x".into(),
         }];
-        let res = r.render(canvas, &ops, ImageFormat::Png).await;
+        let res = r.render(canvas, &ops, ImageFormat::Png);
         assert!(res.is_ok(), "label op should be skipped, not error: {res:?}");
     }
 
-    #[tokio::test]
-    async fn jpeg_returns_not_implemented() {
+    #[test]
+    fn jpeg_returns_not_implemented() {
         let r = TinySkiaRenderer;
         let canvas = Canvas {
             width: 4,
             height: 4,
             background: None,
         };
-        let res = r.render(canvas, &[], ImageFormat::Jpeg).await;
+        let res = r.render(canvas, &[], ImageFormat::Jpeg);
         assert!(matches!(res, Err(RenderError::NotImplemented { .. })));
     }
 
-    #[tokio::test]
-    async fn golden_square_matches() {
+    #[test]
+    fn golden_square_matches() {
         let r = TinySkiaRenderer;
         let canvas = Canvas {
             width: 64,
@@ -234,7 +232,7 @@ mod tests {
                 ..Default::default()
             },
         }];
-        let actual = r.render(canvas, &ops, ImageFormat::Png).await.unwrap();
+        let actual = r.render(canvas, &ops, ImageFormat::Png).unwrap();
 
         let golden_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/square.png");
         if std::env::var("MARS_UPDATE_GOLDEN").is_ok() || !golden_path.exists() {

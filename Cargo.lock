@@ -1808,7 +1808,6 @@ dependencies = [
 name = "mars-http"
 version = "0.0.1"
 dependencies = [
- "async-trait",
  "axum",
  "mars-config",
  "mars-observability",
@@ -1856,13 +1855,11 @@ dependencies = [
 name = "mars-render"
 version = "0.0.1"
 dependencies = [
- "async-trait",
  "mars-render-port",
  "mars-style",
  "png",
  "thiserror",
  "tiny-skia",
- "tokio",
  "tracing",
 ]
 
@@ -1870,7 +1867,6 @@ dependencies = [
 name = "mars-render-port"
 version = "0.0.1"
 dependencies = [
- "async-trait",
  "mars-style",
  "mars-types",
  "thiserror",
