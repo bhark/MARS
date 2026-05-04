@@ -115,15 +115,22 @@ async fn run_runtime(config_path: &Path) -> Result<()> {
         renderer: Arc::new(TinySkiaRenderer),
     }));
 
-    match read_current_manifest(&publisher) {
-        Ok(Some(manifest)) => match RuntimeState::from_config_and_manifest(&cfg, stylesheet.clone(), manifest) {
+    let manifest_opt = match read_current_manifest(&publisher) {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::warn!(error = %e, "initial manifest unavailable");
+            None
+        }
+    };
+
+    match &manifest_opt {
+        Some(manifest) => match RuntimeState::from_config_and_manifest(&cfg, stylesheet.clone(), manifest.clone()) {
             Ok(state) => runtime.swap_state(Arc::new(state)),
             Err(e) => tracing::warn!(error = %e, "initial manifest rejected"),
         },
-        Ok(None) => {
+        None => {
             tracing::warn!("no manifest published yet; readyz will return 503");
         }
-        Err(e) => tracing::warn!(error = %e, "initial manifest unavailable"),
     }
 
     let watcher: Arc<dyn mars_store::ManifestWatch> = publisher.clone();
@@ -137,7 +144,11 @@ async fn run_runtime(config_path: &Path) -> Result<()> {
         }
     });
 
-    let caps = mars_wms::capabilities_xml(&cfg, &empty_manifest(&cfg)).map_err(|e| anyhow!("capabilities: {e}"))?;
+    let caps = match &manifest_opt {
+        Some(manifest) => mars_wms::capabilities_xml(&cfg, manifest),
+        None => mars_wms::capabilities_xml(&cfg, &empty_manifest(&cfg)),
+    }
+    .map_err(|e| anyhow!("capabilities: {e}"))?;
 
     mars_http::serve(
         mars_http::ServerConfig {
