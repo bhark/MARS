@@ -1,7 +1,6 @@
 //! mars artifact container codec. on-disk layout per SPEC §9.3 / FORMAT.md.
 //! synchronous codec over `&[u8]` / `bytes::Bytes`; async i/o stays in adapters.
 
-
 /// MARS magic bytes - also used as the trailer.
 pub const MAGIC: &[u8; 8] = b"MARS\0\0\0\0";
 

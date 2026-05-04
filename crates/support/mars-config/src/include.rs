@@ -25,8 +25,7 @@ pub(crate) fn load_with_includes(path: &Path) -> Result<Value, ConfigError> {
 }
 
 fn load_inner(path: &Path, stack: &mut HashSet<PathBuf>) -> Result<Value, ConfigError> {
-    let canon = fs::canonicalize(path)
-        .map_err(|e| ConfigError::Io(format!("canonicalize {}: {e}", path.display())))?;
+    let canon = fs::canonicalize(path).map_err(|e| ConfigError::Io(format!("canonicalize {}: {e}", path.display())))?;
     if !stack.insert(canon.clone()) {
         return Err(ConfigError::Invalid(format!(
             "include cycle detected at {}",
@@ -34,11 +33,10 @@ fn load_inner(path: &Path, stack: &mut HashSet<PathBuf>) -> Result<Value, Config
         )));
     }
 
-    let raw = fs::read_to_string(&canon)
-        .map_err(|e| ConfigError::Io(format!("read {}: {e}", canon.display())))?;
+    let raw = fs::read_to_string(&canon).map_err(|e| ConfigError::Io(format!("read {}: {e}", canon.display())))?;
     let expanded = substitute(&raw)?;
-    let mut value: Value = serde_yml::from_str(&expanded)
-        .map_err(|e| ConfigError::Parse(format!("{}: {e}", canon.display())))?;
+    let mut value: Value =
+        serde_yml::from_str(&expanded).map_err(|e| ConfigError::Parse(format!("{}: {e}", canon.display())))?;
 
     let dir = canon.parent().map(Path::to_path_buf).unwrap_or_default();
     resolve(&mut value, &dir, stack)?;
@@ -47,11 +45,7 @@ fn load_inner(path: &Path, stack: &mut HashSet<PathBuf>) -> Result<Value, Config
     Ok(value)
 }
 
-fn resolve(
-    value: &mut Value,
-    base_dir: &Path,
-    stack: &mut HashSet<PathBuf>,
-) -> Result<(), ConfigError> {
+fn resolve(value: &mut Value, base_dir: &Path, stack: &mut HashSet<PathBuf>) -> Result<(), ConfigError> {
     // tagged scalars surface via Value::Tagged in serde_yml
     if let Value::Tagged(tagged) = value
         && tagged.tag == INCLUDE_TAG

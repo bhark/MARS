@@ -26,8 +26,7 @@ impl FsStore {
     pub fn new(root: impl Into<PathBuf>) -> Result<Self, StoreError> {
         let raw = root.into();
         if !raw.exists() {
-            std::fs::create_dir_all(&raw)
-                .map_err(|e| StoreError::Backend(format!("create root: {e}")))?;
+            std::fs::create_dir_all(&raw).map_err(|e| StoreError::Backend(format!("create root: {e}")))?;
         }
         let root = raw
             .canonicalize()
@@ -88,9 +87,7 @@ impl ObjectStore for FsStore {
         tokio::task::spawn_blocking(move || -> Result<(), StoreError> {
             match std::fs::remove_file(&path) {
                 Ok(()) => Ok(()),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    Err(StoreError::NotFound(key_owned))
-                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(StoreError::NotFound(key_owned)),
                 Err(e) => Err(StoreError::Backend(format!("delete: {e}"))),
             }
         })
@@ -120,8 +117,8 @@ impl ObjectStore for FsStore {
 }
 
 fn walk(dir: &Path, root: &Path, out: &mut Vec<String>) -> Result<(), StoreError> {
-    let entries = std::fs::read_dir(dir)
-        .map_err(|e| StoreError::Backend(format!("read_dir {}: {e}", dir.display())))?;
+    let entries =
+        std::fs::read_dir(dir).map_err(|e| StoreError::Backend(format!("read_dir {}: {e}", dir.display())))?;
     for ent in entries {
         let ent = ent.map_err(|e| StoreError::Backend(format!("readdir: {e}")))?;
         let ft = ent
@@ -155,8 +152,7 @@ pub(crate) fn atomic_write(path: &Path, body: &[u8]) -> Result<(), StoreError> {
     let parent = path
         .parent()
         .ok_or_else(|| StoreError::Backend("path has no parent".into()))?;
-    std::fs::create_dir_all(parent)
-        .map_err(|e| StoreError::Backend(format!("mkdir {}: {e}", parent.display())))?;
+    std::fs::create_dir_all(parent).map_err(|e| StoreError::Backend(format!("mkdir {}: {e}", parent.display())))?;
 
     let suffix: String = thread_rng()
         .sample_iter(&Alphanumeric)
@@ -170,12 +166,10 @@ pub(crate) fn atomic_write(path: &Path, body: &[u8]) -> Result<(), StoreError> {
     let tmp = parent.join(format!("{file_name}.tmp.{suffix}"));
 
     {
-        let mut f = std::fs::File::create(&tmp)
-            .map_err(|e| StoreError::Backend(format!("create tmp: {e}")))?;
+        let mut f = std::fs::File::create(&tmp).map_err(|e| StoreError::Backend(format!("create tmp: {e}")))?;
         f.write_all(body)
             .map_err(|e| StoreError::Backend(format!("write: {e}")))?;
-        f.sync_all()
-            .map_err(|e| StoreError::Backend(format!("fsync: {e}")))?;
+        f.sync_all().map_err(|e| StoreError::Backend(format!("fsync: {e}")))?;
     }
 
     std::fs::rename(&tmp, path).map_err(|e| {

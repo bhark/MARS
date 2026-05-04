@@ -38,9 +38,7 @@ pub async fn run_task(
     let mut out = SnapshotOutput::default();
     for cell in &task.cells {
         let bbox = cell_bbox(task.origin, task.cell_size, cell);
-        let rows = source
-            .fetch_cell(&task.binding, cell, bbox, None)
-            .await?;
+        let rows = source.fetch_cell(&task.binding, cell, bbox, None).await?;
         if rows.is_empty() {
             continue;
         }
@@ -51,8 +49,7 @@ pub async fn run_task(
         let (src_entry, src_hash) = build_source_artifact(task, cell, &rows, store).await?;
         out.source_artifacts.push(src_entry);
 
-        let layer_entry =
-            build_layer_artifact(task, cell, &rows, src_hash, store).await?;
+        let layer_entry = build_layer_artifact(task, cell, &rows, src_hash, store).await?;
         out.layer_artifacts.push(layer_entry);
     }
     Ok(out)
@@ -67,8 +64,7 @@ async fn build_source_artifact(
     let mut features = Vec::with_capacity(rows.len());
     let mut acc = BboxAcc::new();
     for row in rows {
-        let f = wkb::decode_feature(row.feature_id, &row.geometry)
-            .map_err(|e| CompilerError::Wkb(e.to_string()))?;
+        let f = wkb::decode_feature(row.feature_id, &row.geometry).map_err(|e| CompilerError::Wkb(e.to_string()))?;
         acc.fold(f.bbox);
         features.push(f);
     }
@@ -78,9 +74,7 @@ async fn build_source_artifact(
         .map_err(|e| CompilerError::Artifact(e.to_string()))?;
     writer.set_bbox(acc.into_bbox());
     writer.set_feature_count(features.len() as u64);
-    let bytes = writer
-        .finish()
-        .map_err(|e| CompilerError::Artifact(e.to_string()))?;
+    let bytes = writer.finish().map_err(|e| CompilerError::Artifact(e.to_string()))?;
     let hash = compute_content_hash(&bytes);
     let key = ArtifactKey::new(format!(
         "src/{coll}/{band}/{cx}_{cy}/{hex}.mars",
@@ -113,9 +107,7 @@ async fn build_layer_artifact(
     let mut assignments: Vec<(u64, u16)> = Vec::with_capacity(rows.len());
     for row in rows {
         let attrs = RowAttrs::new(&row.attributes);
-        if let Some(idx) = first_match(&task.classes, &attrs)
-            .map_err(|e| CompilerError::Expr(e.to_string()))?
-        {
+        if let Some(idx) = first_match(&task.classes, &attrs).map_err(|e| CompilerError::Expr(e.to_string()))? {
             assignments.push((row.feature_id, idx));
         }
     }
@@ -137,9 +129,7 @@ async fn build_layer_artifact(
         cell_y: cell.y,
         content_hash: source_hash,
     });
-    let bytes = writer
-        .finish()
-        .map_err(|e| CompilerError::Artifact(e.to_string()))?;
+    let bytes = writer.finish().map_err(|e| CompilerError::Artifact(e.to_string()))?;
     let hash = compute_content_hash(&bytes);
     let key = ArtifactKey::new(format!(
         "lyr/{layer}/{band}/{cx}_{cy}/v{schema}/{hex}.mars",

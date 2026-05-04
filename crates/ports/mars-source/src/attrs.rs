@@ -223,10 +223,7 @@ mod tests {
     #[test]
     fn oversize_block_rejected() {
         let big = vec![0u8; MAX_ROW_BYTES + 1];
-        assert!(matches!(
-            decode_row(&big),
-            Err(AttrError::TooLarge { .. })
-        ));
+        assert!(matches!(decode_row(&big), Err(AttrError::TooLarge { .. })));
     }
 
     #[test]
@@ -253,7 +250,9 @@ mod tests {
             Just(AttrValue::Null),
             any::<bool>().prop_map(AttrValue::Bool),
             any::<i64>().prop_map(AttrValue::Int),
-            any::<f64>().prop_filter("finite", |f| f.is_finite()).prop_map(AttrValue::Float),
+            any::<f64>()
+                .prop_filter("finite", |f| f.is_finite())
+                .prop_map(AttrValue::Float),
             ".{0,32}".prop_map(AttrValue::String),
         ]
     }

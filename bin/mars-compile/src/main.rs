@@ -33,10 +33,8 @@ fn main() -> Result<()> {
     let _ = cli.once; // accepted for forward-compat; phase-0 pipeline is single-shot.
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     runtime.block_on(async move {
-        let cfg = mars_config::load(&cli.config)
-            .with_context(|| format!("load {}", cli.config.display()))?;
-        mars_config::validate(&cfg, &config_dir(&cli.config))
-            .context("validate config")?;
+        let cfg = mars_config::load(&cli.config).with_context(|| format!("load {}", cli.config.display()))?;
+        mars_config::validate(&cfg, &config_dir(&cli.config)).context("validate config")?;
         run_snapshot(cfg).await
     })
 }
@@ -55,10 +53,7 @@ async fn run_snapshot(cfg: Config) -> Result<()> {
         },
         cfg,
     );
-    compiler
-        .run(CancellationToken::new())
-        .await
-        .map_err(|e| anyhow!(e))
+    compiler.run(CancellationToken::new()).await.map_err(|e| anyhow!(e))
 }
 
 async fn build_source(cfg: &Config) -> Result<Arc<PgSource>> {

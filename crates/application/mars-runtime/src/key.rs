@@ -12,14 +12,8 @@ pub const LAYER_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ParsedKey {
-    Layer {
-        layer: LayerId,
-        cell: Cell,
-    },
-    Source {
-        collection: String,
-        cell: Cell,
-    },
+    Layer { layer: LayerId, cell: Cell },
+    Source { collection: String, cell: Cell },
 }
 
 pub(crate) fn parse(key: &ArtifactKey) -> Result<ParsedKey, RuntimeError> {

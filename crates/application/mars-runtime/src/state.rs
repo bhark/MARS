@@ -66,8 +66,7 @@ impl RuntimeState {
         for entry in &manifest.source_artifacts {
             match parse(&entry.key)? {
                 ParsedKey::Source { collection, cell } => {
-                    source_index
-                        .insert((collection, cell.band, (cell.x, cell.y)), entry.clone());
+                    source_index.insert((collection, cell.band, (cell.x, cell.y)), entry.clone());
                 }
                 ParsedKey::Layer { .. } => {
                     return Err(RuntimeError::BadKey(format!(
@@ -98,12 +97,11 @@ fn build_bands(config: &Config) -> Result<Vec<BandConfig>, RuntimeError> {
     let origin = (config.cells.origin[0], config.cells.origin[1]);
     let mut out = Vec::with_capacity(config.scales.bands.len());
     for b in &config.scales.bands {
-        let cell_size = *sizes.get(&b.name).ok_or_else(|| {
-            RuntimeError::Config(format!("no cells.size_per_band for band '{}'", b.name))
-        })?;
-        let max_denom = u32::try_from(b.max_denom).map_err(|_| {
-            RuntimeError::Config(format!("band '{}' max_denom out of u32 range", b.name))
-        })?;
+        let cell_size = *sizes
+            .get(&b.name)
+            .ok_or_else(|| RuntimeError::Config(format!("no cells.size_per_band for band '{}'", b.name)))?;
+        let max_denom = u32::try_from(b.max_denom)
+            .map_err(|_| RuntimeError::Config(format!("band '{}' max_denom out of u32 range", b.name)))?;
         out.push(BandConfig {
             name: ScaleBand::new(b.name.clone()),
             max_denom,

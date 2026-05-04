@@ -59,10 +59,7 @@ impl WmsConfig {
             })
             .filter(|v| !v.is_empty())
             .unwrap_or_else(|| vec![ImageFormat::Png]);
-        Self {
-            allowlist_crs,
-            formats,
-        }
+        Self { allowlist_crs, formats }
     }
 }
 

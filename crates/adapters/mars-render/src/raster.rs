@@ -2,9 +2,7 @@
 
 use mars_render_port::Path as PortPath;
 use mars_style::{Colour, LineCap as SLineCap, LineJoin as SLineJoin, Style};
-use tiny_skia::{
-    Color, FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Stroke, StrokeDash, Transform,
-};
+use tiny_skia::{Color, FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Stroke, StrokeDash, Transform};
 
 /// build a tiny-skia path from port rings. each ring is closed after its last vertex.
 /// returns None if no ring has at least 2 points (tiny-skia rejects empty paths).

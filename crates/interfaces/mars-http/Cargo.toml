@@ -27,3 +27,6 @@ thiserror          = { workspace = true }
 
 [dev-dependencies]
 tower              = { version = "0.5", features = ["util"] }
+async-trait        = { workspace = true }
+mars-render-port   = { workspace = true }
+mars-store         = { workspace = true }

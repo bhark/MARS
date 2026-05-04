@@ -10,10 +10,8 @@ fn main() {
     let schema = manifest_dir.join("schemas/footer.fbs");
     println!("cargo:rerun-if-changed={}", schema.display());
 
-    let declarations =
-        planus_translation::translate_files(&[&schema]).expect("translate footer.fbs");
-    let generated =
-        planus_codegen::generate_rust(&declarations, true).expect("planus rust codegen");
+    let declarations = planus_translation::translate_files(&[&schema]).expect("translate footer.fbs");
+    let generated = planus_codegen::generate_rust(&declarations, true).expect("planus rust codegen");
 
     let out_dir = env::var_os("OUT_DIR").expect("OUT_DIR");
     let dest = PathBuf::from(out_dir).join("generated.rs");

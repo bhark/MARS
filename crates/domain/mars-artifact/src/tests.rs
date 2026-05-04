@@ -3,9 +3,8 @@ use mars_types::{Bbox, ContentHash};
 use proptest::prelude::*;
 
 use crate::{
-    ArtifactError, ArtifactKind, ArtifactReader, ArtifactWriter, FORMAT_VERSION, MAGIC,
-    SectionKind, SourceRef, compute_content_hash, decode_class_assignment, decode_geometry_payload,
-    decode_style_refs, encode_geometry_payload,
+    ArtifactError, ArtifactKind, ArtifactReader, ArtifactWriter, FORMAT_VERSION, MAGIC, SectionKind, SourceRef,
+    compute_content_hash, decode_class_assignment, decode_geometry_payload, decode_style_refs, encode_geometry_payload,
 };
 use crate::{Coord, FeatureGeom, GeomKind};
 
@@ -32,9 +31,9 @@ fn geom_close(a: &GeomKind, b: &GeomKind) -> bool {
         }
         (GeomKind::MultiPolygon(p), GeomKind::MultiPolygon(q)) => {
             p.len() == q.len()
-                && p.iter().zip(q).all(|(r, s)| {
-                    r.len() == s.len() && r.iter().zip(s).all(|(rr, ss)| ring_close(rr, ss))
-                })
+                && p.iter()
+                    .zip(q)
+                    .all(|(r, s)| r.len() == s.len() && r.iter().zip(s).all(|(rr, ss)| ring_close(rr, ss)))
         }
         _ => false,
     }
@@ -55,8 +54,7 @@ fn geom_strategy() -> impl Strategy<Value = GeomKind> {
         prop::collection::vec(ring_strategy(), 0..4).prop_map(GeomKind::Polygon),
         prop::collection::vec(coord_strategy(), 0..8).prop_map(GeomKind::MultiPoint),
         prop::collection::vec(ring_strategy(), 0..4).prop_map(GeomKind::MultiLineString),
-        prop::collection::vec(prop::collection::vec(ring_strategy(), 0..3), 0..3)
-            .prop_map(GeomKind::MultiPolygon),
+        prop::collection::vec(prop::collection::vec(ring_strategy(), 0..3), 0..3).prop_map(GeomKind::MultiPolygon),
     ]
 }
 
@@ -100,9 +98,21 @@ proptest! {
 #[test]
 fn empty_geometries_roundtrip() {
     let features = vec![
-        FeatureGeom { id: 0, bbox: [0.0; 4], geom: GeomKind::LineString(vec![]) },
-        FeatureGeom { id: 1, bbox: [0.0; 4], geom: GeomKind::Polygon(vec![]) },
-        FeatureGeom { id: 2, bbox: [0.0; 4], geom: GeomKind::MultiPolygon(vec![]) },
+        FeatureGeom {
+            id: 0,
+            bbox: [0.0; 4],
+            geom: GeomKind::LineString(vec![]),
+        },
+        FeatureGeom {
+            id: 1,
+            bbox: [0.0; 4],
+            geom: GeomKind::Polygon(vec![]),
+        },
+        FeatureGeom {
+            id: 2,
+            bbox: [0.0; 4],
+            geom: GeomKind::MultiPolygon(vec![]),
+        },
     ];
     let bytes = encode_geometry_payload(&features).unwrap();
     let back = decode_geometry_payload(&bytes).unwrap();
@@ -130,15 +140,14 @@ fn style_refs_roundtrip() {
 }
 
 fn build_simple_artifact() -> Bytes {
-    let features = vec![
-        FeatureGeom {
-            id: 1,
-            bbox: [0.0, 0.0, 10.0, 10.0],
-            geom: GeomKind::LineString(vec![(0.0, 0.0), (10.0, 10.0)]),
-        },
-    ];
+    let features = vec![FeatureGeom {
+        id: 1,
+        bbox: [0.0, 0.0, 10.0, 10.0],
+        geom: GeomKind::LineString(vec![(0.0, 0.0), (10.0, 10.0)]),
+    }];
     let mut w = ArtifactWriter::new(ArtifactKind::Source);
-    w.add_geometry_payload(&features).unwrap()
+    w.add_geometry_payload(&features)
+        .unwrap()
         .set_bbox(Bbox::new(0.0, 0.0, 10.0, 10.0))
         .set_feature_count(1);
     w.finish().unwrap()

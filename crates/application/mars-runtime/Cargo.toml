@@ -27,6 +27,8 @@ tracing            = { workspace = true }
 thiserror          = { workspace = true }
 bytes              = { workspace = true }
 async-trait        = { workspace = true }
+arc-swap           = { workspace = true }
+futures-util       = { workspace = true }
 
 [dev-dependencies]
 mars-store-fs = { workspace = true }

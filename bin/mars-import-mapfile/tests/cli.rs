@@ -15,10 +15,7 @@ fn fixture() -> PathBuf {
 
 #[test]
 fn produces_expected_skeleton() {
-    let out = Command::new(bin_path())
-        .arg(fixture())
-        .output()
-        .expect("run binary");
+    let out = Command::new(bin_path()).arg(fixture()).output().expect("run binary");
     assert!(out.status.success(), "non-strict run should succeed");
     let s = String::from_utf8(out.stdout).expect("utf8");
     assert!(s.contains("service:"), "missing service: -- {s}");

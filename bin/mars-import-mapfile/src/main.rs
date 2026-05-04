@@ -70,11 +70,7 @@ impl<S> Layer<S> for WarnCounter
 where
     S: tracing::Subscriber,
 {
-    fn on_event(
-        &self,
-        event: &tracing::Event<'_>,
-        _ctx: tracing_subscriber::layer::Context<'_, S>,
-    ) {
+    fn on_event(&self, event: &tracing::Event<'_>, _ctx: tracing_subscriber::layer::Context<'_, S>) {
         if *event.metadata().level() == tracing::Level::WARN {
             self.counter.fetch_add(1, Ordering::Relaxed);
         }
@@ -98,8 +94,7 @@ fn main() -> Result<()> {
     let warn_count = Arc::new(AtomicUsize::new(0));
     install_tracing(warn_count.clone());
 
-    let src = fs::read_to_string(&cli.input)
-        .with_context(|| format!("reading {}", cli.input.display()))?;
+    let src = fs::read_to_string(&cli.input).with_context(|| format!("reading {}", cli.input.display()))?;
     let skeleton = translate(&src);
     let yaml = emitter::render(&skeleton);
 
@@ -232,10 +227,7 @@ END
         let skel = translate(src);
         assert_eq!(skel.service_name.as_deref(), Some("demo"));
         assert_eq!(skel.service_title.as_deref(), Some("Demo Service"));
-        assert_eq!(
-            skel.layers,
-            vec!["roads".to_string(), "buildings".to_string()]
-        );
+        assert_eq!(skel.layers, vec!["roads".to_string(), "buildings".to_string()]);
     }
 
     #[test]

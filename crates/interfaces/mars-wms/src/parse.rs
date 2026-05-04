@@ -15,9 +15,7 @@ pub fn parse_request(query: &str, cfg: &WmsConfig) -> Result<WmsRequest, WmsErro
     let kvp = parse_kvp(query);
     let request = require(&kvp, "request")?;
     match request.as_str() {
-        s if s.eq_ignore_ascii_case("GetMap") => Ok(WmsRequest::GetMap(parse_get_map_inner(
-            &kvp, cfg,
-        )?)),
+        s if s.eq_ignore_ascii_case("GetMap") => Ok(WmsRequest::GetMap(parse_get_map_inner(&kvp, cfg)?)),
         s if s.eq_ignore_ascii_case("GetCapabilities") => Ok(WmsRequest::GetCapabilities),
         other => Err(WmsError::NotImplemented {
             what: format!("WMS request={other}"),
@@ -167,10 +165,11 @@ fn require(kvp: &Kvp, name: &'static str) -> Result<String, WmsError> {
 
 fn parse_u32(kvp: &Kvp, name: &'static str) -> Result<u32, WmsError> {
     let raw = require(kvp, name)?;
-    raw.parse().map_err(|e: std::num::ParseIntError| WmsError::InvalidParam {
-        name,
-        reason: e.to_string(),
-    })
+    raw.parse()
+        .map_err(|e: std::num::ParseIntError| WmsError::InvalidParam {
+            name,
+            reason: e.to_string(),
+        })
 }
 
 fn parse_format(raw: &str) -> Result<ImageFormat, WmsError> {

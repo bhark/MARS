@@ -60,9 +60,9 @@ pub(crate) fn validate_key(root: &Path, key: &str) -> Result<PathBuf, StoreError
     // resolve the deepest existing ancestor; if any of it is a symlink that
     // escapes root, reject. the file itself may not exist yet (put path).
     let anchor = deepest_existing(&candidate);
-    let canon = anchor.canonicalize().map_err(|e| {
-        StoreError::Backend(format!("canonicalise {}: {e}", anchor.display()))
-    })?;
+    let canon = anchor
+        .canonicalize()
+        .map_err(|e| StoreError::Backend(format!("canonicalise {}: {e}", anchor.display())))?;
     if !canon.starts_with(root) {
         return Err(StoreError::Backend("path escapes store root".into()));
     }
@@ -71,9 +71,9 @@ pub(crate) fn validate_key(root: &Path, key: &str) -> Result<PathBuf, StoreError
     // leaf that points outside (deepest_existing would have returned the leaf,
     // but only if it exists; canonicalize follows symlinks regardless).
     if candidate.exists() {
-        let leaf_canon = candidate.canonicalize().map_err(|e| {
-            StoreError::Backend(format!("canonicalise {}: {e}", candidate.display()))
-        })?;
+        let leaf_canon = candidate
+            .canonicalize()
+            .map_err(|e| StoreError::Backend(format!("canonicalise {}: {e}", candidate.display())))?;
         if !leaf_canon.starts_with(root) {
             return Err(StoreError::Backend("path escapes store root via symlink".into()));
         }
@@ -84,10 +84,7 @@ pub(crate) fn validate_key(root: &Path, key: &str) -> Result<PathBuf, StoreError
 
 /// Same as [`validate_key`] but takes an `ArtifactKey`, threading the key into
 /// `NotFound` / `HashMismatch` errors at call sites.
-pub(crate) fn validate_artifact_key(
-    root: &Path,
-    key: &ArtifactKey,
-) -> Result<PathBuf, StoreError> {
+pub(crate) fn validate_artifact_key(root: &Path, key: &ArtifactKey) -> Result<PathBuf, StoreError> {
     validate_key(root, key.as_str())
 }
 
@@ -129,16 +126,7 @@ mod tests {
     fn rejects_invalid_keys() {
         let (_td, root) = root();
         for k in [
-            "",
-            "/abs",
-            "..",
-            "a/../b",
-            "a//b",
-            "a\\b",
-            "a\0b",
-            "../b",
-            "./a",
-            "a/./b",
+            "", "/abs", "..", "a/../b", "a//b", "a\\b", "a\0b", "../b", "./a", "a/./b",
         ] {
             assert!(validate_key(&root, k).is_err(), "should reject {k:?}");
         }
@@ -146,9 +134,7 @@ mod tests {
 
     fn good_seg() -> impl Strategy<Value = String> {
         // single normal segment: alnum / dash / underscore, length 1..8
-        "[a-z0-9_-][a-z0-9._-]{0,7}".prop_filter("not . or ..", |s: &String| {
-            s != "." && s != ".."
-        })
+        "[a-z0-9_-][a-z0-9._-]{0,7}".prop_filter("not . or ..", |s: &String| s != "." && s != "..")
     }
 
     proptest! {

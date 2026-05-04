@@ -18,10 +18,7 @@ impl<'a> RowAttrs<'a> {
 
 impl<'a> AttributeAccess for RowAttrs<'a> {
     fn get(&self, name: &str) -> Option<Literal> {
-        self.0
-            .iter()
-            .find(|(k, _)| k == name)
-            .map(|(_, v)| to_literal(v))
+        self.0.iter().find(|(k, _)| k == name).map(|(_, v)| to_literal(v))
     }
 }
 

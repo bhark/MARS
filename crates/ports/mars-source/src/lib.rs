@@ -163,9 +163,7 @@ impl SourceBinding {
                 return Err(SourceError::InvalidBinding("empty attribute name".into()));
             }
             if !seen.insert(a.as_str()) {
-                return Err(SourceError::InvalidBinding(format!(
-                    "duplicate attribute: {a}"
-                )));
+                return Err(SourceError::InvalidBinding(format!("duplicate attribute: {a}")));
             }
         }
 
@@ -234,9 +232,7 @@ pub struct RowBytes {
 /// Phase-0 stub adapters that satisfy the port traits with `NotImplemented`.
 /// Lets bins and tests compose the surface without naming a real backend.
 pub mod stub {
-    use super::{
-        ChangeEvent, ChangeFeed, RowBytes, Source, SourceBinding, SourceError,
-    };
+    use super::{ChangeEvent, ChangeFeed, RowBytes, Source, SourceBinding, SourceError};
     use async_trait::async_trait;
     use futures_core::stream::BoxStream;
     use mars_expr::Expr;
@@ -263,9 +259,7 @@ pub mod stub {
 
     #[async_trait]
     impl ChangeFeed for NotImplementedSource {
-        async fn subscribe(
-            &self,
-        ) -> Result<BoxStream<'static, Result<ChangeEvent, SourceError>>, SourceError> {
+        async fn subscribe(&self) -> Result<BoxStream<'static, Result<ChangeEvent, SourceError>>, SourceError> {
             Err(SourceError::NotImplemented {
                 what: "mars-source::stub::NotImplementedSource::subscribe",
             })

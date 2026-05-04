@@ -4,10 +4,8 @@ use bytes::Bytes;
 use mars_types::{Bbox, ContentHash};
 
 use crate::{
-    ArtifactError, ArtifactKind, FORMAT_VERSION, MAGIC, SectionKind,
-    generated::mars::artifact as fb,
-    section::FLAG_COMPRESSED,
-    writer::SourceRef,
+    ArtifactError, ArtifactKind, FORMAT_VERSION, MAGIC, SectionKind, generated::mars::artifact as fb,
+    section::FLAG_COMPRESSED, writer::SourceRef,
 };
 
 const HEADER_LEN: usize = 8 + 4 + 4;
@@ -55,33 +53,22 @@ impl ArtifactReader {
             return Err(ArtifactError::BadMagic);
         }
         let footer_end = trailer_off;
-        let footer_start = footer_end
-            .checked_sub(footer_len)
-            .ok_or(ArtifactError::Truncated)?;
+        let footer_start = footer_end.checked_sub(footer_len).ok_or(ArtifactError::Truncated)?;
         if footer_start < HEADER_LEN {
             return Err(ArtifactError::Truncated);
         }
         let footer_bytes = &bytes[footer_start..footer_end];
-        let footer = planus::ReadAsRoot::read_as_root(footer_bytes)
-            .map_err(|_| ArtifactError::Malformed("footer parse"))?;
+        let footer =
+            planus::ReadAsRoot::read_as_root(footer_bytes).map_err(|_| ArtifactError::Malformed("footer parse"))?;
         let footer: fb::FooterRef<'_> = footer;
 
-        let kind = ArtifactKind::try_from(
-            footer
-                .kind()
-                .map_err(|_| ArtifactError::Malformed("footer kind"))?,
-        )?;
+        let kind = ArtifactKind::try_from(footer.kind().map_err(|_| ArtifactError::Malformed("footer kind"))?)?;
 
         let bbox_raw = footer
             .bbox()
             .map_err(|_| ArtifactError::Malformed("footer bbox"))?
             .ok_or(ArtifactError::Malformed("footer bbox missing"))?;
-        let bbox = Bbox::new(
-            bbox_raw.min_x(),
-            bbox_raw.min_y(),
-            bbox_raw.max_x(),
-            bbox_raw.max_y(),
-        );
+        let bbox = Bbox::new(bbox_raw.min_x(), bbox_raw.min_y(), bbox_raw.max_x(), bbox_raw.max_y());
 
         let feature_count = footer
             .feature_count()
@@ -116,12 +103,8 @@ impl ArtifactReader {
                     .map_err(|_| ArtifactError::Malformed("source_ref band"))?
                     .ok_or(ArtifactError::Malformed("source_ref band missing"))?
                     .to_owned();
-                let cell_x = s
-                    .cell_x()
-                    .map_err(|_| ArtifactError::Malformed("source_ref cell_x"))?;
-                let cell_y = s
-                    .cell_y()
-                    .map_err(|_| ArtifactError::Malformed("source_ref cell_y"))?;
+                let cell_x = s.cell_x().map_err(|_| ArtifactError::Malformed("source_ref cell_x"))?;
+                let cell_y = s.cell_y().map_err(|_| ArtifactError::Malformed("source_ref cell_y"))?;
                 let hash_slice = s
                     .content_hash()
                     .map_err(|_| ArtifactError::Malformed("source_ref content_hash"))?

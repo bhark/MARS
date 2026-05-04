@@ -14,9 +14,9 @@ use std::sync::Arc;
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand, ValueEnum};
 use mars_compiler::{Compiler, Deps as CompilerDeps};
-use mars_config::{Config, ClassStyle, StyleEntry, config_dir};
+use mars_config::{ClassStyle, Config, StyleEntry, config_dir};
 use mars_render::TinySkiaRenderer;
-use mars_runtime::{Deps as RuntimeDeps, Runtime, RuntimeState};
+use mars_runtime::{Deps as RuntimeDeps, Runtime, RuntimeState, run_manifest_reload_loop};
 use mars_source_postgres::{PgConfig, PgSource};
 use mars_store::{LocalCache, ObjectStore};
 use mars_store_fs::{FsCache, FsPublisher, FsStore};
@@ -82,12 +82,12 @@ fn main() -> Result<()> {
 
 async fn async_main(cli: Cli) -> Result<()> {
     match (cli.mode, cli.tool) {
-        (Some(_), Some(_)) => {
-            Err(anyhow!("mars: --mode and a subcommand are mutually exclusive; provide exactly one"))
-        }
-        (None, None) => {
-            Err(anyhow!("mars: provide --mode <runtime|compiler|all-in-one> or one of: validate, inspect"))
-        }
+        (Some(_), Some(_)) => Err(anyhow!(
+            "mars: --mode and a subcommand are mutually exclusive; provide exactly one"
+        )),
+        (None, None) => Err(anyhow!(
+            "mars: provide --mode <runtime|compiler|all-in-one> or one of: validate, inspect"
+        )),
         (Some(Mode::Runtime), None) => run_runtime(&cli.config).await,
         (Some(Mode::Compiler), None) => run_compiler_mode(&cli.config).await,
         (Some(Mode::AllInOne), None) => run_all_in_one(&cli.config).await,
@@ -100,39 +100,44 @@ async fn async_main(cli: Cli) -> Result<()> {
 
 async fn run_runtime(config_path: &Path) -> Result<()> {
     let cfg = load_and_validate(config_path)?;
+    let cfg = Arc::new(cfg);
 
     let store = build_store(&cfg)?;
     let cache = build_cache(&cfg)?;
     let publisher = build_publisher(&cfg)?;
+    let stylesheet = build_stylesheet(&cfg);
 
     let listen = resolve_listen(&cfg)?;
     let wms_cfg = mars_wms::WmsConfig::from_config(&cfg);
+    let runtime = Arc::new(Runtime::empty(RuntimeDeps {
+        store,
+        cache,
+        renderer: Arc::new(TinySkiaRenderer),
+    }));
 
-    // try to load a current manifest; absence means /readyz returns 503.
-    let (runtime, manifest_for_caps) = match read_current_manifest(&publisher)? {
-        Some(manifest) => {
-            let stylesheet = build_stylesheet(&cfg);
-            let state =
-                RuntimeState::from_config_and_manifest(&cfg, stylesheet, manifest.clone())
-                    .map_err(|e| anyhow!("runtime state: {e}"))?;
-            let rt = Arc::new(Runtime::from_state(
-                Arc::new(state),
-                RuntimeDeps {
-                    store,
-                    cache,
-                    renderer: Arc::new(TinySkiaRenderer),
-                },
-            ));
-            (Some(rt), manifest)
-        }
-        None => {
+    match read_current_manifest(&publisher) {
+        Ok(Some(manifest)) => match RuntimeState::from_config_and_manifest(&cfg, stylesheet.clone(), manifest) {
+            Ok(state) => runtime.swap_state(Arc::new(state)),
+            Err(e) => tracing::warn!(error = %e, "initial manifest rejected"),
+        },
+        Ok(None) => {
             tracing::warn!("no manifest published yet; readyz will return 503");
-            (None, empty_manifest(&cfg))
         }
-    };
+        Err(e) => tracing::warn!(error = %e, "initial manifest unavailable"),
+    }
 
-    let caps = mars_wms::capabilities_xml(&cfg, &manifest_for_caps)
-        .map_err(|e| anyhow!("capabilities: {e}"))?;
+    let watcher: Arc<dyn mars_store::ManifestWatch> = publisher.clone();
+    let _reload_task = tokio::spawn({
+        let runtime = runtime.clone();
+        let cfg = cfg.clone();
+        async move {
+            if let Err(e) = run_manifest_reload_loop(runtime, watcher, cfg, stylesheet).await {
+                tracing::error!(error = %e, "manifest reload loop stopped");
+            }
+        }
+    });
+
+    let caps = mars_wms::capabilities_xml(&cfg, &empty_manifest(&cfg)).map_err(|e| anyhow!("capabilities: {e}"))?;
 
     mars_http::serve(
         mars_http::ServerConfig {
@@ -168,10 +173,7 @@ async fn run_compiler(cfg: Config) -> Result<()> {
         },
         cfg,
     );
-    compiler
-        .run(CancellationToken::new())
-        .await
-        .map_err(|e| anyhow!(e))
+    compiler.run(CancellationToken::new()).await.map_err(|e| anyhow!(e))
 }
 
 async fn run_all_in_one(config_path: &Path) -> Result<()> {
@@ -285,8 +287,7 @@ fn read_current_manifest(pub_: &FsPublisher) -> Result<Option<Manifest>> {
     };
     let pointer = pointer.trim();
     let body_path = pub_.manifests_dir().join(format!("{pointer}.json"));
-    let body = std::fs::read(&body_path)
-        .with_context(|| format!("read manifest body {}", body_path.display()))?;
+    let body = std::fs::read(&body_path).with_context(|| format!("read manifest body {}", body_path.display()))?;
     let manifest: Manifest = serde_json::from_slice(&body).context("parse manifest")?;
     Ok(Some(manifest))
 }

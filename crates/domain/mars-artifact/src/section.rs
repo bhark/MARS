@@ -29,11 +29,7 @@ impl SectionHeader {
         let length = u64::from_le_bytes([
             bytes[4], bytes[5], bytes[6], bytes[7], bytes[8], bytes[9], bytes[10], bytes[11],
         ]);
-        Ok(Self {
-            kind,
-            flags,
-            length,
-        })
+        Ok(Self { kind, flags, length })
     }
 }
 

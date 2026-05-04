@@ -181,7 +181,6 @@ const FEATURE_INDEX_ENTRY_LEN: usize = 8 + 4 * 4 + 1 + 4 + 4;
 
 /// encode features into the geometry-payload section bytes.
 /// requires features sorted by id ascending (caller's responsibility for determinism).
-#[must_use]
 pub fn encode_geometry_payload(features: &[FeatureGeom]) -> Result<Bytes, ArtifactError> {
     // pack coord blocks first to learn their offsets, then write index + blocks
     let mut coord_blocks: Vec<Vec<u8>> = Vec::with_capacity(features.len());
@@ -208,9 +207,7 @@ pub fn encode_geometry_payload(features: &[FeatureGeom]) -> Result<Bytes, Artifa
         .ok_or(ArtifactError::Malformed("geometry payload too large"))?;
     let mut out = Vec::with_capacity(total_len);
     out.extend_from_slice(
-        &(u32::try_from(features.len())
-            .map_err(|_| ArtifactError::Malformed("too many features"))?)
-        .to_le_bytes(),
+        &(u32::try_from(features.len()).map_err(|_| ArtifactError::Malformed("too many features"))?).to_le_bytes(),
     );
 
     let mut running_offset: u32 = 0;
@@ -221,8 +218,7 @@ pub fn encode_geometry_payload(features: &[FeatureGeom]) -> Result<Bytes, Artifa
         }
         out.push(geom_type_byte(&f.geom));
         out.extend_from_slice(&running_offset.to_le_bytes());
-        let len = u32::try_from(block.len())
-            .map_err(|_| ArtifactError::Malformed("geometry section too large"))?;
+        let len = u32::try_from(block.len()).map_err(|_| ArtifactError::Malformed("geometry section too large"))?;
         out.extend_from_slice(&len.to_le_bytes());
         running_offset = running_offset
             .checked_add(len)
@@ -251,14 +247,38 @@ pub fn decode_geometry_payload(bytes: &[u8]) -> Result<Vec<FeatureGeom>, Artifac
         let off = 4 + i * FEATURE_INDEX_ENTRY_LEN;
         let id = u64::from_le_bytes(bytes[off..off + 8].try_into().map_err(|_| ArtifactError::Truncated)?);
         let bbox = [
-            f32::from_le_bytes(bytes[off + 8..off + 12].try_into().map_err(|_| ArtifactError::Truncated)?),
-            f32::from_le_bytes(bytes[off + 12..off + 16].try_into().map_err(|_| ArtifactError::Truncated)?),
-            f32::from_le_bytes(bytes[off + 16..off + 20].try_into().map_err(|_| ArtifactError::Truncated)?),
-            f32::from_le_bytes(bytes[off + 20..off + 24].try_into().map_err(|_| ArtifactError::Truncated)?),
+            f32::from_le_bytes(
+                bytes[off + 8..off + 12]
+                    .try_into()
+                    .map_err(|_| ArtifactError::Truncated)?,
+            ),
+            f32::from_le_bytes(
+                bytes[off + 12..off + 16]
+                    .try_into()
+                    .map_err(|_| ArtifactError::Truncated)?,
+            ),
+            f32::from_le_bytes(
+                bytes[off + 16..off + 20]
+                    .try_into()
+                    .map_err(|_| ArtifactError::Truncated)?,
+            ),
+            f32::from_le_bytes(
+                bytes[off + 20..off + 24]
+                    .try_into()
+                    .map_err(|_| ArtifactError::Truncated)?,
+            ),
         ];
         let geom_type = bytes[off + 24];
-        let coff = u32::from_le_bytes(bytes[off + 25..off + 29].try_into().map_err(|_| ArtifactError::Truncated)?) as usize;
-        let clen = u32::from_le_bytes(bytes[off + 29..off + 33].try_into().map_err(|_| ArtifactError::Truncated)?) as usize;
+        let coff = u32::from_le_bytes(
+            bytes[off + 25..off + 29]
+                .try_into()
+                .map_err(|_| ArtifactError::Truncated)?,
+        ) as usize;
+        let clen = u32::from_le_bytes(
+            bytes[off + 29..off + 33]
+                .try_into()
+                .map_err(|_| ArtifactError::Truncated)?,
+        ) as usize;
         if coff.checked_add(clen).is_none_or(|end| end > coord_area.len()) {
             return Err(ArtifactError::Truncated);
         }

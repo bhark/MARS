@@ -28,11 +28,7 @@ pub fn decode_class_assignment(bytes: &[u8]) -> Result<Vec<(u64, u16)>, Artifact
     let mut out = Vec::with_capacity(n);
     for i in 0..n {
         let off = 4 + i * ENTRY_LEN;
-        let id = u64::from_le_bytes(
-            bytes[off..off + 8]
-                .try_into()
-                .map_err(|_| ArtifactError::Truncated)?,
-        );
+        let id = u64::from_le_bytes(bytes[off..off + 8].try_into().map_err(|_| ArtifactError::Truncated)?);
         let cls = u16::from_le_bytes([bytes[off + 8], bytes[off + 9]]);
         out.push((id, cls));
     }

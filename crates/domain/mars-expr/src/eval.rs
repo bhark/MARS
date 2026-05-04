@@ -5,9 +5,7 @@ use crate::{AttributeAccess, CmpOp, Expr, ExprError, Literal, LogicOp};
 pub(crate) fn eval(expr: &Expr, attrs: &dyn AttributeAccess) -> Result<Literal, ExprError> {
     match expr {
         Expr::Literal(l) => Ok(l.clone()),
-        Expr::Ident(name) => attrs
-            .get(name)
-            .ok_or_else(|| ExprError::UnknownIdent(name.clone())),
+        Expr::Ident(name) => attrs.get(name).ok_or_else(|| ExprError::UnknownIdent(name.clone())),
         Expr::Cmp { op, lhs, rhs } => {
             let l = eval(lhs, attrs)?;
             let r = eval(rhs, attrs)?;
@@ -22,9 +20,7 @@ pub(crate) fn eval(expr: &Expr, attrs: &dyn AttributeAccess) -> Result<Literal, 
                         Literal::Bool(true) => {}
                         Literal::Null => any_null = true,
                         other => {
-                            return Err(ExprError::Type(format!(
-                                "AND requires boolean operands, got {other:?}"
-                            )));
+                            return Err(ExprError::Type(format!("AND requires boolean operands, got {other:?}")));
                         }
                     }
                 }
@@ -38,9 +34,7 @@ pub(crate) fn eval(expr: &Expr, attrs: &dyn AttributeAccess) -> Result<Literal, 
                         Literal::Bool(false) => {}
                         Literal::Null => any_null = true,
                         other => {
-                            return Err(ExprError::Type(format!(
-                                "OR requires boolean operands, got {other:?}"
-                            )));
+                            return Err(ExprError::Type(format!("OR requires boolean operands, got {other:?}")));
                         }
                     }
                 }
@@ -50,9 +44,7 @@ pub(crate) fn eval(expr: &Expr, attrs: &dyn AttributeAccess) -> Result<Literal, 
         Expr::Not(inner) => match eval(inner, attrs)? {
             Literal::Bool(b) => Ok(Literal::Bool(!b)),
             Literal::Null => Ok(Literal::Null),
-            other => Err(ExprError::Type(format!(
-                "NOT requires boolean operand, got {other:?}"
-            ))),
+            other => Err(ExprError::Type(format!("NOT requires boolean operand, got {other:?}"))),
         },
         Expr::In { lhs, list } => {
             let v = eval(lhs, attrs)?;
@@ -82,15 +74,11 @@ pub(crate) fn eval(expr: &Expr, attrs: &dyn AttributeAccess) -> Result<Literal, 
             match v {
                 Literal::Null => Ok(Literal::Null),
                 Literal::String(s) => Ok(Literal::Bool(like_match(&s, pattern))),
-                other => Err(ExprError::Type(format!(
-                    "LIKE requires string operand, got {other:?}"
-                ))),
+                other => Err(ExprError::Type(format!("LIKE requires string operand, got {other:?}"))),
             }
         }
         Expr::IsNull(inner) => Ok(Literal::Bool(matches!(eval(inner, attrs)?, Literal::Null))),
-        Expr::IsNotNull(inner) => {
-            Ok(Literal::Bool(!matches!(eval(inner, attrs)?, Literal::Null)))
-        }
+        Expr::IsNotNull(inner) => Ok(Literal::Bool(!matches!(eval(inner, attrs)?, Literal::Null))),
     }
 }
 
@@ -100,21 +88,19 @@ fn cmp(op: CmpOp, l: &Literal, r: &Literal) -> Result<Literal, ExprError> {
     }
     let ord = match (l, r) {
         (Literal::Int(a), Literal::Int(b)) => a.cmp(b),
-        (Literal::Float(a), Literal::Float(b)) => a.partial_cmp(b).ok_or_else(|| {
-            ExprError::Type("NaN comparison".into())
-        })?,
-        (Literal::Int(a), Literal::Float(b)) => (*a as f64).partial_cmp(b).ok_or_else(|| {
-            ExprError::Type("NaN comparison".into())
-        })?,
-        (Literal::Float(a), Literal::Int(b)) => a.partial_cmp(&(*b as f64)).ok_or_else(|| {
-            ExprError::Type("NaN comparison".into())
-        })?,
+        (Literal::Float(a), Literal::Float(b)) => a
+            .partial_cmp(b)
+            .ok_or_else(|| ExprError::Type("NaN comparison".into()))?,
+        (Literal::Int(a), Literal::Float(b)) => (*a as f64)
+            .partial_cmp(b)
+            .ok_or_else(|| ExprError::Type("NaN comparison".into()))?,
+        (Literal::Float(a), Literal::Int(b)) => a
+            .partial_cmp(&(*b as f64))
+            .ok_or_else(|| ExprError::Type("NaN comparison".into()))?,
         (Literal::String(a), Literal::String(b)) => a.cmp(b),
         (Literal::Bool(a), Literal::Bool(b)) => a.cmp(b),
         (a, b) => {
-            return Err(ExprError::Type(format!(
-                "cannot compare {a:?} and {b:?}"
-            )));
+            return Err(ExprError::Type(format!("cannot compare {a:?} and {b:?}")));
         }
     };
     use std::cmp::Ordering::*;

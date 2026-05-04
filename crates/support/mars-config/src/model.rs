@@ -471,9 +471,6 @@ pub struct TracingConfig {
 impl ChangeFeed {
     /// Resolve `poll_interval` to a `Duration` if set.
     pub fn poll_interval_dur(&self) -> Result<Option<Duration>, ConfigError> {
-        self.poll_interval
-            .as_deref()
-            .map(units::parse_duration)
-            .transpose()
+        self.poll_interval.as_deref().map(units::parse_duration).transpose()
     }
 }

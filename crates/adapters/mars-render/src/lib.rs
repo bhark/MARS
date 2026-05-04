@@ -57,10 +57,20 @@ mod tests {
     use mars_style::{Colour, Style};
 
     fn red() -> Colour {
-        Colour { r: 255, g: 0, b: 0, a: 255 }
+        Colour {
+            r: 255,
+            g: 0,
+            b: 0,
+            a: 255,
+        }
     }
     fn white() -> Colour {
-        Colour { r: 255, g: 255, b: 255, a: 255 }
+        Colour {
+            r: 255,
+            g: 255,
+            b: 255,
+            a: 255,
+        }
     }
 
     fn square(cx: f32, cy: f32, half: f32) -> PortPath {
@@ -86,8 +96,18 @@ mod tests {
     #[tokio::test]
     async fn determinism_byte_exact() {
         let r = TinySkiaRenderer;
-        let canvas = Canvas { width: 64, height: 64, background: Some(white()) };
-        let ops = vec![DrawOp::Path { path: square(32.0, 32.0, 16.0), style: Style { fill: Some(red()), ..Default::default() } }];
+        let canvas = Canvas {
+            width: 64,
+            height: 64,
+            background: Some(white()),
+        };
+        let ops = vec![DrawOp::Path {
+            path: square(32.0, 32.0, 16.0),
+            style: Style {
+                fill: Some(red()),
+                ..Default::default()
+            },
+        }];
         let a = r.render(canvas, &ops, ImageFormat::Png).await.unwrap();
         let b = r.render(canvas, &ops, ImageFormat::Png).await.unwrap();
         assert_eq!(a, b, "renderer must be deterministic");
@@ -96,8 +116,18 @@ mod tests {
     #[tokio::test]
     async fn filled_polygon_red_pixels() {
         let r = TinySkiaRenderer;
-        let canvas = Canvas { width: 64, height: 64, background: None };
-        let ops = vec![DrawOp::Path { path: square(32.0, 32.0, 16.0), style: Style { fill: Some(red()), ..Default::default() } }];
+        let canvas = Canvas {
+            width: 64,
+            height: 64,
+            background: None,
+        };
+        let ops = vec![DrawOp::Path {
+            path: square(32.0, 32.0, 16.0),
+            style: Style {
+                fill: Some(red()),
+                ..Default::default()
+            },
+        }];
         let png_bytes = r.render(canvas, &ops, ImageFormat::Png).await.unwrap();
         let (_, _, rgba) = decode(&png_bytes);
         let red_count = rgba
@@ -110,9 +140,22 @@ mod tests {
     #[tokio::test]
     async fn stroked_line_has_pixels() {
         let r = TinySkiaRenderer;
-        let canvas = Canvas { width: 64, height: 64, background: None };
-        let path = PortPath { rings: vec![vec![(8.0, 32.0), (56.0, 32.0)]] };
-        let ops = vec![DrawOp::Path { path, style: Style { stroke: Some(red()), stroke_width: Some(2.0), ..Default::default() } }];
+        let canvas = Canvas {
+            width: 64,
+            height: 64,
+            background: None,
+        };
+        let path = PortPath {
+            rings: vec![vec![(8.0, 32.0), (56.0, 32.0)]],
+        };
+        let ops = vec![DrawOp::Path {
+            path,
+            style: Style {
+                stroke: Some(red()),
+                stroke_width: Some(2.0),
+                ..Default::default()
+            },
+        }];
         let png_bytes = r.render(canvas, &ops, ImageFormat::Png).await.unwrap();
         let (w, _, rgba) = decode(&png_bytes);
         let row = 32usize * w as usize * 4;
@@ -127,12 +170,20 @@ mod tests {
     async fn transparent_vs_opaque_background() {
         let r = TinySkiaRenderer;
 
-        let c1 = Canvas { width: 4, height: 4, background: None };
+        let c1 = Canvas {
+            width: 4,
+            height: 4,
+            background: None,
+        };
         let png1 = r.render(c1, &[], ImageFormat::Png).await.unwrap();
         let (_, _, rgba1) = decode(&png1);
         assert_eq!(rgba1[3], 0, "transparent bg → first pixel alpha 0");
 
-        let c2 = Canvas { width: 4, height: 4, background: Some(white()) };
+        let c2 = Canvas {
+            width: 4,
+            height: 4,
+            background: Some(white()),
+        };
         let png2 = r.render(c2, &[], ImageFormat::Png).await.unwrap();
         let (_, _, rgba2) = decode(&png2);
         assert_eq!(rgba2[3], 255, "opaque bg → first pixel alpha 255");
@@ -142,8 +193,16 @@ mod tests {
     #[tokio::test]
     async fn label_op_is_skipped_not_errored() {
         let r = TinySkiaRenderer;
-        let canvas = Canvas { width: 8, height: 8, background: None };
-        let ops = vec![DrawOp::Label { anchor: (0.0, 0.0), text: "hi".into(), style_ref: "x".into() }];
+        let canvas = Canvas {
+            width: 8,
+            height: 8,
+            background: None,
+        };
+        let ops = vec![DrawOp::Label {
+            anchor: (0.0, 0.0),
+            text: "hi".into(),
+            style_ref: "x".into(),
+        }];
         let res = r.render(canvas, &ops, ImageFormat::Png).await;
         assert!(res.is_ok(), "label op should be skipped, not error: {res:?}");
     }
@@ -151,7 +210,11 @@ mod tests {
     #[tokio::test]
     async fn jpeg_returns_not_implemented() {
         let r = TinySkiaRenderer;
-        let canvas = Canvas { width: 4, height: 4, background: None };
+        let canvas = Canvas {
+            width: 4,
+            height: 4,
+            background: None,
+        };
         let res = r.render(canvas, &[], ImageFormat::Jpeg).await;
         assert!(matches!(res, Err(RenderError::NotImplemented { .. })));
     }
@@ -159,8 +222,18 @@ mod tests {
     #[tokio::test]
     async fn golden_square_matches() {
         let r = TinySkiaRenderer;
-        let canvas = Canvas { width: 64, height: 64, background: Some(white()) };
-        let ops = vec![DrawOp::Path { path: square(32.0, 32.0, 16.0), style: Style { fill: Some(red()), ..Default::default() } }];
+        let canvas = Canvas {
+            width: 64,
+            height: 64,
+            background: Some(white()),
+        };
+        let ops = vec![DrawOp::Path {
+            path: square(32.0, 32.0, 16.0),
+            style: Style {
+                fill: Some(red()),
+                ..Default::default()
+            },
+        }];
         let actual = r.render(canvas, &ops, ImageFormat::Png).await.unwrap();
 
         let golden_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/square.png");
@@ -169,6 +242,9 @@ mod tests {
             std::fs::write(&golden_path, &actual).unwrap();
         }
         let expected = std::fs::read(&golden_path).unwrap();
-        assert_eq!(actual, expected, "golden mismatch; rerun with MARS_UPDATE_GOLDEN=1 if intentional");
+        assert_eq!(
+            actual, expected,
+            "golden mismatch; rerun with MARS_UPDATE_GOLDEN=1 if intentional"
+        );
     }
 }

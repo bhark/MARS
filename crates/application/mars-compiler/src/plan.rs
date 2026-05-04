@@ -5,9 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use mars_config::{
-    Band, ClassStyle, Config, Layer, ScaleWindow, SourceBinding as CfgBinding,
-};
+use mars_config::{Band, ClassStyle, Config, Layer, ScaleWindow, SourceBinding as CfgBinding};
 use mars_expr::ExprError;
 use mars_grid::{BandConfig, GridError, cells_in_bbox};
 use mars_source::{SourceBinding, SourceCollectionId, SourceError};
@@ -44,8 +42,7 @@ pub struct BuildTask {
 /// build the full plan from the config.
 pub fn build_plan(cfg: &Config) -> Result<Vec<BuildTask>, PlanError> {
     let cell_sizes = cfg.cells.size_per_band_m()?;
-    let band_index: BTreeMap<&str, &Band> =
-        cfg.scales.bands.iter().map(|b| (b.name.as_str(), b)).collect();
+    let band_index: BTreeMap<&str, &Band> = cfg.scales.bands.iter().map(|b| (b.name.as_str(), b)).collect();
     let origin = (cfg.cells.origin[0], cfg.cells.origin[1]);
     let extent = cfg.cells.extent.unwrap_or_else(|| {
         // single-cell fallback at the origin for phase-0 in-memory tests
@@ -58,12 +55,10 @@ pub fn build_plan(cfg: &Config) -> Result<Vec<BuildTask>, PlanError> {
         let classes = compile_classes(layer)?;
         for binding in &layer.sources {
             for (band_name, &cell_size) in &cell_sizes {
-                let band = band_index.get(band_name.as_str()).ok_or_else(|| {
-                    PlanError::Invalid(format!("unknown band {band_name}"))
-                })?;
-                if !window_intersects(&layer.scale, band)
-                    || !window_intersects(&binding.scale, band)
-                {
+                let band = band_index
+                    .get(band_name.as_str())
+                    .ok_or_else(|| PlanError::Invalid(format!("unknown band {band_name}")))?;
+                if !window_intersects(&layer.scale, band) || !window_intersects(&binding.scale, band) {
                     continue;
                 }
                 let band_cfg = BandConfig {
@@ -136,9 +131,8 @@ fn compile_classes(layer: &Layer) -> Result<Vec<CompiledClass>, PlanError> {
             name: c.name.clone(),
             when,
             style_id,
-            class_index: u16::try_from(i).map_err(|_| {
-                PlanError::Invalid(format!("layer {} has too many classes", layer.name))
-            })?,
+            class_index: u16::try_from(i)
+                .map_err(|_| PlanError::Invalid(format!("layer {} has too many classes", layer.name)))?,
         });
     }
     Ok(out)

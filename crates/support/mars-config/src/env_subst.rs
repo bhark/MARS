@@ -29,7 +29,9 @@ pub(crate) fn substitute(src: &str) -> Result<String, ConfigError> {
     let mut last_end = 0;
 
     for caps in re.captures_iter(src) {
-        let m = caps.get(0).unwrap();
+        let Some(m) = caps.get(0) else {
+            continue;
+        };
         out.push_str(&src[last_end..m.start()]);
 
         if m.as_str() == "$$" {
@@ -53,9 +55,7 @@ pub(crate) fn substitute(src: &str) -> Result<String, ConfigError> {
             },
         };
 
-        validate_yaml_safe(&value).map_err(|reason| {
-            ConfigError::Invalid(format!("env var {name}: {reason}"))
-        })?;
+        validate_yaml_safe(&value).map_err(|reason| ConfigError::Invalid(format!("env var {name}: {reason}")))?;
 
         out.push_str(&value);
         last_end = m.end();

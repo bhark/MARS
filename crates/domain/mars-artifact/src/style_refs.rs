@@ -27,9 +27,7 @@ pub fn decode_style_refs(bytes: &[u8]) -> Result<Vec<String>, ArtifactError> {
         if bytes.len() < pos + 4 {
             return Err(ArtifactError::Truncated);
         }
-        let len = u32::from_le_bytes([
-            bytes[pos], bytes[pos + 1], bytes[pos + 2], bytes[pos + 3],
-        ]) as usize;
+        let len = u32::from_le_bytes([bytes[pos], bytes[pos + 1], bytes[pos + 2], bytes[pos + 3]]) as usize;
         pos += 4;
         if bytes.len() < pos + len {
             return Err(ArtifactError::Truncated);

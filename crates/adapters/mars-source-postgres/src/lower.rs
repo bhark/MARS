@@ -13,10 +13,7 @@ use crate::quote::quote_ident;
 
 /// Lower the AST. Returned SQL has params numbered starting at `$1`; the
 /// caller renumbers if it has already-bound spatial params (see `fetch.rs`).
-pub fn lower_to_sql(
-    expr: &Expr,
-    binding: &SourceBinding,
-) -> Result<(String, Vec<SqlParam>), SourceError> {
+pub fn lower_to_sql(expr: &Expr, binding: &SourceBinding) -> Result<(String, Vec<SqlParam>), SourceError> {
     let mut ctx = LowerCtx {
         binding,
         params: Vec::new(),
@@ -37,12 +34,9 @@ impl<'a> LowerCtx<'a> {
     }
 
     fn check_ident(&self, name: &str) -> Result<String, SourceError> {
-        let allowed = self.binding.id_column == name
-            || self.binding.attributes.iter().any(|a| a == name);
+        let allowed = self.binding.id_column == name || self.binding.attributes.iter().any(|a| a == name);
         if !allowed {
-            return Err(SourceError::UnknownIdent {
-                name: name.to_string(),
-            });
+            return Err(SourceError::UnknownIdent { name: name.to_string() });
         }
         quote_ident(name)
     }
@@ -104,16 +98,9 @@ fn lower(e: &Expr, ctx: &mut LowerCtx<'_>) -> Result<String, SourceError> {
 
 fn lower_logic_arg(parent: LogicOp, e: &Expr, ctx: &mut LowerCtx<'_>) -> Result<String, SourceError> {
     // parens around mixed-precedence children mirror the Display impl
-    let needs_paren = matches!(
-        (parent, e),
-        (LogicOp::And, Expr::Logic { op: LogicOp::Or, .. })
-    );
+    let needs_paren = matches!((parent, e), (LogicOp::And, Expr::Logic { op: LogicOp::Or, .. }));
     let s = lower(e, ctx)?;
-    if needs_paren {
-        Ok(format!("({s})"))
-    } else {
-        Ok(s)
-    }
+    if needs_paren { Ok(format!("({s})")) } else { Ok(s) }
 }
 
 fn lower_literal(l: &Literal, ctx: &mut LowerCtx<'_>) -> String {

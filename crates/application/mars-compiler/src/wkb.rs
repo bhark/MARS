@@ -52,12 +52,20 @@ impl<'a> Cursor<'a> {
     fn u32(&mut self, le: bool) -> Result<u32, WkbError> {
         let b = self.take(4)?;
         let arr: [u8; 4] = [b[0], b[1], b[2], b[3]];
-        Ok(if le { u32::from_le_bytes(arr) } else { u32::from_be_bytes(arr) })
+        Ok(if le {
+            u32::from_le_bytes(arr)
+        } else {
+            u32::from_be_bytes(arr)
+        })
     }
     fn f64(&mut self, le: bool) -> Result<f64, WkbError> {
         let b = self.take(8)?;
         let arr: [u8; 8] = [b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]];
-        Ok(if le { f64::from_le_bytes(arr) } else { f64::from_be_bytes(arr) })
+        Ok(if le {
+            f64::from_le_bytes(arr)
+        } else {
+            f64::from_be_bytes(arr)
+        })
     }
 }
 
@@ -132,12 +140,7 @@ fn read_geom(c: &mut Cursor<'_>, allow_srid: bool) -> Result<GeomKind, WkbError>
     }
 }
 
-fn read_points(
-    c: &mut Cursor<'_>,
-    le: bool,
-    has_z: bool,
-    has_m: bool,
-) -> Result<Vec<(f64, f64)>, WkbError> {
+fn read_points(c: &mut Cursor<'_>, le: bool, has_z: bool, has_m: bool) -> Result<Vec<(f64, f64)>, WkbError> {
     let n = c.u32(le)? as usize;
     let mut out = Vec::with_capacity(n);
     for _ in 0..n {

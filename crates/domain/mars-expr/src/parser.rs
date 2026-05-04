@@ -108,8 +108,7 @@ fn tokenize(input: &str) -> Result<Vec<Spanned>, ExprError> {
                 i = end;
             }
             b'"' => return Err(parse_err(pos, "double-quoted strings are not allowed")),
-            b'+' | b'*' | b'/' | b'~' | b'%' | b'^' | b'&' | b'|' | b'?' | b'@' | b'#'
-            | b'$' | b':' | b';' => {
+            b'+' | b'*' | b'/' | b'~' | b'%' | b'^' | b'&' | b'|' | b'?' | b'@' | b'#' | b'$' | b':' | b';' => {
                 return Err(parse_err(pos, &format!("unexpected character '{}'", b as char)));
             }
             b'-' => {
@@ -212,8 +211,7 @@ fn read_number(bytes: &[u8], start: usize) -> Result<(Tok, usize), ExprError> {
             break;
         }
     }
-    let s = std::str::from_utf8(&bytes[start..i])
-        .map_err(|_| parse_err(start, "invalid number"))?;
+    let s = std::str::from_utf8(&bytes[start..i]).map_err(|_| parse_err(start, "invalid number"))?;
     if has_dot || has_exp {
         let v: f64 = s.parse().map_err(|_| parse_err(start, "invalid float"))?;
         Ok((Tok::Float(v), i))
@@ -290,11 +288,17 @@ impl Parser {
         while self.eat(&Tok::KwOr) {
             let rhs = self.parse_and()?;
             lhs = match lhs {
-                Expr::Logic { op: LogicOp::Or, mut args } => {
+                Expr::Logic {
+                    op: LogicOp::Or,
+                    mut args,
+                } => {
                     args.push(rhs);
                     Expr::Logic { op: LogicOp::Or, args }
                 }
-                other => Expr::Logic { op: LogicOp::Or, args: vec![other, rhs] },
+                other => Expr::Logic {
+                    op: LogicOp::Or,
+                    args: vec![other, rhs],
+                },
             };
         }
         Ok(lhs)
@@ -305,11 +309,17 @@ impl Parser {
         while self.eat(&Tok::KwAnd) {
             let rhs = self.parse_not()?;
             lhs = match lhs {
-                Expr::Logic { op: LogicOp::And, mut args } => {
+                Expr::Logic {
+                    op: LogicOp::And,
+                    mut args,
+                } => {
                     args.push(rhs);
                     Expr::Logic { op: LogicOp::And, args }
                 }
-                other => Expr::Logic { op: LogicOp::And, args: vec![other, rhs] },
+                other => Expr::Logic {
+                    op: LogicOp::And,
+                    args: vec![other, rhs],
+                },
             };
         }
         Ok(lhs)
@@ -331,32 +341,56 @@ impl Parser {
             Some(Tok::Eq) => {
                 self.bump();
                 let rhs = self.parse_primary()?;
-                Ok(Expr::Cmp { op: CmpOp::Eq, lhs: Box::new(lhs), rhs: Box::new(rhs) })
+                Ok(Expr::Cmp {
+                    op: CmpOp::Eq,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                })
             }
             Some(Tok::Ne) => {
                 self.bump();
                 let rhs = self.parse_primary()?;
-                Ok(Expr::Cmp { op: CmpOp::Ne, lhs: Box::new(lhs), rhs: Box::new(rhs) })
+                Ok(Expr::Cmp {
+                    op: CmpOp::Ne,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                })
             }
             Some(Tok::Lt) => {
                 self.bump();
                 let rhs = self.parse_primary()?;
-                Ok(Expr::Cmp { op: CmpOp::Lt, lhs: Box::new(lhs), rhs: Box::new(rhs) })
+                Ok(Expr::Cmp {
+                    op: CmpOp::Lt,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                })
             }
             Some(Tok::Le) => {
                 self.bump();
                 let rhs = self.parse_primary()?;
-                Ok(Expr::Cmp { op: CmpOp::Le, lhs: Box::new(lhs), rhs: Box::new(rhs) })
+                Ok(Expr::Cmp {
+                    op: CmpOp::Le,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                })
             }
             Some(Tok::Gt) => {
                 self.bump();
                 let rhs = self.parse_primary()?;
-                Ok(Expr::Cmp { op: CmpOp::Gt, lhs: Box::new(lhs), rhs: Box::new(rhs) })
+                Ok(Expr::Cmp {
+                    op: CmpOp::Gt,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                })
             }
             Some(Tok::Ge) => {
                 self.bump();
                 let rhs = self.parse_primary()?;
-                Ok(Expr::Cmp { op: CmpOp::Ge, lhs: Box::new(lhs), rhs: Box::new(rhs) })
+                Ok(Expr::Cmp {
+                    op: CmpOp::Ge,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                })
             }
             Some(Tok::KwIs) => {
                 self.bump();
@@ -371,12 +405,18 @@ impl Parser {
             Some(Tok::KwIn) => {
                 self.bump();
                 let list = self.parse_literal_list()?;
-                Ok(Expr::In { lhs: Box::new(lhs), list })
+                Ok(Expr::In {
+                    lhs: Box::new(lhs),
+                    list,
+                })
             }
             Some(Tok::KwLike) => {
                 self.bump();
                 let pat = self.expect_string("string after LIKE")?;
-                Ok(Expr::Like { lhs: Box::new(lhs), pattern: pat })
+                Ok(Expr::Like {
+                    lhs: Box::new(lhs),
+                    pattern: pat,
+                })
             }
             Some(Tok::KwNot) => {
                 // NOT IN / NOT LIKE
@@ -385,12 +425,18 @@ impl Parser {
                     Some(Tok::KwIn) => {
                         self.bump();
                         let list = self.parse_literal_list()?;
-                        Ok(Expr::Not(Box::new(Expr::In { lhs: Box::new(lhs), list })))
+                        Ok(Expr::Not(Box::new(Expr::In {
+                            lhs: Box::new(lhs),
+                            list,
+                        })))
                     }
                     Some(Tok::KwLike) => {
                         self.bump();
                         let pat = self.expect_string("string after NOT LIKE")?;
-                        Ok(Expr::Not(Box::new(Expr::Like { lhs: Box::new(lhs), pattern: pat })))
+                        Ok(Expr::Not(Box::new(Expr::Like {
+                            lhs: Box::new(lhs),
+                            pattern: pat,
+                        })))
                     }
                     _ => Err(parse_err(self.pos(), "expected IN or LIKE after NOT")),
                 }

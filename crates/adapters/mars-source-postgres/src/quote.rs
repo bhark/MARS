@@ -11,9 +11,7 @@ pub(crate) fn quote_ident(name: &str) -> Result<String, SourceError> {
         return Err(SourceError::Backend("empty identifier".into()));
     }
     if name.contains('.') {
-        return Err(SourceError::Backend(format!(
-            "dotted identifier rejected: {name}"
-        )));
+        return Err(SourceError::Backend(format!("dotted identifier rejected: {name}")));
     }
     if name.contains('\0') {
         return Err(SourceError::Backend("identifier contains NUL".into()));
@@ -53,10 +51,7 @@ mod tests {
 
     #[test]
     fn rejects_nul() {
-        assert!(matches!(
-            quote_ident("a\0b"),
-            Err(SourceError::Backend(_))
-        ));
+        assert!(matches!(quote_ident("a\0b"), Err(SourceError::Backend(_))));
     }
 
     #[test]

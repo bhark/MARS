@@ -10,8 +10,8 @@ use std::sync::Arc;
 use mars_artifact::{ArtifactReader, SectionKind, decode_class_assignment};
 use mars_compiler::{Compiler, Deps};
 use mars_config::{
-    Artifacts, ArtifactCache, ArtifactStore, Cells, Class, ClassStyle, Config, Interfaces,
-    Layer, Scales, ServiceMeta, Source as CfgSource, SourceBinding as CfgBinding, model::Band,
+    ArtifactCache, ArtifactStore, Artifacts, Cells, Class, ClassStyle, Config, Interfaces, Layer, Scales, ServiceMeta,
+    Source as CfgSource, SourceBinding as CfgBinding, model::Band,
 };
 use mars_source::{AttrValue, RowBytes, SourceCollectionId};
 use mars_store::ObjectStore;
@@ -90,13 +90,17 @@ fn make_config() -> Config {
                     name: "a".to_string(),
                     title: String::new(),
                     when: Some("attr = 'a'".to_string()),
-                    style: ClassStyle::Ref { ref_: "style_a".to_string() },
+                    style: ClassStyle::Ref {
+                        ref_: "style_a".to_string(),
+                    },
                 },
                 Class {
                     name: "b".to_string(),
                     title: String::new(),
                     when: Some("attr = 'b'".to_string()),
-                    style: ClassStyle::Ref { ref_: "style_b".to_string() },
+                    style: ClassStyle::Ref {
+                        ref_: "style_b".to_string(),
+                    },
                 },
             ],
             label: None,
@@ -107,22 +111,10 @@ fn make_config() -> Config {
 
 fn make_rows() -> Vec<RowBytes> {
     let mut out = Vec::new();
-    let polys: [(u64, &str); 5] = [
-        (1, "a"),
-        (2, "a"),
-        (3, "a"),
-        (4, "b"),
-        (5, "b"),
-    ];
+    let polys: [(u64, &str); 5] = [(1, "a"), (2, "a"), (3, "a"), (4, "b"), (5, "b")];
     for (id, val) in polys {
         let dx = (id as f64) * 10.0;
-        let coords = [
-            (dx, dx),
-            (dx + 5.0, dx),
-            (dx + 5.0, dx + 5.0),
-            (dx, dx + 5.0),
-            (dx, dx),
-        ];
+        let coords = [(dx, dx), (dx + 5.0, dx), (dx + 5.0, dx + 5.0), (dx, dx + 5.0), (dx, dx)];
         out.push(RowBytes {
             feature_id: id,
             geometry: wkb_polygon(&coords),
@@ -132,10 +124,7 @@ fn make_rows() -> Vec<RowBytes> {
     out
 }
 
-fn build_deps(
-    tmp: &TempDir,
-    rows: Vec<RowBytes>,
-) -> (Deps, Arc<FsStore>, Arc<FsPublisher>) {
+fn build_deps(tmp: &TempDir, rows: Vec<RowBytes>) -> (Deps, Arc<FsStore>, Arc<FsPublisher>) {
     let store = Arc::new(FsStore::new(tmp.path()).unwrap());
     let publisher = Arc::new(FsPublisher::new(tmp.path()).unwrap());
 

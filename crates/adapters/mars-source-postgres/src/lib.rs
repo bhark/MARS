@@ -18,9 +18,7 @@ use async_trait::async_trait;
 use deadpool_postgres::{Config as PoolConfig, Pool, Runtime};
 use futures_core::stream::BoxStream;
 use mars_expr::Expr;
-use mars_source::{
-    ChangeEvent, ChangeFeed, RowBytes, Source, SourceBinding, SourceError,
-};
+use mars_source::{ChangeEvent, ChangeFeed, RowBytes, Source, SourceBinding, SourceError};
 use mars_types::{Bbox, Cell};
 use tokio_postgres::NoTls;
 
@@ -53,8 +51,8 @@ impl PgSource {
     /// Connect (open the pool) using the supplied DSN. Does not establish
     /// any connection up front; the first `fetch_cell` call will.
     pub async fn connect(cfg: PgConfig) -> Result<Self, SourceError> {
-        let pg_cfg = tokio_postgres::Config::from_str(&cfg.dsn)
-            .map_err(|e| SourceError::Backend(format!("dsn: {e}")))?;
+        let pg_cfg =
+            tokio_postgres::Config::from_str(&cfg.dsn).map_err(|e| SourceError::Backend(format!("dsn: {e}")))?;
         let mut pool_cfg = PoolConfig::new();
         pool_cfg.host = pg_cfg.get_hosts().first().and_then(|h| match h {
             tokio_postgres::config::Host::Tcp(s) => Some(s.clone()),
@@ -63,9 +61,7 @@ impl PgSource {
         });
         pool_cfg.port = pg_cfg.get_ports().first().copied();
         pool_cfg.user = pg_cfg.get_user().map(str::to_owned);
-        pool_cfg.password = pg_cfg
-            .get_password()
-            .map(|b| String::from_utf8_lossy(b).into_owned());
+        pool_cfg.password = pg_cfg.get_password().map(|b| String::from_utf8_lossy(b).into_owned());
         pool_cfg.dbname = pg_cfg.get_dbname().map(str::to_owned);
 
         let pool = pool_cfg
@@ -108,9 +104,7 @@ impl Source for PgSource {
 
 #[async_trait]
 impl ChangeFeed for PgSource {
-    async fn subscribe(
-        &self,
-    ) -> Result<BoxStream<'static, Result<ChangeEvent, SourceError>>, SourceError> {
+    async fn subscribe(&self) -> Result<BoxStream<'static, Result<ChangeEvent, SourceError>>, SourceError> {
         // pgoutput subscription is Phase 1. one-shot warn, then NotImplemented.
         if !self.feed_warned.swap(true, Ordering::Relaxed) {
             tracing::warn!("phase-1: pgoutput subscription not yet implemented");
@@ -145,9 +139,9 @@ mod e2e_tests {
     use mars_source::SourceCollectionId;
     use mars_types::{CrsCode, ScaleBand};
     use testcontainers::{
+        GenericImage, ImageExt,
         core::{IntoContainerPort, WaitFor},
         runners::AsyncRunner,
-        GenericImage, ImageExt,
     };
 
     #[tokio::test]
@@ -167,9 +161,7 @@ mod e2e_tests {
             .expect("docker available");
 
         let port = container.get_host_port_ipv4(5432).await.unwrap();
-        let dsn = format!(
-            "host=127.0.0.1 port={port} user=mars password=pw dbname=mars"
-        );
+        let dsn = format!("host=127.0.0.1 port={port} user=mars password=pw dbname=mars");
 
         // setup table
         let setup = PgConfig {

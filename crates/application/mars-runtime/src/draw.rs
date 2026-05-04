@@ -2,8 +2,8 @@
 //! feature_id, viewport bbox filter, world→pixel transform, push DrawOp::Path.
 
 use mars_artifact::{
-    ArtifactReader, FeatureGeom, GeomKind, SectionKind, decode_class_assignment,
-    decode_geometry_payload, decode_style_refs,
+    ArtifactReader, FeatureGeom, GeomKind, SectionKind, decode_class_assignment, decode_geometry_payload,
+    decode_style_refs,
 };
 use mars_render_port::{DrawOp, Path};
 use mars_style::{Style, Stylesheet};
@@ -108,14 +108,9 @@ pub(crate) fn emit_layer_cell(
 fn build_draw_op(feat: &FeatureGeom, vp: Viewport, style: &Style) -> Option<DrawOp> {
     let rings = match &feat.geom {
         GeomKind::Polygon(rs) => project_polygon(rs, vp, true),
-        GeomKind::MultiPolygon(parts) => parts
-            .iter()
-            .flat_map(|rs| project_polygon(rs, vp, true))
-            .collect(),
+        GeomKind::MultiPolygon(parts) => parts.iter().flat_map(|rs| project_polygon(rs, vp, true)).collect(),
         GeomKind::LineString(verts) => vec![project_ring(verts, vp, false)],
-        GeomKind::MultiLineString(parts) => {
-            parts.iter().map(|p| project_ring(p, vp, false)).collect()
-        }
+        GeomKind::MultiLineString(parts) => parts.iter().map(|p| project_ring(p, vp, false)).collect(),
         // phase 0: points only meaningful with a fill; emit a 1px square. skip
         // if no fill style is configured.
         GeomKind::Point((x, y)) => {
@@ -150,11 +145,5 @@ fn project_ring(verts: &[(f64, f64)], vp: Viewport, close: bool) -> Vec<(f32, f3
 
 fn project_point_square(x: f64, y: f64, vp: Viewport) -> Vec<(f32, f32)> {
     let (px, py) = vp.project(x, y);
-    vec![
-        (px, py),
-        (px + 1.0, py),
-        (px + 1.0, py + 1.0),
-        (px, py + 1.0),
-        (px, py),
-    ]
+    vec![(px, py), (px + 1.0, py), (px + 1.0, py + 1.0), (px, py + 1.0), (px, py)]
 }

@@ -38,22 +38,17 @@ pub struct ServerConfig {
     pub debug_endpoints: bool,
 }
 
-/// Shared per-request state. The runtime is optional so `/readyz` can
-/// distinguish "binary up, manifest absent" from "binary up, manifest present".
+/// Shared per-request state.
 #[derive(Clone)]
 struct AppState {
-    runtime: Option<Arc<Runtime>>,
+    runtime: Arc<Runtime>,
     capabilities: Arc<String>,
     wms_cfg: Arc<WmsConfig>,
     request_counter: Arc<AtomicU64>,
 }
 
 /// Build the router. Exposed for in-process testing via `tower::ServiceExt`.
-pub fn router(
-    runtime: Option<Arc<Runtime>>,
-    capabilities: String,
-    wms_cfg: WmsConfig,
-) -> Router {
+pub fn router(runtime: Arc<Runtime>, capabilities: String, wms_cfg: WmsConfig) -> Router {
     let state = AppState {
         runtime,
         capabilities: Arc::new(capabilities),
@@ -68,12 +63,10 @@ pub fn router(
         .with_state(state)
 }
 
-/// Run the HTTP server until ctrl_c. `runtime` may be `None` when no manifest
-/// has been published yet — `/wms` GetMap will then 503, but `/healthz`,
-/// `/readyz` and capabilities still work.
+/// Run the HTTP server until ctrl_c.
 pub async fn serve(
     cfg: ServerConfig,
-    runtime: Option<Arc<Runtime>>,
+    runtime: Arc<Runtime>,
     capabilities_body: String,
     wms_cfg: WmsConfig,
 ) -> Result<(), HttpError> {
@@ -106,9 +99,7 @@ async fn handle_wms(
     let span = tracing::info_span!("wms", req_id = %req_id);
     let _g = span.enter();
 
-    let raw = raw_query
-        .and_then(|q| q.0)
-        .unwrap_or_default();
+    let raw = raw_query.and_then(|q| q.0).unwrap_or_default();
 
     let parsed = match mars_wms::parse_request(&raw, &state.wms_cfg) {
         Ok(r) => r,
@@ -118,18 +109,12 @@ async fn handle_wms(
     match parsed {
         WmsRequest::GetCapabilities => {
             let mut h = HeaderMap::new();
-            h.insert(
-                header::CONTENT_TYPE,
-                HeaderValue::from_static("application/xml"),
-            );
+            h.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/xml"));
             (StatusCode::OK, h, state.capabilities.as_str().to_owned()).into_response()
         }
         WmsRequest::GetMap(plan) => {
-            let Some(rt) = state.runtime.as_ref() else {
-                return (StatusCode::SERVICE_UNAVAILABLE, "no manifest loaded").into_response();
-            };
             let mime = plan.format.mime();
-            match rt.render(&plan).await {
+            match state.runtime.render(&plan).await {
                 Ok(bytes) => {
                     let mut h = HeaderMap::new();
                     h.insert(header::CONTENT_TYPE, HeaderValue::from_static(mime));
@@ -142,7 +127,7 @@ async fn handle_wms(
 }
 
 async fn handle_ready(State(state): State<AppState>) -> Response {
-    if state.runtime.is_some() {
+    if state.runtime.is_ready() {
         (StatusCode::OK, "ready").into_response()
     } else {
         (StatusCode::SERVICE_UNAVAILABLE, "no manifest").into_response()
@@ -152,12 +137,7 @@ async fn handle_ready(State(state): State<AppState>) -> Response {
 async fn handle_metrics() -> Response {
     let mut h = HeaderMap::new();
     h.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/plain"));
-    (
-        StatusCode::OK,
-        h,
-        "# phase-0 metrics not yet wired\n".to_owned(),
-    )
-        .into_response()
+    (StatusCode::OK, h, "# phase-0 metrics not yet wired\n".to_owned()).into_response()
 }
 
 // ---------- helpers ----------
@@ -180,10 +160,9 @@ fn wms_error_response(e: WmsError) -> Response {
 
 fn runtime_error_response(e: RuntimeError) -> Response {
     let status = match &e {
+        RuntimeError::NotReady => StatusCode::SERVICE_UNAVAILABLE,
         RuntimeError::CrsNotCanonical { .. } => StatusCode::NOT_IMPLEMENTED,
-        RuntimeError::ManifestEntryMissing { .. } | RuntimeError::SourceMissing { .. } => {
-            StatusCode::NOT_FOUND
-        }
+        RuntimeError::ManifestEntryMissing { .. } | RuntimeError::SourceMissing { .. } => StatusCode::NOT_FOUND,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     };
     tracing::error!(error = %e, "render failed");
@@ -196,16 +175,59 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::Request;
-    use mars_types::{CrsCode, ImageFormat};
+    use mars_render_port::{Canvas, ImageFormat as RenderImageFormat, RenderError, Renderer};
+    use mars_runtime::{Deps, RuntimeState};
+    use mars_store::stub::{NotImplementedCache, NotImplementedStore};
+    use mars_types::{CrsCode, ImageFormat, Manifest};
     use tower::ServiceExt;
 
-    fn empty_router(with_runtime: bool) -> Router {
-        let _ = with_runtime; // Phase 0: tests cover the no-manifest paths.
+    #[derive(Debug)]
+    struct NoopRenderer;
+
+    #[async_trait::async_trait]
+    impl Renderer for NoopRenderer {
+        async fn render(
+            &self,
+            _canvas: Canvas,
+            _ops: &[mars_render_port::DrawOp],
+            _format: RenderImageFormat,
+        ) -> Result<Vec<u8>, RenderError> {
+            Ok(Vec::new())
+        }
+    }
+
+    fn empty_runtime() -> Arc<Runtime> {
+        Arc::new(Runtime::empty(Deps {
+            store: Arc::new(NotImplementedStore),
+            cache: Arc::new(NotImplementedCache),
+            renderer: Arc::new(NoopRenderer),
+        }))
+    }
+
+    fn empty_router() -> Router {
         let cfg = WmsConfig {
             allowlist_crs: vec![CrsCode::new("EPSG:25832")],
             formats: vec![ImageFormat::Png],
         };
-        router(None, "<caps/>".into(), cfg)
+        router(empty_runtime(), "<caps/>".into(), cfg)
+    }
+
+    fn ready_state() -> RuntimeState {
+        RuntimeState {
+            canonical_crs: CrsCode::new("EPSG:25832"),
+            bands: Vec::new(),
+            layer_order: Vec::new(),
+            stylesheet: Default::default(),
+            manifest: Manifest {
+                version: 1,
+                service: "test".into(),
+                source_artifacts: Vec::new(),
+                layer_artifacts: Vec::new(),
+                style_artifact: None,
+            },
+            layer_index: Default::default(),
+            source_index: Default::default(),
+        }
     }
 
     async fn body_str(resp: Response) -> String {
@@ -215,7 +237,7 @@ mod tests {
 
     #[tokio::test]
     async fn healthz_ok() {
-        let app = empty_router(false);
+        let app = empty_router();
         let resp = app
             .oneshot(Request::builder().uri("/healthz").body(Body::empty()).unwrap())
             .await
@@ -226,7 +248,7 @@ mod tests {
 
     #[tokio::test]
     async fn readyz_503_without_manifest() {
-        let app = empty_router(false);
+        let app = empty_router();
         let resp = app
             .oneshot(Request::builder().uri("/readyz").body(Body::empty()).unwrap())
             .await
@@ -235,8 +257,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn readyz_200_after_swap_state() {
+        let runtime = empty_runtime();
+        let cfg = WmsConfig {
+            allowlist_crs: vec![CrsCode::new("EPSG:25832")],
+            formats: vec![ImageFormat::Png],
+        };
+        let app = router(runtime.clone(), "<caps/>".into(), cfg);
+        runtime.swap_state(Arc::new(ready_state()));
+
+        let resp = app
+            .oneshot(Request::builder().uri("/readyz").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
     async fn wms_capabilities_200() {
-        let app = empty_router(false);
+        let app = empty_router();
         let resp = app
             .oneshot(
                 Request::builder()
@@ -253,7 +292,7 @@ mod tests {
 
     #[tokio::test]
     async fn wms_invalid_400() {
-        let app = empty_router(false);
+        let app = empty_router();
         let resp = app
             .oneshot(
                 Request::builder()
@@ -267,8 +306,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn wms_get_map_503_without_manifest() {
+        let app = empty_router();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/wms?service=WMS&version=1.3.0&request=GetMap&layers=a&styles=&crs=EPSG:25832&bbox=0,0,10,10&width=16&height=16&format=image/png")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
     async fn metrics_placeholder() {
-        let app = empty_router(false);
+        let app = empty_router();
         let resp = app
             .oneshot(Request::builder().uri("/metrics").body(Body::empty()).unwrap())
             .await

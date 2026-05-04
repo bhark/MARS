@@ -39,8 +39,7 @@ pub fn capabilities_xml(cfg: &Config, _manifest: &Manifest) -> Result<String, Wm
         w.write_event(Event::End(BytesEnd::new("ContactInformation")))
             .map_err(xml_err)?;
     }
-    w.write_event(Event::End(BytesEnd::new("Service")))
-        .map_err(xml_err)?;
+    w.write_event(Event::End(BytesEnd::new("Service"))).map_err(xml_err)?;
 
     // capability block
     w.write_event(Event::Start(BytesStart::new("Capability")))
@@ -50,18 +49,14 @@ pub fn capabilities_xml(cfg: &Config, _manifest: &Manifest) -> Result<String, Wm
     w.write_event(Event::Start(BytesStart::new("Request")))
         .map_err(xml_err)?;
     for op in ["GetCapabilities", "GetMap"] {
-        w.write_event(Event::Start(BytesStart::new(op)))
-            .map_err(xml_err)?;
+        w.write_event(Event::Start(BytesStart::new(op))).map_err(xml_err)?;
         text_element(&mut w, "Format", "image/png")?;
-        w.write_event(Event::End(BytesEnd::new(op)))
-            .map_err(xml_err)?;
+        w.write_event(Event::End(BytesEnd::new(op))).map_err(xml_err)?;
     }
-    w.write_event(Event::End(BytesEnd::new("Request")))
-        .map_err(xml_err)?;
+    w.write_event(Event::End(BytesEnd::new("Request"))).map_err(xml_err)?;
 
     // root layer
-    w.write_event(Event::Start(BytesStart::new("Layer")))
-        .map_err(xml_err)?;
+    w.write_event(Event::Start(BytesStart::new("Layer"))).map_err(xml_err)?;
     text_element(&mut w, "Title", &cfg.service.title)?;
 
     // crs allowlist
@@ -71,8 +66,7 @@ pub fn capabilities_xml(cfg: &Config, _manifest: &Manifest) -> Result<String, Wm
 
     // child layers
     for layer in &cfg.layers {
-        w.write_event(Event::Start(BytesStart::new("Layer")))
-            .map_err(xml_err)?;
+        w.write_event(Event::Start(BytesStart::new("Layer"))).map_err(xml_err)?;
         text_element(&mut w, "Name", layer.name.as_str())?;
         text_element(&mut w, "Title", &layer.title)?;
         if !layer.abstract_.is_empty() {
@@ -87,32 +81,25 @@ pub fn capabilities_xml(cfg: &Config, _manifest: &Manifest) -> Result<String, Wm
             bb.push_attribute(("maxy", bbox.max_y.to_string().as_str()));
             w.write_event(Event::Empty(bb)).map_err(xml_err)?;
         }
-        w.write_event(Event::End(BytesEnd::new("Layer")))
-            .map_err(xml_err)?;
+        w.write_event(Event::End(BytesEnd::new("Layer"))).map_err(xml_err)?;
     }
 
-    w.write_event(Event::End(BytesEnd::new("Layer")))
-        .map_err(xml_err)?;
+    w.write_event(Event::End(BytesEnd::new("Layer"))).map_err(xml_err)?;
     w.write_event(Event::End(BytesEnd::new("Capability")))
         .map_err(xml_err)?;
     w.write_event(Event::End(BytesEnd::new("WMS_Capabilities")))
         .map_err(xml_err)?;
 
-    String::from_utf8(buf.into_inner())
-        .map_err(|e| WmsError::InvalidParam { name: "capabilities", reason: e.to_string() })
+    String::from_utf8(buf.into_inner()).map_err(|e| WmsError::InvalidParam {
+        name: "capabilities",
+        reason: e.to_string(),
+    })
 }
 
-fn text_element<W: std::io::Write>(
-    w: &mut Writer<W>,
-    name: &str,
-    text: &str,
-) -> Result<(), WmsError> {
-    w.write_event(Event::Start(BytesStart::new(name)))
-        .map_err(xml_err)?;
-    w.write_event(Event::Text(BytesText::new(text)))
-        .map_err(xml_err)?;
-    w.write_event(Event::End(BytesEnd::new(name)))
-        .map_err(xml_err)?;
+fn text_element<W: std::io::Write>(w: &mut Writer<W>, name: &str, text: &str) -> Result<(), WmsError> {
+    w.write_event(Event::Start(BytesStart::new(name))).map_err(xml_err)?;
+    w.write_event(Event::Text(BytesText::new(text))).map_err(xml_err)?;
+    w.write_event(Event::End(BytesEnd::new(name))).map_err(xml_err)?;
     Ok(())
 }
 

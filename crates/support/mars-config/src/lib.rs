@@ -56,8 +56,8 @@ pub enum ConfigError {
 pub fn load(path: impl AsRef<Path>) -> Result<Config, ConfigError> {
     let path = path.as_ref();
     let value = include::load_with_includes(path)?;
-    let config: Config = serde_yml::from_value(value)
-        .map_err(|e| ConfigError::Parse(format!("{}: {e}", path.display())))?;
+    let config: Config =
+        serde_yml::from_value(value).map_err(|e| ConfigError::Parse(format!("{}: {e}", path.display())))?;
     Ok(config)
 }
 
@@ -73,12 +73,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Config, ConfigError> {
 pub fn validate(config: &Config, config_dir: &Path) -> Result<(), ConfigError> {
     let _ = config_dir;
 
-    let band_names: std::collections::BTreeSet<&str> = config
-        .scales
-        .bands
-        .iter()
-        .map(|b| b.name.as_str())
-        .collect();
+    let band_names: std::collections::BTreeSet<&str> = config.scales.bands.iter().map(|b| b.name.as_str()).collect();
 
     for k in config.cells.size_per_band.keys() {
         if !band_names.contains(k.as_str()) {

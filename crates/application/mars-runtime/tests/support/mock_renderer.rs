@@ -16,12 +16,7 @@ pub(crate) struct MockRenderer {
 
 #[async_trait]
 impl Renderer for MockRenderer {
-    async fn render(
-        &self,
-        _canvas: Canvas,
-        ops: &[DrawOp],
-        _format: ImageFormat,
-    ) -> Result<Vec<u8>, RenderError> {
+    async fn render(&self, _canvas: Canvas, ops: &[DrawOp], _format: ImageFormat) -> Result<Vec<u8>, RenderError> {
         self.ops.lock().expect("mock renderer lock").push(ops.to_vec());
         Ok(CANNED_BYTES.to_vec())
     }

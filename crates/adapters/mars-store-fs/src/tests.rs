@@ -1,9 +1,11 @@
 use std::os::unix::fs::symlink;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use bytes::Bytes;
+use futures_util::StreamExt;
 use mars_artifact::compute_content_hash;
-use mars_store::{LocalCache, ManifestPublisher, ObjectStore, StoreError};
+use mars_store::{LocalCache, ManifestPublisher, ManifestWatch, ObjectStore, StoreError};
 use mars_types::{ArtifactKey, ContentHash, Manifest};
 use tempfile::TempDir;
 
@@ -11,6 +13,16 @@ use super::*;
 
 fn k(s: &str) -> ArtifactKey {
     ArtifactKey::new(s)
+}
+
+fn manifest(version: u64) -> Manifest {
+    Manifest {
+        version,
+        service: "svc".into(),
+        source_artifacts: vec![],
+        layer_artifacts: vec![],
+        style_artifact: None,
+    }
 }
 
 #[tokio::test]
@@ -88,28 +100,125 @@ async fn publish_atomicity_and_recovery() {
     let td = TempDir::new().unwrap();
     let pub1 = FsPublisher::new(td.path()).unwrap();
 
-    let m1 = Manifest {
-        version: 1,
-        service: "svc".into(),
-        source_artifacts: vec![],
-        layer_artifacts: vec![],
-        style_artifact: None,
-    };
+    let m1 = manifest(1);
     pub1.publish(&m1).await.unwrap();
     assert_eq!(pub1.read_current().unwrap().as_deref(), Some("v1"));
 
-    let m2 = Manifest { version: 2, ..m1.clone() };
+    let m2 = Manifest {
+        version: 2,
+        ..m1.clone()
+    };
     pub1.publish(&m2).await.unwrap();
     assert_eq!(pub1.read_current().unwrap().as_deref(), Some("v2"));
 
     // simulate a crash mid-publish: write v3 body but skip the pointer swap.
-    let v3_body = serde_json::to_vec_pretty(&Manifest { version: 3, ..m1.clone() }).unwrap();
+    let v3_body = serde_json::to_vec_pretty(&Manifest {
+        version: 3,
+        ..m1.clone()
+    })
+    .unwrap();
     let v3_path = pub1.manifests_dir().join("v3.json");
     std::fs::write(&v3_path, &v3_body).unwrap();
 
     // a freshly-constructed publisher must still see v2 as current.
     let pub2 = FsPublisher::new(td.path()).unwrap();
     assert_eq!(pub2.read_current().unwrap().as_deref(), Some("v2"));
+}
+
+#[tokio::test]
+async fn watch_waits_when_current_is_absent() {
+    let td = TempDir::new().unwrap();
+    let publisher = FsPublisher::new_with_poll_interval(td.path(), Duration::from_millis(10)).unwrap();
+    let mut stream = publisher.watch().await.unwrap();
+
+    let next = tokio::time::timeout(Duration::from_millis(40), stream.next()).await;
+    assert!(next.is_err(), "watcher yielded without current");
+}
+
+#[tokio::test]
+async fn watch_yields_existing_current_on_subscribe() {
+    let td = TempDir::new().unwrap();
+    let publisher = FsPublisher::new_with_poll_interval(td.path(), Duration::from_millis(10)).unwrap();
+    publisher.publish(&manifest(1)).await.unwrap();
+
+    let mut stream = publisher.watch().await.unwrap();
+    let got = tokio::time::timeout(Duration::from_millis(100), stream.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(got.version, 1);
+}
+
+#[tokio::test]
+async fn watch_yields_changed_pointer() {
+    let td = TempDir::new().unwrap();
+    let publisher = FsPublisher::new_with_poll_interval(td.path(), Duration::from_millis(10)).unwrap();
+    publisher.publish(&manifest(1)).await.unwrap();
+
+    let mut stream = publisher.watch().await.unwrap();
+    let first = tokio::time::timeout(Duration::from_millis(100), stream.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.version, 1);
+
+    publisher.publish(&manifest(2)).await.unwrap();
+    let second = tokio::time::timeout(Duration::from_millis(100), stream.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(second.version, 2);
+}
+
+#[tokio::test]
+async fn watch_reports_bad_pointer_then_recovers() {
+    let td = TempDir::new().unwrap();
+    let publisher = FsPublisher::new_with_poll_interval(td.path(), Duration::from_millis(10)).unwrap();
+    std::fs::create_dir_all(publisher.manifests_dir()).unwrap();
+    std::fs::write(publisher.manifests_dir().join("current"), "../bad").unwrap();
+
+    let mut stream = publisher.watch().await.unwrap();
+    let bad = tokio::time::timeout(Duration::from_millis(100), stream.next())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(bad, Err(StoreError::Backend(_))));
+
+    publisher.publish(&manifest(1)).await.unwrap();
+    let recovered = tokio::time::timeout(Duration::from_millis(100), stream.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(recovered.version, 1);
+}
+
+#[tokio::test]
+async fn watch_throttles_repeated_bad_pointer_errors() {
+    let td = TempDir::new().unwrap();
+    let poll_interval = Duration::from_millis(50);
+    let publisher = FsPublisher::new_with_poll_interval(td.path(), poll_interval).unwrap();
+    std::fs::create_dir_all(publisher.manifests_dir()).unwrap();
+    std::fs::write(publisher.manifests_dir().join("current"), "../bad").unwrap();
+
+    let mut stream = publisher.watch().await.unwrap();
+    let first = tokio::time::timeout(Duration::from_millis(100), stream.next())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(first, Err(StoreError::Backend(_))));
+
+    let repeated = tokio::time::timeout(Duration::from_millis(15), stream.next()).await;
+    assert!(repeated.is_err(), "watcher repeated an error without sleeping");
+
+    let second = tokio::time::timeout(Duration::from_millis(100), stream.next())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(second, Err(StoreError::Backend(_))));
 }
 
 #[tokio::test]
@@ -125,10 +234,7 @@ async fn symlink_escape_rejected() {
     let link = td.path().join("escape");
     symlink(&target, &link).unwrap();
 
-    let err = store
-        .get(&k("escape"), ContentHash::zero())
-        .await
-        .unwrap_err();
+    let err = store.get(&k("escape"), ContentHash::zero()).await.unwrap_err();
     assert!(
         matches!(err, StoreError::Backend(_)),
         "expected backend rejection, got {err:?}"

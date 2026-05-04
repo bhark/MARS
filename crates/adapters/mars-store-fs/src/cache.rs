@@ -29,8 +29,7 @@ impl FsCache {
     pub fn new(root: impl Into<PathBuf>) -> Result<Self, StoreError> {
         let raw = root.into();
         if !raw.exists() {
-            std::fs::create_dir_all(&raw)
-                .map_err(|e| StoreError::Backend(format!("create cache root: {e}")))?;
+            std::fs::create_dir_all(&raw).map_err(|e| StoreError::Backend(format!("create cache root: {e}")))?;
         }
         let root = raw
             .canonicalize()

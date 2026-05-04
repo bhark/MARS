@@ -361,10 +361,7 @@ mod tests {
         assert!(matches!(eval(&e, &attrs(&[])), Err(ExprError::UnknownIdent(_))));
         // explicit Null → IS NULL true
         let e = parse("x IS NULL").unwrap();
-        assert_eq!(
-            eval(&e, &attrs(&[("x", Literal::Null)])).unwrap(),
-            Literal::Bool(true)
-        );
+        assert_eq!(eval(&e, &attrs(&[("x", Literal::Null)])).unwrap(), Literal::Bool(true));
         // set value → IS NULL false
         assert_eq!(
             eval(&e, &attrs(&[("x", Literal::Int(7))])).unwrap(),
@@ -377,8 +374,14 @@ mod tests {
         let a = attrs(&[("s", Literal::String("foobar".into()))]);
         assert_eq!(eval(&parse("s LIKE 'foo%'").unwrap(), &a).unwrap(), Literal::Bool(true));
         assert_eq!(eval(&parse("s LIKE '%bar'").unwrap(), &a).unwrap(), Literal::Bool(true));
-        assert_eq!(eval(&parse("s LIKE 'f__bar'").unwrap(), &a).unwrap(), Literal::Bool(true));
-        assert_eq!(eval(&parse("s LIKE 'baz%'").unwrap(), &a).unwrap(), Literal::Bool(false));
+        assert_eq!(
+            eval(&parse("s LIKE 'f__bar'").unwrap(), &a).unwrap(),
+            Literal::Bool(true)
+        );
+        assert_eq!(
+            eval(&parse("s LIKE 'baz%'").unwrap(), &a).unwrap(),
+            Literal::Bool(false)
+        );
         assert_eq!(eval(&parse("s LIKE '%'").unwrap(), &a).unwrap(), Literal::Bool(true));
         assert_eq!(eval(&parse("s LIKE '_'").unwrap(), &a).unwrap(), Literal::Bool(false));
     }
@@ -461,10 +464,7 @@ mod proptests {
     // primary = literal or ident. cmp / in / like / is-null lhs/rhs must be a
     // primary because the parser's postfix predicates don't chain on each other.
     fn arb_primary() -> impl Strategy<Value = Expr> {
-        prop_oneof![
-            arb_literal().prop_map(Expr::Literal),
-            arb_ident().prop_map(Expr::Ident),
-        ]
+        prop_oneof![arb_literal().prop_map(Expr::Literal), arb_ident().prop_map(Expr::Ident),]
     }
 
     fn arb_predicate() -> impl Strategy<Value = Expr> {
@@ -475,10 +475,14 @@ mod proptests {
                 lhs: Box::new(l),
                 rhs: Box::new(r),
             }),
-            (arb_primary(), prop::collection::vec(arb_literal(), 0..4))
-                .prop_map(|(lhs, list)| Expr::In { lhs: Box::new(lhs), list }),
-            (arb_primary(), "[a-zA-Z0-9_%]{0,8}")
-                .prop_map(|(lhs, pat)| Expr::Like { lhs: Box::new(lhs), pattern: pat }),
+            (arb_primary(), prop::collection::vec(arb_literal(), 0..4)).prop_map(|(lhs, list)| Expr::In {
+                lhs: Box::new(lhs),
+                list
+            }),
+            (arb_primary(), "[a-zA-Z0-9_%]{0,8}").prop_map(|(lhs, pat)| Expr::Like {
+                lhs: Box::new(lhs),
+                pattern: pat
+            }),
             arb_primary().prop_map(|e| Expr::IsNull(Box::new(e))),
             arb_primary().prop_map(|e| Expr::IsNotNull(Box::new(e))),
         ]
@@ -509,7 +513,10 @@ mod proptests {
                 for a in args {
                     let a = canonicalize(a);
                     match a {
-                        Expr::Logic { op: inner_op, args: inner_args } if inner_op == op => {
+                        Expr::Logic {
+                            op: inner_op,
+                            args: inner_args,
+                        } if inner_op == op => {
                             flat.extend(inner_args);
                         }
                         other => flat.push(other),
@@ -523,10 +530,14 @@ mod proptests {
                 rhs: Box::new(canonicalize(*rhs)),
             },
             Expr::Not(inner) => Expr::Not(Box::new(canonicalize(*inner))),
-            Expr::In { lhs, list } => Expr::In { lhs: Box::new(canonicalize(*lhs)), list },
-            Expr::Like { lhs, pattern } => {
-                Expr::Like { lhs: Box::new(canonicalize(*lhs)), pattern }
-            }
+            Expr::In { lhs, list } => Expr::In {
+                lhs: Box::new(canonicalize(*lhs)),
+                list,
+            },
+            Expr::Like { lhs, pattern } => Expr::Like {
+                lhs: Box::new(canonicalize(*lhs)),
+                pattern,
+            },
             Expr::IsNull(i) => Expr::IsNull(Box::new(canonicalize(*i))),
             Expr::IsNotNull(i) => Expr::IsNotNull(Box::new(canonicalize(*i))),
             other => other,

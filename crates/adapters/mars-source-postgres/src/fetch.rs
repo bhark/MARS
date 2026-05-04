@@ -29,10 +29,7 @@ pub(crate) async fn fetch_cell(
         .await
         .map_err(|e| SourceError::Backend(format!("prepare: {e}")))?;
 
-    let pg_params: Vec<&(dyn ToSql + Sync)> = params
-        .iter()
-        .map(|p| p as &(dyn ToSql + Sync))
-        .collect();
+    let pg_params: Vec<&(dyn ToSql + Sync)> = params.iter().map(|p| p as &(dyn ToSql + Sync)).collect();
     let rows = client
         .query(&stmt, &pg_params)
         .await
@@ -126,10 +123,7 @@ fn renumber_params(s: &str, offset: usize) -> String {
     out
 }
 
-fn decode_row(
-    row: &tokio_postgres::Row,
-    binding: &SourceBinding,
-) -> Result<RowBytes, SourceError> {
+fn decode_row(row: &tokio_postgres::Row, binding: &SourceBinding) -> Result<RowBytes, SourceError> {
     // col 0 = id, col 1 = wkb geom, col 2.. = attrs in binding order
     let id_signed: i64 = read_int(row, 0)?;
     if id_signed < 0 {
@@ -215,9 +209,7 @@ fn decode_attr(row: &tokio_postgres::Row, idx: usize) -> Result<AttrValue, Sourc
             .map_err(map_decode_err("text"))?
             .map_or(AttrValue::Null, AttrValue::String),
         ref other => {
-            return Err(SourceError::Backend(format!(
-                "unsupported pg type: {other}"
-            )));
+            return Err(SourceError::Backend(format!("unsupported pg type: {other}")));
         }
     };
     Ok(v)
@@ -267,9 +259,7 @@ impl ToSql for SqlParam {
                 _ => Err(format!("cannot bind float to {ty}").into()),
             },
             SqlParam::Text(s) => match *ty {
-                Type::TEXT | Type::VARCHAR | Type::BPCHAR | Type::NAME => {
-                    s.to_sql(ty, out)
-                }
+                Type::TEXT | Type::VARCHAR | Type::BPCHAR | Type::NAME => s.to_sql(ty, out),
                 _ => Err(format!("cannot bind text to {ty}").into()),
             },
         }

@@ -46,10 +46,7 @@ async fn end_to_end_compile_and_render() -> Result<()> {
         .start()
         .await
         .context("start postgis container")?;
-    let port = container
-        .get_host_port_ipv4(5432)
-        .await
-        .context("host port")?;
+    let port = container.get_host_port_ipv4(5432).await.context("host port")?;
     let dsn = format!("host=127.0.0.1 port={port} user=mars password=pw dbname=mars");
 
     if let Err(e) = setup_database(&dsn).await {
@@ -178,7 +175,12 @@ async fn setup_database(dsn: &str) -> Result<()> {
     Ok(())
 }
 
-async fn connect_with_retry(dsn: &str) -> Result<(tokio_postgres::Client, tokio_postgres::Connection<tokio_postgres::Socket, tokio_postgres::tls::NoTlsStream>)> {
+async fn connect_with_retry(
+    dsn: &str,
+) -> Result<(
+    tokio_postgres::Client,
+    tokio_postgres::Connection<tokio_postgres::Socket, tokio_postgres::tls::NoTlsStream>,
+)> {
     let mut last_err = None;
     for _ in 0..30 {
         match tokio_postgres::connect(dsn, NoTls).await {
@@ -189,10 +191,7 @@ async fn connect_with_retry(dsn: &str) -> Result<(tokio_postgres::Client, tokio_
             }
         }
     }
-    Err(anyhow::anyhow!(
-        "postgres connect timed out: {:?}",
-        last_err
-    ))
+    Err(anyhow::anyhow!("postgres connect timed out: {:?}", last_err))
 }
 
 async fn run_compile(cfg: &Config) -> Result<()> {
@@ -202,14 +201,9 @@ async fn run_compile(cfg: &Config) -> Result<()> {
         slot: String::new(),
     };
     let source = Arc::new(PgSource::connect(pg_cfg).await.context("pg connect")?);
-    let store = Arc::new(
-        FsStore::new(cfg.artifacts.store.path.as_deref().unwrap())
-            .context("open compile store")?,
-    );
-    let publisher = Arc::new(
-        FsPublisher::new(cfg.artifacts.store.path.as_deref().unwrap())
-            .context("open compile publisher")?,
-    );
+    let store = Arc::new(FsStore::new(cfg.artifacts.store.path.as_deref().unwrap()).context("open compile store")?);
+    let publisher =
+        Arc::new(FsPublisher::new(cfg.artifacts.store.path.as_deref().unwrap()).context("open compile publisher")?);
     let compiler = Compiler::new(
         CompilerDeps {
             source: source.clone(),
@@ -235,8 +229,7 @@ fn build_stylesheet(cfg: &Config) -> Stylesheet {
     for layer in &cfg.layers {
         for class in &layer.classes {
             if let ClassStyle::Inline(s) = &class.style {
-                ss.geometry
-                    .insert(format!("{}::{}", layer.name, class.name), s.clone());
+                ss.geometry.insert(format!("{}::{}", layer.name, class.name), s.clone());
             }
         }
     }
