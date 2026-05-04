@@ -165,7 +165,10 @@ fn runtime_error_response(e: RuntimeError) -> Response {
         RuntimeError::ManifestEntryMissing { .. } | RuntimeError::SourceMissing { .. } => StatusCode::NOT_FOUND,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     };
-    tracing::error!(error = %e, "render failed");
+    match &e {
+        RuntimeError::NotReady => tracing::warn!(error = %e, "render failed"),
+        _ => tracing::error!(error = %e, "render failed"),
+    }
     (status, e.to_string()).into_response()
 }
 
