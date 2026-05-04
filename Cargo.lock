@@ -1937,6 +1937,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1973,6 +1974,7 @@ dependencies = [
  "mars-config",
  "mars-runtime",
  "mars-types",
+ "percent-encoding",
  "quick-xml",
  "serde_yml",
  "thiserror",

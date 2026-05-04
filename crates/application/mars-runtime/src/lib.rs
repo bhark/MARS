@@ -83,6 +83,9 @@ pub struct RenderPlan {
 pub struct Runtime {
     state: ArcSwapOption<RuntimeState>,
     deps: Deps,
+    /// reason the most recent manifest swap was rejected, if any. exposed for
+    /// the debug endpoint; cleared on a successful swap.
+    last_reject_reason: ArcSwapOption<String>,
 }
 
 impl Runtime {
@@ -92,6 +95,7 @@ impl Runtime {
         Self {
             state: ArcSwapOption::empty(),
             deps,
+            last_reject_reason: ArcSwapOption::empty(),
         }
     }
 
@@ -101,7 +105,23 @@ impl Runtime {
         Self {
             state: ArcSwapOption::from(Some(state)),
             deps,
+            last_reject_reason: ArcSwapOption::empty(),
         }
+    }
+
+    /// Snapshot of the most recent manifest reject reason. `None` when the
+    /// last observed manifest was accepted (or no manifest has been seen).
+    #[must_use]
+    pub fn last_reject_reason(&self) -> Option<Arc<String>> {
+        self.last_reject_reason.load_full()
+    }
+
+    fn record_reject(&self, reason: String) {
+        self.last_reject_reason.store(Some(Arc::new(reason)));
+    }
+
+    fn clear_reject(&self) {
+        self.last_reject_reason.store(None);
     }
 
     /// Returns true when an active manifest snapshot is loaded.
@@ -176,8 +196,9 @@ impl Runtime {
             background: None,
         };
         let renderer = self.deps.renderer.clone();
-        let ops = ops.clone();
         let format = plan.format;
+        // move ownership directly into the closure; the `ops` binding is dead
+        // after this line, so peak memory is one Vec<DrawOp> not two.
         let bytes = tokio::task::spawn_blocking(move || renderer.render(canvas, &ops, format))
             .await
             .map_err(|e| {
@@ -203,22 +224,41 @@ pub async fn run_manifest_reload_loop(
         let manifest = match next {
             Ok(manifest) => manifest,
             Err(e) => {
-                tracing::warn!(error = %e, "manifest watch: ignoring invalid snapshot");
+                let reason = format!("invalid snapshot: {e}");
+                tracing::error!(error = %e, "manifest watch: ignoring invalid snapshot");
+                runtime.record_reject(reason);
                 continue;
             }
         };
 
-        // skip if the runtime already holds this exact version (e.g. startup)
-        if let Some(current) = runtime.current_state()
-            && current.manifest.version == manifest.version
-        {
-            continue;
+        // monotonicity: refuse anything not strictly newer than the active
+        // version. silent identical-version skip would mask a real downgrade.
+        if let Some(current) = runtime.current_state() {
+            if manifest.version == current.manifest.version {
+                continue;
+            }
+            if manifest.version < current.manifest.version {
+                let reason = format!(
+                    "manifest version {} is older than active {}",
+                    manifest.version, current.manifest.version
+                );
+                tracing::error!(
+                    new_version = manifest.version,
+                    current_version = current.manifest.version,
+                    "manifest watch: rejecting older manifest"
+                );
+                runtime.record_reject(reason);
+                continue;
+            }
         }
 
+        let new_version = manifest.version;
         let state = match RuntimeState::from_config_and_manifest(&config, stylesheet.clone(), manifest) {
             Ok(state) => Arc::new(state),
             Err(e) => {
-                tracing::warn!(error = %e, "manifest watch: rejecting manifest");
+                let reason = format!("manifest v{new_version} rejected: {e}");
+                tracing::error!(version = new_version, error = %e, "manifest watch: rejecting manifest");
+                runtime.record_reject(reason);
                 continue;
             }
         };
@@ -233,6 +273,7 @@ pub async fn run_manifest_reload_loop(
         let evictable_keys = previous_keys.difference(&next_keys).cloned().collect::<Vec<_>>();
 
         runtime.swap_state(state);
+        runtime.clear_reject();
         for key in &evictable_keys {
             runtime.deps.cache.mark_evictable(key);
         }
@@ -263,8 +304,18 @@ fn referenced_entries(state: &RuntimeState) -> Vec<ArtifactEntry> {
     entries
 }
 
+/// keys referenced by `state`, collected directly without intermediate `Vec`.
+/// hot path: every manifest swap calls this twice.
 fn referenced_keys(state: &RuntimeState) -> HashSet<ArtifactKey> {
-    referenced_entries(state).into_iter().map(|entry| entry.key).collect()
+    let mut out = HashSet::with_capacity(
+        state.layer_index.len() + state.source_index.len() + usize::from(state.manifest.style_artifact.is_some()),
+    );
+    out.extend(state.layer_index.values().map(|e| e.key.clone()));
+    out.extend(state.source_index.values().map(|e| e.key.clone()));
+    if let Some(entry) = &state.manifest.style_artifact {
+        out.insert(entry.key.clone());
+    }
+    out
 }
 
 fn spawn_warming(

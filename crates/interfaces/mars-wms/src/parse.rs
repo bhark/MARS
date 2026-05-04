@@ -2,8 +2,15 @@
 //!
 //! Phase 0 covers `GetMap` and `GetCapabilities`. Other request kinds reject
 //! with `WmsError::NotImplemented` so they round-trip to a 5xx in the edge.
+//!
+//! KVP semantics: parameter names are case-insensitive (lowercased on parse,
+//! per OGC 06-042 §11.5.2); values are preserved as-is. Repeated keys
+//! follow last-win semantics — the spec does not pin a behaviour, so this
+//! is an adapter choice that matches common WMS server practice.
 
 use std::collections::HashMap;
+
+use percent_encoding::percent_decode_str;
 
 use mars_runtime::RenderPlan;
 use mars_types::{Bbox, CrsCode, ImageFormat, LayerId};
@@ -124,48 +131,12 @@ fn parse_kvp(query: &str) -> Kvp {
     out
 }
 
+/// percent-decode a KVP value with `+` -> space (form-style). invalid escapes
+/// pass through literally, matching the prior hand-rolled behaviour.
 fn pct_decode(s: &str) -> String {
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'+' => {
-                out.push(b' ');
-                i += 1;
-            }
-            b'%' if i + 2 < bytes.len() => {
-                let h = hex_pair(bytes[i + 1], bytes[i + 2]);
-                match h {
-                    Some(b) => {
-                        out.push(b);
-                        i += 3;
-                    }
-                    None => {
-                        out.push(bytes[i]);
-                        i += 1;
-                    }
-                }
-            }
-            b => {
-                out.push(b);
-                i += 1;
-            }
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-fn hex_pair(a: u8, b: u8) -> Option<u8> {
-    let h = |c: u8| -> Option<u8> {
-        match c {
-            b'0'..=b'9' => Some(c - b'0'),
-            b'a'..=b'f' => Some(c - b'a' + 10),
-            b'A'..=b'F' => Some(c - b'A' + 10),
-            _ => None,
-        }
-    };
-    Some((h(a)? << 4) | h(b)?)
+    // form-style first: + means space.
+    let plus_decoded: String = s.chars().map(|c| if c == '+' { ' ' } else { c }).collect();
+    percent_decode_str(&plus_decoded).decode_utf8_lossy().into_owned()
 }
 
 fn require(kvp: &Kvp, name: &'static str) -> Result<String, WmsError> {
@@ -370,6 +341,17 @@ mod tests {
                  bbox=0,0,1,1&width=1&height=1&format=image/png";
         let plan = parse_get_map(q, &cfg()).unwrap();
         assert_eq!(plan.layers[0].as_str(), "foo%ZZ%G");
+    }
+
+    #[test]
+    fn percent_decode_at_end_of_input() {
+        // boundary: %xx at the very end of the value must decode (the previous
+        // hand-rolled implementation had an off-by-one that emitted it literally).
+        // `%2F` decodes to `/`; we feed it as the final 3 bytes of a value.
+        let q = "request=GetMap&version=1.3.0&layers=ab%2F&crs=EPSG:25832&\
+                 bbox=0,0,1,1&width=1&height=1&format=image/png";
+        let plan = parse_get_map(q, &cfg()).unwrap();
+        assert_eq!(plan.layers[0].as_str(), "ab/");
     }
 
     #[test]

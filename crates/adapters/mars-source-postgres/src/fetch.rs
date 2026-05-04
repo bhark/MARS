@@ -84,65 +84,16 @@ pub(crate) fn build_query(
     );
 
     if let Some(expr) = filter {
-        let (frag, fparams) = lower_to_sql(expr, binding)?;
-        // renumber filter params: $N in `frag` becomes $(N + offset)
-        let offset = params.len();
-        let renumbered = renumber_params(&frag, offset);
+        // lowerer emits placeholders starting at `params.len() + 1`
+        let start = params.len() + 1;
+        let (frag, fparams) = lower_to_sql(expr, binding, start)?;
         sql.push_str(" AND (");
-        sql.push_str(&renumbered);
+        sql.push_str(&frag);
         sql.push(')');
         params.extend(fparams);
     }
 
     Ok((sql, params))
-}
-
-/// shifts placeholder `$N` tokens by `offset` positions.
-fn renumber_params(s: &str, offset: usize) -> String {
-    let mut out = String::with_capacity(s.len() + 4);
-    let bytes = s.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'\'' | b'"' => {
-                let quote = bytes[i];
-                let start = i;
-                i += 1;
-                while i < bytes.len() {
-                    if bytes[i] == quote {
-                        i += 1;
-                        if i < bytes.len() && bytes[i] == quote {
-                            i += 1;
-                            continue;
-                        }
-                        break;
-                    }
-                    i += 1;
-                }
-                out.push_str(&s[start..i]);
-            }
-            b'$' => {
-                let mut j = i + 1;
-                while j < bytes.len() && bytes[j].is_ascii_digit() {
-                    j += 1;
-                }
-                if j > i + 1 {
-                    let n: usize = s[i + 1..j].parse().unwrap_or(0);
-                    out.push_str(&format!("${}", n + offset));
-                    i = j;
-                } else {
-                    out.push('$');
-                    i += 1;
-                }
-            }
-            _ => {
-                let ch = s[i..].chars().next().unwrap_or_default();
-                out.push(ch);
-                i += ch.len_utf8();
-            }
-        }
-    }
-    out
 }
 
 fn decode_row(row: &tokio_postgres::Row, binding: &SourceBinding) -> Result<RowBytes, SourceError> {
@@ -363,27 +314,26 @@ mod tests {
     }
 
     #[test]
-    fn query_renumbering_ignores_dollars_inside_quoted_identifiers() {
+    fn lowerer_emits_correct_placeholders_for_multi_segment_filter() {
+        // multi-clause filter must be numbered contiguously, starting after
+        // the spatial params ($1..$5).
+        let bbox = Bbox::new(0.0, 0.0, 1.0, 1.0);
+        let e = parse("name = 'a' AND kind IN (1, 2, 3) AND area >= 10").unwrap();
         let binding = SourceBinding::new(
             SourceCollectionId::new("c"),
             "public",
             "t",
             "geom",
             "gid",
-            vec!["cost$1".into()],
+            vec!["name".into(), "kind".into(), "area".into()],
             CrsCode::new("EPSG:25832"),
         )
         .unwrap();
-        let e = Expr::Cmp {
-            op: mars_expr::CmpOp::Eq,
-            lhs: Box::new(Expr::Ident("cost$1".into())),
-            rhs: Box::new(Expr::Literal(mars_expr::Literal::Int(10))),
-        };
-
-        let bbox = Bbox::new(0.0, 0.0, 1.0, 1.0);
         let (sql, params) = build_query(&binding, bbox, 25832, Some(&e)).unwrap();
-
-        assert!(sql.contains("AND (\"cost$1\" = $6)"), "{sql}");
-        assert_eq!(params.len(), 6);
+        assert!(
+            sql.contains("AND (\"name\" = $6 AND \"kind\" IN ($7, $8, $9) AND \"area\" >= $10)"),
+            "{sql}"
+        );
+        assert_eq!(params.len(), 10);
     }
 }

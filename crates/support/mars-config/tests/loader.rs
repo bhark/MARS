@@ -44,6 +44,18 @@ fn missing_style_ref_is_rejected() {
 }
 
 #[test]
+fn non_metric_canonical_crs_is_rejected() {
+    let path = fixtures_dir().join("demo_minimal.yaml");
+    let mut cfg = load(&path).unwrap();
+    // EPSG:4326 is geographic (lat/lon, degrees) — must be refused at load time.
+    cfg.source.native_crs = mars_types::CrsCode::new("EPSG:4326");
+    let err = validate(&cfg, &fixtures_dir()).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("metric"), "error should mention metric: {msg}");
+    assert!(msg.contains("EPSG:4326"), "error should name the rejected crs: {msg}");
+}
+
+#[test]
 fn unknown_band_in_source_binding_is_rejected() {
     let path = fixtures_dir().join("demo_minimal.yaml");
     let mut cfg = load(&path).unwrap();

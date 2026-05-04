@@ -4,10 +4,17 @@
 //! dance: keep the policy obvious. Operators who need a literal `$` in YAML
 //! should use double-dollar escape `$$`, which we emit back as a single `$`.
 //!
-//! Substituted values are validated for YAML scalar safety: newlines,
-//! colon-space, space-hash, and unbalanced quotes are rejected so that a
-//! substituted value cannot corrupt the document structure or change its
-//! semantics.
+//! Substituted values are validated against per-value structural risks
+//! (newlines, colon-space, space-hash, YAML tags, document separators).
+//! Quote balance is intentionally not enforced per-value: legitimate values
+//! like `a's` inside a double-quoted YAML scalar would otherwise be flagged
+//! as unbalanced. The full substituted document is re-parsed by serde_yml
+//! downstream, which catches any structural corruption that survives the
+//! per-value gate.
+//!
+//! Nested defaults like `${A:-${B}}` are explicitly rejected: the current
+//! regex cannot parse them safely and silent misparsing would be worse than
+//! a clear error.
 
 use std::env;
 use std::sync::LazyLock;
@@ -23,8 +30,10 @@ static ENV_RE: LazyLock<Regex> =
 /// Apply env substitution to `src`. Unknown variables without a default
 /// produce `EnvMissing`. Double-dollar `$$` is preserved as literal `$`.
 /// Each substituted value is checked for characters that would break YAML
-/// structure (colon-space, space-hash, newlines, unbalanced quotes).
+/// structure (colon-space, space-hash, newlines, YAML tags, doc separators).
 pub(crate) fn substitute(src: &str) -> Result<String, ConfigError> {
+    detect_nested_defaults(src)?;
+
     let mut missing: Option<String> = None;
     let mut out = String::with_capacity(src.len());
     let mut last_end = 0;
@@ -69,6 +78,41 @@ pub(crate) fn substitute(src: &str) -> Result<String, ConfigError> {
     Ok(out)
 }
 
+/// Reject `${A:-${B}}`-style nested defaults: the current regex cannot
+/// parse them and silent misparse (treating `${A:-${B}` as the match) is
+/// worse than a clear error. Done by scanning for `${` followed eventually
+/// by another `${` before the matching `}`.
+fn detect_nested_defaults(src: &str) -> Result<(), ConfigError> {
+    let bytes = src.as_bytes();
+    let mut i = 0;
+    while i + 1 < bytes.len() {
+        // skip the `$$` literal-dollar escape
+        if bytes[i] == b'$' && bytes[i + 1] == b'$' {
+            i += 2;
+            continue;
+        }
+        if bytes[i] == b'$' && bytes[i + 1] == b'{' {
+            let outer_start = i;
+            // find first `}` and check whether another `${` appears before it
+            let mut j = i + 2;
+            while j < bytes.len() && bytes[j] != b'}' {
+                if bytes[j] == b'$' && j + 1 < bytes.len() && bytes[j + 1] == b'{' {
+                    let snippet_end = (outer_start + 32).min(bytes.len());
+                    let snippet = String::from_utf8_lossy(&bytes[outer_start..snippet_end]);
+                    return Err(ConfigError::Invalid(format!(
+                        "nested ${{}} expansions are not supported (near {snippet:?}); flatten defaults to a single level"
+                    )));
+                }
+                j += 1;
+            }
+            i = j.saturating_add(1);
+            continue;
+        }
+        i += 1;
+    }
+    Ok(())
+}
+
 fn validate_yaml_safe(value: &str) -> Result<(), &'static str> {
     if value.contains('\n') || value.contains('\r') {
         return Err("contains newline");
@@ -91,15 +135,9 @@ fn validate_yaml_safe(value: &str) -> Result<(), &'static str> {
     if value.contains("---") {
         return Err("contains YAML document separator");
     }
-    // unbalanced quotes could break a quoted string context in the template
-    let double_quotes = value.chars().filter(|&c| c == '"').count();
-    let single_quotes = value.chars().filter(|&c| c == '\'').count();
-    if double_quotes % 2 != 0 {
-        return Err("contains unbalanced double quotes");
-    }
-    if single_quotes % 2 != 0 {
-        return Err("contains unbalanced single quotes");
-    }
+    // quote balance is intentionally not enforced: a value like `a's` is
+    // legitimate inside a double-quoted yaml scalar, and the downstream
+    // serde_yml parse catches any structural corruption that survives.
     Ok(())
 }
 
@@ -140,22 +178,17 @@ mod tests {
     }
 
     #[test]
-    fn validate_rejects_unbalanced_double_quotes() {
-        assert!(validate_yaml_safe("\"").is_err());
-        assert!(validate_yaml_safe("\"\"\"").is_err());
-    }
-
-    #[test]
-    fn validate_rejects_unbalanced_single_quotes() {
-        assert!(validate_yaml_safe("'").is_err());
-        assert!(validate_yaml_safe("'''").is_err());
+    fn validate_accepts_unbalanced_quotes() {
+        // legitimate inside a double-quoted YAML scalar (`"a's"`).
+        assert!(validate_yaml_safe("a's").is_ok());
+        assert!(validate_yaml_safe("\"").is_ok());
+        assert!(validate_yaml_safe("'").is_ok());
     }
 
     #[test]
     fn validate_accepts_balanced_quotes() {
         assert!(validate_yaml_safe("\"hello\"").is_ok());
         assert!(validate_yaml_safe("'hello'").is_ok());
-        assert!(validate_yaml_safe("\"\"''\"\"").is_ok());
     }
 
     #[test]
@@ -203,5 +236,34 @@ mod tests {
         let err = substitute("val=${MARS_X:-foo\nbar}").unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("newline"), "expected newline rejection, got {msg}");
+    }
+
+    #[test]
+    fn substitute_passes_through_apostrophe_in_double_quoted_context() {
+        // simulates `key: "${VAR}"` with VAR=`a's` — must not be rejected.
+        let result = substitute("key: \"${MARS_TEST_APOS:-a's}\"").unwrap();
+        assert_eq!(result, "key: \"a's\"");
+        // and the resulting yaml must parse cleanly downstream
+        let v: serde_yml::Value = serde_yml::from_str(&result).unwrap();
+        assert_eq!(v["key"].as_str(), Some("a's"));
+    }
+
+    #[test]
+    fn substitute_rejects_nested_defaults() {
+        // ${A:-${B}} would silently misparse with the `[^}]*` regex; reject it.
+        let err = substitute("val=${A:-${B:-x}}").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("nested"),
+            "expected nested-defaults rejection, got {msg}"
+        );
+    }
+
+    #[test]
+    fn substitute_double_dollar_does_not_trigger_nested_check() {
+        // `$$` is the escape for a literal `$`; must not be flagged as nested
+        // even when followed by a `{...}` token.
+        let result = substitute("a=$${BAR:-x}").unwrap();
+        assert_eq!(result, "a=${BAR:-x}");
     }
 }

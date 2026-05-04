@@ -16,8 +16,9 @@ pub(crate) struct LayerCellTask {
 /// OGC 1.3.0 standard pixel size used to derive a denominator from a bbox.
 const OGC_PIXEL_M: f64 = 0.000_28;
 
-/// derive a scale denominator for the request. phase-0 simplification: the
-/// canonical CRS is metric, units-per-meter = 1, so:
+/// derive a scale denominator for the request. canonical CRS is metric
+/// (units-per-meter = 1) — validated up front in `mars-config::validate`, so
+/// here we can apply the simple formula:
 ///   denom = bbox.width / (width_px * OGC_PIXEL_M)
 #[must_use]
 pub fn denom_from_plan(bbox_width: f64, width_px: u32) -> u32 {
