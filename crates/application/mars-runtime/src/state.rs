@@ -188,6 +188,7 @@ mod tests {
             styles: Default::default(),
             layers: vec![],
             observability: Default::default(),
+            render: Default::default(),
         }
     }
 

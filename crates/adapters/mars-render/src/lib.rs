@@ -1,5 +1,5 @@
-//! CPU rasteriser. SPEC §11.2 - tiny-skia rasterisation, PNG encoding.
-//! Label rendering and JPEG encoding deferred to later phases.
+//! CPU rasteriser. SPEC §11.2 - tiny-skia rasterisation, PNG and JPEG encoding.
+//! Label rendering deferred to a later phase.
 
 #![forbid(unsafe_code)]
 
@@ -46,18 +46,35 @@ impl Renderer for TinySkiaRenderer {
     }
 }
 
-/// PNG encoder; JPEG deferred to Phase 1. Lives next to the rasteriser so the
-/// in-process pipeline does not pay an extra copy crossing crate boundaries.
-#[derive(Debug, Default)]
-pub struct TinySkiaEncoder;
+/// PNG and JPEG encoder. Lives next to the rasteriser so the in-process
+/// pipeline does not pay an extra copy crossing crate boundaries.
+///
+/// JPEG quality is captured at construction so it does not have to leak into
+/// the [`Encoder::encode`] trait signature.
+#[derive(Debug, Clone, Copy)]
+pub struct TinySkiaEncoder {
+    jpeg_quality: u8,
+}
+
+impl TinySkiaEncoder {
+    /// Construct with a configured jpeg quality (1-100).
+    #[must_use]
+    pub fn new(jpeg_quality: u8) -> Self {
+        Self { jpeg_quality }
+    }
+}
+
+impl Default for TinySkiaEncoder {
+    fn default() -> Self {
+        Self { jpeg_quality: 85 }
+    }
+}
 
 impl Encoder for TinySkiaEncoder {
     fn encode(&self, pixmap: &Pixmap, format: ImageFormat) -> Result<Vec<u8>, EncodeError> {
         match format {
             ImageFormat::Png => encode::encode_png(pixmap),
-            ImageFormat::Jpeg => Err(EncodeError::NotImplemented {
-                what: "jpeg encoding deferred to Phase 1",
-            }),
+            ImageFormat::Jpeg => encode::encode_jpeg(pixmap, self.jpeg_quality),
         }
     }
 }
@@ -101,7 +118,7 @@ mod tests {
 
     fn render_png(canvas: Canvas, ops: &[DrawOp]) -> Vec<u8> {
         let pm = TinySkiaRenderer.render(canvas, ops).unwrap();
-        TinySkiaEncoder.encode(&pm, ImageFormat::Png).unwrap()
+        TinySkiaEncoder::default().encode(&pm, ImageFormat::Png).unwrap()
     }
 
     fn decode(bytes: &[u8]) -> (u32, u32, Vec<u8>) {
@@ -222,15 +239,40 @@ mod tests {
     }
 
     #[test]
-    fn jpeg_returns_not_implemented() {
+    fn jpeg_roundtrip_decodes_to_expected_dimensions() {
         let canvas = Canvas {
-            width: 4,
-            height: 4,
+            width: 16,
+            height: 16,
+            background: Some(red()),
+        };
+        let pm = TinySkiaRenderer.render(canvas, &[]).unwrap();
+        let bytes = TinySkiaEncoder::default().encode(&pm, ImageFormat::Jpeg).unwrap();
+        assert!(bytes.starts_with(&[0xFF, 0xD8]), "jpeg SOI marker");
+
+        let mut dec = jpeg_decoder::Decoder::new(std::io::Cursor::new(&bytes));
+        let pixels = dec.decode().unwrap();
+        let info = dec.info().unwrap();
+        assert_eq!((info.width, info.height), (16, 16));
+        assert_eq!(info.pixel_format, jpeg_decoder::PixelFormat::RGB24);
+
+        // sanity-check colour is roughly red after lossy round-trip.
+        let (r, g, b) = (pixels[0], pixels[1], pixels[2]);
+        assert!(r > 200 && g < 60 && b < 60, "expected red-ish, got ({r},{g},{b})");
+    }
+
+    #[test]
+    fn jpeg_transparent_collapses_to_white() {
+        let canvas = Canvas {
+            width: 8,
+            height: 8,
             background: None,
         };
         let pm = TinySkiaRenderer.render(canvas, &[]).unwrap();
-        let res = TinySkiaEncoder.encode(&pm, ImageFormat::Jpeg);
-        assert!(matches!(res, Err(EncodeError::NotImplemented { .. })));
+        let bytes = TinySkiaEncoder::default().encode(&pm, ImageFormat::Jpeg).unwrap();
+        let mut dec = jpeg_decoder::Decoder::new(std::io::Cursor::new(&bytes));
+        let pixels = dec.decode().unwrap();
+        let (r, g, b) = (pixels[0], pixels[1], pixels[2]);
+        assert!(r > 240 && g > 240 && b > 240, "expected white-ish, got ({r},{g},{b})");
     }
 
     #[test]

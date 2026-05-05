@@ -16,7 +16,9 @@ mars-render-port = { workspace = true }
 mars-style       = { workspace = true }
 tracing          = { workspace = true }
 tiny-skia        = "0.12"
-png = { workspace = true }
+png              = { workspace = true }
+jpeg-encoder     = "0.6"
 
 [dev-dependencies]
-png = { workspace = true }
+png              = { workspace = true }
+jpeg-decoder     = "0.3"

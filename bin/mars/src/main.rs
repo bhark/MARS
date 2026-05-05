@@ -136,7 +136,7 @@ async fn run_runtime(config_path: &Path) -> Result<()> {
         store,
         cache,
         renderer: Arc::new(TinySkiaRenderer),
-        encoder: Arc::new(TinySkiaEncoder),
+        encoder: Arc::new(TinySkiaEncoder::new(cfg.render.jpeg_quality)),
         metrics: metrics.clone(),
     }));
 

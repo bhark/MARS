@@ -1,7 +1,8 @@
-//! image encoding. PNG only at Phase 0; JPEG deferred to Phase 1.
+//! image encoding for png and jpeg.
 
 use std::cell::RefCell;
 
+use jpeg_encoder::{ColorType as JpegColorType, Encoder as JpegEnc};
 use mars_render_port::{EncodeError, Pixmap};
 
 thread_local! {
@@ -29,6 +30,37 @@ pub(crate) fn encode_png(pm: &Pixmap) -> Result<Vec<u8>, EncodeError> {
         })?;
     }
     Ok(out)
+}
+
+/// jpeg has no alpha; flatten over an opaque white background. matches the
+/// conventional WMS interpretation of opaque jpeg responses.
+pub(crate) fn encode_jpeg(pm: &Pixmap, quality: u8) -> Result<Vec<u8>, EncodeError> {
+    let pixels = (pm.width as usize)
+        .checked_mul(pm.height as usize)
+        .ok_or_else(|| EncodeError::Backend(format!("dim overflow {}x{}", pm.width, pm.height)))?;
+    let mut out = Vec::with_capacity(pixels / 4);
+    SCRATCH.with(|s| {
+        let mut scratch = s.borrow_mut();
+        scratch.clear();
+        scratch.reserve(pixels * 3);
+        flatten_premul_over_white(&pm.premultiplied_rgba, &mut scratch);
+        let enc = JpegEnc::new(&mut out, quality);
+        enc.encode(&scratch, pm.width as u16, pm.height as u16, JpegColorType::Rgb)
+            .map_err(|e| EncodeError::Backend(format!("jpeg encode: {e}")))
+    })?;
+    Ok(out)
+}
+
+/// composite premultiplied rgba over opaque white into rgb.
+/// for premul (R',G',B',A): out = R' + (255 - A), since the white contribution
+/// is (255 - A) * 255 / 255 = 255 - A. saturating add guards rounding drift.
+fn flatten_premul_over_white(premul: &[u8], out: &mut Vec<u8>) {
+    for px in premul.chunks_exact(4) {
+        let inv = 255u8.saturating_sub(px[3]);
+        out.push(px[0].saturating_add(inv));
+        out.push(px[1].saturating_add(inv));
+        out.push(px[2].saturating_add(inv));
+    }
 }
 
 fn demultiply_into(premul: &[u8], out: &mut Vec<u8>) {

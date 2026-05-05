@@ -105,7 +105,7 @@ async fn end_to_end_compile_and_render() -> Result<()> {
             store,
             cache,
             renderer: Arc::new(TinySkiaRenderer),
-            encoder: Arc::new(TinySkiaEncoder),
+            encoder: Arc::new(TinySkiaEncoder::default()),
             metrics: mars_observability::Metrics::new().expect("metrics"),
         },
     );

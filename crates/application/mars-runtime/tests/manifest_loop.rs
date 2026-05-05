@@ -100,6 +100,7 @@ fn minimal_config() -> Arc<Config> {
         styles: Default::default(),
         layers: vec![],
         observability: Default::default(),
+        render: Default::default(),
     })
 }
 

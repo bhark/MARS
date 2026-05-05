@@ -105,6 +105,7 @@ fn make_config() -> Config {
             label: None,
         }],
         observability: Default::default(),
+        render: Default::default(),
     }
 }
 

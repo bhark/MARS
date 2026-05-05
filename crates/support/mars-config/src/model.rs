@@ -44,6 +44,29 @@ pub struct Config {
     /// Observability settings.
     #[serde(default)]
     pub observability: Observability,
+    /// Renderer / encoder settings.
+    #[serde(default)]
+    pub render: Render,
+}
+
+/// Renderer / encoder configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Render {
+    /// JPEG quality, 1-100. Defaults to 85.
+    #[serde(default = "default_jpeg_quality")]
+    pub jpeg_quality: u8,
+}
+
+impl Default for Render {
+    fn default() -> Self {
+        Self {
+            jpeg_quality: default_jpeg_quality(),
+        }
+    }
+}
+
+fn default_jpeg_quality() -> u8 {
+    85
 }
 
 /// Service identity. SPEC §5.2.
