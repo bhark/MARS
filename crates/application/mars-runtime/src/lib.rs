@@ -54,6 +54,8 @@ pub enum RuntimeError {
     Grid(#[from] mars_grid::GridError),
     #[error("plan CRS '{requested}' is not the canonical CRS; reprojection deferred to phase 1")]
     CrsNotCanonical { requested: String },
+    #[error("layer '{layer}' is not defined")]
+    LayerNotDefined { layer: String },
     #[error("manifest entry missing for layer '{layer}' band '{band}' cell {cell:?}")]
     ManifestEntryMissing {
         layer: String,
@@ -166,6 +168,14 @@ impl Runtime {
             return Err(RuntimeError::CrsNotCanonical {
                 requested: plan.crs.to_string(),
             });
+        }
+
+        for layer in &plan.layers {
+            if !state.layer_order.contains(layer) {
+                return Err(RuntimeError::LayerNotDefined {
+                    layer: layer.as_str().to_owned(),
+                });
+            }
         }
 
         let tasks = plan::resolve(plan, &state)?;

@@ -410,13 +410,27 @@ async fn rejects_non_canonical_crs() {
 }
 
 #[tokio::test]
-async fn missing_manifest_entry_errors() {
+async fn unknown_layer_errors() {
     let fx = build_fixture().await;
     let mut plan = plan_for(&fx);
     plan.layers = vec![LayerId::new("does-not-exist")];
     match fx.runtime.render(&plan).await {
-        Err(RuntimeError::ManifestEntryMissing { layer, .. }) => {
+        Err(RuntimeError::LayerNotDefined { layer }) => {
             assert_eq!(layer, "does-not-exist");
+        }
+        other => panic!("expected LayerNotDefined, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn missing_manifest_entry_errors() {
+    let fx = build_fixture().await;
+    let mut plan = plan_for(&fx);
+    // bbox outside the cell (0,0) that exists in the fixture -> cell (9,0) is missing
+    plan.bbox = Bbox::new(10000.0, 0.0, 10100.0, 10.0);
+    match fx.runtime.render(&plan).await {
+        Err(RuntimeError::ManifestEntryMissing { layer, .. }) => {
+            assert_eq!(layer, "parcels");
         }
         other => panic!("expected ManifestEntryMissing, got {other:?}"),
     }
