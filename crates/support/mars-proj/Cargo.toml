@@ -15,3 +15,4 @@ workspace = true
 [dependencies]
 mars-types  = { workspace = true }
 thiserror   = { workspace = true }
+proj-sys    = "0.27"

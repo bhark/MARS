@@ -15,6 +15,7 @@ workspace = true
 mars-types  = { workspace = true }
 mars-style  = { workspace = true }
 mars-expr   = { workspace = true }
+mars-proj   = { workspace = true }
 serde       = { workspace = true }
 thiserror   = { workspace = true }
 serde_yml = { workspace = true }

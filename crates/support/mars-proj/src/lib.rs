@@ -13,6 +13,8 @@
 #![allow(unsafe_code)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use std::ffi::CString;
+
 use mars_types::{Bbox, CrsCode};
 
 #[derive(Debug, thiserror::Error)]
@@ -23,6 +25,35 @@ pub enum ProjError {
     Transform(String),
     #[error("not implemented: {what}")]
     NotImplemented { what: &'static str },
+}
+
+/// Returns `true` when `code` is a projected (metric) CRS.
+///
+/// Uses PROJ introspection so any authority code known to the local PROJ
+/// database is accepted; no hard-coded allowlist is required.
+pub fn is_projected(code: &CrsCode) -> Result<bool, ProjError> {
+    let definition = CString::new(code.as_str())
+        .map_err(|e| ProjError::UnknownCrs(format!("invalid CRS string: {e}")))?;
+
+    // SAFETY: proj_context_create / proj_create / proj_get_type / proj_destroy
+    // / proj_context_destroy are the standard PROJ C lifecycle. `definition`
+    // is a valid NUL-terminated string allocated on the Rust heap.
+    unsafe {
+        let ctx = proj_sys::proj_context_create();
+        if ctx.is_null() {
+            return Err(ProjError::Transform("failed to create PROJ context".into()));
+        }
+        let pj = proj_sys::proj_create(ctx, definition.as_ptr());
+        let result = if pj.is_null() {
+            Err(ProjError::UnknownCrs(code.to_string()))
+        } else {
+            let ty = proj_sys::proj_get_type(pj);
+            proj_sys::proj_destroy(pj);
+            Ok(ty == proj_sys::PJ_TYPE_PJ_TYPE_PROJECTED_CRS)
+        };
+        proj_sys::proj_context_destroy(ctx);
+        result
+    }
 }
 
 /// A reusable forward+inverse transformer between two CRSes.

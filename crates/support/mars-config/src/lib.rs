@@ -172,34 +172,8 @@ pub fn config_dir(path: &Path) -> PathBuf {
     path.parent().map(PathBuf::from).unwrap_or_default()
 }
 
-/// Conservative metric-CRS allowlist used to validate the canonical CRS at
-/// config load time. The list covers the projected coord systems mars
-/// currently exercises in production / tests; expanding it is a one-line
-/// edit. Any geographic (lat/lon, degree-based) CRS is rejected.
-///
-/// We do not try to introspect units via PROJ here: that's added in Phase 1
-/// when reprojection lands. Until then, an explicit allowlist is the safest
-/// gate.
+/// Validate that `code` is a projected (metric) CRS using PROJ introspection.
 fn is_metric_crs(code: &str) -> bool {
-    // strip the trailing axis-order qualifier we sometimes see in URN form
-    let trimmed = code.trim();
-    matches!(
-        trimmed,
-        // utm zones used in the nordic projects
-        "EPSG:25832" | "EPSG:25833" | "EPSG:25834" | "EPSG:25835" | "EPSG:25836"
-        // utm zones (full set, common pickups)
-        | "EPSG:32601" | "EPSG:32602" | "EPSG:32603" | "EPSG:32604" | "EPSG:32605"
-        | "EPSG:32606" | "EPSG:32607" | "EPSG:32608" | "EPSG:32609" | "EPSG:32610"
-        | "EPSG:32611" | "EPSG:32612" | "EPSG:32613" | "EPSG:32614" | "EPSG:32615"
-        | "EPSG:32616" | "EPSG:32617" | "EPSG:32618" | "EPSG:32619" | "EPSG:32620"
-        | "EPSG:32621" | "EPSG:32622" | "EPSG:32623" | "EPSG:32624" | "EPSG:32625"
-        | "EPSG:32626" | "EPSG:32627" | "EPSG:32628" | "EPSG:32629" | "EPSG:32630"
-        | "EPSG:32631" | "EPSG:32632" | "EPSG:32633" | "EPSG:32634" | "EPSG:32635"
-        | "EPSG:32636" | "EPSG:32637" | "EPSG:32638" | "EPSG:32639" | "EPSG:32640"
-        // web mercator
-        | "EPSG:3857" | "EPSG:900913"
-        // common national grids
-        | "EPSG:2154" | "EPSG:27700" | "EPSG:31370" | "EPSG:21781" | "EPSG:2056"
-        | "EPSG:5514" | "EPSG:23700" | "EPSG:3035" | "EPSG:3034"
-    )
+    let crs = mars_types::CrsCode::new(code.trim());
+    mars_proj::is_projected(&crs).unwrap_or(false)
 }
