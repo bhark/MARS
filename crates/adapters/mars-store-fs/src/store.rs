@@ -37,6 +37,7 @@ impl FsStore {
                 root.display()
             )));
         }
+        cleanup_tmp_files(&root)?;
         Ok(Self { root })
     }
 
@@ -117,10 +118,42 @@ impl ObjectStore for FsStore {
 }
 
 fn walk(dir: &Path, root: &Path, out: &mut Vec<String>) -> Result<(), StoreError> {
-    let mut stack = vec![dir.to_path_buf()];
-    while let Some(dir) = stack.pop() {
+    let entries =
+        std::fs::read_dir(dir).map_err(|e| StoreError::Backend(format!("read_dir {}: {e}", dir.display())))?;
+    for ent in entries {
+        let ent = ent.map_err(|e| StoreError::Backend(format!("readdir: {e}")))?;
+        let ft = ent
+            .file_type()
+            .map_err(|e| StoreError::Backend(format!("file_type: {e}")))?;
+        let p = ent.path();
+        if ft.is_dir() {
+            walk(&p, root, out)?;
+        } else if ft.is_file() {
+            // skip stale temp files
+            if let Some(name) = p.file_name().and_then(|s| s.to_str())
+                && name.contains(".tmp.")
+            {
+                continue;
+            }
+            let rel = p
+                .strip_prefix(root)
+                .map_err(|e| StoreError::Backend(format!("strip_prefix: {e}")))?;
+            let key = rel
+                .to_str()
+                .ok_or_else(|| StoreError::Backend("non-utf8 path".into()))?
+                .replace('\\', "/");
+            out.push(key);
+        }
+    }
+    Ok(())
+}
+
+/// walk `root` recursively and delete any files whose name contains `.tmp.`.
+/// deletion errors are silently ignored (best-effort cleanup after crashes).
+pub(crate) fn cleanup_tmp_files(root: &Path) -> Result<(), StoreError> {
+    fn walk(dir: &Path) -> Result<(), StoreError> {
         let entries =
-            std::fs::read_dir(&dir).map_err(|e| StoreError::Backend(format!("read_dir {}: {e}", dir.display())))?;
+            std::fs::read_dir(dir).map_err(|e| StoreError::Backend(format!("read_dir {}: {e}", dir.display())))?;
         for ent in entries {
             let ent = ent.map_err(|e| StoreError::Backend(format!("readdir: {e}")))?;
             let ft = ent
@@ -128,26 +161,18 @@ fn walk(dir: &Path, root: &Path, out: &mut Vec<String>) -> Result<(), StoreError
                 .map_err(|e| StoreError::Backend(format!("file_type: {e}")))?;
             let p = ent.path();
             if ft.is_dir() {
-                stack.push(p);
+                walk(&p)?;
             } else if ft.is_file() {
-                // skip stale temp files
                 if let Some(name) = p.file_name().and_then(|s| s.to_str())
                     && name.contains(".tmp.")
                 {
-                    continue;
+                    let _ = std::fs::remove_file(&p);
                 }
-                let rel = p
-                    .strip_prefix(root)
-                    .map_err(|e| StoreError::Backend(format!("strip_prefix: {e}")))?;
-                let key = rel
-                    .to_str()
-                    .ok_or_else(|| StoreError::Backend("non-utf8 path".into()))?
-                    .replace('\\', "/");
-                out.push(key);
             }
         }
+        Ok(())
     }
-    Ok(())
+    walk(root)
 }
 
 /// Atomic write: tmp file in same dir, fsync, rename. parents are created.

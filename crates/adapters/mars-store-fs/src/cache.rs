@@ -22,7 +22,7 @@ use mars_store::{LocalCache, ObjectStore, StoreError};
 use mars_types::{ArtifactKey, ContentHash};
 
 use crate::key::validate_artifact_key;
-use crate::store::atomic_write;
+use crate::store::{atomic_write, cleanup_tmp_files};
 
 /// scan-time aggregate: (lru-ordered-by-mtime, total bytes).
 type ScanResult = (LinkedHashMap<ArtifactKey, u64>, u64);
@@ -91,6 +91,7 @@ impl FsCache {
         let root = raw
             .canonicalize()
             .map_err(|e| StoreError::Backend(format!("canonicalise cache root: {e}")))?;
+        cleanup_tmp_files(&root)?;
 
         let (lru, total_size) = scan_existing(&root)?;
         let state = CacheState {
