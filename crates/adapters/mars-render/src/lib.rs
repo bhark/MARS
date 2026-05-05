@@ -67,6 +67,8 @@ impl Encoder for TinySkiaEncoder {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use mars_render_port::Path as PortPath;
     use mars_style::{Colour, Style};
@@ -122,10 +124,10 @@ mod tests {
         };
         let ops = vec![DrawOp::Path {
             path: square(32.0, 32.0, 16.0),
-            style: Style {
+            style: Arc::new(Style {
                 fill: Some(red()),
                 ..Default::default()
-            },
+            }),
         }];
         let a = render_png(canvas, &ops);
         let b = render_png(canvas, &ops);
@@ -141,10 +143,10 @@ mod tests {
         };
         let ops = vec![DrawOp::Path {
             path: square(32.0, 32.0, 16.0),
-            style: Style {
+            style: Arc::new(Style {
                 fill: Some(red()),
                 ..Default::default()
-            },
+            }),
         }];
         let png_bytes = render_png(canvas, &ops);
         let (_, _, rgba) = decode(&png_bytes);
@@ -167,11 +169,11 @@ mod tests {
         };
         let ops = vec![DrawOp::Path {
             path,
-            style: Style {
+            style: Arc::new(Style {
                 stroke: Some(red()),
                 stroke_width: Some(2.0),
                 ..Default::default()
-            },
+            }),
         }];
         let png_bytes = render_png(canvas, &ops);
         let (w, _, rgba) = decode(&png_bytes);
@@ -242,10 +244,10 @@ mod tests {
         };
         let ops = vec![DrawOp::Path {
             path: square(32.0, 32.0, 16.0),
-            style: Style {
+            style: Arc::new(Style {
                 fill: Some(red()),
                 ..Default::default()
-            },
+            }),
         }];
         let actual = render_png(canvas, &ops);
 

@@ -214,6 +214,7 @@ async fn run_compile(cfg: &Config) -> Result<()> {
             change_feed: source,
             store,
             manifest: publisher,
+            metrics: mars_observability::Metrics::new().unwrap(),
         },
         cfg.clone(),
     );
@@ -227,13 +228,13 @@ fn build_stylesheet(cfg: &Config) -> Stylesheet {
     let mut ss = Stylesheet::default();
     for (name, entry) in &cfg.styles {
         if let Some(s) = entry.as_geometry() {
-            ss.geometry.insert(name.clone(), s.clone());
+            ss.geometry.insert(name.clone(), Arc::new(s.clone()));
         }
     }
     for layer in &cfg.layers {
         for class in &layer.classes {
             if let ClassStyle::Inline(s) = &class.style {
-                ss.geometry.insert(format!("{}::{}", layer.name, class.name), s.clone());
+                ss.geometry.insert(format!("{}::{}", layer.name, class.name), Arc::new(s.clone()));
             }
         }
     }

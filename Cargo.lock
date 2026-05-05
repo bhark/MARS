@@ -1789,6 +1789,7 @@ dependencies = [
  "mars-config",
  "mars-expr",
  "mars-grid",
+ "mars-observability",
  "mars-source",
  "mars-store",
  "mars-types",

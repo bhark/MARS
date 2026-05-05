@@ -85,7 +85,7 @@ fn stylesheet() -> Stylesheet {
     let mut ss = Stylesheet::default();
     ss.geometry.insert(
         STYLE_RED.to_owned(),
-        Style {
+        Arc::new(Style {
             fill: Some(Colour {
                 r: 255,
                 g: 0,
@@ -93,11 +93,11 @@ fn stylesheet() -> Stylesheet {
                 a: 255,
             }),
             ..Default::default()
-        },
+        }),
     );
     ss.geometry.insert(
         STYLE_BLUE.to_owned(),
-        Style {
+        Arc::new(Style {
             fill: Some(Colour {
                 r: 0,
                 g: 0,
@@ -105,7 +105,7 @@ fn stylesheet() -> Stylesheet {
                 a: 255,
             }),
             ..Default::default()
-        },
+        }),
     );
     ss
 }

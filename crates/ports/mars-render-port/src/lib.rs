@@ -6,6 +6,8 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+use std::sync::Arc;
+
 use mars_style::Style;
 
 pub use mars_types::ImageFormat;
@@ -54,7 +56,7 @@ pub enum DrawOp {
         /// Geometry to draw.
         path: Path,
         /// Fill / stroke style.
-        style: Style,
+        style: Arc<Style>,
     },
     /// Place a label glyph run at an anchor point with the given style ref.
     Label {

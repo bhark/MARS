@@ -1,6 +1,8 @@
 //! per-cell draw-op emission: decode source + layer artifacts, merge-walk by
 //! feature_id, viewport bbox filter, world→pixel transform, push DrawOp::Path.
 
+use std::sync::Arc;
+
 use mars_artifact::{
     ArtifactReader, FeatureGeom, GeomKind, SectionKind, decode_class_assignment, decode_geometry_payload,
     decode_style_refs,
@@ -105,7 +107,7 @@ pub(crate) fn emit_layer_cell(
     Ok(())
 }
 
-fn build_draw_op(feat: &FeatureGeom, vp: Viewport, style: &Style) -> Option<DrawOp> {
+fn build_draw_op(feat: &FeatureGeom, vp: Viewport, style: &Arc<Style>) -> Option<DrawOp> {
     let rings = match &feat.geom {
         GeomKind::Polygon(rs) => project_polygon(rs, vp, true),
         GeomKind::MultiPolygon(parts) => parts.iter().flat_map(|rs| project_polygon(rs, vp, true)).collect(),
@@ -251,7 +253,7 @@ mod tests {
         }]);
         let lyr = build_layer(&[(1, 0)], &["red".into()]);
         let mut ss = Stylesheet::default();
-        ss.geometry.insert("red".into(), red_style());
+        ss.geometry.insert("red".into(), Arc::new(red_style()));
         let mut out = Vec::new();
         emit_layer_cell(
             &src,
@@ -274,7 +276,7 @@ mod tests {
         // class_index 5 but only 1 style_ref → out of range
         let lyr = build_layer(&[(1, 5)], &["red".into()]);
         let mut ss = Stylesheet::default();
-        ss.geometry.insert("red".into(), red_style());
+        ss.geometry.insert("red".into(), Arc::new(red_style()));
         let mut out = Vec::new();
         emit_layer_cell(
             &src,
@@ -317,7 +319,7 @@ mod tests {
         }]);
         let lyr = build_layer(&[(1, 0)], &["no_fill".into()]);
         let mut ss = Stylesheet::default();
-        ss.geometry.insert("no_fill".into(), Style::default());
+        ss.geometry.insert("no_fill".into(), Arc::new(Style::default()));
         let mut out = Vec::new();
         emit_layer_cell(
             &src,
@@ -339,7 +341,7 @@ mod tests {
         }]);
         let lyr = build_layer(&[(1, 0)], &["red".into()]);
         let mut ss = Stylesheet::default();
-        ss.geometry.insert("red".into(), red_style());
+        ss.geometry.insert("red".into(), Arc::new(red_style()));
         let mut out = Vec::new();
         emit_layer_cell(
             &src,

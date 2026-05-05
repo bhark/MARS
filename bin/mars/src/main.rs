@@ -77,10 +77,10 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // tracing-subscriber's global registry can only be installed once; we read
-    // log_format from the config when a service mode is selected, otherwise we
-    // fall back to plain text for tooling subcommands.
-    let json = wants_json_logs(&cli);
-    if let Err(e) = mars_observability::init_tracing(json) {
+    // observability settings from the config when a service mode is selected,
+    // otherwise we fall back to plain text / default level for tooling.
+    let (json, log_level) = observability_prefs(&cli);
+    if let Err(e) = mars_observability::init_tracing(json, log_level.as_deref()) {
         eprintln!("warning: tracing init failed: {e}");
     }
 
@@ -88,17 +88,18 @@ fn main() -> Result<()> {
     runtime.block_on(async_main(cli))
 }
 
-fn wants_json_logs(cli: &Cli) -> bool {
+fn observability_prefs(cli: &Cli) -> (bool, Option<String>) {
     if cli.tool.is_some() {
-        return false;
+        return (false, None);
     }
-    // pre-parse the config purely for log_format. errors are non-fatal here;
+    // pre-parse the config purely for observability. errors are non-fatal here;
     // the real load_and_validate runs again inside the chosen mode and reports
     // the error with full context.
     let Ok(cfg) = mars_config::load(&cli.config) else {
-        return false;
+        return (false, None);
     };
-    matches!(cfg.observability.log_format.as_deref(), Some("json"))
+    let json = matches!(cfg.observability.log_format.as_deref(), Some("json"));
+    (json, cfg.observability.log_level)
 }
 
 async fn async_main(cli: Cli) -> Result<()> {
@@ -239,6 +240,7 @@ async fn run_compiler(cfg: Config) -> Result<()> {
     let source = build_source(&cfg).await?;
     let store = build_store(&cfg)?;
     let publisher = build_publisher(&cfg)?;
+    let metrics = mars_observability::Metrics::new().context("init metrics")?;
 
     let compiler = Compiler::new(
         CompilerDeps {
@@ -246,6 +248,7 @@ async fn run_compiler(cfg: Config) -> Result<()> {
             change_feed: source,
             store,
             manifest: publisher,
+            metrics,
         },
         cfg,
     );
@@ -366,7 +369,7 @@ fn build_stylesheet(cfg: &Config) -> Stylesheet {
     let mut ss = Stylesheet::default();
     for (name, entry) in &cfg.styles {
         if let Some(s) = entry.as_geometry() {
-            ss.geometry.insert(name.clone(), s.clone());
+            ss.geometry.insert(name.clone(), Arc::new(s.clone()));
         } else if let Some(l) = entry.as_label() {
             ss.labels.insert(name.clone(), l.clone());
         }
@@ -377,7 +380,7 @@ fn build_stylesheet(cfg: &Config) -> Stylesheet {
         for class in &layer.classes {
             if let ClassStyle::Inline(s) = &class.style {
                 let key = format!("{}::{}", layer.name, class.name);
-                ss.geometry.insert(key, s.clone());
+                ss.geometry.insert(key, Arc::new(s.clone()));
             }
         }
     }

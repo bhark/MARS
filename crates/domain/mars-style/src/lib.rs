@@ -6,6 +6,7 @@
 
 use std::fmt;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -138,7 +139,7 @@ pub struct Halo {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Stylesheet {
     #[serde(default)]
-    pub geometry: std::collections::BTreeMap<String, Style>,
+    pub geometry: std::collections::BTreeMap<String, Arc<Style>>,
     #[serde(default)]
     pub labels: std::collections::BTreeMap<String, LabelStyle>,
 }
