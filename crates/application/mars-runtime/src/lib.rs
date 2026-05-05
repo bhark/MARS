@@ -217,9 +217,20 @@ impl Runtime {
         let renderer = self.deps.renderer.clone();
         let encoder = self.deps.encoder.clone();
         let format = plan.format;
+        let permit = self
+            .render_sem
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| {
+                RuntimeError::Render(mars_render_port::RenderError::Backend(
+                    "render semaphore closed".into(),
+                ))
+            })?;
         // move ownership directly into the closure; the `ops` binding is dead
         // after this line, so peak memory is one Vec<DrawOp> not two.
         let bytes = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, RuntimeError> {
+            let _permit = permit;
             let pixmap = renderer.render(canvas, &ops)?;
             Ok(encoder.encode(&pixmap, format)?)
         })
