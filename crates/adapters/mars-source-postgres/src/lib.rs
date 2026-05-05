@@ -12,7 +12,7 @@
 #![forbid(unsafe_code)]
 
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use deadpool_postgres::{Config as PoolConfig, Pool, Runtime};
@@ -26,8 +26,10 @@ mod fetch;
 mod leader;
 mod lower;
 mod quote;
+mod replication;
 
 pub use lower::lower_to_sql;
+pub use replication::{CollectionTopology, ReplicationTopology};
 
 /// Connection / topology configuration.
 #[derive(Clone, Default)]
@@ -80,8 +82,8 @@ fn redact_dsn(dsn: &str) -> String {
 #[derive(Debug)]
 pub struct PgSource {
     pool: Pool,
-    cfg: PgConfig,
-    feed_warned: AtomicBool,
+    cfg: Arc<PgConfig>,
+    topology: Option<Arc<ReplicationTopology>>,
 }
 
 impl PgSource {
@@ -107,9 +109,19 @@ impl PgSource {
 
         Ok(Self {
             pool,
-            cfg,
-            feed_warned: AtomicBool::new(false),
+            cfg: Arc::new(cfg),
+            topology: None,
         })
+    }
+
+    /// Wire the replication topology used by `subscribe`. The topology is
+    /// derived from the parsed `mars-config` (collection -> table mapping +
+    /// scale bands) at bin-composition time. Without it `subscribe`
+    /// returns `InvalidBinding`.
+    #[must_use]
+    pub fn with_topology(mut self, topology: ReplicationTopology) -> Self {
+        self.topology = Some(Arc::new(topology));
+        self
     }
 
     /// Borrow the underlying pool — useful for tests and future extensions
@@ -142,13 +154,10 @@ impl Source for PgSource {
 #[async_trait]
 impl ChangeFeed for PgSource {
     async fn subscribe(&self) -> Result<BoxStream<'static, Result<ChangeEvent, SourceError>>, SourceError> {
-        // pgoutput subscription is Phase 1. one-shot warn, then NotImplemented.
-        if !self.feed_warned.swap(true, Ordering::Relaxed) {
-            tracing::warn!("phase-1: pgoutput subscription not yet implemented");
-        }
-        Err(SourceError::NotImplemented {
-            what: "mars-source-postgres::ChangeFeed::subscribe",
-        })
+        let topology = self.topology.clone().ok_or_else(|| {
+            SourceError::InvalidBinding("ReplicationTopology not wired; call PgSource::with_topology".into())
+        })?;
+        replication::subscribe(self.cfg.clone(), topology).await
     }
 }
 
