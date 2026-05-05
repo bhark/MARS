@@ -47,6 +47,7 @@ async fn run_snapshot(cfg: Config) -> Result<()> {
     let source = build_source(&cfg).await?;
     let store = build_store(&cfg)?;
     let manifest = build_publisher(&cfg)?;
+    let metrics = mars_observability::Metrics::new().context("init metrics")?;
 
     let compiler = Compiler::new(
         Deps {
@@ -54,6 +55,7 @@ async fn run_snapshot(cfg: Config) -> Result<()> {
             change_feed: source,
             store,
             manifest,
+            metrics,
         },
         cfg,
     );

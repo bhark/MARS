@@ -5,9 +5,11 @@
 #![forbid(unsafe_code)]
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use futures_util::stream::{self, StreamExt};
 use mars_config::Config;
+use mars_observability::Metrics;
 use mars_source::{ChangeFeed, Source};
 use mars_store::{ManifestStore, ObjectStore};
 use mars_types::Manifest;
@@ -44,6 +46,7 @@ pub struct Deps {
     pub change_feed: Arc<dyn ChangeFeed>,
     pub store: Arc<dyn ObjectStore>,
     pub manifest: Arc<dyn ManifestStore>,
+    pub metrics: Metrics,
 }
 
 /// The compiler service.
@@ -70,10 +73,14 @@ impl Compiler {
 
         let tasks = plan::build_plan(&self.config)?;
         tracing::info!(task_count = tasks.len(), "compiler: snapshot plan built");
+        self.deps.metrics.inc_compiler_change_events();
+        self.deps.metrics.inc_compiler_dirty_cells(tasks.len() as u64);
+        self.deps.metrics.set_compiler_window_lag(std::time::Duration::ZERO);
 
         let mut output = snapshot::SnapshotOutput::default();
         let source = self.deps.source.clone();
         let store = self.deps.store.clone();
+        let rebuild_start = Instant::now();
         let mut stream = stream::iter(tasks)
             .map(|task| {
                 let source = source.clone();
@@ -97,6 +104,7 @@ impl Compiler {
             None,
         );
         let v = self.deps.manifest.publish(&manifest).await?;
+        self.deps.metrics.observe_compiler_rebuild_duration(rebuild_start.elapsed());
         tracing::info!(version = v, "compiler: manifest published");
         Ok(())
     }

@@ -10,7 +10,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use prometheus::{
-    Encoder, HistogramOpts, HistogramVec, IntCounterVec, IntGauge, Opts, Registry, TextEncoder,
+    Encoder, Gauge, Histogram, HistogramOpts, HistogramVec, IntCounter, IntCounterVec, IntGauge,
+    Opts, Registry, TextEncoder,
 };
 use tracing_subscriber::EnvFilter;
 
@@ -97,6 +98,10 @@ struct MetricsInner {
     request_duration: HistogramVec,
     manifest_version: IntGauge,
     manifest_reject_total: IntCounterVec,
+    compiler_change_events: IntCounter,
+    compiler_dirty_cells: IntCounter,
+    compiler_rebuild_duration: Histogram,
+    compiler_window_lag: Gauge,
 }
 
 impl std::fmt::Debug for Metrics {
@@ -131,11 +136,32 @@ impl Metrics {
             ),
             &["reason"],
         )?;
+        let compiler_change_events = IntCounter::new(
+            metrics::COMPILER_CHANGE_EVENTS,
+            "total compiler change events processed",
+        )?;
+        let compiler_dirty_cells = IntCounter::new(
+            metrics::COMPILER_DIRTY_CELLS,
+            "total cells marked dirty by the compiler",
+        )?;
+        let compiler_rebuild_duration = Histogram::with_opts(
+            HistogramOpts::new(
+                metrics::COMPILER_REBUILD_DURATION,
+                "compiler rebuild duration in seconds",
+            )
+            .buckets(vec![0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0]),
+        )?;
+        let compiler_window_lag =
+            Gauge::new(metrics::COMPILER_WINDOW_LAG, "compiler change feed window lag in seconds")?;
 
         registry.register(Box::new(request_total.clone()))?;
         registry.register(Box::new(request_duration.clone()))?;
         registry.register(Box::new(manifest_version.clone()))?;
         registry.register(Box::new(manifest_reject_total.clone()))?;
+        registry.register(Box::new(compiler_change_events.clone()))?;
+        registry.register(Box::new(compiler_dirty_cells.clone()))?;
+        registry.register(Box::new(compiler_rebuild_duration.clone()))?;
+        registry.register(Box::new(compiler_window_lag.clone()))?;
 
         Ok(Self {
             inner: Arc::new(MetricsInner {
@@ -144,6 +170,10 @@ impl Metrics {
                 request_duration,
                 manifest_version,
                 manifest_reject_total,
+                compiler_change_events,
+                compiler_dirty_cells,
+                compiler_rebuild_duration,
+                compiler_window_lag,
             }),
         })
     }
@@ -178,6 +208,28 @@ impl Metrics {
             .inc();
     }
 
+    /// Increment the compiler change-event counter.
+    pub fn inc_compiler_change_events(&self) {
+        self.inner.compiler_change_events.inc();
+    }
+
+    /// Increment the compiler dirty-cell counter by `n`.
+    pub fn inc_compiler_dirty_cells(&self, n: u64) {
+        self.inner.compiler_dirty_cells.inc_by(n);
+    }
+
+    /// Record one compiler rebuild duration.
+    pub fn observe_compiler_rebuild_duration(&self, duration: Duration) {
+        self.inner
+            .compiler_rebuild_duration
+            .observe(duration.as_secs_f64());
+    }
+
+    /// Set the compiler change-feed window lag gauge.
+    pub fn set_compiler_window_lag(&self, duration: Duration) {
+        self.inner.compiler_window_lag.set(duration.as_secs_f64());
+    }
+
     /// Encode the current registry as Prometheus text exposition format.
     pub fn encode_text(&self) -> Result<String, ObservabilityError> {
         let encoder = TextEncoder::new();
@@ -198,6 +250,10 @@ mod tests {
         m.observe_request("wms", 200, Duration::from_millis(12));
         m.set_manifest_version(42);
         m.inc_manifest_reject(reject_reason::BACKWARDS_VERSION);
+        m.inc_compiler_change_events();
+        m.inc_compiler_dirty_cells(7);
+        m.observe_compiler_rebuild_duration(Duration::from_secs_f64(1.23));
+        m.set_compiler_window_lag(Duration::from_secs_f64(0.5));
         let text = m.encode_text().unwrap();
         assert!(text.contains("mars_request_total"));
         assert!(text.contains("interface=\"wms\""));
@@ -206,5 +262,9 @@ mod tests {
         assert!(text.contains("mars_manifest_version 42"));
         assert!(text.contains("mars_manifest_reject_total"));
         assert!(text.contains("reason=\"backwards_version\""));
+        assert!(text.contains("mars_compiler_change_events_total"));
+        assert!(text.contains("mars_compiler_dirty_cells_total"));
+        assert!(text.contains("mars_compiler_rebuild_duration_seconds"));
+        assert!(text.contains("mars_compiler_window_lag_seconds"));
     }
 }

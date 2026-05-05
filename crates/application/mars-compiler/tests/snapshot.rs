@@ -155,6 +155,7 @@ fn build_deps(rows: Vec<RowBytes>) -> (Deps, Arc<InMemoryStore>, Arc<InMemoryPub
         change_feed: mem as Arc<dyn mars_source::ChangeFeed>,
         store: store.clone() as Arc<dyn ObjectStore>,
         manifest: publisher.clone() as Arc<dyn ManifestStore>,
+        metrics: mars_observability::Metrics::new().unwrap(),
     };
     (deps, store, publisher)
 }
