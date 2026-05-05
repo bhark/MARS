@@ -326,7 +326,7 @@ mod tests {
             bands: Vec::new(),
             layer_order: Vec::new(),
             stylesheet: Default::default(),
-            manifest: Manifest::new(1, "test", Vec::new(), Vec::new(), None),
+            manifest: Manifest::new(1, "test", Vec::new(), Vec::new(), None, Vec::new()),
             layer_index: Default::default(),
             source_index: Default::default(),
         }

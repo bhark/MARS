@@ -177,6 +177,7 @@ async fn write_manifest(store: &InMemoryStore, version: u64, offset: f64) -> Man
             size_bytes: layer_bytes.len() as u64,
         }],
         None,
+        vec![],
     )
 }
 

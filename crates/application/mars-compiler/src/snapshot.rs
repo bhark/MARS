@@ -6,7 +6,7 @@ use std::sync::Arc;
 use mars_artifact::{ArtifactKind, ArtifactWriter, SourceRef, compute_content_hash};
 use mars_source::{RowAttrs, RowBytes, Source};
 use mars_store::ObjectStore;
-use mars_types::{ArtifactEntry, ArtifactKey, Bbox, Cell, ContentHash, LayerId, ScaleBand};
+use mars_types::{ArtifactEntry, ArtifactKey, Bbox, Cell, ContentHash, EmptyLayerCell, LayerId, ScaleBand};
 
 use crate::CompilerError;
 use crate::class::{CompiledClass, first_match};
@@ -17,12 +17,14 @@ use crate::wkb;
 pub struct SnapshotOutput {
     pub source_artifacts: Vec<ArtifactEntry>,
     pub layer_artifacts: Vec<ArtifactEntry>,
+    pub empty_layer_cells: Vec<EmptyLayerCell>,
 }
 
 impl SnapshotOutput {
     pub fn extend(&mut self, other: SnapshotOutput) {
         self.source_artifacts.extend(other.source_artifacts);
         self.layer_artifacts.extend(other.layer_artifacts);
+        self.empty_layer_cells.extend(other.empty_layer_cells);
     }
 }
 
@@ -36,6 +38,14 @@ pub async fn run_task(
         let bbox = cell_bbox(task.origin, task.cell_size, cell);
         let rows = source.fetch_cell(&task.binding, cell, bbox, None).await?;
         if rows.is_empty() {
+            out.empty_layer_cells.push(EmptyLayerCell {
+                layer: task.layer.clone(),
+                cell: Cell {
+                    band: task.band.clone(),
+                    x: cell.x,
+                    y: cell.y,
+                },
+            });
             continue;
         }
         // sort by feature id for deterministic layout

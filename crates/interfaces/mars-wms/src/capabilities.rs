@@ -216,7 +216,7 @@ layers:
     #[test]
     fn parses_clean() {
         let cfg = minimal_cfg();
-        let m = Manifest::new(1, cfg.service.name.clone(), vec![], vec![], None);
+        let m = Manifest::new(1, cfg.service.name.clone(), vec![], vec![], None, vec![]);
         let xml = capabilities_xml(&cfg, &m).unwrap();
         assert!(xml.contains("WMS_Capabilities"));
         assert!(xml.contains("EPSG:25832"));
@@ -242,7 +242,7 @@ layers:
     fn escapes_xml_special_chars() {
         let mut cfg = minimal_cfg();
         cfg.layers[0].title = "A & B <C>".into();
-        let m = Manifest::new(1, cfg.service.name.clone(), vec![], vec![], None);
+        let m = Manifest::new(1, cfg.service.name.clone(), vec![], vec![], None, vec![]);
         let xml = capabilities_xml(&cfg, &m).unwrap();
         // special chars must be escaped, not raw
         assert!(!xml.contains("A & B <C>"), "raw unescaped special chars found");
@@ -253,7 +253,7 @@ layers:
     fn empty_layers_produces_valid_xml() {
         let mut cfg = minimal_cfg();
         cfg.layers.clear();
-        let m = Manifest::new(1, cfg.service.name.clone(), vec![], vec![], None);
+        let m = Manifest::new(1, cfg.service.name.clone(), vec![], vec![], None, vec![]);
         let xml = capabilities_xml(&cfg, &m).unwrap();
         assert!(xml.contains("<Layer>"));
         assert!(xml.contains("</Layer>"));
@@ -277,7 +277,7 @@ layers:
     fn empty_allowlist_omits_crs() {
         let mut cfg = minimal_cfg();
         cfg.reprojection.allowlist.clear();
-        let m = Manifest::new(1, cfg.service.name.clone(), vec![], vec![], None);
+        let m = Manifest::new(1, cfg.service.name.clone(), vec![], vec![], None, vec![]);
         let xml = capabilities_xml(&cfg, &m).unwrap();
         assert!(
             !xml.contains("<CRS>"),
@@ -289,7 +289,7 @@ layers:
     fn omits_contact_when_email_empty() {
         let mut cfg = minimal_cfg();
         cfg.service.contact_email = String::new();
-        let m = Manifest::new(1, cfg.service.name.clone(), vec![], vec![], None);
+        let m = Manifest::new(1, cfg.service.name.clone(), vec![], vec![], None, vec![]);
         let xml = capabilities_xml(&cfg, &m).unwrap();
         assert!(
             !xml.contains("ContactInformation"),
@@ -312,7 +312,7 @@ layers:
             hash: ContentHash::zero(),
             size_bytes: 0,
         };
-        let m = Manifest::new(1, cfg.service.name.clone(), vec![], vec![entry], None);
+        let m = Manifest::new(1, cfg.service.name.clone(), vec![], vec![entry], None, vec![]);
         let xml = capabilities_xml(&cfg, &m).unwrap();
         // cell (0,0) at 1024m should produce a bbox of (0,0,1024,1024).
         assert!(xml.contains("minx=\"0\""), "missing minx=0: {xml}");

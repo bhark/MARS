@@ -181,6 +181,7 @@ mod tests {
                 size_bytes: 0,
             }],
             None,
+            vec![],
         )
     }
 
@@ -195,6 +196,7 @@ mod tests {
             }],
             vec![],
             None,
+            vec![],
         )
     }
 

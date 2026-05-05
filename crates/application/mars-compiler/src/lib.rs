@@ -102,6 +102,7 @@ impl Compiler {
             output.source_artifacts,
             output.layer_artifacts,
             None,
+            output.empty_layer_cells,
         );
         let v = self.deps.manifest.publish(&manifest).await?;
         self.deps.metrics.observe_compiler_rebuild_duration(rebuild_start.elapsed());

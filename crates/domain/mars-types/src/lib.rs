@@ -13,7 +13,7 @@ pub const LAYER_SCHEMA_VERSION: u32 = 1;
 
 /// current `Manifest::format_version`. Incremented on incompatible additions to
 /// the on-disk manifest format. Older readers must reject newer values.
-pub const MANIFEST_FORMAT_VERSION: u32 = 1;
+pub const MANIFEST_FORMAT_VERSION: u32 = 2;
 
 /// inclusive bounding box in canonical CRS units.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -261,6 +261,15 @@ impl ImageFormat {
     }
 }
 
+/// marker for a (layer, cell) that falls inside the layer's published domain
+/// but contains no features. emitted by the compiler so the runtime can
+/// distinguish "empty by design" from "manifest broken / incomplete".
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct EmptyLayerCell {
+    pub layer: LayerId,
+    pub cell: Cell,
+}
+
 fn default_manifest_format_version() -> u32 {
     MANIFEST_FORMAT_VERSION
 }
@@ -288,6 +297,10 @@ pub struct Manifest {
     pub source_artifacts: Vec<ArtifactEntry>,
     pub layer_artifacts: Vec<ArtifactEntry>,
     pub style_artifact: Option<ArtifactEntry>,
+    /// cells explicitly known to be empty (no features). default = empty vec so
+    /// v1 manifests without the field load cleanly during rollback windows.
+    #[serde(default)]
+    pub empty_layer_cells: Vec<EmptyLayerCell>,
 }
 
 impl Manifest {
@@ -299,6 +312,7 @@ impl Manifest {
         source_artifacts: Vec<ArtifactEntry>,
         layer_artifacts: Vec<ArtifactEntry>,
         style_artifact: Option<ArtifactEntry>,
+        empty_layer_cells: Vec<EmptyLayerCell>,
     ) -> Self {
         Self {
             format_version: MANIFEST_FORMAT_VERSION,
@@ -308,6 +322,7 @@ impl Manifest {
             source_artifacts,
             layer_artifacts,
             style_artifact,
+            empty_layer_cells,
         }
     }
 }
@@ -333,10 +348,44 @@ mod tests {
 
     #[test]
     fn manifest_roundtrip() {
-        let m = Manifest::new(1, "demo", vec![], vec![], None);
+        let m = Manifest::new(1, "demo", vec![], vec![], None, vec![]);
         let s = serde_json::to_string(&m).unwrap();
         let back: Manifest = serde_json::from_str(&s).unwrap();
         assert_eq!(m, back);
+    }
+
+    #[test]
+    fn manifest_roundtrip_with_empty_cells() {
+        let m = Manifest::new(
+            1,
+            "demo",
+            vec![],
+            vec![],
+            None,
+            vec![EmptyLayerCell {
+                layer: LayerId::new("roads"),
+                cell: Cell {
+                    band: ScaleBand::new("hi"),
+                    x: 0,
+                    y: 0,
+                },
+            }],
+        );
+        let s = serde_json::to_string(&m).unwrap();
+        let back: Manifest = serde_json::from_str(&s).unwrap();
+        assert_eq!(m, back);
+        assert_eq!(back.empty_layer_cells.len(), 1);
+    }
+
+    #[test]
+    fn manifest_back_compat_v1_without_empty_cells() {
+        // v1 on-disk manifest without empty_layer_cells must load with an empty vec.
+        let s = r#"{"version":7,"service":"x","source_artifacts":[],"layer_artifacts":[],"style_artifact":null}"#;
+        let m: Manifest = serde_json::from_str(s).unwrap();
+        assert_eq!(m.version, 7);
+        assert_eq!(m.format_version, MANIFEST_FORMAT_VERSION);
+        assert_eq!(m.created_at, SystemTime::UNIX_EPOCH);
+        assert!(m.empty_layer_cells.is_empty());
     }
 
     #[test]

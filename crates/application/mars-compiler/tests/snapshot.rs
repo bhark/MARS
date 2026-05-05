@@ -229,3 +229,58 @@ async fn snapshot_is_deterministic() {
     assert_eq!(lyr1, lyr2, "layer keys (= content hashes) must match");
     assert_eq!(src1, src2, "source keys (= content hashes) must match");
 }
+
+fn make_config_two_cells() -> Config {
+    let mut cfg = make_config();
+    // extent covers cells (0,0) and (1,0) at 4096m origin [0,0]
+    cfg.cells.extent = Some(Bbox::new(0.0, 0.0, 4097.0, 1.0));
+    cfg
+}
+
+fn build_deps_one_cell(rows: Vec<RowBytes>) -> (Deps, Arc<InMemoryStore>, Arc<InMemoryPublisher>) {
+    let store = Arc::new(InMemoryStore::new());
+    let publisher = Arc::new(InMemoryPublisher::new());
+
+    let mut mem = MemSource::default();
+    mem.insert(
+        SourceCollectionId::new("public.roads"),
+        Cell {
+            band: ScaleBand::new("hi"),
+            x: 0,
+            y: 0,
+        },
+        rows,
+    );
+    // cell (1,0) is intentionally absent -> empty
+    let mem = Arc::new(mem);
+
+    let deps = Deps {
+        source: mem.clone() as Arc<dyn mars_source::Source>,
+        change_feed: mem as Arc<dyn mars_source::ChangeFeed>,
+        store: store.clone() as Arc<dyn ObjectStore>,
+        manifest: publisher.clone() as Arc<dyn ManifestStore>,
+        metrics: mars_observability::Metrics::new().unwrap(),
+    };
+    (deps, store, publisher)
+}
+
+#[tokio::test]
+async fn snapshot_emits_empty_layer_cells_for_sparse_data() {
+    let cfg = make_config_two_cells();
+    let (deps, store, publisher) = build_deps_one_cell(make_rows());
+    let compiler = Compiler::new(deps, cfg);
+    compiler.run(CancellationToken::new()).await.unwrap();
+
+    let src_keys = store.list("src").await.unwrap();
+    assert_eq!(src_keys.len(), 1, "one source artifact: {src_keys:?}");
+    let lyr_keys = store.list("lyr").await.unwrap();
+    assert_eq!(lyr_keys.len(), 1, "one layer artifact: {lyr_keys:?}");
+
+    let manifest = publisher.current().await.unwrap().unwrap();
+    assert_eq!(manifest.layer_artifacts.len(), 1);
+    assert_eq!(manifest.source_artifacts.len(), 1);
+    assert_eq!(manifest.empty_layer_cells.len(), 1);
+    assert_eq!(manifest.empty_layer_cells[0].layer.as_str(), "roads");
+    assert_eq!(manifest.empty_layer_cells[0].cell.x, 1);
+    assert_eq!(manifest.empty_layer_cells[0].cell.y, 0);
+}

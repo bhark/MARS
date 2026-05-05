@@ -15,7 +15,7 @@ fn k(s: &str) -> ArtifactKey {
 }
 
 fn manifest(version: u64) -> Manifest {
-    Manifest::new(version, "svc", vec![], vec![], None)
+    Manifest::new(version, "svc", vec![], vec![], None, vec![])
 }
 
 #[tokio::test]

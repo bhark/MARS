@@ -106,7 +106,7 @@ fn minimal_config() -> Arc<Config> {
 }
 
 fn manifest(version: u64) -> Manifest {
-    Manifest::new(version, "t", vec![], vec![], None)
+    Manifest::new(version, "t", vec![], vec![], None, vec![])
 }
 
 fn manifest_with_bad_key(version: u64) -> Manifest {
@@ -124,6 +124,7 @@ fn manifest_with_bad_key(version: u64) -> Manifest {
         }],
         vec![],
         None,
+        vec![],
     )
 }
 

@@ -388,7 +388,7 @@ fn build_stylesheet(cfg: &Config) -> Stylesheet {
 }
 
 fn empty_manifest(cfg: &Config) -> Manifest {
-    Manifest::new(0, cfg.service.name.clone(), vec![], vec![], None)
+    Manifest::new(0, cfg.service.name.clone(), vec![], vec![], None, vec![])
 }
 
 const DEFAULT_LISTEN_ADDR: &str = "0.0.0.0:8080";
