@@ -248,7 +248,7 @@ fn render_fixture_yaml(dsn_kv: &str, store_path: &str, cache_path: &str) -> Stri
     let a_hex = format!("{a_r:02x}{a_g:02x}{a_b:02x}");
     let b_hex = format!("{b_r:02x}{b_g:02x}{b_b:02x}");
     format!(
-        r#"service:
+        r##"service:
   name: e2e
   title: "E2E"
   abstract: "e2e fixture"
@@ -327,7 +327,7 @@ layers:
 observability:
   log_level: info
   log_format: text
-"#
+"##
     )
 }
 
