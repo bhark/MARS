@@ -52,10 +52,18 @@ pub mod metrics {
     pub const ARTIFACT_VERSION_IN_USE: &str = "mars_artifact_version_in_use";
 }
 
-/// Initialise the global tracing subscriber. Honours `RUST_LOG`. JSON output
-/// when `json` is true (matches `observability.log_format: json` in SPEC §5.2).
-pub fn init_tracing(json: bool) -> Result<(), ObservabilityError> {
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+/// Initialise the global tracing subscriber.
+///
+/// `log_level` is read from `config.observability.log_level`; when present it
+/// takes precedence over `RUST_LOG`. When both are absent the default is
+/// `info`. JSON output when `json` is true (matches
+/// `observability.log_format: json` in SPEC §5.2).
+pub fn init_tracing(json: bool, log_level: Option<&str>) -> Result<(), ObservabilityError> {
+    let filter = if let Some(level) = log_level {
+        EnvFilter::new(level)
+    } else {
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"))
+    };
     let result = if json {
         tracing_subscriber::fmt().with_env_filter(filter).json().try_init()
     } else {
