@@ -6,6 +6,8 @@ use std::path::PathBuf;
 
 use mars_config::{ConfigError, load, validate};
 
+static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures")
 }
@@ -66,6 +68,7 @@ fn unknown_band_in_source_binding_is_rejected() {
 
 #[test]
 fn env_default_used_when_unset() {
+    let _guard = ENV_LOCK.lock().unwrap();
     unsafe {
         env::remove_var("MARS_TEST_DSN_FORVALTNING");
     }
@@ -91,6 +94,7 @@ interfaces: {}
 
 #[test]
 fn env_unset_no_default_errors() {
+    let _guard = ENV_LOCK.lock().unwrap();
     unsafe {
         env::remove_var("MARS_TEST_REQUIRED_VAR");
     }
