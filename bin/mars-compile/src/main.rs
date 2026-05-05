@@ -52,14 +52,22 @@ async fn run_snapshot(cfg: Config) -> Result<()> {
     let compiler = Compiler::new(
         Deps {
             source: source.clone(),
-            change_feed: source,
+            change_feed: source.clone(),
+            leader_lock: source,
             store,
             manifest,
             metrics,
         },
         cfg,
     );
-    compiler.run(CancellationToken::new()).await.map_err(|e| anyhow!(e))
+    match compiler.run(CancellationToken::new()).await {
+        Ok(()) => Ok(()),
+        Err(mars_compiler::CompilerError::NotLeader) => {
+            eprintln!("compiler: another instance is leader; exiting cleanly");
+            Ok(())
+        }
+        Err(e) => Err(anyhow!(e)),
+    }
 }
 
 async fn build_source(cfg: &Config) -> Result<Arc<PgSource>> {

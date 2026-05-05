@@ -10,7 +10,7 @@ use std::time::Instant;
 use futures_util::stream::{self, StreamExt};
 use mars_config::Config;
 use mars_observability::Metrics;
-use mars_source::{ChangeFeed, Source};
+use mars_source::{ChangeFeed, LeaderLock, LeaderLockGuard, Source};
 use mars_store::{ManifestStore, ObjectStore};
 use mars_types::Manifest;
 use tokio_util::sync::CancellationToken;
@@ -19,6 +19,22 @@ pub mod class;
 pub mod plan;
 pub mod snapshot;
 pub mod wkb;
+
+/// Deterministic 64-bit hash of the leader-lock key, reinterpreted as `i64`
+/// for `pg_try_advisory_lock`. FNV-1a is stable across releases and has no
+/// runtime dependency; `DefaultHasher` is unsuitable because its seed is
+/// process-local and may change between rust releases.
+#[must_use]
+pub fn leader_lock_key(name: &str) -> i64 {
+    const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut h = FNV_OFFSET;
+    for &b in name.as_bytes() {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(FNV_PRIME);
+    }
+    h as i64
+}
 
 const SNAPSHOT_CONCURRENCY: usize = 4;
 
@@ -38,12 +54,23 @@ pub enum CompilerError {
     Expr(#[from] mars_expr::ExprError),
     #[error("build task panicked: {reason}")]
     BuildTaskPanic { reason: String },
+    /// Another compiler instance holds the leader lock; this process should
+    /// exit cleanly without producing output.
+    #[error("another compiler instance is the leader")]
+    NotLeader,
+    /// Backend error while attempting to acquire the leader lock.
+    #[error("leader lock acquisition failed: {source}")]
+    LeaderLock {
+        #[source]
+        source: mars_source::SourceError,
+    },
 }
 
 /// All ports the compiler depends on, bundled for easy composition by the bin.
 pub struct Deps {
     pub source: Arc<dyn Source>,
     pub change_feed: Arc<dyn ChangeFeed>,
+    pub leader_lock: Arc<dyn LeaderLock>,
     pub store: Arc<dyn ObjectStore>,
     pub manifest: Arc<dyn ManifestStore>,
     pub metrics: Metrics,
@@ -64,6 +91,22 @@ impl Compiler {
     /// Run one snapshot pass. The change-feed dependency is held but not
     /// subscribed in Phase 0 (SPEC §8.2; deferred to Phase 1).
     pub async fn run(&self, shutdown: CancellationToken) -> Result<(), CompilerError> {
+        // singleton enforcement: hold the leader lock for the whole run.
+        let key = leader_lock_key(&self.config.service.name);
+        let _guard: Box<dyn LeaderLockGuard> = match self
+            .deps
+            .leader_lock
+            .try_acquire(key)
+            .await
+            .map_err(|source| CompilerError::LeaderLock { source })?
+        {
+            Some(g) => g,
+            None => {
+                tracing::info!(service = %self.config.service.name, "compiler: not leader, exiting");
+                return Err(CompilerError::NotLeader);
+            }
+        };
+
         tracing::warn!("phase-1: change feed deferred");
         let _ = &self.deps.change_feed;
 

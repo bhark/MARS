@@ -244,14 +244,22 @@ async fn run_compiler(cfg: Config) -> Result<()> {
     let compiler = Compiler::new(
         CompilerDeps {
             source: source.clone(),
-            change_feed: source,
+            change_feed: source.clone(),
+            leader_lock: source,
             store,
             manifest: publisher,
             metrics,
         },
         cfg,
     );
-    compiler.run(CancellationToken::new()).await.map_err(|e| anyhow!(e))
+    match compiler.run(CancellationToken::new()).await {
+        Ok(()) => Ok(()),
+        Err(mars_compiler::CompilerError::NotLeader) => {
+            tracing::info!("compiler: another instance is leader; exiting cleanly");
+            Ok(())
+        }
+        Err(e) => Err(anyhow!(e)),
+    }
 }
 
 async fn run_all_in_one(config_path: &Path) -> Result<()> {

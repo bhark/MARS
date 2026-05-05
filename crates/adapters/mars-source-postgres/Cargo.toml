@@ -28,6 +28,7 @@ async-trait = { workspace = true }
 futures-core = { workspace = true }
 bytes       = { workspace = true }
 tracing     = { workspace = true }
+tokio          = { workspace = true }
 tokio-postgres = { workspace = true }
 deadpool-postgres  = "0.14"
 # optional, gated behind `e2e` feature; lives under [dependencies] because

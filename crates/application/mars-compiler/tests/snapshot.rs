@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod support {
+    pub(crate) mod mem_leader;
     pub(crate) mod mem_source;
 }
 
@@ -19,6 +20,7 @@ use mars_store::{ManifestStore, ObjectStore};
 use mars_types::{Bbox, Cell, CrsCode, LayerId, ScaleBand};
 use tokio_util::sync::CancellationToken;
 
+use crate::support::mem_leader::MemLeader;
 use crate::support::mem_source::{MemSource, wkb_polygon};
 
 fn make_config() -> Config {
@@ -154,6 +156,7 @@ fn build_deps(rows: Vec<RowBytes>) -> (Deps, Arc<InMemoryStore>, Arc<InMemoryPub
     let deps = Deps {
         source: mem.clone() as Arc<dyn mars_source::Source>,
         change_feed: mem as Arc<dyn mars_source::ChangeFeed>,
+        leader_lock: Arc::new(MemLeader::always_grants()) as Arc<dyn mars_source::LeaderLock>,
         store: store.clone() as Arc<dyn ObjectStore>,
         manifest: publisher.clone() as Arc<dyn ManifestStore>,
         metrics: mars_observability::Metrics::new().unwrap(),
@@ -258,6 +261,7 @@ fn build_deps_one_cell(rows: Vec<RowBytes>) -> (Deps, Arc<InMemoryStore>, Arc<In
     let deps = Deps {
         source: mem.clone() as Arc<dyn mars_source::Source>,
         change_feed: mem as Arc<dyn mars_source::ChangeFeed>,
+        leader_lock: Arc::new(MemLeader::always_grants()) as Arc<dyn mars_source::LeaderLock>,
         store: store.clone() as Arc<dyn ObjectStore>,
         manifest: publisher.clone() as Arc<dyn ManifestStore>,
         metrics: mars_observability::Metrics::new().unwrap(),
@@ -284,4 +288,23 @@ async fn snapshot_emits_empty_layer_cells_for_sparse_data() {
     assert_eq!(manifest.empty_layer_cells[0].layer.as_str(), "roads");
     assert_eq!(manifest.empty_layer_cells[0].cell.x, 1);
     assert_eq!(manifest.empty_layer_cells[0].cell.y, 0);
+}
+
+#[tokio::test]
+async fn run_returns_not_leader_when_lock_unavailable() {
+    let cfg = make_config();
+    let (mut deps, store, publisher) = build_deps(make_rows());
+    deps.leader_lock = Arc::new(MemLeader::always_denies()) as Arc<dyn mars_source::LeaderLock>;
+
+    let compiler = Compiler::new(deps, cfg);
+    let err = compiler
+        .run(CancellationToken::new())
+        .await
+        .expect_err("expected NotLeader");
+    assert!(matches!(err, mars_compiler::CompilerError::NotLeader));
+
+    // no work performed
+    assert!(store.list("src").await.unwrap().is_empty());
+    assert!(store.list("lyr").await.unwrap().is_empty());
+    assert!(publisher.current().await.unwrap().is_none());
 }

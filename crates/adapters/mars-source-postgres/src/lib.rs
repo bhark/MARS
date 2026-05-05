@@ -23,6 +23,7 @@ use mars_types::{Bbox, Cell};
 use tokio_postgres::NoTls;
 
 mod fetch;
+mod leader;
 mod lower;
 mod quote;
 
