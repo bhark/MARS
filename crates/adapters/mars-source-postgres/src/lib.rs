@@ -52,10 +52,10 @@ impl std::fmt::Debug for PgConfig {
 fn redact_dsn(dsn: &str) -> String {
     if dsn.contains("://") {
         // URI form: postgresql://user:password@host/...
-        if let Some(at) = dsn.find('@') {
-            if let Some(scheme_end) = dsn.find("://") {
-                return format!("{}user:***@{}", &dsn[..scheme_end + 3], &dsn[at + 1..]);
-            }
+        if let Some(at) = dsn.find('@')
+            && let Some(scheme_end) = dsn.find("://")
+        {
+            return format!("{}user:***@{}", &dsn[..scheme_end + 3], &dsn[at + 1..]);
         }
         return dsn.to_string();
     }

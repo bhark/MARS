@@ -162,12 +162,11 @@ pub(crate) fn cleanup_tmp_files(root: &Path) -> Result<(), StoreError> {
             let p = ent.path();
             if ft.is_dir() {
                 walk(&p)?;
-            } else if ft.is_file() {
-                if let Some(name) = p.file_name().and_then(|s| s.to_str())
-                    && name.contains(".tmp.")
-                {
-                    let _ = std::fs::remove_file(&p);
-                }
+            } else if ft.is_file()
+                && let Some(name) = p.file_name().and_then(|s| s.to_str())
+                && name.contains(".tmp.")
+            {
+                let _ = std::fs::remove_file(&p);
             }
         }
         Ok(())

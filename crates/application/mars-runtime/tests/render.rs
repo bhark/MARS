@@ -527,8 +527,8 @@ async fn empty_marker_skips_fetch_and_draw() {
     let layer_hash = compute_content_hash(&layer_bytes);
     let source_key_v = source_key(COLLECTION, &cell_present, &hex(&source_hash.0));
     let layer_key_v = layer_key(&LayerId::new(LAYER), &cell_present, &hex(&layer_hash.0));
-    store.put(&source_key_v, source_bytes.into()).await.unwrap();
-    store.put(&layer_key_v, layer_bytes.into()).await.unwrap();
+    store.put(&source_key_v, source_bytes).await.unwrap();
+    store.put(&layer_key_v, layer_bytes).await.unwrap();
 
     let mock = Arc::new(MockRenderer::default());
     let state = state_with_empty_marker();
