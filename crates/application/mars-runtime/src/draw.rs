@@ -7,13 +7,22 @@ use mars_artifact::{
     ArtifactReader, FeatureGeom, GeomKind, SectionKind, decode_class_assignment, decode_geometry_payload,
     decode_style_refs,
 };
+use mars_proj::Transformer;
 use mars_render_port::{DrawOp, Path};
 use mars_style::{Style, Stylesheet};
 use mars_types::Bbox;
 
 use crate::RuntimeError;
 
-/// world → pixel linear transform for a viewport.
+/// optional canonical-to-request reprojector applied to vertices before pixel
+/// projection. `None` means the request is already in canonical CRS.
+pub(crate) type Reproject<'a> = Option<&'a Transformer>;
+
+/// request-space → pixel linear transform for a viewport.
+///
+/// `bbox` is in the **request** CRS — the same frame as `width` x `height`.
+/// vertices in canonical CRS must be reprojected (see `Reproject`) before
+/// pixel mapping.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Viewport {
     pub bbox: Bbox,
@@ -44,11 +53,18 @@ pub(crate) fn bbox_intersects(feat: [f32; 4], vp: Bbox) -> bool {
 }
 
 /// emit draw ops for one (source artifact, layer artifact) pair into `out`.
+///
+/// `canonical_bbox` is the request bbox expressed in the canonical CRS,
+/// used to cull feature bboxes (which are stored in canonical coords).
+/// `reproject`, when present, transforms vertices from canonical CRS into
+/// the viewport's request CRS before pixel mapping.
 pub(crate) fn emit_layer_cell(
     source: &ArtifactReader,
     layer: &ArtifactReader,
     stylesheet: &Stylesheet,
     viewport: Viewport,
+    canonical_bbox: Bbox,
+    reproject: Reproject<'_>,
     out: &mut Vec<DrawOp>,
 ) -> Result<(), RuntimeError> {
     if viewport.bbox.width() == 0.0 || viewport.bbox.height() == 0.0 {
@@ -78,7 +94,7 @@ pub(crate) fn emit_layer_cell(
         let class_index = class_assignment[ai].1 as usize;
         ai += 1;
 
-        if !bbox_intersects(feat.bbox, viewport.bbox) {
+        if !bbox_intersects(feat.bbox, canonical_bbox) {
             continue;
         }
 
@@ -100,54 +116,117 @@ pub(crate) fn emit_layer_cell(
             }
         };
 
-        if let Some(op) = build_draw_op(feat, viewport, &style) {
+        if let Some(op) = build_draw_op(feat, viewport, reproject, &style)? {
             out.push(op);
         }
     }
     Ok(())
 }
 
-fn build_draw_op(feat: &FeatureGeom, vp: Viewport, style: &Arc<Style>) -> Option<DrawOp> {
+fn build_draw_op(
+    feat: &FeatureGeom,
+    vp: Viewport,
+    reproject: Reproject<'_>,
+    style: &Arc<Style>,
+) -> Result<Option<DrawOp>, RuntimeError> {
     let rings = match &feat.geom {
-        GeomKind::Polygon(rs) => project_polygon(rs, vp, true),
-        GeomKind::MultiPolygon(parts) => parts.iter().flat_map(|rs| project_polygon(rs, vp, true)).collect(),
-        GeomKind::LineString(verts) => vec![project_ring(verts, vp, false)],
-        GeomKind::MultiLineString(parts) => parts.iter().map(|p| project_ring(p, vp, false)).collect(),
+        GeomKind::Polygon(rs) => project_polygon(rs, vp, reproject, true)?,
+        GeomKind::MultiPolygon(parts) => {
+            let mut acc = Vec::new();
+            for rs in parts {
+                acc.extend(project_polygon(rs, vp, reproject, true)?);
+            }
+            acc
+        }
+        GeomKind::LineString(verts) => vec![project_ring(verts, vp, reproject, false)?],
+        GeomKind::MultiLineString(parts) => {
+            let mut acc = Vec::with_capacity(parts.len());
+            for p in parts {
+                acc.push(project_ring(p, vp, reproject, false)?);
+            }
+            acc
+        }
         // phase 0: points only meaningful with a fill; emit a 1px square. skip
         // if no fill style is configured.
         GeomKind::Point((x, y)) => {
-            style.fill?;
-            vec![project_point_square(*x, *y, vp)]
+            if style.fill.is_none() {
+                return Ok(None);
+            }
+            vec![project_point_square(*x, *y, vp, reproject)?]
         }
         GeomKind::MultiPoint(pts) => {
-            style.fill?;
-            pts.iter().map(|(x, y)| project_point_square(*x, *y, vp)).collect()
+            if style.fill.is_none() {
+                return Ok(None);
+            }
+            let mut acc = Vec::with_capacity(pts.len());
+            for (x, y) in pts {
+                acc.push(project_point_square(*x, *y, vp, reproject)?);
+            }
+            acc
         }
     };
     if rings.is_empty() {
-        return None;
+        return Ok(None);
     }
-    Some(DrawOp::Path {
+    Ok(Some(DrawOp::Path {
         path: Path { rings },
         style: style.clone(),
-    })
+    }))
 }
 
-fn project_polygon(rings: &[Vec<(f64, f64)>], vp: Viewport, close: bool) -> Vec<Vec<(f32, f32)>> {
-    rings.iter().map(|r| project_ring(r, vp, close)).collect()
+fn project_polygon(
+    rings: &[Vec<(f64, f64)>],
+    vp: Viewport,
+    reproject: Reproject<'_>,
+    close: bool,
+) -> Result<Vec<Vec<(f32, f32)>>, RuntimeError> {
+    let mut out = Vec::with_capacity(rings.len());
+    for r in rings {
+        out.push(project_ring(r, vp, reproject, close)?);
+    }
+    Ok(out)
 }
 
-pub(crate) fn project_ring(verts: &[(f64, f64)], vp: Viewport, close: bool) -> Vec<(f32, f32)> {
-    let mut out: Vec<(f32, f32)> = verts.iter().map(|&(x, y)| vp.project(x, y)).collect();
+pub(crate) fn project_ring(
+    verts: &[(f64, f64)],
+    vp: Viewport,
+    reproject: Reproject<'_>,
+    close: bool,
+) -> Result<Vec<(f32, f32)>, RuntimeError> {
+    let mut out: Vec<(f32, f32)> = Vec::with_capacity(verts.len() + usize::from(close));
+    for &(x, y) in verts {
+        let (rx, ry) = reproject_point(x, y, reproject)?;
+        out.push(vp.project(rx, ry));
+    }
     if close && out.len() >= 2 && out[0] != out[out.len() - 1] {
         out.push(out[0]);
     }
-    out
+    Ok(out)
 }
 
-pub(crate) fn project_point_square(x: f64, y: f64, vp: Viewport) -> Vec<(f32, f32)> {
-    let (px, py) = vp.project(x, y);
-    vec![(px, py), (px + 1.0, py), (px + 1.0, py + 1.0), (px, py + 1.0), (px, py)]
+pub(crate) fn project_point_square(
+    x: f64,
+    y: f64,
+    vp: Viewport,
+    reproject: Reproject<'_>,
+) -> Result<Vec<(f32, f32)>, RuntimeError> {
+    let (rx, ry) = reproject_point(x, y, reproject)?;
+    let (px, py) = vp.project(rx, ry);
+    Ok(vec![
+        (px, py),
+        (px + 1.0, py),
+        (px + 1.0, py + 1.0),
+        (px, py + 1.0),
+        (px, py),
+    ])
+}
+
+#[inline]
+fn reproject_point(x: f64, y: f64, reproject: Reproject<'_>) -> Result<(f64, f64), RuntimeError> {
+    match reproject {
+        Some(t) => Ok(t.transform_point(x, y)?),
+        None => Ok((x, y)),
+    }
 }
 
 #[cfg(test)]
@@ -194,7 +273,7 @@ mod tests {
     fn project_ring_closes_polygon() {
         let vp = viewport(Bbox::new(0.0, 0.0, 10.0, 10.0), 100, 100);
         let ring = vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)];
-        let out = project_ring(&ring, vp, true);
+        let out = project_ring(&ring, vp, None, true).unwrap();
         assert_eq!(out[0], out[out.len() - 1], "polygon ring should be closed");
     }
 
@@ -202,14 +281,14 @@ mod tests {
     fn project_ring_does_not_close_linestring() {
         let vp = viewport(Bbox::new(0.0, 0.0, 10.0, 10.0), 100, 100);
         let ring = vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)];
-        let out = project_ring(&ring, vp, false);
+        let out = project_ring(&ring, vp, None, false).unwrap();
         assert_ne!(out[0], out[out.len() - 1], "linestring should stay open");
     }
 
     #[test]
     fn project_point_square_1px() {
         let vp = viewport(Bbox::new(0.0, 0.0, 10.0, 10.0), 100, 100);
-        let sq = project_point_square(5.0, 5.0, vp);
+        let sq = project_point_square(5.0, 5.0, vp, None).unwrap();
         assert_eq!(sq.len(), 5);
         assert_eq!(sq[0], sq[4]);
         assert_eq!(sq[1].0, sq[0].0 + 1.0);
@@ -255,14 +334,8 @@ mod tests {
         let mut ss = Stylesheet::default();
         ss.geometry.insert("red".into(), Arc::new(red_style()));
         let mut out = Vec::new();
-        emit_layer_cell(
-            &src,
-            &lyr,
-            &ss,
-            viewport(Bbox::new(0.0, 0.0, 0.0, 10.0), 100, 100),
-            &mut out,
-        )
-        .unwrap();
+        let vp = viewport(Bbox::new(0.0, 0.0, 0.0, 10.0), 100, 100);
+        emit_layer_cell(&src, &lyr, &ss, vp, vp.bbox, None, &mut out).unwrap();
         assert!(out.is_empty());
     }
 
@@ -278,14 +351,8 @@ mod tests {
         let mut ss = Stylesheet::default();
         ss.geometry.insert("red".into(), Arc::new(red_style()));
         let mut out = Vec::new();
-        emit_layer_cell(
-            &src,
-            &lyr,
-            &ss,
-            viewport(Bbox::new(0.0, 0.0, 10.0, 10.0), 100, 100),
-            &mut out,
-        )
-        .unwrap();
+        let vp = viewport(Bbox::new(0.0, 0.0, 10.0, 10.0), 100, 100);
+        emit_layer_cell(&src, &lyr, &ss, vp, vp.bbox, None, &mut out).unwrap();
         assert!(out.is_empty());
     }
 
@@ -299,14 +366,8 @@ mod tests {
         let lyr = build_layer(&[(1, 0)], &["blue".into()]);
         let ss = Stylesheet::default(); // no "blue" style
         let mut out = Vec::new();
-        emit_layer_cell(
-            &src,
-            &lyr,
-            &ss,
-            viewport(Bbox::new(0.0, 0.0, 10.0, 10.0), 100, 100),
-            &mut out,
-        )
-        .unwrap();
+        let vp = viewport(Bbox::new(0.0, 0.0, 10.0, 10.0), 100, 100);
+        emit_layer_cell(&src, &lyr, &ss, vp, vp.bbox, None, &mut out).unwrap();
         assert!(out.is_empty());
     }
 
@@ -321,14 +382,8 @@ mod tests {
         let mut ss = Stylesheet::default();
         ss.geometry.insert("no_fill".into(), Arc::new(Style::default()));
         let mut out = Vec::new();
-        emit_layer_cell(
-            &src,
-            &lyr,
-            &ss,
-            viewport(Bbox::new(0.0, 0.0, 10.0, 10.0), 100, 100),
-            &mut out,
-        )
-        .unwrap();
+        let vp = viewport(Bbox::new(0.0, 0.0, 10.0, 10.0), 100, 100);
+        emit_layer_cell(&src, &lyr, &ss, vp, vp.bbox, None, &mut out).unwrap();
         assert!(out.is_empty());
     }
 
@@ -343,14 +398,8 @@ mod tests {
         let mut ss = Stylesheet::default();
         ss.geometry.insert("red".into(), Arc::new(red_style()));
         let mut out = Vec::new();
-        emit_layer_cell(
-            &src,
-            &lyr,
-            &ss,
-            viewport(Bbox::new(0.0, 0.0, 10.0, 10.0), 100, 100),
-            &mut out,
-        )
-        .unwrap();
+        let vp = viewport(Bbox::new(0.0, 0.0, 10.0, 10.0), 100, 100);
+        emit_layer_cell(&src, &lyr, &ss, vp, vp.bbox, None, &mut out).unwrap();
         assert_eq!(out.len(), 1);
         match &out[0] {
             DrawOp::Path { path, .. } => {

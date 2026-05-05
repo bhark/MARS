@@ -34,10 +34,19 @@ pub fn denom_from_plan(bbox_width: f64, width_px: u32) -> u32 {
 }
 
 /// expand a `RenderPlan` into the flat list of cell-tasks to fetch + draw.
-pub(crate) fn resolve(plan: &RenderPlan, state: &RuntimeState) -> Result<Vec<LayerCellTask>, RuntimeError> {
+///
+/// `canonical_bbox` is the request bbox transformed into the canonical CRS;
+/// pass `plan.bbox` directly when the request is already canonical. cell
+/// selection always operates in canonical-CRS space — the manifest grid is
+/// indexed in that frame.
+pub(crate) fn resolve(
+    plan: &RenderPlan,
+    state: &RuntimeState,
+    canonical_bbox: mars_types::Bbox,
+) -> Result<Vec<LayerCellTask>, RuntimeError> {
     let denom = denom_from_plan(plan.bbox.width(), plan.width);
     let band = pick_band(denom, &state.bands)?;
-    let cells = cells_in_bbox(plan.bbox, band, crate::MAX_CELLS_PER_REQUEST)?;
+    let cells = cells_in_bbox(canonical_bbox, band, crate::MAX_CELLS_PER_REQUEST)?;
 
     let mut out = Vec::with_capacity(plan.layers.len() * cells.len());
     for layer in &plan.layers {

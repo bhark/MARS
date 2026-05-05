@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use arc_swap::ArcSwapOption;
 use futures_util::{StreamExt, stream};
+use mars_artifact::ArtifactReader;
 use mars_observability::{Metrics, reject_reason};
 use mars_render_port::{Canvas, Encoder, Renderer};
 use mars_store::{LocalCache, ManifestStore, ObjectStore, StoreError};
@@ -52,8 +53,8 @@ pub enum RuntimeError {
     Artifact(#[from] mars_artifact::ArtifactError),
     #[error(transparent)]
     Grid(#[from] mars_grid::GridError),
-    #[error("plan CRS '{requested}' is not the canonical CRS; reprojection deferred to phase 1")]
-    CrsNotCanonical { requested: String },
+    #[error(transparent)]
+    Proj(#[from] mars_proj::ProjError),
     #[error("layer '{layer}' is not defined")]
     LayerNotDefined { layer: String },
     #[error("manifest entry missing for layer '{layer}' band '{band}' cell {cell:?}")]
@@ -164,11 +165,6 @@ impl Runtime {
     /// Execute one render plan and return encoded image bytes.
     pub async fn render(&self, plan: &RenderPlan) -> Result<Vec<u8>, RuntimeError> {
         let state = self.current_state().ok_or(RuntimeError::NotReady)?;
-        if plan.crs != state.canonical_crs {
-            return Err(RuntimeError::CrsNotCanonical {
-                requested: plan.crs.to_string(),
-            });
-        }
 
         for layer in &plan.layers {
             if !state.layer_order.contains(layer) {
@@ -178,14 +174,26 @@ impl Runtime {
             }
         }
 
-        let tasks = plan::resolve(plan, &state)?;
+        // reproject the request bbox into canonical CRS for cell selection.
+        // forward (canonical -> request) transformer is built later inside
+        // spawn_blocking — Transformer is !Send and must live on one thread.
+        let needs_reproject = plan.crs != state.canonical_crs;
+        let canonical_bbox = if needs_reproject {
+            let inverse = mars_proj::Transformer::new(&plan.crs, &state.canonical_crs)?;
+            inverse.transform_bbox(plan.bbox)?
+        } else {
+            plan.bbox
+        };
+
+        let tasks = plan::resolve(plan, &state, canonical_bbox)?;
         let viewport = draw::Viewport {
             bbox: plan.bbox,
             width: plan.width,
             height: plan.height,
         };
 
-        let mut ops = Vec::new();
+        // collect fetched artifacts under async; geometry + render run sync.
+        let mut fetched: Vec<(ArtifactReader, ArtifactReader)> = Vec::with_capacity(tasks.len());
         for task in &tasks {
             let layer_art = match fetch::fetch_layer(
                 &state,
@@ -218,8 +226,7 @@ impl Runtime {
                 &source_cell,
             )
             .await?;
-
-            draw::emit_layer_cell(&source_art, &layer_art, &state.stylesheet, viewport, &mut ops)?;
+            fetched.push((source_art, layer_art));
         }
 
         let canvas = Canvas {
@@ -233,10 +240,30 @@ impl Runtime {
         let permit = self.render_sem.clone().acquire_owned().await.map_err(|_| {
             RuntimeError::Render(mars_render_port::RenderError::Backend("render semaphore closed".into()))
         })?;
-        // move ownership directly into the closure; the `ops` binding is dead
-        // after this line, so peak memory is one Vec<DrawOp> not two.
+        let canonical_crs = state.canonical_crs.clone();
+        let request_crs = plan.crs.clone();
+        let stylesheet_state = state.clone();
         let bytes = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, RuntimeError> {
             let _permit = permit;
+            // build the forward transformer on the blocking thread so its
+            // thread-local PJ context lives only here.
+            let forward = if needs_reproject {
+                Some(mars_proj::Transformer::new(&canonical_crs, &request_crs)?)
+            } else {
+                None
+            };
+            let mut ops = Vec::new();
+            for (source_art, layer_art) in &fetched {
+                draw::emit_layer_cell(
+                    source_art,
+                    layer_art,
+                    &stylesheet_state.stylesheet,
+                    viewport,
+                    canonical_bbox,
+                    forward.as_ref(),
+                    &mut ops,
+                )?;
+            }
             let pixmap = renderer.render(canvas, &ops)?;
             Ok(encoder.encode(&pixmap, format)?)
         })

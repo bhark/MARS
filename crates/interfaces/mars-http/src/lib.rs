@@ -290,10 +290,17 @@ fn map_runtime_error(e: &RuntimeError) -> WmsException {
             code: None,
             message: "Service temporarily unavailable".into(),
         },
-        RuntimeError::CrsNotCanonical { requested } => WmsException {
-            semantic_status: StatusCode::BAD_REQUEST,
-            code: Some("InvalidCRS"),
-            message: format!("CRS '{requested}' is not supported"),
+        RuntimeError::Proj(proj_err) => match proj_err {
+            mars_proj::ProjError::UnknownCrs(name) => WmsException {
+                semantic_status: StatusCode::BAD_REQUEST,
+                code: Some("InvalidCRS"),
+                message: format!("CRS '{name}' is not supported"),
+            },
+            _ => WmsException {
+                semantic_status: StatusCode::BAD_REQUEST,
+                code: Some("InvalidCRS"),
+                message: "Coordinate transformation failed".into(),
+            },
         },
         RuntimeError::NotImplemented { what } => WmsException {
             semantic_status: StatusCode::NOT_IMPLEMENTED,

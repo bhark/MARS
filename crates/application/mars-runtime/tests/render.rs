@@ -397,16 +397,150 @@ async fn render_pins_state_across_swap() {
 }
 
 #[tokio::test]
-async fn rejects_non_canonical_crs() {
+async fn rejects_unsupported_crs() {
+    // a CRS code the proj database does not know must surface as a Proj
+    // error, not a panic. note: phase-1 has no curated allowlist; admission
+    // is "whatever proj can load".
     let fx = build_fixture().await;
     let mut plan = plan_for(&fx);
-    plan.crs = CrsCode::new("EPSG:3857");
+    plan.crs = CrsCode::new("EPSG:9999999");
     match fx.runtime.render(&plan).await {
-        Err(RuntimeError::CrsNotCanonical { requested }) => {
-            assert_eq!(requested, "EPSG:3857");
-        }
-        other => panic!("expected CrsNotCanonical, got {other:?}"),
+        Err(RuntimeError::Proj(_)) => {}
+        other => panic!("expected Proj error, got {other:?}"),
     }
+}
+
+/// fixture variant with empty markers surrounding (0,0): the densified
+/// inverse-bbox from a foreign CRS reliably bulges across canonical cell
+/// boundaries, and cells outside data extent must be treated as empty.
+async fn build_fixture_with_empty_neighbours() -> Fixture {
+    let store = Arc::new(InMemoryStore::new());
+    let cache = InMemoryCache::new();
+    let manifest = write_manifest(&store, 1, 0.0).await;
+    let canonical_crs = CrsCode::new("EPSG:25832");
+
+    let bands = vec![BandConfig {
+        name: ScaleBand::new(BAND),
+        max_denom: u32::MAX,
+        origin: (0.0, 0.0),
+        cell_size: 1024.0,
+    }];
+
+    let mut layer_index = std::collections::HashMap::new();
+    let mut source_index = std::collections::HashMap::new();
+    layer_index.insert(
+        (LayerId::new(LAYER), ScaleBand::new(BAND), (CELL_X, CELL_Y)),
+        LayerCellState::Present(manifest.layer_artifacts[0].clone()),
+    );
+    for dx in -2i64..=2 {
+        for dy in -2i64..=2 {
+            if dx == 0 && dy == 0 {
+                continue;
+            }
+            layer_index.insert(
+                (LayerId::new(LAYER), ScaleBand::new(BAND), (dx, dy)),
+                LayerCellState::Empty,
+            );
+        }
+    }
+    source_index.insert(
+        (COLLECTION.to_owned(), ScaleBand::new(BAND), (CELL_X, CELL_Y)),
+        manifest.source_artifacts[0].clone(),
+    );
+
+    let state = RuntimeState {
+        canonical_crs: canonical_crs.clone(),
+        bands,
+        layer_order: vec![LayerId::new(LAYER)],
+        stylesheet: stylesheet(),
+        manifest,
+        layer_index,
+        source_index,
+    };
+
+    let mock = Arc::new(MockRenderer::default());
+    let renderer: Arc<dyn Renderer> = mock.clone();
+    let runtime = Runtime::from_state(
+        Arc::new(state),
+        Deps {
+            store: store.clone(),
+            cache: Arc::new(cache),
+            renderer,
+            encoder: Arc::new(CannedEncoder),
+            metrics: mars_observability::Metrics::new().unwrap(),
+        },
+    );
+    Fixture {
+        runtime,
+        mock,
+        store,
+        canonical_crs,
+    }
+}
+
+#[tokio::test]
+async fn reprojects_25832_to_3857() {
+    // canonical fixture features sit at utm32n (0..200, 0..10), which is far
+    // west of zone 32's natural strip; in webmercator that maps to roughly
+    // (502_190, 0) -> (503_212, 1028). pick a request envelope that covers it
+    // and verify the reprojected render still emits path ops.
+    let fx = build_fixture_with_empty_neighbours().await;
+    let mut plan = plan_for(&fx);
+    plan.crs = CrsCode::new("EPSG:3857");
+    // canonical features at 25832 (0..100, 0..10) project to 3857
+    // (~502190..502290, 0..10); request envelope must cover that.
+    plan.bbox = Bbox::new(502_180.0, -5.0, 502_300.0, 15.0);
+
+    let bytes = fx.runtime.render(&plan).await.unwrap();
+    assert_eq!(bytes, CANNED_BYTES);
+
+    let recorded = fx.mock.ops.lock().unwrap();
+    assert_eq!(recorded.len(), 1, "renderer called exactly once");
+    let ops = &recorded[0];
+    let path_count = ops.iter().filter(|o| matches!(o, DrawOp::Path { .. })).count();
+    assert!(
+        path_count > 0,
+        "reprojected request should still emit at least one path"
+    );
+}
+
+#[tokio::test]
+async fn reprojects_25832_to_4326() {
+    // EPSG:4326 + proj_normalize_for_visualization yields lon/lat (x,y) order,
+    // matching WMS 1.3.0 + WMTS conventions used elsewhere in this codebase.
+    // canonical (0..1024, 0..1024) utm32n -> 4326 envelope ~(4.51, 0, 4.52, 0.01).
+    let fx = build_fixture_with_empty_neighbours().await;
+    let mut plan = plan_for(&fx);
+    plan.crs = CrsCode::new("EPSG:4326");
+    // canonical features at 25832 (0..100, 0..10) project to 4326
+    // (~4.5113..4.5122 lon, 0..1e-4 lat). lon/lat (x,y) order from
+    // proj_normalize_for_visualization matches WMS 1.3.0 conventions.
+    plan.bbox = Bbox::new(4.5110, -0.0001, 4.5125, 0.0002);
+
+    let bytes = fx.runtime.render(&plan).await.unwrap();
+    assert_eq!(bytes, CANNED_BYTES);
+
+    let recorded = fx.mock.ops.lock().unwrap();
+    let ops = &recorded[0];
+    let path_count = ops.iter().filter(|o| matches!(o, DrawOp::Path { .. })).count();
+    assert!(path_count > 0, "reprojected request should emit at least one path");
+}
+
+#[tokio::test]
+async fn reprojection_skipped_when_crs_matches() {
+    // canonical-equality path must not touch proj at all; we just sanity-check
+    // it still produces ops identical to the baseline.
+    let fx = build_fixture().await;
+    let baseline = ops_debug(&{
+        fx.runtime.render(&plan_for(&fx)).await.unwrap();
+        fx.mock.ops.lock().unwrap()[0].clone()
+    });
+    fx.mock.ops.lock().unwrap().clear();
+
+    let plan = plan_for(&fx);
+    fx.runtime.render(&plan).await.unwrap();
+    let again = ops_debug(&fx.mock.ops.lock().unwrap()[0]);
+    assert_eq!(baseline, again);
 }
 
 #[tokio::test]
