@@ -3,10 +3,14 @@
 
 #![forbid(unsafe_code)]
 
+use std::time::Duration;
+
 mod cache;
 mod key;
 mod manifest;
 mod store;
+
+const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 pub use cache::FsCache;
 pub use manifest::FsPublisher;

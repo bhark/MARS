@@ -18,6 +18,8 @@ pub mod plan;
 pub mod snapshot;
 pub mod wkb;
 
+const SNAPSHOT_CONCURRENCY: usize = 4;
+
 #[derive(Debug, thiserror::Error)]
 pub enum CompilerError {
     #[error(transparent)]
@@ -78,7 +80,7 @@ impl Compiler {
                 let store = store.clone();
                 async move { snapshot::run_task(&task, &source, &store).await }
             })
-            .buffer_unordered(4);
+            .buffer_unordered(SNAPSHOT_CONCURRENCY);
         while let Some(result) = stream.next().await {
             if shutdown.is_cancelled() {
                 return Ok(());

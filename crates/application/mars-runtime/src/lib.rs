@@ -20,6 +20,7 @@ use mars_render_port::{Canvas, Encoder, Renderer};
 use mars_store::{LocalCache, ManifestStore, ObjectStore, StoreError};
 use mars_style::Stylesheet;
 use mars_types::{ArtifactEntry, ArtifactKey, Bbox, CrsCode, ImageFormat, LayerId};
+use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
@@ -27,6 +28,16 @@ pub use plan::denom_from_plan;
 pub use state::RuntimeState;
 
 const WARM_CONCURRENCY: usize = 8;
+
+fn default_render_concurrency() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+}
+
+/// hard limit on cells a single request may cover. prevents oom from
+/// pathological bbox / tiny cell size combinations.
+pub(crate) const MAX_CELLS_PER_REQUEST: usize = 1_000_000;
 
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
@@ -91,6 +102,7 @@ pub struct Runtime {
     /// reason the most recent manifest swap was rejected, if any. exposed for
     /// the debug endpoint; cleared on a successful swap.
     last_reject_reason: ArcSwapOption<String>,
+    render_sem: Arc<Semaphore>,
 }
 
 impl Runtime {
@@ -101,6 +113,7 @@ impl Runtime {
             state: ArcSwapOption::empty(),
             deps,
             last_reject_reason: ArcSwapOption::empty(),
+            render_sem: Arc::new(Semaphore::new(default_render_concurrency())),
         }
     }
 
@@ -111,6 +124,7 @@ impl Runtime {
             state: ArcSwapOption::from(Some(state)),
             deps,
             last_reject_reason: ArcSwapOption::empty(),
+            render_sem: Arc::new(Semaphore::new(default_render_concurrency())),
         }
     }
 

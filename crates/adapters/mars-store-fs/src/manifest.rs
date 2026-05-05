@@ -18,7 +18,6 @@ use crate::store::atomic_write;
 
 const MANIFEST_DIR: &str = "manifests";
 const CURRENT_FILE: &str = "current";
-const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Filesystem manifest publisher. Shares its root with [`crate::FsStore`].
 #[derive(Debug, Clone)]
@@ -42,7 +41,7 @@ impl FsPublisher {
             .map_err(|e| StoreError::Backend(format!("create manifests dir: {e}")))?;
         Ok(Self {
             root,
-            poll_interval: DEFAULT_POLL_INTERVAL,
+            poll_interval: crate::DEFAULT_POLL_INTERVAL,
         })
     }
 

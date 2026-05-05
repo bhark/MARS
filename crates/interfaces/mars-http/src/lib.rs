@@ -32,6 +32,9 @@ use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
 use tracing::Instrument;
 
+const BODY_LIMIT_BYTES: usize = 1 << 20; // 1 MiB
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+
 #[derive(Debug, thiserror::Error)]
 pub enum HttpError {
     #[error("listen error: {0}")]
@@ -85,10 +88,10 @@ pub fn router(
         .route("/metrics", get(handle_metrics))
         .with_state(state.clone())
         .layer(middleware::from_fn_with_state(state, observe_request))
-        .layer(RequestBodyLimitLayer::new(1 << 20))
+        .layer(RequestBodyLimitLayer::new(BODY_LIMIT_BYTES))
         .layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
-            Duration::from_secs(60),
+            REQUEST_TIMEOUT,
         ))
 }
 
