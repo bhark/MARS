@@ -160,10 +160,10 @@ echo "--- 3. adapter-specific methods outside adapter crates ---"
 # methods that belong to FsPublisher but not to ManifestPublisher
 for method in "read_current(" "manifests_dir(" "new_with_poll_interval("; do
     matches=$(grep -r "$method" crates/ bin/ --include="*.rs" 2>/dev/null) || true
-    # keep only matches outside the adapter crate itself
-    filtered=$(echo "$matches" | grep -v "crates/adapters/mars-store-fs/" || true)
+    # keep only matches outside any manifest-store adapter crate
+    filtered=$(echo "$matches" | grep -v "crates/adapters/mars-store-fs/" | grep -v "crates/adapters/mars-store-s3/" || true)
     if [[ -n "$filtered" ]]; then
-        warn "adapter-specific method '.$method' called outside mars-store-fs adapter:"
+        warn "adapter-specific method '.$method' called outside a manifest-store adapter:"
         echo "$filtered" | sed 's/^/    /'
     fi
 done

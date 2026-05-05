@@ -12,10 +12,18 @@ description = "Object-store adapter for mars-store backed by `object_store` (S3 
 workspace = true
 
 [dependencies]
-mars-store  = { workspace = true }
-mars-types  = { workspace = true }
-async-trait = { workspace = true }
-bytes       = { workspace = true }
+mars-store     = { workspace = true }
+mars-types     = { workspace = true }
+mars-artifact  = { workspace = true }
+async-trait    = { workspace = true }
+bytes          = { workspace = true }
+tokio          = { workspace = true }
+serde_json     = { workspace = true }
+futures-core   = { workspace = true }
+futures-util   = { workspace = true }
+tracing        = { workspace = true }
+object_store   = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt", "macros"] }
+tokio        = { workspace = true, features = ["macros", "rt-multi-thread"] }
+object_store = { workspace = true, features = ["aws"] }

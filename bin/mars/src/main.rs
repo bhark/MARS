@@ -21,6 +21,7 @@ use mars_runtime::{Deps as RuntimeDeps, Runtime, RuntimeState, run_manifest_relo
 use mars_source_postgres::{PgConfig, PgSource};
 use mars_store::{LocalCache, ManifestStore, ObjectStore};
 use mars_store_fs::{FsCache, FsPublisher, FsStore};
+use mars_store_s3::{S3Config, S3Publisher, S3Store};
 use mars_style::Stylesheet;
 use mars_types::Manifest;
 use tokio_util::sync::CancellationToken;
@@ -124,9 +125,8 @@ async fn run_runtime(config_path: &Path) -> Result<()> {
     let cfg = load_and_validate(config_path)?;
     let cfg = Arc::new(cfg);
 
-    let store = build_store(&cfg)?;
+    let (store, publisher) = build_store_and_publisher(&cfg)?;
     let cache = build_cache(&cfg)?;
-    let publisher = build_publisher(&cfg)?;
     let stylesheet = build_stylesheet(&cfg);
 
     let listen = resolve_listen(&cfg)?;
@@ -238,8 +238,7 @@ async fn run_compiler_mode(config_path: &Path) -> Result<()> {
 
 async fn run_compiler(cfg: Config) -> Result<()> {
     let source = build_source(&cfg).await?;
-    let store = build_store(&cfg)?;
-    let publisher = build_publisher(&cfg)?;
+    let (store, publisher) = build_store_and_publisher(&cfg)?;
     let metrics = mars_observability::Metrics::new().context("init metrics")?;
 
     let compiler = Compiler::new(
@@ -327,7 +326,9 @@ async fn build_source(cfg: &Config) -> Result<Arc<PgSource>> {
     Ok(Arc::new(PgSource::connect(pg_cfg).await.context("connect postgres")?))
 }
 
-fn build_store(cfg: &Config) -> Result<Arc<dyn ObjectStore>> {
+fn build_store_and_publisher(
+    cfg: &Config,
+) -> Result<(Arc<dyn ObjectStore>, Arc<dyn ManifestStore>)> {
     match cfg.artifacts.store.kind.as_str() {
         "fs" => {
             let p = cfg
@@ -336,10 +337,42 @@ fn build_store(cfg: &Config) -> Result<Arc<dyn ObjectStore>> {
                 .path
                 .as_deref()
                 .ok_or_else(|| anyhow!("artifacts.store.path required for type=fs"))?;
-            Ok(Arc::new(FsStore::new(p).context("open fs store")?))
+            let store: Arc<dyn ObjectStore> = Arc::new(FsStore::new(p).context("open fs store")?);
+            let publisher: Arc<dyn ManifestStore> =
+                Arc::new(FsPublisher::new(p).context("open fs manifest store")?);
+            Ok((store, publisher))
+        }
+        "s3" => {
+            let bucket = cfg
+                .artifacts
+                .store
+                .bucket
+                .clone()
+                .ok_or_else(|| anyhow!("artifacts.store.bucket required for type=s3"))?;
+            let region = std::env::var("AWS_REGION")
+                .or_else(|_| std::env::var("AWS_DEFAULT_REGION"))
+                .map_err(|_| anyhow!("AWS_REGION env required for type=s3"))?;
+            let s3 = S3Config {
+                endpoint: cfg.artifacts.store.endpoint.clone(),
+                region,
+                bucket,
+                prefix: cfg.artifacts.store.prefix.clone().unwrap_or_default(),
+                access_key_id: None,
+                secret_access_key: None,
+                allow_http: cfg
+                    .artifacts
+                    .store
+                    .endpoint
+                    .as_deref()
+                    .is_some_and(|e| e.starts_with("http://")),
+            };
+            let store_inner = S3Store::from_config(&s3).context("open s3 store")?;
+            let publisher: Arc<dyn ManifestStore> = Arc::new(S3Publisher::from_store(&store_inner));
+            let store: Arc<dyn ObjectStore> = Arc::new(store_inner);
+            Ok((store, publisher))
         }
         other => Err(anyhow!(
-            "artifacts.store.type='{other}' not supported in Phase 0; use type=fs"
+            "artifacts.store.type='{other}' unsupported; use 'fs' or 's3'"
         )),
     }
 }
@@ -353,16 +386,6 @@ fn build_cache(cfg: &Config) -> Result<Arc<dyn LocalCache>> {
     Ok(Arc::new(
         FsCache::new(&cfg.artifacts.cache.path, max).context("open fs cache")?,
     ))
-}
-
-fn build_publisher(cfg: &Config) -> Result<Arc<FsPublisher>> {
-    let p = cfg
-        .artifacts
-        .store
-        .path
-        .as_deref()
-        .ok_or_else(|| anyhow!("artifacts.store.path required for manifest store"))?;
-    Ok(Arc::new(FsPublisher::new(p).context("open fs manifest store")?))
 }
 
 fn build_stylesheet(cfg: &Config) -> Stylesheet {

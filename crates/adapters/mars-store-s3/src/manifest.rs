@@ -1,0 +1,214 @@
+//! object-store-backed [`ManifestStore`] (SPEC §8.5).
+//!
+//! publish flow:
+//!   1. write `manifests/v{N}.json` (no conditional — content-addressed).
+//!   2. CAS-update `manifests/current` from its prior etag.
+//!
+//! a backend that does not support `PutMode::Update` returns
+//! `NotSupported`; we fall back to plain overwrite and log a warning. for
+//! AWS S3 + MinIO + R2 the update path is supported.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use async_trait::async_trait;
+use bytes::Bytes;
+use futures_core::stream::BoxStream;
+use futures_util::stream;
+use mars_store::{ManifestStore, StoreError};
+use mars_types::{MANIFEST_FORMAT_VERSION, Manifest};
+use object_store::path::Path as OsPath;
+use object_store::{ObjectStore as OsStore, ObjectStoreExt, PutMode, PutOptions, UpdateVersion};
+
+use crate::store::{S3Store, join_prefix};
+
+const MANIFEST_DIR: &str = "manifests";
+const CURRENT_FILE: &str = "manifests/current";
+
+const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(1);
+
+/// object-store-backed manifest publisher. shares its backend (and prefix)
+/// with [`S3Store`] so a single bucket holds artifacts and manifests.
+#[derive(Clone)]
+pub struct S3Publisher {
+    backend: Arc<dyn OsStore>,
+    prefix: String,
+    poll_interval: Duration,
+}
+
+impl std::fmt::Debug for S3Publisher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("S3Publisher")
+            .field("prefix", &self.prefix)
+            .field("poll_interval", &self.poll_interval)
+            .finish()
+    }
+}
+
+impl S3Publisher {
+    /// Build from an existing `S3Store` so artifacts and manifests share a
+    /// backend handle.
+    #[must_use]
+    pub fn from_store(store: &S3Store) -> Self {
+        Self {
+            backend: store.backend(),
+            prefix: store.prefix().to_owned(),
+            poll_interval: DEFAULT_POLL_INTERVAL,
+        }
+    }
+
+    /// Override the watch poll interval.
+    #[must_use]
+    pub fn with_poll_interval(mut self, d: Duration) -> Self {
+        self.poll_interval = d;
+        self
+    }
+
+    fn current_path(&self) -> OsPath {
+        join_prefix(&self.prefix, CURRENT_FILE)
+    }
+
+    fn body_path(&self, n: u64) -> OsPath {
+        join_prefix(&self.prefix, &format!("{MANIFEST_DIR}/v{n}.json"))
+    }
+
+    /// Read the raw `manifests/current` body and its etag; returns `None` if
+    /// not yet published.
+    async fn read_current(&self) -> Result<Option<(String, Option<UpdateVersion>)>, StoreError> {
+        let path = self.current_path();
+        match self.backend.get(&path).await {
+            Ok(result) => {
+                let etag = result.meta.e_tag.clone();
+                let version = result.meta.version.clone();
+                let bytes = result
+                    .bytes()
+                    .await
+                    .map_err(|e| StoreError::Backend(format!("s3 read current: {e}")))?;
+                let pointer = String::from_utf8(bytes.to_vec())
+                    .map_err(|e| StoreError::Backend(format!("manifest pointer not utf-8: {e}")))?
+                    .trim()
+                    .to_owned();
+                Ok(Some((pointer, Some(UpdateVersion { e_tag: etag, version }))))
+            }
+            Err(object_store::Error::NotFound { .. }) => Ok(None),
+            Err(e) => Err(StoreError::Backend(format!("s3 get current: {e}"))),
+        }
+    }
+
+    async fn fetch_manifest_body(&self, pointer: &str) -> Result<Manifest, StoreError> {
+        if pointer.is_empty() || pointer.contains('/') || pointer.contains('\\') || pointer.contains("..") {
+            return Err(StoreError::Backend(format!("malformed manifest pointer: {pointer:?}")));
+        }
+        let path = join_prefix(&self.prefix, &format!("{MANIFEST_DIR}/{pointer}.json"));
+        let result = self
+            .backend
+            .get(&path)
+            .await
+            .map_err(|e| StoreError::Backend(format!("s3 get manifest {pointer}: {e}")))?;
+        let bytes = result
+            .bytes()
+            .await
+            .map_err(|e| StoreError::Backend(format!("s3 read manifest {pointer}: {e}")))?;
+        let manifest: Manifest =
+            serde_json::from_slice(&bytes).map_err(|e| StoreError::Backend(format!("parse manifest {pointer}: {e}")))?;
+        if manifest.format_version > MANIFEST_FORMAT_VERSION {
+            return Err(StoreError::UnsupportedManifestVersion {
+                found: manifest.format_version,
+                supported: MANIFEST_FORMAT_VERSION,
+            });
+        }
+        Ok(manifest)
+    }
+}
+
+#[async_trait]
+impl ManifestStore for S3Publisher {
+    async fn publish(&self, manifest: &Manifest) -> Result<u64, StoreError> {
+        let n = manifest.version;
+        let body =
+            serde_json::to_vec_pretty(manifest).map_err(|e| StoreError::Backend(format!("serialise manifest: {e}")))?;
+        let body_path = self.body_path(n);
+        self.backend
+            .put(&body_path, Bytes::from(body).into())
+            .await
+            .map_err(|e| StoreError::Backend(format!("s3 put manifest body: {e}")))?;
+
+        let pointer_body = Bytes::from(format!("v{n}"));
+        let current_path = self.current_path();
+
+        let prior = self.read_current().await?;
+        let opts = match prior {
+            Some((_, Some(version))) => PutOptions::from(PutMode::Update(version)),
+            _ => PutOptions::from(PutMode::Create),
+        };
+
+        match self.backend.put_opts(&current_path, pointer_body.clone().into(), opts).await {
+            Ok(_) => Ok(n),
+            // bucket lacks CAS support -> fall back to overwrite. visible in logs;
+            // operator can switch to a backend that supports it.
+            Err(object_store::Error::NotSupported { .. }) => {
+                tracing::warn!(
+                    "s3 backend does not support conditional put; manifest swap is not atomic across writers"
+                );
+                self.backend
+                    .put(&current_path, pointer_body.into())
+                    .await
+                    .map_err(|e| StoreError::Backend(format!("s3 put current: {e}")))?;
+                Ok(n)
+            }
+            Err(object_store::Error::Precondition { .. } | object_store::Error::AlreadyExists { .. }) => Err(
+                StoreError::Backend("manifest pointer changed concurrently; retry publish".into()),
+            ),
+            Err(e) => Err(StoreError::Backend(format!("s3 put current: {e}"))),
+        }
+    }
+
+    async fn current(&self) -> Result<Option<Manifest>, StoreError> {
+        let Some((pointer, _)) = self.read_current().await? else {
+            return Ok(None);
+        };
+        Ok(Some(self.fetch_manifest_body(&pointer).await?))
+    }
+
+    async fn watch(&self) -> Result<BoxStream<'static, Result<Manifest, StoreError>>, StoreError> {
+        struct State {
+            publisher: S3Publisher,
+            last_pointer: Option<String>,
+            sleep_first: bool,
+        }
+        let state = State {
+            publisher: self.clone(),
+            last_pointer: None,
+            sleep_first: false,
+        };
+        let stream = stream::unfold(state, |mut state| async move {
+            loop {
+                if state.sleep_first {
+                    tokio::time::sleep(state.publisher.poll_interval).await;
+                    state.sleep_first = false;
+                }
+                match state.publisher.read_current().await {
+                    Ok(Some((pointer, _))) if state.last_pointer.as_deref() != Some(pointer.as_str()) => {
+                        match state.publisher.fetch_manifest_body(&pointer).await {
+                            Ok(m) => {
+                                state.last_pointer = Some(pointer);
+                                return Some((Ok(m), state));
+                            }
+                            Err(e) => {
+                                state.sleep_first = true;
+                                return Some((Err(e), state));
+                            }
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        state.sleep_first = true;
+                        return Some((Err(e), state));
+                    }
+                }
+                tokio::time::sleep(state.publisher.poll_interval).await;
+            }
+        });
+        Ok(Box::pin(stream))
+    }
+}

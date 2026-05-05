@@ -91,6 +91,7 @@ linked-hash-map     = "0.5"
 tokio-postgres      = "0.7"
 prometheus          = "0.14"
 libfuzzer-sys       = "0.4"
+object_store        = { version = "0.13", default-features = false, features = ["aws"] }
 
 [workspace.lints.rust]
 unsafe_code              = "deny"
