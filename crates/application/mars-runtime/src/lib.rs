@@ -28,6 +28,7 @@ pub use plan::denom_from_plan;
 pub use state::RuntimeState;
 
 const WARM_CONCURRENCY: usize = 8;
+const WARM_TIMEOUT: Duration = Duration::from_secs(10);
 
 fn default_render_concurrency() -> usize {
     std::thread::available_parallelism()
@@ -379,12 +380,21 @@ fn spawn_warming(
                 let cache = cache.clone();
                 let store = store.clone();
                 async move {
-                    if let Err(e) = cache.get_or_fetch(&entry.key, entry.hash, store.as_ref()).await {
-                        tracing::warn!(
-                            key = %entry.key,
-                            error = %e,
-                            "manifest watch: artifact warm failed"
-                        );
+                    match timeout(WARM_TIMEOUT, cache.get_or_fetch(&entry.key, entry.hash, store.as_ref())).await {
+                        Ok(Ok(_)) => {}
+                        Ok(Err(e)) => {
+                            tracing::warn!(
+                                key = %entry.key,
+                                error = %e,
+                                "manifest watch: artifact warm failed"
+                            );
+                        }
+                        Err(_) => {
+                            tracing::warn!(
+                                key = %entry.key,
+                                "manifest watch: artifact warm timed out"
+                            );
+                        }
                     }
                 }
             })
