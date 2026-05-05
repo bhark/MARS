@@ -1,7 +1,11 @@
 //! filesystem-backed adapter for `mars-store::ObjectStore`, `LocalCache`,
 //! and `ManifestStore`. SPEC §8.5 / §10.2 / §10.3.
 
-#![forbid(unsafe_code)]
+// `deny` rather than `forbid`: cache.rs uses a single `unsafe { Mmap::map(..) }`
+// at the file-boundary read path with item-level `#[allow(unsafe_code)]`. the
+// hexagonal architecture check still gates on crate-level `#![allow(...)]`,
+// which is not used here.
+#![deny(unsafe_code)]
 
 use std::time::Duration;
 

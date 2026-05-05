@@ -1,16 +1,22 @@
 //! filesystem-backed [`LocalCache`]. mirrors the object-store key layout.
 //!
-//! implements size-bounded lru eviction: on write, if the cache exceeds its
-//! configured max size, the least-recently-used entries are deleted until the
-//! budget is restored.
+//! three behaviours layered on top of an on-disk store:
 //!
-//! state is held under a `Mutex` and never crosses an `.await`. on
-//! construction the existing root is scanned synchronously so the in-memory
-//! accounting starts consistent with what is already on disk; lru order is
-//! seeded by mtime (oldest first) so eviction is deterministic across restart.
+//! 1. **single-flight**: concurrent `get_or_fetch` calls for the same key
+//!    coalesce into a single origin fetch. waiters block on a per-key
+//!    `Notify`; on wake they retry the local read (now populated on success)
+//!    or contend for a fresh leadership slot if the leader failed.
+//! 2. **size budget + lru eviction**: state is held under a `Mutex` and never
+//!    crosses an `.await`. on construction the existing root is scanned so
+//!    the in-memory accounting starts consistent with what is on disk; lru
+//!    order is seeded by mtime (oldest first).
+//! 3. **mmap on read**: cached files are mapped into memory via `memmap2`
+//!    and surfaced as `bytes::Bytes` through `Bytes::from_owner`. zero-copy
+//!    for downstream codecs.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
 use linked_hash_map::LinkedHashMap;
@@ -20,6 +26,7 @@ use bytes::Bytes;
 use mars_artifact::compute_content_hash;
 use mars_store::{LocalCache, ObjectStore, StoreError};
 use mars_types::{ArtifactKey, ContentHash};
+use tokio::sync::Notify;
 
 use crate::key::validate_artifact_key;
 use crate::store::{atomic_write, cleanup_tmp_files};
@@ -37,7 +44,7 @@ struct CacheState {
 impl CacheState {
     fn touch(&mut self, key: ArtifactKey) {
         // refresh position to back if already present
-        let _ = self.lru.get_mut(&key);
+        let _ = self.lru.get_refresh(&key);
     }
 
     /// inserts (or overwrites) `key` with `size`. caller is responsible for
@@ -64,6 +71,10 @@ impl CacheState {
     }
 }
 
+/// per-key in-flight registration. notifies all waiters when the leader
+/// either persists the artifact or returns.
+type Flights = Mutex<HashMap<ArtifactKey, Arc<Notify>>>;
+
 /// Filesystem-backed local cache. Key layout mirrors the object store.
 ///
 /// Not `Clone`: callers should share via `Arc<FsCache>` (or
@@ -72,6 +83,7 @@ impl CacheState {
 pub struct FsCache {
     root: PathBuf,
     state: Mutex<CacheState>,
+    flights: Flights,
 }
 
 impl FsCache {
@@ -100,6 +112,7 @@ impl FsCache {
         let cache = Self {
             root,
             state: Mutex::new(state),
+            flights: Mutex::new(HashMap::new()),
         };
 
         // bring on-disk state inside the budget if the existing footprint
@@ -130,6 +143,51 @@ impl FsCache {
         }
         Ok(())
     }
+
+    /// register the current task as the flight leader for `key` if no flight
+    /// is active, otherwise return a handle to await the existing leader.
+    fn join_or_lead(&self, key: &ArtifactKey) -> FlightRole {
+        let mut flights = lock_flights(&self.flights);
+        if let Some(notify) = flights.get(key) {
+            return FlightRole::Waiter(notify.clone());
+        }
+        let notify = Arc::new(Notify::new());
+        flights.insert(key.clone(), notify.clone());
+        FlightRole::Leader
+    }
+
+    /// unregister the flight and wake every waiter. always called by the
+    /// leader, including on error and on panic (via `LeaderGuard`).
+    fn finish_flight(&self, key: &ArtifactKey) {
+        let notify = {
+            let mut flights = lock_flights(&self.flights);
+            flights.remove(key)
+        };
+        if let Some(n) = notify {
+            n.notify_waiters();
+        }
+    }
+}
+
+enum FlightRole {
+    Leader,
+    Waiter(Arc<Notify>),
+}
+
+/// drop-guard that finishes the flight if the leader bails out by panic or
+/// early return without an explicit `finish_flight` call.
+struct LeaderGuard<'a> {
+    cache: &'a FsCache,
+    key: &'a ArtifactKey,
+    armed: bool,
+}
+
+impl Drop for LeaderGuard<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.cache.finish_flight(self.key);
+        }
+    }
 }
 
 /// scope a `Mutex` lock so it never crosses an `.await`. on poison we panic;
@@ -137,6 +195,11 @@ impl FsCache {
 #[allow(clippy::expect_used)]
 fn lock_state(m: &Mutex<CacheState>) -> std::sync::MutexGuard<'_, CacheState> {
     m.lock().expect("cache state poisoned")
+}
+
+#[allow(clippy::expect_used)]
+fn lock_flights(m: &Flights) -> std::sync::MutexGuard<'_, HashMap<ArtifactKey, Arc<Notify>>> {
+    m.lock().expect("cache flights poisoned")
 }
 
 /// walk `root` recursively, collecting (key, size, mtime) for every file.
@@ -195,6 +258,32 @@ fn walk(dir: &Path, root: &Path, out: &mut Vec<(ArtifactKey, u64, SystemTime)>) 
     Ok(())
 }
 
+/// open `path` and return its contents as `Bytes` backed by an mmap. the
+/// `File` handle is dropped immediately after mapping; the kernel keeps the
+/// mapping alive via the `Mmap`. returns `Ok(None)` if the file is absent.
+///
+/// SAFETY: `Mmap` is unsafe because external mutation of the file (or
+/// truncation) while the map is live is undefined behaviour. we only mmap
+/// files we wrote atomically (rename-into-place) and never mutate in place;
+/// eviction unlinks but the map keeps the inode pinned until `Bytes` drops.
+#[allow(unsafe_code)]
+fn read_mmap(path: &Path) -> Result<Option<Bytes>, StoreError> {
+    let file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(StoreError::Backend(format!("cache open: {e}"))),
+    };
+    let meta = file
+        .metadata()
+        .map_err(|e| StoreError::Backend(format!("cache stat: {e}")))?;
+    if meta.len() == 0 {
+        return Ok(Some(Bytes::new()));
+    }
+    // SAFETY: see function docs.
+    let mmap = unsafe { memmap2::Mmap::map(&file) }.map_err(|e| StoreError::Backend(format!("cache mmap: {e}")))?;
+    Ok(Some(Bytes::from_owner(mmap)))
+}
+
 #[async_trait]
 impl LocalCache for FsCache {
     async fn get_or_fetch(
@@ -205,41 +294,73 @@ impl LocalCache for FsCache {
     ) -> Result<Bytes, StoreError> {
         let path = validate_artifact_key(&self.root, key)?;
 
-        // try local first; treat NotFound and HashMismatch as miss.
-        let local = {
-            let p = path.clone();
-            tokio::task::spawn_blocking(move || -> Result<Option<Bytes>, StoreError> {
-                match std::fs::read(&p) {
-                    Ok(b) => {
-                        let actual = compute_content_hash(&b);
-                        if actual == expected {
-                            Ok(Some(Bytes::from(b)))
-                        } else {
-                            Ok(None)
+        loop {
+            // try local first; treat NotFound and HashMismatch as miss.
+            let local = {
+                let p = path.clone();
+                tokio::task::spawn_blocking(move || -> Result<Option<Bytes>, StoreError> {
+                    match read_mmap(&p)? {
+                        None => Ok(None),
+                        Some(bytes) => {
+                            if compute_content_hash(&bytes) == expected {
+                                Ok(Some(bytes))
+                            } else {
+                                Ok(None)
+                            }
                         }
                     }
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-                    Err(e) => Err(StoreError::Backend(format!("cache read: {e}"))),
+                })
+                .await
+                .map_err(|e| StoreError::Backend(format!("join: {e}")))??
+            };
+
+            if let Some(bytes) = local {
+                let mut state = lock_state(&self.state);
+                state.touch(key.clone());
+                return Ok(bytes);
+            }
+
+            // miss: contend for the single-flight slot.
+            match self.join_or_lead(key) {
+                FlightRole::Waiter(notify) => {
+                    // leader is fetching; wait then retry from local read.
+                    notify.notified().await;
+                    continue;
                 }
-            })
-            .await
-            .map_err(|e| StoreError::Backend(format!("join: {e}")))??
-        };
-
-        if let Some(bytes) = local {
-            // lock scope is tight; never crosses an await.
-            let mut state = lock_state(&self.state);
-            state.touch(key.clone());
-            return Ok(bytes);
+                FlightRole::Leader => {
+                    // panic-safe slot release: guard's drop unregisters the
+                    // flight if the future is cancelled or origin.get panics.
+                    let mut guard = LeaderGuard {
+                        cache: self,
+                        key,
+                        armed: true,
+                    };
+                    let res = self.leader_fetch(key, expected, origin, &path).await;
+                    // explicit cleanup so all waiters wake before the guard
+                    // would race; disarm so drop is a no-op.
+                    self.finish_flight(key);
+                    guard.armed = false;
+                    return res;
+                }
+            }
         }
+    }
+}
 
-        // miss: fetch from origin and persist.
+impl FsCache {
+    async fn leader_fetch(
+        &self,
+        key: &ArtifactKey,
+        expected: ContentHash,
+        origin: &dyn ObjectStore,
+        path: &Path,
+    ) -> Result<Bytes, StoreError> {
         let bytes = origin.get(key, expected).await?;
         let body = bytes.clone();
-        let k = key.clone();
+        let path_owned = path.to_path_buf();
         let size = tokio::task::spawn_blocking(move || {
-            atomic_write(&path, &body)?;
-            let meta = std::fs::metadata(&path).map_err(|e| StoreError::Backend(format!("cache stat: {e}")))?;
+            atomic_write(&path_owned, &body)?;
+            let meta = std::fs::metadata(&path_owned).map_err(|e| StoreError::Backend(format!("cache stat: {e}")))?;
             Ok::<_, StoreError>(meta.len())
         })
         .await
@@ -247,15 +368,15 @@ impl LocalCache for FsCache {
 
         let evicted = {
             let mut state = lock_state(&self.state);
-            state.insert(k, size)
+            state.insert(key.clone(), size)
         };
-        for key in evicted {
-            let path = validate_artifact_key(&self.root, &key)?;
+        for victim in evicted {
+            let victim_path = validate_artifact_key(&self.root, &victim)?;
             // best-effort eviction; missing file is fine.
-            if let Err(e) = std::fs::remove_file(&path)
+            if let Err(e) = std::fs::remove_file(&victim_path)
                 && e.kind() != std::io::ErrorKind::NotFound
             {
-                tracing::warn!(path = %path.display(), error = %e, "fs cache: evict failed");
+                tracing::warn!(path = %victim_path.display(), error = %e, "fs cache: evict failed");
             }
         }
         Ok(bytes)
@@ -267,6 +388,8 @@ impl LocalCache for FsCache {
 mod tests {
     use super::*;
 
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use bytes::Bytes;
     use mars_store::ObjectStore;
     use tempfile::TempDir;
@@ -277,14 +400,200 @@ mod tests {
         ArtifactKey::new(s)
     }
 
+    /// origin wrapper that counts upstream `get` invocations.
+    struct CountingStore {
+        inner: FsStore,
+        gets: AtomicUsize,
+    }
+
+    impl CountingStore {
+        fn new(inner: FsStore) -> Self {
+            Self {
+                inner,
+                gets: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ObjectStore for CountingStore {
+        async fn get(&self, key: &ArtifactKey, expected: ContentHash) -> Result<Bytes, StoreError> {
+            self.gets.fetch_add(1, Ordering::SeqCst);
+            self.inner.get(key, expected).await
+        }
+        async fn put(&self, key: &ArtifactKey, body: Bytes) -> Result<ContentHash, StoreError> {
+            self.inner.put(key, body).await
+        }
+        async fn delete(&self, key: &ArtifactKey) -> Result<(), StoreError> {
+            self.inner.delete(key).await
+        }
+        async fn list(&self, prefix: &str) -> Result<Vec<ArtifactKey>, StoreError> {
+            self.inner.list(prefix).await
+        }
+    }
+
+    /// origin that blocks on a barrier before serving `get`. lets us hold
+    /// the leader inside `origin.get` while many waiters queue up.
+    struct BarrierStore {
+        inner: FsStore,
+        gets: AtomicUsize,
+        gate: tokio::sync::Notify,
+        gate_open: std::sync::atomic::AtomicBool,
+    }
+
+    impl BarrierStore {
+        fn new(inner: FsStore) -> Self {
+            Self {
+                inner,
+                gets: AtomicUsize::new(0),
+                gate: tokio::sync::Notify::new(),
+                gate_open: std::sync::atomic::AtomicBool::new(false),
+            }
+        }
+        fn open_gate(&self) {
+            self.gate_open.store(true, Ordering::SeqCst);
+            self.gate.notify_waiters();
+        }
+    }
+
+    #[async_trait]
+    impl ObjectStore for BarrierStore {
+        async fn get(&self, key: &ArtifactKey, expected: ContentHash) -> Result<Bytes, StoreError> {
+            self.gets.fetch_add(1, Ordering::SeqCst);
+            // wait until the test opens the gate so callers can pile up.
+            while !self.gate_open.load(Ordering::SeqCst) {
+                self.gate.notified().await;
+            }
+            self.inner.get(key, expected).await
+        }
+        async fn put(&self, key: &ArtifactKey, body: Bytes) -> Result<ContentHash, StoreError> {
+            self.inner.put(key, body).await
+        }
+        async fn delete(&self, key: &ArtifactKey) -> Result<(), StoreError> {
+            self.inner.delete(key).await
+        }
+        async fn list(&self, prefix: &str) -> Result<Vec<ArtifactKey>, StoreError> {
+            self.inner.list(prefix).await
+        }
+    }
+
+    #[tokio::test]
+    async fn roundtrip_on_miss() {
+        let store_dir = TempDir::new().unwrap();
+        let cache_dir = TempDir::new().unwrap();
+        let store = CountingStore::new(FsStore::new(store_dir.path()).unwrap());
+        let cache = FsCache::new(cache_dir.path(), u64::MAX).unwrap();
+
+        let body = b"hello-cache".to_vec();
+        let key = k("a/b.bin");
+        let h = store.inner.put(&key, Bytes::from(body.clone())).await.unwrap();
+
+        let first = cache.get_or_fetch(&key, h, &store).await.unwrap();
+        assert_eq!(first.as_ref(), body.as_slice());
+        assert_eq!(store.gets.load(Ordering::SeqCst), 1);
+
+        let second = cache.get_or_fetch(&key, h, &store).await.unwrap();
+        assert_eq!(second.as_ref(), body.as_slice());
+        // second call hits local — origin not consulted again.
+        assert_eq!(store.gets.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn single_flight_coalesces() {
+        let store_dir = TempDir::new().unwrap();
+        let cache_dir = TempDir::new().unwrap();
+        let inner = FsStore::new(store_dir.path()).unwrap();
+        let body = vec![7u8; 4096];
+        let key = k("c/d.bin");
+        let h = inner.put(&key, Bytes::from(body.clone())).await.unwrap();
+
+        let store = Arc::new(BarrierStore::new(inner));
+        let cache = Arc::new(FsCache::new(cache_dir.path(), u64::MAX).unwrap());
+
+        let mut handles = Vec::new();
+        for _ in 0..16 {
+            let store = store.clone();
+            let cache = cache.clone();
+            let key = key.clone();
+            handles.push(tokio::spawn(async move {
+                cache.get_or_fetch(&key, h, store.as_ref()).await
+            }));
+        }
+
+        // give the leader time to register the flight and enter origin.get.
+        for _ in 0..50 {
+            if store.gets.load(Ordering::SeqCst) >= 1 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        store.open_gate();
+
+        for h in handles {
+            let bytes = h.await.unwrap().unwrap();
+            assert_eq!(bytes.as_ref(), body.as_slice());
+        }
+        assert_eq!(
+            store.gets.load(Ordering::SeqCst),
+            1,
+            "16 concurrent calls produced more than one upstream fetch"
+        );
+    }
+
+    #[tokio::test]
+    async fn eviction_respects_size_budget() {
+        let store_dir = TempDir::new().unwrap();
+        let cache_dir = TempDir::new().unwrap();
+        let store = FsStore::new(store_dir.path()).unwrap();
+        // 4 KiB budget, ten 1 KiB items; expect ≤4 KiB on disk after fill.
+        let cache = FsCache::new(cache_dir.path(), 4096).unwrap();
+
+        let payload = vec![9u8; 1024];
+        let h = mars_artifact::compute_content_hash(&payload);
+
+        let mut keys = Vec::new();
+        for i in 0..10 {
+            let key = k(&format!("e/v{i:02}.bin"));
+            store.put(&key, Bytes::from(payload.clone())).await.unwrap();
+            cache.get_or_fetch(&key, h, &store).await.unwrap();
+            keys.push(key);
+        }
+
+        let total = walk_total(cache_dir.path());
+        assert!(total <= 4096, "on-disk footprint {total} exceeds budget");
+        let state_total = cache.state.lock().unwrap().total_size;
+        assert_eq!(state_total, total);
+
+        // oldest entries should have been evicted.
+        let oldest = cache_dir.path().canonicalize().unwrap().join("e/v00.bin");
+        assert!(!oldest.exists(), "oldest entry was not evicted");
+    }
+
+    #[tokio::test]
+    async fn mmap_returns_correct_bytes() {
+        let store_dir = TempDir::new().unwrap();
+        let cache_dir = TempDir::new().unwrap();
+        let store = FsStore::new(store_dir.path()).unwrap();
+        let cache = FsCache::new(cache_dir.path(), u64::MAX).unwrap();
+
+        // distinctive content so we know we're not getting a coincidental zero buffer.
+        let body: Vec<u8> = (0..8192u32).map(|n| (n as u8).wrapping_mul(31)).collect();
+        let key = k("m/m.bin");
+        let h = store.put(&key, Bytes::from(body.clone())).await.unwrap();
+
+        // first call: write through; second: served from mmap.
+        cache.get_or_fetch(&key, h, &store).await.unwrap();
+        let mmapped = cache.get_or_fetch(&key, h, &store).await.unwrap();
+        assert_eq!(mmapped.as_ref(), body.as_slice());
+        assert_eq!(mmapped.len(), body.len());
+    }
+
     #[tokio::test]
     async fn restart_loads_existing_entries_and_evicts_to_budget() {
         let store_dir = TempDir::new().unwrap();
         let cache_dir = TempDir::new().unwrap();
         let store = FsStore::new(store_dir.path()).unwrap();
 
-        // pre-seed the cache with 4 x 1KiB files via a generous-budget cache,
-        // then drop it and reopen with a 2KiB budget.
         let payload = vec![0u8; 1024];
         let h = mars_artifact::compute_content_hash(&payload);
         for i in 0..4 {
@@ -297,20 +606,16 @@ mod tests {
             for i in 0..4 {
                 let key = k(&format!("a/b/f{i}.bin"));
                 warm.get_or_fetch(&key, h, &store).await.unwrap();
-                // small sleep so mtimes are distinct enough for ordering
                 tokio::time::sleep(std::time::Duration::from_millis(15)).await;
             }
         }
 
-        // reopen with a 2 KiB cap. scan must populate state and eviction must
-        // bring on-disk footprint within budget.
         let tight = FsCache::new(cache_dir.path(), 2048).unwrap();
         let total: u64 = walk_total(cache_dir.path());
         assert!(
             total <= 2048,
             "expected on-disk footprint <= 2KiB after reopen, got {total}"
         );
-        // accounting should match what's on disk
         let state_total = tight.state.lock().unwrap().total_size;
         assert_eq!(state_total, total);
     }
@@ -331,8 +636,6 @@ mod tests {
         let after_first = cache.state.lock().unwrap().total_size;
         assert_eq!(after_first, payload.len() as u64);
 
-        // simulate a retry / concurrent re-fetch path that re-enters insert
-        // for the same key. accounting must not double-count.
         std::fs::remove_file(cache_dir.path().canonicalize().unwrap().join("x/y.bin")).unwrap();
         cache.get_or_fetch(&key, h, &store).await.unwrap();
         let after_second = cache.state.lock().unwrap().total_size;
@@ -341,10 +644,6 @@ mod tests {
 
     #[test]
     fn fscache_is_not_clone() {
-        // compile-time guard: callers must share via `Arc<FsCache>`. if a
-        // future commit re-adds `impl Clone`, the negative-trait probe below
-        // will still compile but the structural check that we always wrap in
-        // `Arc` is the contract that matters for correctness.
         let _: fn(std::sync::Arc<FsCache>) = |_| {};
     }
 
