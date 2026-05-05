@@ -29,7 +29,7 @@ mod quote;
 pub use lower::lower_to_sql;
 
 /// Connection / topology configuration.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct PgConfig {
     /// libpq DSN.
     pub dsn: String,
@@ -37,6 +37,42 @@ pub struct PgConfig {
     pub publication: String,
     /// Logical replication slot name.
     pub slot: String,
+}
+
+impl std::fmt::Debug for PgConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PgConfig")
+            .field("dsn", &redact_dsn(&self.dsn))
+            .field("publication", &self.publication)
+            .field("slot", &self.slot)
+            .finish()
+    }
+}
+
+fn redact_dsn(dsn: &str) -> String {
+    if dsn.contains("://") {
+        // URI form: postgresql://user:password@host/...
+        if let Some(at) = dsn.find('@') {
+            if let Some(scheme_end) = dsn.find("://") {
+                return format!("{}user:***@{}", &dsn[..scheme_end + 3], &dsn[at + 1..]);
+            }
+        }
+        return dsn.to_string();
+    }
+
+    // key-value form
+    dsn.split(' ')
+        .map(|part| {
+            if let Some(eq) = part.find('=') {
+                let key = &part[..eq];
+                if key.eq_ignore_ascii_case("password") || key.eq_ignore_ascii_case("passwd") {
+                    return format!("{key}=***");
+                }
+            }
+            part.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Real PostgreSQL/PostGIS adapter. Holds a `deadpool` pool over `tokio-postgres`.
