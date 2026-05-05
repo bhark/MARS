@@ -1,5 +1,4 @@
 use std::os::unix::fs::symlink;
-use std::path::PathBuf;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -125,7 +124,7 @@ async fn watch_waits_when_current_is_absent() {
     let publisher = FsPublisher::new_with_poll_interval(td.path(), Duration::from_millis(10)).unwrap();
     let mut stream = publisher.watch().await.unwrap();
 
-    let next = tokio::time::timeout(Duration::from_millis(40), stream.next()).await;
+    let next = tokio::time::timeout(Duration::from_millis(200), stream.next()).await;
     assert!(next.is_err(), "watcher yielded without current");
 }
 
@@ -219,12 +218,9 @@ async fn watch_throttles_repeated_bad_pointer_errors() {
 async fn symlink_escape_rejected() {
     let td = TempDir::new().unwrap();
     let store = FsStore::new(td.path()).unwrap();
-    // create <root>/escape -> /etc/passwd
-    let target = PathBuf::from("/etc/passwd");
-    if !target.exists() {
-        // skip if /etc/passwd not present
-        return;
-    }
+    // create <root>/escape -> current executable (guaranteed to exist)
+    let target = std::env::current_exe().unwrap();
+    assert!(target.exists(), "current exe must exist for symlink escape test");
     let link = td.path().join("escape");
     symlink(&target, &link).unwrap();
 

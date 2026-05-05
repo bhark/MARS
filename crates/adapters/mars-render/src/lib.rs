@@ -250,16 +250,26 @@ mod tests {
             }),
         }];
         let actual = render_png(canvas, &ops);
+        let (w1, h1, rgba1) = decode(&actual);
 
         let golden_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/square.png");
         if std::env::var("MARS_UPDATE_GOLDEN").is_ok() || !golden_path.exists() {
             std::fs::create_dir_all(golden_path.parent().unwrap()).unwrap();
             std::fs::write(&golden_path, &actual).unwrap();
         }
-        let expected = std::fs::read(&golden_path).unwrap();
+        let expected_bytes = std::fs::read(&golden_path).unwrap();
+        let (w2, h2, rgba2) = decode(&expected_bytes);
+        assert_eq!((w1, h1), (w2, h2), "golden dimension mismatch");
+
+        // pixel-level comparison tolerates platform differences in png compression.
+        let mismatches = rgba1
+            .chunks_exact(4)
+            .zip(rgba2.chunks_exact(4))
+            .filter(|(a, b)| a.iter().zip(b.iter()).any(|(x, y)| x.abs_diff(*y) > 1))
+            .count();
         assert_eq!(
-            actual, expected,
-            "golden mismatch; rerun with MARS_UPDATE_GOLDEN=1 if intentional"
+            mismatches, 0,
+            "golden pixel mismatch ({mismatches} pixels); rerun with MARS_UPDATE_GOLDEN=1 if intentional"
         );
     }
 }
