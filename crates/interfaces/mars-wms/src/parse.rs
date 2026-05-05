@@ -1,7 +1,8 @@
 //! WMS 1.3.0 KVP request parsing.
 //!
 //! Phase 0 covers `GetMap` and `GetCapabilities`. Other request kinds reject
-//! with `WmsError::NotImplemented` so they round-trip to a 5xx in the edge.
+//! with `WmsError::NotImplemented` so they round-trip to an XML exception in
+//! the edge.
 //!
 //! KVP semantics: parameter names are case-insensitive (lowercased on parse,
 //! per OGC 06-042 §11.5.2); values are preserved as-is. Repeated keys

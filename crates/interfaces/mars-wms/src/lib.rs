@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 mod capabilities;
+mod exception;
 mod parse;
 
 use mars_config::Config;
@@ -13,6 +14,7 @@ use mars_runtime::RenderPlan;
 use mars_types::{CrsCode, ImageFormat};
 
 pub use capabilities::capabilities_xml;
+pub use exception::service_exception_report;
 pub use parse::{parse_get_map, parse_request};
 
 #[derive(Debug, thiserror::Error)]
