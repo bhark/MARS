@@ -1,0 +1,90 @@
+# parcels-mini service config for the image-diff harness.
+# placeholders {{DSN}} / {{STORE}} / {{CACHE}} are substituted at test runtime.
+service:
+  name: parcels-mini
+  title: "parcels-mini"
+  abstract: "image-diff harness fixture"
+  contact_email: ops@example.org
+
+source:
+  type: postgis
+  dsn: "{{DSN}}"
+  native_crs: EPSG:25832
+
+artifacts:
+  store:
+    type: fs
+    path: {{STORE}}
+  cache:
+    path: {{CACHE}}
+    max_size: 64MiB
+    eviction: lru
+
+scales:
+  bands:
+    - { name: hi, max_denom: 50000 }
+
+cells:
+  grid: regular
+  origin: [0, 0]
+  size_per_band:
+    hi: 1024m
+  extent:
+    min_x: 0
+    min_y: 0
+    max_x: 1024
+    max_y: 1024
+
+interfaces:
+  wms:
+    enabled: true
+    versions: ["1.3.0"]
+    formats: ["image/png"]
+
+reprojection:
+  allowlist: [EPSG:25832]
+
+styles:
+  cls_park:
+    type: polygon
+    fill: "#2ecc71"
+    stroke: "#0a4a23"
+    stroke_width: 1.0
+  cls_road:
+    type: polygon
+    fill: "#888888"
+    stroke: "#202020"
+    stroke_width: 1.0
+  cls_water:
+    type: polygon
+    fill: "#268bd2"
+    stroke: "#073642"
+    stroke_width: 1.0
+
+layers:
+  - name: parcels
+    title: "Parcels"
+    type: polygon
+    sources:
+      - band: hi
+        from: mars_diff.parcels
+        geometry_column: geom
+        id_column: gid
+        attributes: [kind]
+    classes:
+      - name: park
+        title: "Park"
+        when: "kind = 'park'"
+        style: { type: ref, name: cls_park }
+      - name: road
+        title: "Road"
+        when: "kind = 'road'"
+        style: { type: ref, name: cls_road }
+      - name: water
+        title: "Water"
+        when: "kind = 'water'"
+        style: { type: ref, name: cls_water }
+
+observability:
+  log_level: warn
+  log_format: text
