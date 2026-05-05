@@ -10,9 +10,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::stream::{self, BoxStream};
 use mars_artifact::compute_content_hash;
-use mars_config::{
-    ArtifactCache, ArtifactStore, Artifacts, Band, Cells, Config, Scales, ServiceMeta, Source,
-};
+use mars_config::{ArtifactCache, ArtifactStore, Artifacts, Band, Cells, Config, Scales, ServiceMeta, Source};
 use mars_render_port::{Canvas, DrawOp, EncodeError, Encoder, ImageFormat, Pixmap, Renderer};
 use mars_runtime::{Deps, Runtime, run_manifest_reload_loop};
 use mars_store::mem::{InMemoryCache, InMemoryStore};

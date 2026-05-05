@@ -68,12 +68,7 @@ struct AppState {
 }
 
 /// Build the router. Exposed for in-process testing via `tower::ServiceExt`.
-pub fn router(
-    runtime: Arc<Runtime>,
-    capabilities: CapabilitiesHandle,
-    wms_cfg: WmsConfig,
-    metrics: Metrics,
-) -> Router {
+pub fn router(runtime: Arc<Runtime>, capabilities: CapabilitiesHandle, wms_cfg: WmsConfig, metrics: Metrics) -> Router {
     let state = AppState {
         runtime,
         capabilities,
@@ -265,7 +260,9 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::Request;
-    use mars_render_port::{Canvas, EncodeError, Encoder, ImageFormat as RenderImageFormat, Pixmap, RenderError, Renderer};
+    use mars_render_port::{
+        Canvas, EncodeError, Encoder, ImageFormat as RenderImageFormat, Pixmap, RenderError, Renderer,
+    };
     use mars_runtime::{Deps, RuntimeState};
     use mars_store::stub::{NotImplementedCache, NotImplementedStore};
     use mars_types::{CrsCode, ImageFormat, Manifest};
@@ -369,12 +366,7 @@ mod tests {
             max_layers: 100,
             max_bbox_coord: 1e9,
         };
-        let app = router(
-            runtime.clone(),
-            capabilities_handle("<caps/>".into()),
-            cfg,
-            metrics,
-        );
+        let app = router(runtime.clone(), capabilities_handle("<caps/>".into()), cfg, metrics);
         runtime.swap_state(Arc::new(ready_state()));
 
         let resp = app

@@ -56,9 +56,7 @@ impl RuntimeState {
         let bands = build_bands(config)?;
         let layer_order = config.layers.iter().map(|l| l.name.clone()).collect();
 
-        let mut layer_index = HashMap::with_capacity(
-            manifest.layer_artifacts.len() + manifest.empty_layer_cells.len(),
-        );
+        let mut layer_index = HashMap::with_capacity(manifest.layer_artifacts.len() + manifest.empty_layer_cells.len());
         for entry in &manifest.layer_artifacts {
             match parse(&entry.key)? {
                 ParsedKey::Layer { layer, cell } => {
@@ -302,7 +300,10 @@ mod tests {
         let err = RuntimeState::from_config_and_manifest(&cfg, Stylesheet::default(), manifest).unwrap_err();
         assert!(matches!(err, RuntimeError::BadKey { .. }));
         let msg = err.to_string();
-        assert!(msg.contains("both layer_artifacts and empty_layer_cells"), "error: {msg}");
+        assert!(
+            msg.contains("both layer_artifacts and empty_layer_cells"),
+            "error: {msg}"
+        );
     }
 
     #[test]
@@ -326,7 +327,9 @@ mod tests {
         let state = RuntimeState::from_config_and_manifest(&cfg, Stylesheet::default(), manifest).unwrap();
         assert_eq!(state.layer_index.len(), 1);
         assert!(matches!(
-            state.layer_index.get(&(LayerId::new("l"), ScaleBand::new("hi"), (0, 0))),
+            state
+                .layer_index
+                .get(&(LayerId::new("l"), ScaleBand::new("hi"), (0, 0))),
             Some(LayerCellState::Empty)
         ));
     }

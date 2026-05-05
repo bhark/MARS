@@ -10,8 +10,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use prometheus::{
-    Encoder, Gauge, Histogram, HistogramOpts, HistogramVec, IntCounter, IntCounterVec, IntGauge,
-    Opts, Registry, TextEncoder,
+    Encoder, Gauge, Histogram, HistogramOpts, HistogramVec, IntCounter, IntCounterVec, IntGauge, Opts, Registry,
+    TextEncoder,
 };
 use tracing_subscriber::EnvFilter;
 
@@ -121,14 +121,12 @@ impl Metrics {
         )?;
         // buckets cover sub-millisecond render to multi-second slow paths.
         let request_duration = HistogramVec::new(
-            HistogramOpts::new(metrics::REQUEST_DURATION, "HTTP request duration in seconds")
-                .buckets(vec![
-                    0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
-                ]),
+            HistogramOpts::new(metrics::REQUEST_DURATION, "HTTP request duration in seconds").buckets(vec![
+                0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+            ]),
             &["interface"],
         )?;
-        let manifest_version =
-            IntGauge::new(metrics::MANIFEST_VERSION, "active manifest version")?;
+        let manifest_version = IntGauge::new(metrics::MANIFEST_VERSION, "active manifest version")?;
         let manifest_reject_total = IntCounterVec::new(
             Opts::new(
                 metrics::MANIFEST_REJECT_TOTAL,
@@ -151,8 +149,10 @@ impl Metrics {
             )
             .buckets(vec![0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0]),
         )?;
-        let compiler_window_lag =
-            Gauge::new(metrics::COMPILER_WINDOW_LAG, "compiler change feed window lag in seconds")?;
+        let compiler_window_lag = Gauge::new(
+            metrics::COMPILER_WINDOW_LAG,
+            "compiler change feed window lag in seconds",
+        )?;
 
         registry.register(Box::new(request_total.clone()))?;
         registry.register(Box::new(request_duration.clone()))?;
@@ -202,10 +202,7 @@ impl Metrics {
     /// Increment the manifest reject counter for `reason`. Use the constants
     /// in [`reject_reason`] so labels stay bounded.
     pub fn inc_manifest_reject(&self, reason: &str) {
-        self.inner
-            .manifest_reject_total
-            .with_label_values(&[reason])
-            .inc();
+        self.inner.manifest_reject_total.with_label_values(&[reason]).inc();
     }
 
     /// Increment the compiler change-event counter.
@@ -220,9 +217,7 @@ impl Metrics {
 
     /// Record one compiler rebuild duration.
     pub fn observe_compiler_rebuild_duration(&self, duration: Duration) {
-        self.inner
-            .compiler_rebuild_duration
-            .observe(duration.as_secs_f64());
+        self.inner.compiler_rebuild_duration.observe(duration.as_secs_f64());
     }
 
     /// Set the compiler change-feed window lag gauge.

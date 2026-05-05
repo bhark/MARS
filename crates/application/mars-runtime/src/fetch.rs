@@ -4,7 +4,10 @@ use mars_artifact::ArtifactReader;
 use mars_store::{LocalCache, ObjectStore};
 use mars_types::{ArtifactEntry, Cell, LayerId};
 
-use crate::{RuntimeError, state::{LayerCellState, RuntimeState}};
+use crate::{
+    RuntimeError,
+    state::{LayerCellState, RuntimeState},
+};
 
 pub(crate) async fn fetch_layer(
     state: &RuntimeState,

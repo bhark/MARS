@@ -105,7 +105,9 @@ impl Compiler {
             output.empty_layer_cells,
         );
         let v = self.deps.manifest.publish(&manifest).await?;
-        self.deps.metrics.observe_compiler_rebuild_duration(rebuild_start.elapsed());
+        self.deps
+            .metrics
+            .observe_compiler_rebuild_duration(rebuild_start.elapsed());
         tracing::info!(version = v, "compiler: manifest published");
         Ok(())
     }

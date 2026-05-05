@@ -44,10 +44,7 @@ impl CacheState {
     /// deleting evicted files on disk via the returned key list.
     fn insert(&mut self, key: ArtifactKey, size: u64) -> Vec<ArtifactKey> {
         let prev = self.lru.insert(key, size);
-        self.total_size = self
-            .total_size
-            .saturating_sub(prev.unwrap_or(0))
-            .saturating_add(size);
+        self.total_size = self.total_size.saturating_sub(prev.unwrap_or(0)).saturating_add(size);
         self.evict()
     }
 
@@ -263,7 +260,6 @@ impl LocalCache for FsCache {
         }
         Ok(bytes)
     }
-
 }
 
 #[cfg(test)]

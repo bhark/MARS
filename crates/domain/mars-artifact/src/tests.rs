@@ -302,7 +302,10 @@ fn class_assignment_rejects_unsorted() {
     buf.extend_from_slice(&0u16.to_le_bytes());
     buf.extend_from_slice(&1u64.to_le_bytes());
     buf.extend_from_slice(&1u16.to_le_bytes());
-    assert!(matches!(decode_class_assignment(&buf), Err(ArtifactError::Malformed(_))));
+    assert!(matches!(
+        decode_class_assignment(&buf),
+        Err(ArtifactError::Malformed(_))
+    ));
 }
 
 #[test]
@@ -313,7 +316,10 @@ fn class_assignment_rejects_duplicate() {
     buf.extend_from_slice(&0u16.to_le_bytes());
     buf.extend_from_slice(&5u64.to_le_bytes());
     buf.extend_from_slice(&1u16.to_le_bytes());
-    assert!(matches!(decode_class_assignment(&buf), Err(ArtifactError::Malformed(_))));
+    assert!(matches!(
+        decode_class_assignment(&buf),
+        Err(ArtifactError::Malformed(_))
+    ));
 }
 
 #[test]

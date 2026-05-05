@@ -41,9 +41,7 @@ impl InMemoryStore {
 impl ObjectStore for InMemoryStore {
     async fn get(&self, key: &ArtifactKey, expected: ContentHash) -> Result<Bytes, StoreError> {
         let lock = self.data.lock().expect("InMemoryStore lock poisoned");
-        let (bytes, hash) = lock
-            .get(key)
-            .ok_or_else(|| StoreError::NotFound(key.clone()))?;
+        let (bytes, hash) = lock.get(key).ok_or_else(|| StoreError::NotFound(key.clone()))?;
         if *hash != expected {
             return Err(StoreError::HashMismatch { key: key.clone() });
         }

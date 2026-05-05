@@ -42,7 +42,9 @@ pub fn decode_class_assignment(bytes: &[u8]) -> Result<Vec<(u64, u16)>, Artifact
                 return Err(ArtifactError::Malformed("duplicate feature_id"));
             }
             if id < p {
-                return Err(ArtifactError::Malformed("class assignments must be ascending by feature_id"));
+                return Err(ArtifactError::Malformed(
+                    "class assignments must be ascending by feature_id",
+                ));
             }
         }
         prev = Some(id);

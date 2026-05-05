@@ -21,8 +21,8 @@ use mars_runtime::{
     key::{layer_key, source_key},
     state::LayerCellState,
 };
-use mars_store::{LocalCache, ObjectStore, StoreError};
 use mars_store::mem::{InMemoryCache, InMemoryStore};
+use mars_store::{LocalCache, ObjectStore, StoreError};
 use mars_style::{Colour, Style, Stylesheet};
 use mars_types::{ArtifactEntry, Bbox, Cell, CrsCode, EmptyLayerCell, ImageFormat, LayerId, Manifest, ScaleBand};
 use tokio::sync::Notify;

@@ -424,10 +424,7 @@ mod tests {
         let hash = ContentHash([0xab; 32]);
         let key = ArtifactKey::build_layer(&layer, &cell, hash);
         match key.parse().unwrap() {
-            ParsedArtifactKey::Layer {
-                layer: l,
-                cell: c,
-            } => {
+            ParsedArtifactKey::Layer { layer: l, cell: c } => {
                 assert_eq!(l, layer);
                 assert_eq!(c, cell);
             }

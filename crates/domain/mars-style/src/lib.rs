@@ -44,9 +44,13 @@ impl FromStr for Colour {
     type Err = StyleError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let raw = s.strip_prefix('#').ok_or_else(|| StyleError::InvalidColour(s.to_owned()))?;
+        let raw = s
+            .strip_prefix('#')
+            .ok_or_else(|| StyleError::InvalidColour(s.to_owned()))?;
         let parse = |i: usize| -> Result<u8, StyleError> {
-            let slice = raw.get(i..i + 2).ok_or_else(|| StyleError::InvalidColour(s.to_owned()))?;
+            let slice = raw
+                .get(i..i + 2)
+                .ok_or_else(|| StyleError::InvalidColour(s.to_owned()))?;
             u8::from_str_radix(slice, 16).map_err(|_| StyleError::InvalidColour(s.to_owned()))
         };
         match raw.len() {

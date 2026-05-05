@@ -31,9 +31,7 @@ const WARM_CONCURRENCY: usize = 8;
 const WARM_TIMEOUT: Duration = Duration::from_secs(10);
 
 fn default_render_concurrency() -> usize {
-    std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4)
+    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4)
 }
 
 /// hard limit on cells a single request may cover. prevents oom from
@@ -222,16 +220,9 @@ impl Runtime {
         let renderer = self.deps.renderer.clone();
         let encoder = self.deps.encoder.clone();
         let format = plan.format;
-        let permit = self
-            .render_sem
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|_| {
-                RuntimeError::Render(mars_render_port::RenderError::Backend(
-                    "render semaphore closed".into(),
-                ))
-            })?;
+        let permit = self.render_sem.clone().acquire_owned().await.map_err(|_| {
+            RuntimeError::Render(mars_render_port::RenderError::Backend("render semaphore closed".into()))
+        })?;
         // move ownership directly into the closure; the `ops` binding is dead
         // after this line, so peak memory is one Vec<DrawOp> not two.
         let bytes = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, RuntimeError> {
@@ -288,7 +279,10 @@ pub async fn run_manifest_reload_loop(
                     current_version = current.manifest.version,
                     "manifest watch: rejecting older manifest"
                 );
-                runtime.deps.metrics.inc_manifest_reject(reject_reason::BACKWARDS_VERSION);
+                runtime
+                    .deps
+                    .metrics
+                    .inc_manifest_reject(reject_reason::BACKWARDS_VERSION);
                 runtime.record_reject(reason);
                 continue;
             }

@@ -6,9 +6,7 @@
 mod encode;
 mod raster;
 
-use mars_render_port::{
-    Canvas, DrawOp, EncodeError, Encoder, ImageFormat, Pixmap, RenderError, Renderer,
-};
+use mars_render_port::{Canvas, DrawOp, EncodeError, Encoder, ImageFormat, Pixmap, RenderError, Renderer};
 use tiny_skia::Pixmap as SkPixmap;
 
 #[derive(Debug, Default)]

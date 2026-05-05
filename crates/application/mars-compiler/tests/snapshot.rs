@@ -14,8 +14,8 @@ use mars_config::{
     Source as CfgSource, SourceBinding as CfgBinding, model::Band,
 };
 use mars_source::{AttrValue, RowBytes, SourceCollectionId};
-use mars_store::{ManifestStore, ObjectStore};
 use mars_store::mem::{InMemoryPublisher, InMemoryStore};
+use mars_store::{ManifestStore, ObjectStore};
 use mars_types::{Bbox, Cell, CrsCode, LayerId, ScaleBand};
 use tokio_util::sync::CancellationToken;
 

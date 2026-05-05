@@ -253,10 +253,7 @@ mod tests {
         // ${A:-${B}} would silently misparse with the `[^}]*` regex; reject it.
         let err = substitute("val=${A:-${B:-x}}").unwrap_err();
         let msg = err.to_string();
-        assert!(
-            msg.contains("nested"),
-            "expected nested-defaults rejection, got {msg}"
-        );
+        assert!(msg.contains("nested"), "expected nested-defaults rejection, got {msg}");
     }
 
     #[test]

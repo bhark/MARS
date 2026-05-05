@@ -174,7 +174,8 @@ fn read_string(bytes: &[u8], start: usize) -> Result<(String, usize), ExprError>
     // walk by char_indices on the post-quote slice so multi-byte utf-8 (e.g.
     // danish 'ø' in 'Foreløbig') is preserved instead of being byte-as-char'd.
     let body_start = start + 1;
-    let s = std::str::from_utf8(&bytes[body_start..]).map_err(|_| parse_err(start, "invalid utf-8 in string literal"))?;
+    let s =
+        std::str::from_utf8(&bytes[body_start..]).map_err(|_| parse_err(start, "invalid utf-8 in string literal"))?;
     let mut out = String::new();
     let mut iter = s.char_indices().peekable();
     while let Some((rel, c)) = iter.next() {

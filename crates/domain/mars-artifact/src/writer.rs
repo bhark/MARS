@@ -91,9 +91,7 @@ impl ArtifactWriter {
     /// - feature_count, when present alongside geometry, must equal the
     ///   actual feature count encoded in the payload
     pub fn finish(mut self) -> Result<Bytes, ArtifactError> {
-        let bbox = self
-            .bbox
-            .ok_or(ArtifactError::InvalidWriterState("bbox not set"))?;
+        let bbox = self.bbox.ok_or(ArtifactError::InvalidWriterState("bbox not set"))?;
 
         if matches!(self.kind, ArtifactKind::Source) && self.source_ref.is_some() {
             return Err(ArtifactError::InvalidWriterState(

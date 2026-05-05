@@ -32,8 +32,8 @@ pub enum ProjError {
 /// Uses PROJ introspection so any authority code known to the local PROJ
 /// database is accepted; no hard-coded allowlist is required.
 pub fn is_projected(code: &CrsCode) -> Result<bool, ProjError> {
-    let definition = CString::new(code.as_str())
-        .map_err(|e| ProjError::UnknownCrs(format!("invalid CRS string: {e}")))?;
+    let definition =
+        CString::new(code.as_str()).map_err(|e| ProjError::UnknownCrs(format!("invalid CRS string: {e}")))?;
 
     // SAFETY: proj_context_create / proj_create / proj_get_type / proj_destroy
     // / proj_context_destroy are the standard PROJ C lifecycle. `definition`

@@ -250,7 +250,8 @@ fn build_stylesheet(cfg: &Config) -> Stylesheet {
     for layer in &cfg.layers {
         for class in &layer.classes {
             if let ClassStyle::Inline(s) = &class.style {
-                ss.geometry.insert(format!("{}::{}", layer.name, class.name), Arc::new(s.clone()));
+                ss.geometry
+                    .insert(format!("{}::{}", layer.name, class.name), Arc::new(s.clone()));
             }
         }
     }
