@@ -158,38 +158,41 @@ fn scan_existing(root: &Path) -> Result<ScanResult, StoreError> {
 }
 
 fn walk(dir: &Path, root: &Path, out: &mut Vec<(ArtifactKey, u64, SystemTime)>) -> Result<(), StoreError> {
-    let rd = std::fs::read_dir(dir).map_err(|e| StoreError::Backend(format!("scan {}: {e}", dir.display())))?;
-    for ent in rd {
-        let ent = ent.map_err(|e| StoreError::Backend(format!("scan readdir: {e}")))?;
-        let ft = ent
-            .file_type()
-            .map_err(|e| StoreError::Backend(format!("scan file_type: {e}")))?;
-        let p = ent.path();
-        if ft.is_dir() {
-            walk(&p, root, out)?;
-            continue;
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let rd = std::fs::read_dir(&dir).map_err(|e| StoreError::Backend(format!("scan {}: {e}", dir.display())))?;
+        for ent in rd {
+            let ent = ent.map_err(|e| StoreError::Backend(format!("scan readdir: {e}")))?;
+            let ft = ent
+                .file_type()
+                .map_err(|e| StoreError::Backend(format!("scan file_type: {e}")))?;
+            let p = ent.path();
+            if ft.is_dir() {
+                stack.push(p);
+                continue;
+            }
+            if !ft.is_file() {
+                continue;
+            }
+            // skip stale temp files left by aborted writes
+            if let Some(name) = p.file_name().and_then(|s| s.to_str())
+                && name.contains(".tmp.")
+            {
+                continue;
+            }
+            let meta = ent
+                .metadata()
+                .map_err(|e| StoreError::Backend(format!("scan metadata: {e}")))?;
+            let mtime = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+            let rel = p
+                .strip_prefix(root)
+                .map_err(|e| StoreError::Backend(format!("scan strip_prefix: {e}")))?;
+            let rel_str = rel
+                .to_str()
+                .ok_or_else(|| StoreError::Backend("scan: non-utf8 path".into()))?
+                .replace('\\', "/");
+            out.push((ArtifactKey::new(rel_str), meta.len(), mtime));
         }
-        if !ft.is_file() {
-            continue;
-        }
-        // skip stale temp files left by aborted writes
-        if let Some(name) = p.file_name().and_then(|s| s.to_str())
-            && name.contains(".tmp.")
-        {
-            continue;
-        }
-        let meta = ent
-            .metadata()
-            .map_err(|e| StoreError::Backend(format!("scan metadata: {e}")))?;
-        let mtime = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-        let rel = p
-            .strip_prefix(root)
-            .map_err(|e| StoreError::Backend(format!("scan strip_prefix: {e}")))?;
-        let rel_str = rel
-            .to_str()
-            .ok_or_else(|| StoreError::Backend("scan: non-utf8 path".into()))?
-            .replace('\\', "/");
-        out.push((ArtifactKey::new(rel_str), meta.len(), mtime));
     }
     Ok(())
 }
