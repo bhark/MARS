@@ -26,7 +26,7 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use mars_observability::Metrics;
-use mars_runtime::{Runtime, RuntimeError};
+use mars_runtime::{RenderPlan, Runtime, RuntimeError};
 use mars_wms::{WmsConfig, WmsError, WmsRequest};
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
@@ -179,7 +179,7 @@ async fn handle_wms(State(state): State<AppState>, headers: HeaderMap, raw_query
                         h.insert(header::CONTENT_TYPE, HeaderValue::from_static(mime));
                         (StatusCode::OK, h, bytes).into_response()
                     }
-                    Err(e) => runtime_error_response(e),
+                    Err(e) => runtime_error_response(e, &plan),
                 }
             }
         }
@@ -231,16 +231,25 @@ fn wms_error_response(e: WmsError) -> Response {
     (status, e.to_string()).into_response()
 }
 
-fn runtime_error_response(e: RuntimeError) -> Response {
+fn runtime_error_response(e: RuntimeError, plan: &RenderPlan) -> Response {
     let status = match &e {
         RuntimeError::NotReady => StatusCode::SERVICE_UNAVAILABLE,
         RuntimeError::CrsNotCanonical { .. } => StatusCode::NOT_IMPLEMENTED,
         RuntimeError::ManifestEntryMissing { .. } | RuntimeError::SourceMissing { .. } => StatusCode::NOT_FOUND,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     };
+    let cell = match &e {
+        RuntimeError::ManifestEntryMissing { cell, .. } => Some(*cell),
+        RuntimeError::SourceMissing { cell, .. } => Some(*cell),
+        _ => None,
+    };
     match &e {
-        RuntimeError::NotReady => tracing::warn!(error = %e, "render failed"),
-        _ => tracing::error!(error = %e, "render failed"),
+        RuntimeError::NotReady => {
+            tracing::warn!(error = %e, layers = ?plan.layers, bbox = ?plan.bbox, cell = ?cell, "render failed")
+        }
+        _ => {
+            tracing::error!(error = %e, layers = ?plan.layers, bbox = ?plan.bbox, cell = ?cell, "render failed")
+        }
     }
     let body = if status == StatusCode::INTERNAL_SERVER_ERROR {
         "internal server error".to_owned()
