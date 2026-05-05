@@ -46,12 +46,12 @@ pub struct ServerConfig {
 }
 
 /// Atomically swappable capabilities document. Cheap clone, lock-free reads.
-pub type CapabilitiesHandle = Arc<ArcSwap<Arc<String>>>;
+pub type CapabilitiesHandle = Arc<ArcSwap<String>>;
 
 /// Helper to build a fresh [`CapabilitiesHandle`] seeded with `body`.
 #[must_use]
 pub fn capabilities_handle(body: String) -> CapabilitiesHandle {
-    Arc::new(ArcSwap::from(Arc::new(Arc::new(body))))
+    Arc::new(ArcSwap::from(Arc::new(body)))
 }
 
 /// Shared per-request state.
@@ -401,7 +401,7 @@ mod tests {
             max_bbox_coord: 1e9,
         };
         let app = router(empty_runtime(&metrics), caps.clone(), cfg, metrics);
-        caps.store(Arc::new(Arc::new("<caps>v2</caps>".to_owned())));
+        caps.store(Arc::new("<caps>v2</caps>".to_owned()));
         let resp = app
             .oneshot(
                 Request::builder()
