@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use mars_config::Config;
 use mars_grid::BandConfig;
 use mars_style::Stylesheet;
-use mars_types::{ArtifactEntry, CrsCode, LayerId, Manifest, ScaleBand};
+use mars_types::{ArtifactEntry, CrsCode, EmptyLayerCell, LayerId, Manifest, ScaleBand};
 
 use crate::RuntimeError;
 use crate::key::{ParsedKey, parse};
@@ -15,6 +15,14 @@ pub type LayerCellKey = (LayerId, ScaleBand, (i64, i64));
 /// composite indexing key for source artifacts (collection name kept as String;
 /// `SourceCollectionId` is a port-side strong wrapper around the same string).
 pub type SourceCellKey = (String, ScaleBand, (i64, i64));
+
+/// discriminant for layer-index lookups: a cell is either backed by a real
+/// artifact or is an explicit empty marker.
+#[derive(Debug, Clone)]
+pub enum LayerCellState {
+    Present(ArtifactEntry),
+    Empty,
+}
 
 /// runtime state — pure data, no I/O. cheap to share across requests behind `Arc`.
 #[derive(Debug)]
@@ -29,8 +37,8 @@ pub struct RuntimeState {
     pub stylesheet: Stylesheet,
     /// active manifest snapshot.
     pub manifest: Manifest,
-    /// `(layer, band, cell) -> artifact entry`.
-    pub layer_index: HashMap<LayerCellKey, ArtifactEntry>,
+    /// `(layer, band, cell) -> present artifact or empty marker`.
+    pub layer_index: HashMap<LayerCellKey, LayerCellState>,
     /// `(collection, band, cell) -> artifact entry`.
     pub source_index: HashMap<SourceCellKey, ArtifactEntry>,
 }
@@ -48,11 +56,16 @@ impl RuntimeState {
         let bands = build_bands(config)?;
         let layer_order = config.layers.iter().map(|l| l.name.clone()).collect();
 
-        let mut layer_index = HashMap::with_capacity(manifest.layer_artifacts.len());
+        let mut layer_index = HashMap::with_capacity(
+            manifest.layer_artifacts.len() + manifest.empty_layer_cells.len(),
+        );
         for entry in &manifest.layer_artifacts {
             match parse(&entry.key)? {
                 ParsedKey::Layer { layer, cell } => {
-                    layer_index.insert((layer, cell.band, (cell.x, cell.y)), entry.clone());
+                    layer_index.insert(
+                        (layer, cell.band, (cell.x, cell.y)),
+                        LayerCellState::Present(entry.clone()),
+                    );
                 }
                 ParsedKey::Source { .. } => {
                     return Err(RuntimeError::BadKey {
@@ -61,6 +74,16 @@ impl RuntimeState {
                     });
                 }
             }
+        }
+        for EmptyLayerCell { layer, cell } in &manifest.empty_layer_cells {
+            let key = (layer.clone(), cell.band.clone(), (cell.x, cell.y));
+            if layer_index.contains_key(&key) {
+                return Err(RuntimeError::BadKey {
+                    key: format!("{layer}/{band}/{x}_{y}", band = cell.band, x = cell.x, y = cell.y),
+                    reason: "cell present in both layer_artifacts and empty_layer_cells".into(),
+                });
+            }
+            layer_index.insert(key, LayerCellState::Empty);
         }
 
         let mut source_index = HashMap::with_capacity(manifest.source_artifacts.len());
@@ -117,7 +140,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use mars_config::{ArtifactCache, ArtifactStore, Artifacts, Band, Cells, Config, Scales, ServiceMeta, Source};
-    use mars_types::{ArtifactEntry, ArtifactKey, ContentHash, Manifest};
+    use mars_types::{ArtifactEntry, ArtifactKey, Cell, ContentHash, Manifest, ScaleBand};
 
     use super::*;
 
@@ -251,5 +274,60 @@ mod tests {
         let err = build_bands(&cfg).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("ghost"), "error should name missing band: {msg}");
+    }
+
+    #[test]
+    fn rejects_duplicate_present_and_empty_marker() {
+        let cfg = minimal_config();
+        let key = "lyr/l/hi/0_0/v1/abcd.mars";
+        let manifest = Manifest::new(
+            1,
+            "t",
+            vec![],
+            vec![ArtifactEntry {
+                key: ArtifactKey::new(key),
+                hash: ContentHash::zero(),
+                size_bytes: 0,
+            }],
+            None,
+            vec![EmptyLayerCell {
+                layer: LayerId::new("l"),
+                cell: Cell {
+                    band: ScaleBand::new("hi"),
+                    x: 0,
+                    y: 0,
+                },
+            }],
+        );
+        let err = RuntimeState::from_config_and_manifest(&cfg, Stylesheet::default(), manifest).unwrap_err();
+        assert!(matches!(err, RuntimeError::BadKey { .. }));
+        let msg = err.to_string();
+        assert!(msg.contains("both layer_artifacts and empty_layer_cells"), "error: {msg}");
+    }
+
+    #[test]
+    fn empty_marker_populates_index() {
+        let cfg = minimal_config();
+        let manifest = Manifest::new(
+            1,
+            "t",
+            vec![],
+            vec![],
+            None,
+            vec![EmptyLayerCell {
+                layer: LayerId::new("l"),
+                cell: Cell {
+                    band: ScaleBand::new("hi"),
+                    x: 0,
+                    y: 0,
+                },
+            }],
+        );
+        let state = RuntimeState::from_config_and_manifest(&cfg, Stylesheet::default(), manifest).unwrap();
+        assert_eq!(state.layer_index.len(), 1);
+        assert!(matches!(
+            state.layer_index.get(&(LayerId::new("l"), ScaleBand::new("hi"), (0, 0))),
+            Some(LayerCellState::Empty)
+        ));
     }
 }

@@ -19,11 +19,12 @@ use mars_render_port::{DrawOp, Renderer};
 use mars_runtime::{
     Deps, RenderPlan, Runtime, RuntimeError, RuntimeState,
     key::{layer_key, source_key},
+    state::LayerCellState,
 };
 use mars_store::{LocalCache, ObjectStore, StoreError};
 use mars_store::mem::{InMemoryCache, InMemoryStore};
 use mars_style::{Colour, Style, Stylesheet};
-use mars_types::{ArtifactEntry, Bbox, Cell, CrsCode, ImageFormat, LayerId, Manifest, ScaleBand};
+use mars_types::{ArtifactEntry, Bbox, Cell, CrsCode, EmptyLayerCell, ImageFormat, LayerId, Manifest, ScaleBand};
 use tokio::sync::Notify;
 
 use crate::support::mock_renderer::{CANNED_BYTES, CannedEncoder, MockRenderer};
@@ -193,7 +194,7 @@ fn state_from_manifest(canonical_crs: CrsCode, manifest: Manifest) -> RuntimeSta
     let mut source_index = std::collections::HashMap::new();
     layer_index.insert(
         (LayerId::new(LAYER), ScaleBand::new(BAND), (CELL_X, CELL_Y)),
-        manifest.layer_artifacts[0].clone(),
+        LayerCellState::Present(manifest.layer_artifacts[0].clone()),
     );
     source_index.insert(
         (COLLECTION.to_owned(), ScaleBand::new(BAND), (CELL_X, CELL_Y)),
@@ -432,4 +433,146 @@ async fn deterministic_repeat() {
     let a: Vec<String> = recorded[0].iter().map(format).collect();
     let b: Vec<String> = recorded[1].iter().map(format).collect();
     assert_eq!(a, b, "draw op sequence must be deterministic");
+}
+
+// -- empty-marker tests --
+
+fn state_with_empty_marker() -> RuntimeState {
+    let cell_present = Cell {
+        band: ScaleBand::new(BAND),
+        x: CELL_X,
+        y: CELL_Y,
+    };
+    let cell_empty = Cell {
+        band: ScaleBand::new(BAND),
+        x: 1,
+        y: 0,
+    };
+
+    let source_bytes = build_source_bytes(0.0);
+    let source_hash = compute_content_hash(&source_bytes);
+    let layer_bytes = build_layer_bytes(source_hash);
+    let layer_hash = compute_content_hash(&layer_bytes);
+
+    let source_key_v = source_key(COLLECTION, &cell_present, &hex(&source_hash.0));
+    let layer_key_v = layer_key(&LayerId::new(LAYER), &cell_present, &hex(&layer_hash.0));
+
+    let manifest = Manifest::new(
+        1,
+        "test",
+        vec![ArtifactEntry {
+            key: source_key_v,
+            hash: source_hash,
+            size_bytes: source_bytes.len() as u64,
+        }],
+        vec![ArtifactEntry {
+            key: layer_key_v,
+            hash: layer_hash,
+            size_bytes: layer_bytes.len() as u64,
+        }],
+        None,
+        vec![EmptyLayerCell {
+            layer: LayerId::new(LAYER),
+            cell: cell_empty,
+        }],
+    );
+
+    let bands = vec![BandConfig {
+        name: ScaleBand::new(BAND),
+        max_denom: u32::MAX,
+        origin: (0.0, 0.0),
+        cell_size: 1024.0,
+    }];
+
+    let mut layer_index = std::collections::HashMap::new();
+    let mut source_index = std::collections::HashMap::new();
+    layer_index.insert(
+        (LayerId::new(LAYER), ScaleBand::new(BAND), (CELL_X, CELL_Y)),
+        LayerCellState::Present(manifest.layer_artifacts[0].clone()),
+    );
+    layer_index.insert(
+        (LayerId::new(LAYER), ScaleBand::new(BAND), (1, 0)),
+        LayerCellState::Empty,
+    );
+    source_index.insert(
+        (COLLECTION.to_owned(), ScaleBand::new(BAND), (CELL_X, CELL_Y)),
+        manifest.source_artifacts[0].clone(),
+    );
+
+    RuntimeState {
+        canonical_crs: CrsCode::new("EPSG:25832"),
+        bands,
+        layer_order: vec![LayerId::new(LAYER)],
+        stylesheet: stylesheet(),
+        manifest,
+        layer_index,
+        source_index,
+    }
+}
+
+#[tokio::test]
+async fn empty_marker_skips_fetch_and_draw() {
+    let store = Arc::new(InMemoryStore::new());
+    let cache = InMemoryCache::new();
+
+    // seed the present cell's source artifact into the store
+    let cell_present = Cell {
+        band: ScaleBand::new(BAND),
+        x: CELL_X,
+        y: CELL_Y,
+    };
+    let source_bytes = build_source_bytes(0.0);
+    let source_hash = compute_content_hash(&source_bytes);
+    let layer_bytes = build_layer_bytes(source_hash);
+    let layer_hash = compute_content_hash(&layer_bytes);
+    let source_key_v = source_key(COLLECTION, &cell_present, &hex(&source_hash.0));
+    let layer_key_v = layer_key(&LayerId::new(LAYER), &cell_present, &hex(&layer_hash.0));
+    store.put(&source_key_v, source_bytes.into()).await.unwrap();
+    store.put(&layer_key_v, layer_bytes.into()).await.unwrap();
+
+    let mock = Arc::new(MockRenderer::default());
+    let state = state_with_empty_marker();
+    let runtime = Runtime::from_state(
+        Arc::new(state),
+        Deps {
+            store,
+            cache: Arc::new(cache),
+            renderer: mock.clone(),
+            encoder: Arc::new(CannedEncoder),
+            metrics: mars_observability::Metrics::new().unwrap(),
+        },
+    );
+
+    // render plan covers both cells: (0,0) present and (1,0) empty
+    let plan = RenderPlan {
+        layers: vec![LayerId::new(LAYER)],
+        bbox: Bbox::new(0.0, 0.0, 2047.0, 10.0),
+        width: 256,
+        height: 64,
+        crs: CrsCode::new("EPSG:25832"),
+        format: ImageFormat::Png,
+    };
+
+    let bytes = runtime.render(&plan).await.unwrap();
+    assert_eq!(bytes, CANNED_BYTES);
+
+    let recorded = mock.ops.lock().unwrap();
+    assert_eq!(recorded.len(), 1, "renderer called exactly once (empty cell skipped)");
+    let ops = &recorded[0];
+    let path_count = ops.iter().filter(|o| matches!(o, DrawOp::Path { .. })).count();
+    assert_eq!(path_count, 5, "only present cell contributes draw ops");
+}
+
+#[tokio::test]
+async fn genuinely_missing_cell_still_errors() {
+    let fx = build_fixture().await;
+    let mut plan = plan_for(&fx);
+    // cell (99,99) is neither present nor an empty marker
+    plan.bbox = Bbox::new(99.0 * 1024.0, 99.0 * 1024.0, 99.0 * 1024.0 + 10.0, 99.0 * 1024.0 + 10.0);
+    match fx.runtime.render(&plan).await {
+        Err(RuntimeError::ManifestEntryMissing { layer, .. }) => {
+            assert_eq!(layer, LAYER);
+        }
+        other => panic!("expected ManifestEntryMissing, got {other:?}"),
+    }
 }

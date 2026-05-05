@@ -33,6 +33,7 @@ const CELL_SIZE_M: f64 = 1024.0;
 // fill colours chosen distinct from white background and from each other
 const FILL_A: (u8, u8, u8) = (220, 50, 47); // red-ish
 const FILL_B: (u8, u8, u8) = (38, 139, 210); // blue-ish
+const FILL_C: (u8, u8, u8) = (46, 204, 113); // green-ish
 
 #[tokio::test(flavor = "multi_thread")]
 async fn end_to_end_compile_and_render() -> Result<()> {
@@ -109,13 +110,15 @@ async fn end_to_end_compile_and_render() -> Result<()> {
         },
     );
 
-    // render plan: cell (0,0) at the origin; denom ≈ 14285 -> band hi (max 25000).
-    // bbox max kept strictly inside the cell so cells_in_bbox enumerates only (0,0).
+    // render plan: covers cells (0,0) and (1,0) at the origin.
+    // polys has data in (0,0) but is empty in (1,0).
+    // sparse_polys has data in (1,0) but is empty in (0,0).
+    // this exercises the empty-marker tombstone path end-to-end.
     let plan = RenderPlan {
-        layers: vec![LayerId::new("polys")],
-        bbox: Bbox::new(0.0, 0.0, CELL_SIZE_M - 1.0, CELL_SIZE_M - 1.0),
+        layers: vec![LayerId::new("polys"), LayerId::new("sparse_polys")],
+        bbox: Bbox::new(0.0, 0.0, CELL_SIZE_M * 2.0 - 1.0, CELL_SIZE_M - 1.0),
         width: RENDER_PX,
-        height: RENDER_PX,
+        height: RENDER_PX / 2,
         crs: CrsCode::new("EPSG:25832"),
         format: ImageFormat::Png,
     };
@@ -132,7 +135,7 @@ async fn end_to_end_compile_and_render() -> Result<()> {
     let mut reader = decoder.read_info()?;
     let info = reader.info().clone();
     assert_eq!(info.width, RENDER_PX);
-    assert_eq!(info.height, RENDER_PX);
+    assert_eq!(info.height, RENDER_PX / 2);
     let mut buf = vec![0u8; reader.output_buffer_size().context("png output buffer too large")?];
     let frame = reader.next_frame(&mut buf)?;
     let pixels = &buf[..frame.buffer_size()];
@@ -143,6 +146,10 @@ async fn end_to_end_compile_and_render() -> Result<()> {
     assert!(
         has_colour_close(pixels, info.color_type, FILL_B),
         "no class-B fill pixels in rendered tile"
+    );
+    assert!(
+        has_colour_close(pixels, info.color_type, FILL_C),
+        "no sparse_polys fill pixels in rendered tile"
     );
 
     Ok(())
@@ -167,12 +174,21 @@ async fn setup_database(dsn: &str) -> Result<()> {
                 klass TEXT NOT NULL,
                 geom geometry(Polygon, 25832) NOT NULL
              );
+             CREATE TABLE mars_e2e.sparse_polys (
+                gid INT4 PRIMARY KEY,
+                klass TEXT NOT NULL,
+                geom geometry(Polygon, 25832) NOT NULL
+             );
              INSERT INTO mars_e2e.polys (gid, klass, geom) VALUES
                 (1, 'a', ST_GeomFromText('POLYGON((100 100, 200 100, 200 200, 100 200, 100 100))', 25832)),
                 (2, 'a', ST_GeomFromText('POLYGON((300 100, 400 100, 400 200, 300 200, 300 100))', 25832)),
                 (3, 'a', ST_GeomFromText('POLYGON((500 100, 600 100, 600 200, 500 200, 500 100))', 25832)),
                 (4, 'b', ST_GeomFromText('POLYGON((100 400, 200 400, 200 500, 100 500, 100 400))', 25832)),
-                (5, 'b', ST_GeomFromText('POLYGON((300 400, 400 400, 400 500, 300 500, 300 400))', 25832));",
+                (5, 'b', ST_GeomFromText('POLYGON((300 400, 400 400, 400 500, 300 500, 300 400))', 25832));
+             -- sparse_polys only in cell (1,0) [1024,0]-[2048,1024]; cell (0,0) is a gap
+             INSERT INTO mars_e2e.sparse_polys (gid, klass, geom) VALUES
+                (1, 'a', ST_GeomFromText('POLYGON((1124 100, 1224 100, 1224 200, 1124 200, 1124 100))', 25832)),
+                (2, 'b', ST_GeomFromText('POLYGON((1324 100, 1424 100, 1424 200, 1324 200, 1324 100))', 25832));",
         )
         .await
         .context("schema/seed")?;
@@ -246,8 +262,10 @@ fn render_fixture_yaml(dsn_kv: &str, store_path: &str, cache_path: &str) -> Stri
     // accepts both kv and url syntax, so the kv DSN is fine here too.
     let (a_r, a_g, a_b) = FILL_A;
     let (b_r, b_g, b_b) = FILL_B;
+    let (c_r, c_g, c_b) = FILL_C;
     let a_hex = format!("{a_r:02x}{a_g:02x}{a_b:02x}");
     let b_hex = format!("{b_r:02x}{b_g:02x}{b_b:02x}");
+    let c_hex = format!("{c_r:02x}{c_g:02x}{c_b:02x}");
     format!(
         r##"service:
   name: e2e
@@ -271,7 +289,7 @@ artifacts:
 
 scales:
   bands:
-    - {{ name: hi, max_denom: 25000 }}
+    - {{ name: hi, max_denom: 50000 }}
 
 cells:
   grid: regular
@@ -281,7 +299,7 @@ cells:
   extent:
     min_x: 0
     min_y: 0
-    max_x: 1024
+    max_x: 2048
     max_y: 1024
 
 interfaces:
@@ -304,6 +322,11 @@ styles:
     fill: "#{b_hex}"
     stroke: "#000000"
     stroke_width: 0.5
+  cls_c:
+    type: polygon
+    fill: "#{c_hex}"
+    stroke: "#000000"
+    stroke_width: 0.5
 
 layers:
   - name: polys
@@ -324,6 +347,24 @@ layers:
         title: "B"
         when: "klass = 'b'"
         style: {{ type: ref, name: cls_b }}
+  - name: sparse_polys
+    title: "Sparse Polys"
+    type: polygon
+    sources:
+      - band: hi
+        from: mars_e2e.sparse_polys
+        geometry_column: geom
+        id_column: gid
+        attributes: [klass]
+    classes:
+      - name: a
+        title: "A"
+        when: "klass = 'a'"
+        style: {{ type: ref, name: cls_c }}
+      - name: b
+        title: "B"
+        when: "klass = 'b'"
+        style: {{ type: ref, name: cls_c }}
 
 observability:
   log_level: info

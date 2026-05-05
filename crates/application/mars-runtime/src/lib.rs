@@ -179,14 +179,18 @@ impl Runtime {
 
         let mut ops = Vec::new();
         for task in &tasks {
-            let layer_art = fetch::fetch_layer(
+            let layer_art = match fetch::fetch_layer(
                 &state,
                 self.deps.cache.as_ref(),
                 self.deps.store.as_ref(),
                 &task.layer,
                 &task.cell,
             )
-            .await?;
+            .await?
+            {
+                Some(reader) => reader,
+                None => continue, // explicit empty marker: no draw ops, no source fetch
+            };
             let source_ref = layer_art.source_ref().cloned().ok_or_else(|| {
                 RuntimeError::Config(mars_config::ConfigError::Invalid(format!(
                     "layer artifact '{}' is missing source_ref footer",
@@ -344,10 +348,18 @@ fn classify_store_error(err: &StoreError) -> &'static str {
 }
 
 fn referenced_entries(state: &RuntimeState) -> Vec<ArtifactEntry> {
+    let present_count = state
+        .layer_index
+        .values()
+        .filter(|s| matches!(s, state::LayerCellState::Present(_)))
+        .count();
     let mut entries = Vec::with_capacity(
-        state.layer_index.len() + state.source_index.len() + usize::from(state.manifest.style_artifact.is_some()),
+        present_count + state.source_index.len() + usize::from(state.manifest.style_artifact.is_some()),
     );
-    entries.extend(state.layer_index.values().cloned());
+    entries.extend(state.layer_index.values().filter_map(|s| match s {
+        state::LayerCellState::Present(e) => Some(e.clone()),
+        state::LayerCellState::Empty => None,
+    }));
     entries.extend(state.source_index.values().cloned());
     if let Some(entry) = &state.manifest.style_artifact {
         entries.push(entry.clone());
@@ -358,10 +370,18 @@ fn referenced_entries(state: &RuntimeState) -> Vec<ArtifactEntry> {
 /// keys referenced by `state`, collected directly without intermediate `Vec`.
 /// hot path: every manifest swap calls this twice.
 fn referenced_keys(state: &RuntimeState) -> HashSet<ArtifactKey> {
+    let present_count = state
+        .layer_index
+        .values()
+        .filter(|s| matches!(s, state::LayerCellState::Present(_)))
+        .count();
     let mut out = HashSet::with_capacity(
-        state.layer_index.len() + state.source_index.len() + usize::from(state.manifest.style_artifact.is_some()),
+        present_count + state.source_index.len() + usize::from(state.manifest.style_artifact.is_some()),
     );
-    out.extend(state.layer_index.values().map(|e| e.key.clone()));
+    out.extend(state.layer_index.values().filter_map(|s| match s {
+        state::LayerCellState::Present(e) => Some(e.key.clone()),
+        state::LayerCellState::Empty => None,
+    }));
     out.extend(state.source_index.values().map(|e| e.key.clone()));
     if let Some(entry) = &state.manifest.style_artifact {
         out.insert(entry.key.clone());
