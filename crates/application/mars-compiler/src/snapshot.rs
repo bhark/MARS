@@ -44,7 +44,6 @@ pub async fn run_task(
 
         let task = task.clone();
         let cell = cell.clone();
-        let rows = rows.clone();
         let (src_entry, src_bytes, layer_entry, layer_bytes) = tokio::task::spawn_blocking(move || {
             let (src_entry, src_bytes) = build_source_artifact(&task, &cell, &rows)?;
             let (layer_entry, layer_bytes) = build_layer_artifact(&task, &cell, &rows, src_entry.hash, bbox)?;
