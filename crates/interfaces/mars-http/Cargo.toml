@@ -12,6 +12,7 @@ description = "axum HTTP edge: /wms /wmts /healthz /readyz /metrics /debug/*."
 workspace = true
 
 [dependencies]
+mars-grid          = { workspace = true }
 mars-runtime       = { workspace = true }
 mars-wms           = { workspace = true }
 mars-types         = { workspace = true }

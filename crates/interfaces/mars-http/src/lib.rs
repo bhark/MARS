@@ -25,6 +25,7 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
+use mars_grid::GridError;
 use mars_observability::Metrics;
 use mars_runtime::{RenderPlan, Runtime, RuntimeError};
 use mars_wms::{WmsConfig, WmsError, WmsRequest};
@@ -122,7 +123,11 @@ async fn observe_request(State(state): State<AppState>, req: Request, next: Next
     let interface = interface_label(req.uri().path());
     let start = Instant::now();
     let resp = next.run(req).await;
-    let status = resp.status().as_u16();
+    let status = resp
+        .extensions()
+        .get::<OriginalStatus>()
+        .map(|s| s.0.as_u16())
+        .unwrap_or_else(|| resp.status().as_u16());
     state.metrics.observe_request(interface, status, start.elapsed());
     resp
 }
@@ -218,21 +223,50 @@ fn request_id(state: &AppState, headers: &HeaderMap) -> String {
     format!("req-{n}")
 }
 
+#[derive(Clone, Copy, Debug)]
+struct OriginalStatus(StatusCode);
+
+struct WmsException {
+    semantic_status: StatusCode,
+    code: Option<&'static str>,
+    message: String,
+}
+
+fn wms_exception_response(exc: WmsException) -> Response {
+    let xml = mars_wms::service_exception_report(exc.code, &exc.message);
+    let mut resp = (StatusCode::OK, xml).into_response();
+    resp.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/xml; charset=utf-8"),
+    );
+    if exc.semantic_status != StatusCode::OK {
+        resp.extensions_mut().insert(OriginalStatus(exc.semantic_status));
+    }
+    resp
+}
+
 fn wms_error_response(e: WmsError) -> Response {
-    let status = match e {
-        WmsError::MissingParam(_) | WmsError::InvalidParam { .. } => StatusCode::BAD_REQUEST,
-        WmsError::NotImplemented { .. } => StatusCode::NOT_IMPLEMENTED,
+    let exc = match e {
+        WmsError::MissingParam(name) => WmsException {
+            semantic_status: StatusCode::BAD_REQUEST,
+            code: Some("MissingParameterValue"),
+            message: format!("Missing required parameter: {name}"),
+        },
+        WmsError::InvalidParam { name, reason } => WmsException {
+            semantic_status: StatusCode::BAD_REQUEST,
+            code: Some("InvalidParameterValue"),
+            message: format!("Invalid parameter '{name}': {reason}"),
+        },
+        WmsError::NotImplemented { what } => WmsException {
+            semantic_status: StatusCode::NOT_IMPLEMENTED,
+            code: Some("OperationNotSupported"),
+            message: format!("Operation not supported: {what}"),
+        },
     };
-    (status, e.to_string()).into_response()
+    wms_exception_response(exc)
 }
 
 fn runtime_error_response(e: RuntimeError, plan: &RenderPlan) -> Response {
-    let status = match &e {
-        RuntimeError::NotReady => StatusCode::SERVICE_UNAVAILABLE,
-        RuntimeError::CrsNotCanonical { .. } => StatusCode::NOT_IMPLEMENTED,
-        RuntimeError::ManifestEntryMissing { .. } | RuntimeError::SourceMissing { .. } => StatusCode::NOT_FOUND,
-        _ => StatusCode::INTERNAL_SERVER_ERROR,
-    };
     let cell = match &e {
         RuntimeError::ManifestEntryMissing { cell, .. } => Some(*cell),
         RuntimeError::SourceMissing { cell, .. } => Some(*cell),
@@ -246,12 +280,61 @@ fn runtime_error_response(e: RuntimeError, plan: &RenderPlan) -> Response {
             tracing::error!(error = %e, layers = ?plan.layers, bbox = ?plan.bbox, cell = ?cell, "render failed")
         }
     }
-    let body = if status == StatusCode::INTERNAL_SERVER_ERROR {
-        "internal server error".to_owned()
-    } else {
-        e.to_string()
-    };
-    (status, body).into_response()
+    wms_exception_response(map_runtime_error(&e))
+}
+
+fn map_runtime_error(e: &RuntimeError) -> WmsException {
+    match e {
+        RuntimeError::NotReady => WmsException {
+            semantic_status: StatusCode::SERVICE_UNAVAILABLE,
+            code: None,
+            message: "Service temporarily unavailable".into(),
+        },
+        RuntimeError::CrsNotCanonical { requested } => WmsException {
+            semantic_status: StatusCode::BAD_REQUEST,
+            code: Some("InvalidCRS"),
+            message: format!("CRS '{requested}' is not supported"),
+        },
+        RuntimeError::NotImplemented { what } => WmsException {
+            semantic_status: StatusCode::NOT_IMPLEMENTED,
+            code: Some("OperationNotSupported"),
+            message: format!("Operation not supported: {what}"),
+        },
+        RuntimeError::LayerNotDefined { layer } => WmsException {
+            semantic_status: StatusCode::BAD_REQUEST,
+            code: Some("LayerNotDefined"),
+            message: format!("Layer '{layer}' is not defined"),
+        },
+        RuntimeError::Grid(grid_err) => match grid_err {
+            GridError::TooManyCells { requested, limit } => WmsException {
+                semantic_status: StatusCode::BAD_REQUEST,
+                code: Some("InvalidParameterValue"),
+                message: format!("Request covers too many cells ({requested} > {limit})"),
+            },
+            GridError::NoBandForScale(denom) => WmsException {
+                semantic_status: StatusCode::BAD_REQUEST,
+                code: Some("InvalidParameterValue"),
+                message: format!("Scale {denom} is not supported"),
+            },
+            _ => WmsException {
+                semantic_status: StatusCode::INTERNAL_SERVER_ERROR,
+                code: None,
+                message: "Internal server error".into(),
+            },
+        },
+        RuntimeError::ManifestEntryMissing { .. }
+        | RuntimeError::SourceMissing { .. }
+        | RuntimeError::BadKey { .. }
+        | RuntimeError::Config(_)
+        | RuntimeError::Store(_)
+        | RuntimeError::Render(_)
+        | RuntimeError::Encode(_)
+        | RuntimeError::Artifact(_) => WmsException {
+            semantic_status: StatusCode::INTERNAL_SERVER_ERROR,
+            code: None,
+            message: "Internal server error".into(),
+        },
+    }
 }
 
 #[cfg(test)]
@@ -419,6 +502,23 @@ mod tests {
         assert!(body_str(resp).await.contains("v2"));
     }
 
+    fn ready_state_with_band() -> RuntimeState {
+        RuntimeState {
+            canonical_crs: CrsCode::new("EPSG:25832"),
+            bands: vec![mars_grid::BandConfig {
+                name: mars_types::ScaleBand::new("hi"),
+                max_denom: u32::MAX,
+                origin: (0.0, 0.0),
+                cell_size: 1024.0,
+            }],
+            layer_order: vec![mars_types::LayerId::new("a")],
+            stylesheet: Default::default(),
+            manifest: Manifest::new(1, "test", Vec::new(), Vec::new(), None, Vec::new()),
+            layer_index: Default::default(),
+            source_index: Default::default(),
+        }
+    }
+
     #[tokio::test]
     async fn wms_invalid_400() {
         let app = empty_router();
@@ -431,7 +531,12 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(resp.status(), StatusCode::OK);
+        let ct = resp.headers().get(header::CONTENT_TYPE).cloned().unwrap();
+        assert!(ct.to_str().unwrap().starts_with("text/xml"));
+        let body = body_str(resp).await;
+        assert!(body.contains("ServiceExceptionReport"));
+        assert!(body.contains(r#"code="MissingParameterValue""#));
     }
 
     #[tokio::test]
@@ -446,7 +551,95 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(resp.status(), StatusCode::OK);
+        let ct = resp.headers().get(header::CONTENT_TYPE).cloned().unwrap();
+        assert!(ct.to_str().unwrap().starts_with("text/xml"));
+        let body = body_str(resp).await;
+        assert!(body.contains("ServiceExceptionReport"));
+        assert!(!body.contains("code="));
+    }
+
+    #[tokio::test]
+    async fn wms_unknown_layer_returns_layer_not_defined() {
+        let metrics = Metrics::new().unwrap();
+        let runtime = empty_runtime(&metrics);
+        let mut state = ready_state_with_band();
+        state.layer_order = vec![mars_types::LayerId::new("b")];
+        runtime.swap_state(Arc::new(state));
+        let cfg = WmsConfig {
+            allowlist_crs: vec![CrsCode::new("EPSG:25832")],
+            formats: vec![ImageFormat::Png],
+            max_image_dimension: 8192,
+            max_layers: 100,
+            max_bbox_coord: 1e9,
+        };
+        let app = router(runtime, capabilities_handle("<caps/>".into()), cfg, metrics);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/wms?service=WMS&version=1.3.0&request=GetMap&layers=a&styles=&crs=EPSG:25832&bbox=0,0,10,10&width=16&height=16&format=image/png")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = body_str(resp).await;
+        assert!(body.contains(r#"code="LayerNotDefined""#));
+        assert!(body.contains("Layer &apos;a&apos; is not defined"));
+    }
+
+    #[tokio::test]
+    async fn wms_manifest_entry_missing_sanitized() {
+        let metrics = Metrics::new().unwrap();
+        let runtime = empty_runtime(&metrics);
+        runtime.swap_state(Arc::new(ready_state_with_band()));
+        let cfg = WmsConfig {
+            allowlist_crs: vec![CrsCode::new("EPSG:25832")],
+            formats: vec![ImageFormat::Png],
+            max_image_dimension: 8192,
+            max_layers: 100,
+            max_bbox_coord: 1e9,
+        };
+        let app = router(runtime, capabilities_handle("<caps/>".into()), cfg, metrics);
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/wms?service=WMS&version=1.3.0&request=GetMap&layers=a&styles=&crs=EPSG:25832&bbox=0,0,10,10&width=16&height=16&format=image/png")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = body_str(resp).await;
+        assert!(body.contains("ServiceExceptionReport"));
+        assert!(body.contains("Internal server error"));
+        assert!(!body.contains("manifest entry missing"));
+        assert!(!body.contains("cell ("));
+    }
+
+    #[tokio::test]
+    async fn wms_bad_request_records_semantic_400_in_metrics() {
+        let app = empty_router();
+        let _ = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/wms?request=GetMap")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let resp = app
+            .oneshot(Request::builder().uri("/metrics").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = body_str(resp).await;
+        assert!(body.contains(r#"interface="wms""#));
+        assert!(body.contains(r#"status="400""#));
     }
 
     #[tokio::test]
