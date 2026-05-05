@@ -9,10 +9,11 @@
 //! accounting starts consistent with what is already on disk; lru order is
 //! seeded by mtime (oldest first) so eviction is deterministic across restart.
 
-use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::SystemTime;
+
+use linked_hash_map::LinkedHashMap;
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -23,33 +24,30 @@ use mars_types::{ArtifactKey, ContentHash};
 use crate::key::validate_artifact_key;
 use crate::store::atomic_write;
 
-/// scan-time aggregate: (size-by-key, lru-ordered-by-mtime, total bytes).
-type ScanResult = (HashMap<ArtifactKey, u64>, VecDeque<ArtifactKey>, u64);
+/// scan-time aggregate: (lru-ordered-by-mtime, total bytes).
+type ScanResult = (LinkedHashMap<ArtifactKey, u64>, u64);
 
 #[derive(Debug)]
 struct CacheState {
     total_size: u64,
     max_size: u64,
-    // lazy lru: every access pushes to the back. stale duplicates are skipped
-    // during eviction.
-    lru: VecDeque<ArtifactKey>,
-    sizes: HashMap<ArtifactKey, u64>,
+    lru: LinkedHashMap<ArtifactKey, u64>,
 }
 
 impl CacheState {
     fn touch(&mut self, key: ArtifactKey) {
-        self.lru.push_back(key);
+        // refresh position to back if already present
+        let _ = self.lru.get_mut(&key);
     }
 
     /// inserts (or overwrites) `key` with `size`. caller is responsible for
     /// deleting evicted files on disk via the returned key list.
     fn insert(&mut self, key: ArtifactKey, size: u64) -> Vec<ArtifactKey> {
-        let prev = self.sizes.insert(key.clone(), size);
+        let prev = self.lru.insert(key, size);
         self.total_size = self
             .total_size
             .saturating_sub(prev.unwrap_or(0))
             .saturating_add(size);
-        self.lru.push_back(key);
         self.evict()
     }
 
@@ -59,12 +57,8 @@ impl CacheState {
             return evicted;
         }
         while self.total_size > self.max_size {
-            let Some(candidate) = self.lru.pop_front() else {
+            let Some((candidate, size)) = self.lru.pop_front() else {
                 break;
-            };
-            let Some(size) = self.sizes.remove(&candidate) else {
-                // stale entry (key was accessed again later)
-                continue;
             };
             self.total_size = self.total_size.saturating_sub(size);
             evicted.push(candidate);
@@ -98,12 +92,11 @@ impl FsCache {
             .canonicalize()
             .map_err(|e| StoreError::Backend(format!("canonicalise cache root: {e}")))?;
 
-        let (sizes, lru, total_size) = scan_existing(&root)?;
+        let (lru, total_size) = scan_existing(&root)?;
         let state = CacheState {
             total_size,
             max_size: max_size_bytes,
             lru,
-            sizes,
         };
 
         let cache = Self {
@@ -155,15 +148,13 @@ fn scan_existing(root: &Path) -> Result<ScanResult, StoreError> {
     walk(root, root, &mut entries)?;
     entries.sort_by_key(|(_, _, mtime)| *mtime);
 
-    let mut sizes = HashMap::with_capacity(entries.len());
-    let mut lru = VecDeque::with_capacity(entries.len());
+    let mut lru = LinkedHashMap::new();
     let mut total: u64 = 0;
     for (key, size, _) in entries {
         total = total.saturating_add(size);
-        sizes.insert(key.clone(), size);
-        lru.push_back(key);
+        lru.insert(key, size);
     }
-    Ok((sizes, lru, total))
+    Ok((lru, total))
 }
 
 fn walk(dir: &Path, root: &Path, out: &mut Vec<(ArtifactKey, u64, SystemTime)>) -> Result<(), StoreError> {
