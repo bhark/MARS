@@ -51,6 +51,13 @@ pub fn pick_band(denom: u32, bands: &[BandConfig]) -> Result<&BandConfig, GridEr
 ///
 /// `max_cells` bounds the output to prevent unbounded allocation from
 /// pathological or malicious requests. the caller decides the limit.
+///
+/// canonical cell-coverage helper: both the snapshot path (planner enumerates
+/// cells over a layer extent) and the change-feed path (per-row geometry bbox
+/// -> affected cells) call this. cells are produced in row-major order
+/// (`y` outer, `x` inner) for deterministic output. a degenerate (zero-area)
+/// bbox returns the single cell that contains the point; negative cell
+/// coordinates are supported.
 pub fn cells_in_bbox(bbox: Bbox, band: &BandConfig, max_cells: usize) -> Result<Vec<Cell>, GridError> {
     if band.cell_size <= 0.0 {
         return Err(GridError::NonPositiveCellSize(band.cell_size));
@@ -150,6 +157,51 @@ mod tests {
         let b = Bbox::new(0.0, 0.0, 4096.0, 4096.0);
         let cells = cells_in_bbox(b, &bs[1], 1_000_000).unwrap();
         assert_eq!(cells.len(), 4); // (0,0)(1,0)(0,1)(1,1)
+    }
+
+    #[test]
+    fn cells_in_bbox_crossing_one_boundary() {
+        let bs = bands();
+        // hi band cell_size=4096; bbox straddles the x=4096 line in cell row 0
+        let b = Bbox::new(4000.0, 100.0, 4200.0, 200.0);
+        let cells = cells_in_bbox(b, &bs[1], 1_000).unwrap();
+        assert_eq!(cells.len(), 2);
+        assert_eq!((cells[0].x, cells[0].y), (0, 0));
+        assert_eq!((cells[1].x, cells[1].y), (1, 0));
+    }
+
+    #[test]
+    fn cells_in_bbox_spanning_many_cells() {
+        let bs = bands();
+        // 3 wide x 4 tall = 12 cells
+        let b = Bbox::new(100.0, 100.0, 4096.0 * 3.0 - 1.0, 4096.0 * 4.0 - 1.0);
+        let cells = cells_in_bbox(b, &bs[1], 1_000).unwrap();
+        assert_eq!(cells.len(), 12);
+        // row-major: (0,0),(1,0),(2,0),(0,1)...
+        assert_eq!((cells[0].x, cells[0].y), (0, 0));
+        assert_eq!((cells[3].x, cells[3].y), (0, 1));
+        assert_eq!((cells[11].x, cells[11].y), (2, 3));
+    }
+
+    #[test]
+    fn cells_in_bbox_zero_area_returns_containing_cell() {
+        let bs = bands();
+        // point bbox: a degenerate rectangle covers the cell containing it
+        let b = Bbox::new(5000.0, 5000.0, 5000.0, 5000.0);
+        let cells = cells_in_bbox(b, &bs[1], 10).unwrap();
+        assert_eq!(cells.len(), 1);
+        assert_eq!((cells[0].x, cells[0].y), (1, 1));
+    }
+
+    #[test]
+    fn cells_in_bbox_negative_coords() {
+        let bs = bands();
+        // origin is (0,0); a bbox in the third quadrant yields negative cell coords
+        let b = Bbox::new(-5000.0, -5000.0, -100.0, -100.0);
+        let cells = cells_in_bbox(b, &bs[1], 10).unwrap();
+        assert_eq!(cells.len(), 4);
+        assert_eq!((cells[0].x, cells[0].y), (-2, -2));
+        assert_eq!((cells[3].x, cells[3].y), (-1, -1));
     }
 
     #[test]
