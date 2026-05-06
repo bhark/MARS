@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::io::Cursor;
 
 use mars_config::Config;
-use mars_types::{Bbox, LayerId, Manifest, ParsedArtifactKey};
+use mars_types::{Bbox, ImageFormat, LayerId, Manifest, ParsedArtifactKey};
 use quick_xml::Writer;
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 
@@ -56,9 +56,12 @@ pub fn capabilities_xml(cfg: &Config, manifest: &Manifest) -> Result<String, Wms
     // request
     w.write_event(Event::Start(BytesStart::new("Request")))
         .map_err(xml_err)?;
+    let advertised_formats = configured_formats(cfg);
     for op in ["GetCapabilities", "GetMap"] {
         w.write_event(Event::Start(BytesStart::new(op))).map_err(xml_err)?;
-        text_element(&mut w, "Format", "image/png")?;
+        for fmt in &advertised_formats {
+            text_element(&mut w, "Format", fmt.mime())?;
+        }
         w.write_event(Event::End(BytesEnd::new(op))).map_err(xml_err)?;
     }
     w.write_event(Event::End(BytesEnd::new("Request"))).map_err(xml_err)?;
@@ -73,7 +76,7 @@ pub fn capabilities_xml(cfg: &Config, manifest: &Manifest) -> Result<String, Wms
     }
 
     if let Some(bb) = root_bbox {
-        write_bbox(&mut w, cfg.source.native_crs.as_str(), bb)?;
+        write_bboxes_per_crs(&mut w, cfg, bb)?;
     }
 
     // child layers
@@ -86,7 +89,7 @@ pub fn capabilities_xml(cfg: &Config, manifest: &Manifest) -> Result<String, Wms
         }
         let bbox = layer_bboxes.get(&layer.name).copied().or(layer.bbox);
         if let Some(bb) = bbox {
-            write_bbox(&mut w, cfg.source.native_crs.as_str(), bb)?;
+            write_bboxes_per_crs(&mut w, cfg, bb)?;
         }
         if let Some(scale) = &layer.scale {
             if let Some(min) = scale.min {
@@ -149,6 +152,47 @@ fn union_bbox(a: Bbox, b: Bbox) -> Bbox {
         a.max_x.max(b.max_x),
         a.max_y.max(b.max_y),
     )
+}
+
+/// Resolve the format set the runtime advertises. Falls back to PNG when
+/// `interfaces.wms.formats` is omitted, matching `WmsConfig::from_config`.
+fn configured_formats(cfg: &Config) -> Vec<ImageFormat> {
+    let configured: Vec<ImageFormat> = cfg
+        .interfaces
+        .wms
+        .as_ref()
+        .map(|w| {
+            w.formats
+                .iter()
+                .filter_map(|f| match f.as_str() {
+                    "image/png" => Some(ImageFormat::Png),
+                    "image/jpeg" | "image/jpg" => Some(ImageFormat::Jpeg),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if configured.is_empty() {
+        vec![ImageFormat::Png]
+    } else {
+        configured
+    }
+}
+
+/// Emit one `<BoundingBox>` per advertised CRS at the same canonical
+/// coordinates. WMS 1.3.0 lets clients pick from any advertised CRS; QGIS in
+/// particular wants at minimum a bbox in the canonical CRS plus one per
+/// reprojection allowlist entry.
+fn write_bboxes_per_crs<W: std::io::Write>(w: &mut Writer<W>, cfg: &Config, bbox: Bbox) -> Result<(), WmsError> {
+    let canonical = cfg.source.native_crs.as_str();
+    write_bbox(w, canonical, bbox)?;
+    for crs in &cfg.reprojection.allowlist {
+        if crs.as_str() == canonical {
+            continue;
+        }
+        write_bbox(w, crs.as_str(), bbox)?;
+    }
+    Ok(())
 }
 
 fn write_bbox<W: std::io::Write>(w: &mut Writer<W>, crs: &str, bbox: Bbox) -> Result<(), WmsError> {
@@ -295,6 +339,58 @@ layers:
             !xml.contains("ContactInformation"),
             "expected no contact block when email empty"
         );
+    }
+
+    #[test]
+    fn advertises_configured_formats() {
+        let yaml = r#"
+service: { name: t, title: T, abstract: A, contact_email: "" }
+source: { type: postgis, dsn: "postgres://x", native_crs: EPSG:25832 }
+artifacts:
+  store: { type: fs, path: /tmp }
+  cache: { path: /tmp/c, max_size: 1GiB }
+scales:
+  bands: [{ name: hi, max_denom: 25000 }]
+cells:
+  grid: regular
+  origin: [0, 0]
+  size_per_band: { hi: 1024m }
+interfaces:
+  wms:
+    enabled: true
+    formats: ["image/png", "image/jpeg"]
+reprojection:
+  allowlist: [EPSG:25832]
+layers:
+  - { name: a, title: A, type: polygon, sources: [{ from: t, geometry_column: g }] }
+"#;
+        let cfg: Config = serde_yml::from_str(yaml).unwrap();
+        let m = Manifest::new(1, cfg.service.name.clone(), vec![], vec![], None, vec![]);
+        let xml = capabilities_xml(&cfg, &m).unwrap();
+        assert!(xml.contains("<Format>image/png</Format>"));
+        assert!(xml.contains("<Format>image/jpeg</Format>"));
+    }
+
+    #[test]
+    fn emits_bbox_per_advertised_crs() {
+        let cfg = minimal_cfg();
+        let layer = LayerId::new("a");
+        let cell = Cell {
+            band: ScaleBand::new("hi"),
+            x: 0,
+            y: 0,
+        };
+        let key = ArtifactKey::try_build_layer(&layer, &cell, ContentHash::zero()).unwrap();
+        let entry = ArtifactEntry {
+            key,
+            hash: ContentHash::zero(),
+            size_bytes: 0,
+        };
+        let m = Manifest::new(1, cfg.service.name.clone(), vec![], vec![entry], None, vec![]);
+        let xml = capabilities_xml(&cfg, &m).unwrap();
+        // canonical + the second allowlist crs (EPSG:4326), no duplicates.
+        assert_eq!(xml.matches(r#"CRS="EPSG:25832""#).count(), 2, "{xml}");
+        assert_eq!(xml.matches(r#"CRS="EPSG:4326""#).count(), 2, "{xml}");
     }
 
     #[test]
