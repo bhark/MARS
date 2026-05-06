@@ -19,9 +19,7 @@ workspace = true
 mars-config         = { workspace = true }
 mars-compiler       = { workspace = true }
 mars-observability  = { workspace = true }
-mars-source-postgres = { workspace = true }
-mars-store          = { workspace = true }
-mars-store-fs       = { workspace = true }
+mars-bin-shared     = { workspace = true }
 
 clap       = { workspace = true }
 tokio      = { workspace = true }

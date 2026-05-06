@@ -30,7 +30,6 @@ mars-compiler       = { workspace = true }
 mars-http           = { workspace = true }
 mars-wms            = { workspace = true }
 mars-store-fs       = { workspace = true }
-mars-store-s3       = { workspace = true }
 mars-source-postgres = { workspace = true }
 mars-render         = { workspace = true }
 mars-artifact       = { workspace = true }
@@ -38,6 +37,7 @@ mars-store          = { workspace = true }
 mars-style          = { workspace = true }
 mars-types          = { workspace = true }
 mars-grid           = { workspace = true }
+mars-bin-shared     = { workspace = true }
 
 clap         = { workspace = true }
 tokio        = { workspace = true }

@@ -1887,6 +1887,7 @@ dependencies = [
  "clap",
  "futures-util",
  "mars-artifact",
+ "mars-bin-shared",
  "mars-compiler",
  "mars-config",
  "mars-grid",
@@ -1897,7 +1898,6 @@ dependencies = [
  "mars-source-postgres",
  "mars-store",
  "mars-store-fs",
- "mars-store-s3",
  "mars-style",
  "mars-types",
  "mars-wms",
@@ -1929,17 +1929,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "mars-bin-shared"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "mars-config",
+ "mars-source-postgres",
+ "mars-store",
+ "mars-store-fs",
+ "mars-store-s3",
+ "tokio",
+]
+
+[[package]]
 name = "mars-compile"
 version = "0.0.1"
 dependencies = [
  "anyhow",
  "clap",
+ "mars-bin-shared",
  "mars-compiler",
  "mars-config",
  "mars-observability",
- "mars-source-postgres",
- "mars-store",
- "mars-store-fs",
  "tokio",
  "tokio-util",
 ]

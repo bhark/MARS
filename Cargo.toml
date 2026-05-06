@@ -24,6 +24,7 @@ members = [
     "bin/mars",
     "bin/mars-import-mapfile",
     "bin/mars-compile",
+    "bin/mars-bin-shared",
 ]
 
 # fuzz crate excluded from workspace builds: it requires nightly + libfuzzer
@@ -66,6 +67,8 @@ mars-http           = { path = "crates/interfaces/mars-http" }
 mars-config         = { path = "crates/support/mars-config" }
 mars-observability  = { path = "crates/support/mars-observability" }
 mars-proj           = { path = "crates/support/mars-proj" }
+# bin-only shared composition wiring (see bin/mars-bin-shared)
+mars-bin-shared     = { path = "bin/mars-bin-shared" }
 
 # third-party (single source of truth)
 async-trait         = "0.1"

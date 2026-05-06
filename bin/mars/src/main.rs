@@ -15,14 +15,13 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand, ValueEnum};
 use futures_util::StreamExt;
+use mars_bin_shared::{build_pg_source, build_store_and_publisher};
 use mars_compiler::{Compiler, Deps as CompilerDeps};
 use mars_config::{ClassStyle, Config, config_dir};
 use mars_render::{TinySkiaEncoder, TinySkiaRenderer};
 use mars_runtime::{Deps as RuntimeDeps, Runtime, RuntimeState, run_manifest_reload_loop};
-use mars_source_postgres::{PgConfig, PgSource};
-use mars_store::{LocalCache, ManifestStore, ObjectStore};
-use mars_store_fs::{FsCache, FsPublisher, FsStore};
-use mars_store_s3::{S3Config, S3Publisher, S3Store};
+use mars_store::{LocalCache, ManifestStore};
+use mars_store_fs::FsCache;
 use mars_style::Stylesheet;
 use mars_types::Manifest;
 use tokio_util::sync::CancellationToken;
@@ -309,7 +308,7 @@ async fn run_compiler_mode(config_path: &Path, shutdown: CancellationToken) -> R
 async fn run_compiler(cfg: Config, shutdown: CancellationToken) -> Result<()> {
     composition::validate_change_feed_config(&cfg)?;
     let topology = composition::build_replication_topology(&cfg)?;
-    let source = build_source_with_topology(&cfg, topology).await?;
+    let source = build_pg_source(&cfg, Some(topology)).await?;
     let (store, publisher) = build_store_and_publisher(&cfg)?;
     let metrics = mars_observability::Metrics::new().context("init metrics")?;
 
@@ -394,79 +393,6 @@ fn load_and_validate(path: &Path) -> Result<Config> {
     let cfg = mars_config::load(path).with_context(|| format!("load {}", path.display()))?;
     mars_config::validate(&cfg, &config_dir(path)).context("validate config")?;
     Ok(cfg)
-}
-
-async fn build_source_with_topology(
-    cfg: &Config,
-    topology: mars_source_postgres::ReplicationTopology,
-) -> Result<Arc<PgSource>> {
-    if cfg.source.kind != "postgis" {
-        return Err(anyhow!(
-            "source.type='{}' not supported in Phase 0; only 'postgis'",
-            cfg.source.kind
-        ));
-    }
-    let feed = cfg.source.change_feed.as_ref();
-    let pool = &cfg.source.pool;
-    let pg_cfg = PgConfig {
-        dsn: cfg.source.dsn.clone(),
-        publication: feed.and_then(|f| f.publication.clone()).unwrap_or_default(),
-        slot: feed.and_then(|f| f.slot.clone()).unwrap_or_default(),
-        max_pool_size: pool.max_size,
-        recycle_timeout: pool.recycle_timeout_secs.map(std::time::Duration::from_secs),
-        statement_timeout: pool.statement_timeout_ms.map(std::time::Duration::from_millis),
-    };
-    let src = PgSource::connect(pg_cfg).await.context("connect postgres")?;
-    Ok(Arc::new(src.with_topology(topology)))
-}
-
-fn build_store_and_publisher(cfg: &Config) -> Result<(Arc<dyn ObjectStore>, Arc<dyn ManifestStore>)> {
-    match cfg.artifacts.store.kind.as_str() {
-        "fs" => {
-            let p = cfg
-                .artifacts
-                .store
-                .path
-                .as_deref()
-                .ok_or_else(|| anyhow!("artifacts.store.path required for type=fs"))?;
-            let store: Arc<dyn ObjectStore> = Arc::new(FsStore::new(p).context("open fs store")?);
-            let publisher: Arc<dyn ManifestStore> = Arc::new(FsPublisher::new(p).context("open fs manifest store")?);
-            Ok((store, publisher))
-        }
-        "s3" => {
-            let bucket = cfg
-                .artifacts
-                .store
-                .bucket
-                .clone()
-                .ok_or_else(|| anyhow!("artifacts.store.bucket required for type=s3"))?;
-            let region = std::env::var("AWS_REGION")
-                .or_else(|_| std::env::var("AWS_DEFAULT_REGION"))
-                .map_err(|_| anyhow!("AWS_REGION env required for type=s3"))?;
-            let s3 = S3Config {
-                endpoint: cfg.artifacts.store.endpoint.clone(),
-                region,
-                bucket,
-                prefix: cfg.artifacts.store.prefix.clone().unwrap_or_default(),
-                access_key_id: None,
-                secret_access_key: None,
-                allow_http: cfg
-                    .artifacts
-                    .store
-                    .endpoint
-                    .as_deref()
-                    .is_some_and(|e| e.starts_with("http://")),
-                allow_non_atomic_publish: false,
-            };
-            let store_inner = S3Store::from_config(&s3).context("open s3 store")?;
-            let publisher: Arc<dyn ManifestStore> = Arc::new(
-                S3Publisher::from_store(&store_inner).with_allow_non_atomic_publish(s3.allow_non_atomic_publish),
-            );
-            let store: Arc<dyn ObjectStore> = Arc::new(store_inner);
-            Ok((store, publisher))
-        }
-        other => Err(anyhow!("artifacts.store.type='{other}' unsupported; use 'fs' or 's3'")),
-    }
 }
 
 fn build_cache(cfg: &Config) -> Result<Arc<dyn LocalCache>> {

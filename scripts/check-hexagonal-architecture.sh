@@ -39,9 +39,10 @@ is_app()      { [[ "$1" == "mars-compiler" || "$1" == "mars-runtime" ]]; }
 is_interface(){ [[ "$1" == "mars-wms" || "$1" == "mars-wmts" || "$1" == "mars-http" ]]; }
 is_support()  { [[ "$1" == "mars-config" || "$1" == "mars-observability" || "$1" == "mars-proj" ]]; }
 
+is_bin() { [[ "$1" == "mars" || "$1" == "mars-import-mapfile" || "$1" == "mars-compile" || "$1" == "mars-bin-shared" ]]; }
+
 is_workspace_crate() {
-    is_domain "$1" || is_port "$1" || is_adapter "$1" || is_app "$1" || is_interface "$1" || is_support "$1" ||
-    [[ "$1" == "mars" || "$1" == "mars-import-mapfile" || "$1" == "mars-compile" ]]
+    is_domain "$1" || is_port "$1" || is_adapter "$1" || is_app "$1" || is_interface "$1" || is_support "$1" || is_bin "$1"
 }
 
 check_dep_direction() {

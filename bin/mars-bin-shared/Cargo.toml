@@ -1,0 +1,25 @@
+[package]
+name        = "mars-bin-shared"
+version     = "0.0.1"
+edition.workspace    = true
+license.workspace    = true
+repository.workspace = true
+authors.workspace    = true
+publish.workspace    = true
+description = "Shared composition wiring for the mars / mars-compile bins. Not a library for use outside bin/."
+
+[lib]
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+mars-config         = { workspace = true }
+mars-source-postgres = { workspace = true }
+mars-store          = { workspace = true }
+mars-store-fs       = { workspace = true }
+mars-store-s3       = { workspace = true }
+
+tokio   = { workspace = true }
+anyhow  = { workspace = true }

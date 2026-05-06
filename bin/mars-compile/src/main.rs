@@ -3,15 +3,12 @@
 //! offline rebuilds. SPEC §18.2.
 
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
 use clap::Parser;
+use mars_bin_shared::{build_pg_source, build_store_and_publisher};
 use mars_compiler::{Compiler, Deps};
 use mars_config::{Config, config_dir};
-use mars_source_postgres::{PgConfig, PgSource};
-use mars_store::{ManifestStore, ObjectStore};
-use mars_store_fs::{FsPublisher, FsStore};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Parser)]
@@ -44,9 +41,9 @@ fn main() -> Result<()> {
 }
 
 async fn run_snapshot(cfg: Config) -> Result<()> {
-    let source = build_source(&cfg).await?;
-    let store = build_store(&cfg)?;
-    let manifest = build_publisher(&cfg)?;
+    // snapshot compile: no replication topology, no leader contention.
+    let source = build_pg_source(&cfg, None).await?;
+    let (store, manifest) = build_store_and_publisher(&cfg)?;
     let metrics = mars_observability::Metrics::new().context("init metrics")?;
 
     let compiler = Compiler::new(
@@ -68,52 +65,4 @@ async fn run_snapshot(cfg: Config) -> Result<()> {
         }
         Err(e) => Err(anyhow!(e)),
     }
-}
-
-async fn build_source(cfg: &Config) -> Result<Arc<PgSource>> {
-    if cfg.source.kind != "postgis" {
-        return Err(anyhow!(
-            "source.type='{}' is not supported in Phase 0; only 'postgis'",
-            cfg.source.kind
-        ));
-    }
-    let feed = cfg.source.change_feed.as_ref();
-    let pool = &cfg.source.pool;
-    let pg_cfg = PgConfig {
-        dsn: cfg.source.dsn.clone(),
-        publication: feed.and_then(|f| f.publication.clone()).unwrap_or_default(),
-        slot: feed.and_then(|f| f.slot.clone()).unwrap_or_default(),
-        max_pool_size: pool.max_size,
-        recycle_timeout: pool.recycle_timeout_secs.map(std::time::Duration::from_secs),
-        statement_timeout: pool.statement_timeout_ms.map(std::time::Duration::from_millis),
-    };
-    let src = PgSource::connect(pg_cfg).await.context("connect postgres")?;
-    Ok(Arc::new(src))
-}
-
-fn build_store(cfg: &Config) -> Result<Arc<dyn ObjectStore>> {
-    match cfg.artifacts.store.kind.as_str() {
-        "fs" => {
-            let path = cfg
-                .artifacts
-                .store
-                .path
-                .as_deref()
-                .ok_or_else(|| anyhow!("artifacts.store.path required for type=fs"))?;
-            Ok(Arc::new(FsStore::new(path).context("open fs store")?))
-        }
-        other => Err(anyhow!(
-            "artifacts.store.type='{other}' not supported in Phase 0; use type=fs"
-        )),
-    }
-}
-
-fn build_publisher(cfg: &Config) -> Result<Arc<dyn ManifestStore>> {
-    let path = cfg
-        .artifacts
-        .store
-        .path
-        .as_deref()
-        .ok_or_else(|| anyhow!("artifacts.store.path required for manifest store"))?;
-    Ok(Arc::new(FsPublisher::new(path).context("open fs manifest store")?))
 }
