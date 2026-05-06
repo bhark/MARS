@@ -54,13 +54,17 @@ impl std::fmt::Debug for PgConfig {
 
 fn redact_dsn(dsn: &str) -> String {
     if dsn.contains("://") {
-        // URI form: postgresql://user:password@host/...
-        if let Some(at) = dsn.find('@')
-            && let Some(scheme_end) = dsn.find("://")
+        let mut s = dsn.to_string();
+        // authority section: user:password@host
+        if let Some(at) = s.find('@')
+            && let Some(scheme_end) = s.find("://")
         {
-            return format!("{}user:***@{}", &dsn[..scheme_end + 3], &dsn[at + 1..]);
+            s.replace_range(scheme_end + 3..at, "user:***");
         }
-        return dsn.to_string();
+        // query-string or key-value params embedded in URI
+        s = redact_value(s, "password");
+        s = redact_value(s, "passwd");
+        return s;
     }
 
     // key-value form
@@ -76,6 +80,22 @@ fn redact_dsn(dsn: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// replace every `key=<value>` in `s` with `key=***` (case-insensitive key).
+fn redact_value(mut s: String, key: &str) -> String {
+    let prefix = format!("{key}=");
+    let mut idx = 0;
+    while let Some(pos) = s[idx..].to_lowercase().find(&prefix) {
+        let start = idx + pos + prefix.len();
+        let end = s[start..]
+            .find(&['&', ';', ' '][..])
+            .map(|p| start + p)
+            .unwrap_or(s.len());
+        s.replace_range(start..end, "***");
+        idx = start + 3;
+    }
+    s
 }
 
 /// Real PostgreSQL/PostGIS adapter. Holds a `deadpool` pool over `tokio-postgres`.
