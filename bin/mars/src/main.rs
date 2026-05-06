@@ -10,6 +10,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -112,17 +113,49 @@ async fn async_main(cli: Cli) -> Result<()> {
         (None, None) => Err(anyhow!(
             "mars: provide --mode <runtime|compiler|all-in-one> or one of: validate, inspect"
         )),
-        (Some(Mode::Runtime), None) => run_runtime(Arc::new(load_and_validate(&cli.config)?)).await,
-        (Some(Mode::Compiler), None) => run_compiler_mode(&cli.config).await,
-        (Some(Mode::AllInOne), None) => run_all_in_one(&cli.config).await,
+        (Some(Mode::Runtime), None) => {
+            let shutdown = install_signal_handler();
+            run_runtime(Arc::new(load_and_validate(&cli.config)?), shutdown).await
+        }
+        (Some(Mode::Compiler), None) => {
+            let shutdown = install_signal_handler();
+            run_compiler_mode(&cli.config, shutdown).await
+        }
+        (Some(Mode::AllInOne), None) => {
+            let shutdown = install_signal_handler();
+            run_all_in_one(&cli.config, shutdown).await
+        }
         (None, Some(Tool::Validate { path })) => tool_validate(&path).await,
         (None, Some(Tool::Inspect { path })) => tool_inspect(&path).await,
     }
 }
 
+/// Spawn a SIGINT/SIGTERM watcher. The first signal cancels the returned
+/// token (graceful shutdown). A second signal escalates to `exit(130)` so
+/// operators can break out of a stuck drain.
+fn install_signal_handler() -> CancellationToken {
+    let token = CancellationToken::new();
+    let watcher = token.clone();
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_err() {
+            tracing::warn!("ctrl_c handler unavailable; signal-based shutdown disabled");
+            return;
+        }
+        tracing::info!("signal received; initiating graceful shutdown");
+        watcher.cancel();
+        // second signal escalates: force exit so a stuck task can't trap the
+        // operator. exit code 130 = killed by SIGINT.
+        if tokio::signal::ctrl_c().await.is_ok() {
+            tracing::warn!("second signal received; forcing exit");
+            std::process::exit(130);
+        }
+    });
+    token
+}
+
 // ---------- runtime mode ----------
 
-async fn run_runtime(cfg: Arc<Config>) -> Result<()> {
+async fn run_runtime(cfg: Arc<Config>, shutdown: CancellationToken) -> Result<()> {
     let (store, publisher) = build_store_and_publisher(&cfg)?;
     let cache = build_cache(&cfg)?;
     let stylesheet = build_stylesheet(&cfg);
@@ -165,13 +198,14 @@ async fn run_runtime(cfg: Arc<Config>) -> Result<()> {
     }
 
     let manifests: Arc<dyn ManifestStore> = publisher.clone();
-    let _reload_task = tokio::spawn({
+    let reload_task = tokio::spawn({
         let runtime = runtime.clone();
         let cfg = cfg.clone();
         let stylesheet = stylesheet.clone();
         let manifests = manifests.clone();
+        let shutdown = shutdown.clone();
         async move {
-            if let Err(e) = run_manifest_reload_loop(runtime, manifests, cfg, stylesheet).await {
+            if let Err(e) = run_manifest_reload_loop(runtime, manifests, cfg, stylesheet, shutdown).await {
                 tracing::error!(error = %e, "manifest reload loop stopped");
             }
         }
@@ -184,22 +218,40 @@ async fn run_runtime(cfg: Arc<Config>) -> Result<()> {
     .map_err(|e| anyhow!("capabilities: {e}"))?;
     let caps_handle = mars_http::capabilities_handle(initial_caps);
 
-    let _caps_task = tokio::spawn(rebuild_capabilities_loop(
+    let caps_task = tokio::spawn(rebuild_capabilities_loop(
         manifests.clone(),
         cfg.clone(),
         caps_handle.clone(),
         metrics.clone(),
+        shutdown.clone(),
     ));
 
-    mars_http::serve(
+    let serve_result = mars_http::serve(
         mars_http::ServerConfig { listen },
         runtime,
         caps_handle,
         wms_cfg,
         metrics,
+        shutdown.clone(),
     )
+    .await;
+
+    // signal background loops to drain. capabilities/manifest watch streams
+    // close when the underlying store is dropped, but cancelling now lets us
+    // tear down promptly even when the watch is mid-poll.
+    shutdown.cancel();
+    let drain = Duration::from_secs(30);
+    if tokio::time::timeout(drain, async {
+        let _ = reload_task.await;
+        let _ = caps_task.await;
+    })
     .await
-    .map_err(Into::into)
+    .is_err()
+    {
+        tracing::warn!("background tasks did not drain within {}s", drain.as_secs());
+    }
+
+    serve_result.map_err(Into::into)
 }
 
 /// Subscribe to the manifest watch stream and atomically swap the cached
@@ -211,6 +263,7 @@ async fn rebuild_capabilities_loop(
     cfg: Arc<Config>,
     handle: mars_http::CapabilitiesHandle,
     metrics: mars_observability::Metrics,
+    shutdown: CancellationToken,
 ) {
     let mut stream = match manifests.watch().await {
         Ok(s) => s,
@@ -220,7 +273,15 @@ async fn rebuild_capabilities_loop(
             return;
         }
     };
-    while let Some(next) = stream.next().await {
+    loop {
+        let next = tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => return,
+            n = stream.next() => match n {
+                Some(n) => n,
+                None => return,
+            },
+        };
         let manifest = match next {
             Ok(m) => m,
             Err(e) => {
@@ -241,12 +302,12 @@ async fn rebuild_capabilities_loop(
 
 // ---------- compiler mode ----------
 
-async fn run_compiler_mode(config_path: &Path) -> Result<()> {
+async fn run_compiler_mode(config_path: &Path, shutdown: CancellationToken) -> Result<()> {
     let cfg = load_and_validate(config_path)?;
-    run_compiler(cfg).await
+    run_compiler(cfg, shutdown).await
 }
 
-async fn run_compiler(cfg: Config) -> Result<()> {
+async fn run_compiler(cfg: Config, shutdown: CancellationToken) -> Result<()> {
     composition::validate_change_feed_config(&cfg)?;
     let topology = composition::build_replication_topology(&cfg)?;
     let source = build_source_with_topology(&cfg, topology).await?;
@@ -264,7 +325,7 @@ async fn run_compiler(cfg: Config) -> Result<()> {
         },
         cfg,
     );
-    match compiler.run(CancellationToken::new()).await {
+    match compiler.run(shutdown).await {
         Ok(()) => Ok(()),
         Err(mars_compiler::CompilerError::NotLeader) => {
             tracing::info!("compiler: another instance is leader; exiting cleanly");
@@ -274,16 +335,16 @@ async fn run_compiler(cfg: Config) -> Result<()> {
     }
 }
 
-async fn run_all_in_one(config_path: &Path) -> Result<()> {
+async fn run_all_in_one(config_path: &Path, shutdown: CancellationToken) -> Result<()> {
     let cfg = load_and_validate(config_path)?;
-    // both halves run concurrently; an error in one cancels the other through
-    // try_join's drop-on-failure semantics. Sequential composition would block
-    // the runtime forever once the change feed is live.
     let runtime_cfg = Arc::new(cfg.clone());
-    let compiler_fut = run_compiler(cfg);
-    let runtime_fut = run_runtime(runtime_cfg);
-    tokio::try_join!(compiler_fut, runtime_fut)?;
-    Ok(())
+    let compiler_fut = run_compiler(cfg, shutdown.clone());
+    let runtime_fut = run_runtime(runtime_cfg, shutdown.clone());
+    // run both concurrently. on first failure or first clean exit, cancel the
+    // shared shutdown so the surviving half drains promptly.
+    let result = tokio::try_join!(compiler_fut, runtime_fut);
+    shutdown.cancel();
+    result.map(|_| ())
 }
 
 // ---------- tooling ----------

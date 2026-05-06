@@ -314,16 +314,39 @@ impl Runtime {
 }
 
 /// Consume a manifest watch stream and atomically hot-swap valid runtime states.
+/// Returns when the stream ends or `shutdown` is cancelled. On cancellation any
+/// in-flight warming task is aborted and drained with a 30 s timeout.
 pub async fn run_manifest_reload_loop(
     runtime: Arc<Runtime>,
     manifests: Arc<dyn ManifestStore>,
     config: Arc<mars_config::Config>,
     stylesheet: Stylesheet,
+    shutdown: tokio_util::sync::CancellationToken,
 ) -> Result<(), RuntimeError> {
     let mut manifests = manifests.watch().await?;
     let mut warming: Option<JoinHandle<()>> = None;
 
-    while let Some(next) = manifests.next().await {
+    loop {
+        let next = tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => {
+                if let Some(task) = warming.take() {
+                    task.abort();
+                    let _ = timeout(Duration::from_secs(30), task).await;
+                }
+                return Ok(());
+            }
+            n = manifests.next() => match n {
+                Some(n) => n,
+                None => {
+                    if let Some(task) = warming.take() {
+                        task.abort();
+                        let _ = timeout(Duration::from_secs(30), task).await;
+                    }
+                    return Ok(());
+                }
+            },
+        };
         let manifest = match next {
             Ok(manifest) => manifest,
             Err(e) => {
@@ -399,8 +422,6 @@ pub async fn run_manifest_reload_loop(
             warm_entries,
         ));
     }
-
-    Ok(())
 }
 
 /// classify a `StoreError` produced during manifest watch into a bounded

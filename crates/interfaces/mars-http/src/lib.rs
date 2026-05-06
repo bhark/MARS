@@ -29,6 +29,7 @@ use mars_grid::GridError;
 use mars_observability::Metrics;
 use mars_runtime::{RenderPlan, Runtime, RuntimeError};
 use mars_wms::{WmsConfig, WmsError, WmsRequest};
+use tokio_util::sync::CancellationToken;
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
 use tracing::Instrument;
@@ -111,13 +112,15 @@ pub fn router(runtime: Arc<Runtime>, capabilities: CapabilitiesHandle, wms_cfg: 
         ))
 }
 
-/// Run the HTTP server until ctrl_c.
+/// Run the HTTP server until `shutdown` is cancelled. The caller is
+/// responsible for installing a signal handler that triggers the token.
 pub async fn serve(
     cfg: ServerConfig,
     runtime: Arc<Runtime>,
     capabilities: CapabilitiesHandle,
     wms_cfg: WmsConfig,
     metrics: Metrics,
+    shutdown: CancellationToken,
 ) -> Result<(), HttpError> {
     let app = router(runtime, capabilities, wms_cfg, metrics);
     let listener = tokio::net::TcpListener::bind(cfg.listen)
@@ -125,16 +128,12 @@ pub async fn serve(
         .map_err(|e| HttpError::Listen(format!("bind {}: {e}", cfg.listen)))?;
     tracing::info!(addr = %cfg.listen, "http: listening");
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(async move {
+            shutdown.cancelled().await;
+            tracing::info!("http: shutdown requested");
+        })
         .await
         .map_err(|e| HttpError::Listen(e.to_string()))
-}
-
-async fn shutdown_signal() {
-    if let Err(e) = tokio::signal::ctrl_c().await {
-        tracing::warn!(%e, "ctrl_c handler failed");
-    }
-    tracing::info!("http: shutdown requested");
 }
 
 // ---------- middleware ----------

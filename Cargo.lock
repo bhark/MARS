@@ -2006,6 +2006,7 @@ dependencies = [
  "mars-wms",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-util",
  "tower",
  "tower-http",
  "tracing",
@@ -2081,6 +2082,7 @@ dependencies = [
  "mars-types",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-util",
  "tracing",
 ]
 
