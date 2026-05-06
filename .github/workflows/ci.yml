@@ -39,6 +39,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace --locked --all-targets
 
+  e2e-check:
+    name: cargo check (e2e gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --locked --features e2e -p mars-source-postgres --tests
+
   deps:
     name: dependency rule + cargo-deny
     runs-on: ubuntu-latest

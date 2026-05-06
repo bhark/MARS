@@ -219,6 +219,7 @@ async fn run_compile(cfg: &Config) -> Result<()> {
         dsn: cfg.source.dsn.clone(),
         publication: String::new(),
         slot: String::new(),
+        ..Default::default()
     };
     let source = Arc::new(PgSource::connect(pg_cfg).await.context("pg connect")?);
     let store = Arc::new(FsStore::new(cfg.artifacts.store.path.as_deref().unwrap()).context("open compile store")?);
@@ -236,8 +237,9 @@ async fn run_compile(cfg: &Config) -> Result<()> {
         cfg.clone(),
     );
     compiler
-        .run(CancellationToken::new())
+        .run_snapshot_once(CancellationToken::new())
         .await
+        .map(|_| ())
         .map_err(|e| anyhow::anyhow!(e))
 }
 
