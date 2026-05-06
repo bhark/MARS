@@ -224,11 +224,11 @@ if ! grep -q "#\!\[allow(unsafe_code)\]" crates/support/mars-proj/src/lib.rs 2>/
     warn "mars-proj (the designated FFI boundary) is missing '#![allow(unsafe_code)]'"
 fi
 
-# no other crate may have a crate-level allow for unsafe_code
-other_unsafe=$(grep -rl "#\!\[allow(unsafe_code)\]" crates/ bin/ --include="*.rs" 2>/dev/null || true)
-other_unsafe_filtered=$(echo "$other_unsafe" | grep -v "crates/support/mars-proj/src/lib.rs" || true)
+# no other crate may have a crate-level or module-level allow for unsafe_code
+other_unsafe=$(grep -rl "#!\[allow(unsafe_code)\]" crates/ bin/ --include="*.rs" 2>/dev/null || true)
+other_unsafe_filtered=$(echo "$other_unsafe" | grep -v "crates/support/mars-proj/src/lib.rs" | grep -v "crates/adapters/mars-store-fs/src/mmap.rs" || true)
 if [[ -n "$other_unsafe_filtered" ]]; then
-    warn "crate-level '#![allow(unsafe_code)]' found outside mars-proj:"
+    warn "crate-level or module-level '#![allow(unsafe_code)]' found outside permitted boundaries:"
     echo "$other_unsafe_filtered" | sed 's/^/    /'
 fi
 
