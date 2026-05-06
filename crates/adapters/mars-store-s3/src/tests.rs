@@ -212,6 +212,23 @@ impl object_store::ObjectStore for NoCasBackend {
 }
 
 #[tokio::test]
+async fn manifest_publish_rejects_duplicate_body_version() {
+    let backend = Arc::new(InMemory::new());
+    let s = store_with("", backend);
+    let pub_ = S3Publisher::from_store(&s);
+    pub_.publish(&manifest(1)).await.unwrap();
+
+    // simulate an orphaned body (e.g. a prior crash between body write and
+    // pointer CAS): publish v1 again. PutMode::Create must refuse to
+    // overwrite the existing body.
+    let err = pub_.publish(&manifest(1)).await.unwrap_err();
+    assert!(
+        err.to_string().contains("already exists"),
+        "expected duplicate-body refusal, got {err}"
+    );
+}
+
+#[tokio::test]
 async fn manifest_publish_rejects_non_atomic_by_default() {
     let backend: Arc<dyn object_store::ObjectStore> = Arc::new(NoCasBackend(Arc::new(InMemory::new())));
     let s = S3Store::from_backend(backend, String::new());

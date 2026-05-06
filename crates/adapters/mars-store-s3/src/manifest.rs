@@ -1,12 +1,19 @@
 //! object-store-backed [`ManifestStore`] (SPEC §8.5).
 //!
 //! publish flow:
-//!   1. write `manifests/v{N}.json` (no conditional — content-addressed).
+//!   1. write `manifests/v{N}.json` with `PutMode::Create` so a duplicate
+//!      version errors instead of being silently overwritten.
 //!   2. CAS-update `manifests/current` from its prior etag.
 //!
 //! a backend that does not support `PutMode::Update` returns
 //! `NotSupported`; we fall back to plain overwrite and log a warning. for
 //! AWS S3 + MinIO + R2 the update path is supported.
+//!
+//! singleton-compiler invariant: only one compiler process publishes at a
+//! time (enforced by the leader-lock in mars-source). step 1's create-only
+//! write is a belt-and-braces guard: if two writers ever race past the
+//! leader lock, one body write fails fast rather than silently overwriting
+//! the peer's serialised manifest.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -134,13 +141,38 @@ impl S3Publisher {
 impl ManifestStore for S3Publisher {
     async fn publish(&self, manifest: &Manifest) -> Result<u64, StoreError> {
         let n = manifest.version;
-        let body =
-            serde_json::to_vec_pretty(manifest).map_err(|e| StoreError::Backend(format!("serialise manifest: {e}")))?;
+        let body = Bytes::from(
+            serde_json::to_vec_pretty(manifest).map_err(|e| StoreError::Backend(format!("serialise manifest: {e}")))?,
+        );
         let body_path = self.body_path(n);
-        self.backend
-            .put(&body_path, Bytes::from(body).into())
+        match self
+            .backend
+            .put_opts(&body_path, body.clone().into(), PutOptions::from(PutMode::Create))
             .await
-            .map_err(|e| StoreError::Backend(format!("s3 put manifest body: {e}")))?;
+        {
+            Ok(_) => {}
+            // body at v{N} already exists. under the singleton-compiler invariant
+            // this means a prior publish left orphaned bytes (crashed between
+            // body write and current-pointer CAS); under a leader-lock failure
+            // a concurrent writer beat us. either way we refuse to overwrite.
+            Err(object_store::Error::AlreadyExists { .. }) => {
+                return Err(StoreError::Backend(format!(
+                    "manifest body v{n} already exists; refusing to overwrite (orphaned publish or concurrent writer)"
+                )));
+            }
+            Err(object_store::Error::NotSupported { .. }) if self.allow_non_atomic_publish => {
+                self.backend
+                    .put(&body_path, body.into())
+                    .await
+                    .map_err(|e| StoreError::Backend(format!("s3 put manifest body: {e}")))?;
+            }
+            Err(object_store::Error::NotSupported { .. }) => {
+                return Err(StoreError::Backend(
+                    "s3 backend does not support conditional create; set allow_non_atomic_publish to override".into(),
+                ));
+            }
+            Err(e) => return Err(StoreError::Backend(format!("s3 put manifest body: {e}"))),
+        }
 
         let pointer_body = Bytes::from(format!("v{n}"));
         let current_path = self.current_path();
