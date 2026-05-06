@@ -25,14 +25,26 @@ use futures_util::stream;
 use mars_store::{ManifestStore, StoreError};
 use mars_types::{MANIFEST_FORMAT_VERSION, Manifest};
 use object_store::path::Path as OsPath;
-use object_store::{ObjectStore as OsStore, ObjectStoreExt, PutMode, PutOptions, UpdateVersion};
+use object_store::{GetOptions, ObjectStore as OsStore, ObjectStoreExt, PutMode, PutOptions, UpdateVersion};
 
 use crate::store::{S3Store, join_prefix, map_backend_error, retry_transient};
+
+/// Result of a conditional read of `manifests/current`.
+enum ReadCurrent {
+    Body { pointer: String, version: Option<UpdateVersion> },
+    NotModified,
+    Missing,
+}
 
 const MANIFEST_DIR: &str = "manifests";
 const CURRENT_FILE: &str = "manifests/current";
 
-const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(1);
+/// Steady-state poll cadence on `manifests/current`. Compiler windows are on
+/// the order of minutes, so a per-second poll on every replica is wasted GETs
+/// against the bucket. 15 s keeps freshness within one or two compile windows
+/// without paying ongoing scrape cost; the conditional GET below makes the
+/// happy path a no-body 304 when the pointer hasn't moved.
+const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(15);
 
 /// object-store-backed manifest publisher. shares its backend (and prefix)
 /// with [`S3Store`] so a single bucket holds artifacts and manifests.
@@ -91,9 +103,25 @@ impl S3Publisher {
     /// Read the raw `manifests/current` body and its etag; returns `None` if
     /// not yet published.
     async fn read_current(&self) -> Result<Option<(String, Option<UpdateVersion>)>, StoreError> {
+        self.read_current_if_changed(None).await.map(|res| match res {
+            ReadCurrent::Body { pointer, version } => Some((pointer, version)),
+            // explicit `None` etag never produces NotModified; assert by mapping it away.
+            ReadCurrent::NotModified | ReadCurrent::Missing => None,
+        })
+    }
+
+    /// Conditional read of `manifests/current`. When `if_none_match` is `Some`
+    /// the request includes the etag and the backend returns `NotModified`
+    /// (no body) on a hit, turning steady-state polling into metadata-only
+    /// roundtrips.
+    async fn read_current_if_changed(&self, if_none_match: Option<String>) -> Result<ReadCurrent, StoreError> {
         let path = self.current_path();
         let result = retry_transient(|| async {
-            let r = self.backend.get(&path).await?;
+            let opts = GetOptions {
+                if_none_match: if_none_match.clone(),
+                ..GetOptions::default()
+            };
+            let r = self.backend.get_opts(&path, opts).await?;
             let etag = r.meta.e_tag.clone();
             let version = r.meta.version.clone();
             let bytes = r.bytes().await?;
@@ -106,9 +134,15 @@ impl S3Publisher {
                     .map_err(|e| StoreError::Backend(format!("manifest pointer not utf-8: {e}")))?
                     .trim()
                     .to_owned();
-                Ok(Some((pointer, Some(UpdateVersion { e_tag: etag, version }))))
+                Ok(ReadCurrent::Body {
+                    pointer,
+                    version: Some(UpdateVersion { e_tag: etag, version }),
+                })
             }
-            Err(object_store::Error::NotFound { .. }) => Ok(None),
+            Err(object_store::Error::NotFound { .. }) => Ok(ReadCurrent::Missing),
+            // 304 Not Modified surfaces as Precondition once the conditional
+            // matches; same etag means the pointer is unchanged.
+            Err(object_store::Error::NotModified { .. }) => Ok(ReadCurrent::NotModified),
             Err(e) => Err(StoreError::Backend(format!("s3 get current: {e}"))),
         }
     }
@@ -223,11 +257,15 @@ impl ManifestStore for S3Publisher {
         struct State {
             publisher: S3Publisher,
             last_pointer: Option<String>,
+            // last seen etag of `manifests/current`; powers If-None-Match so
+            // steady-state polls are 304s without bodies.
+            last_etag: Option<String>,
             sleep_first: bool,
         }
         let state = State {
             publisher: self.clone(),
             last_pointer: None,
+            last_etag: None,
             sleep_first: false,
         };
         let stream = stream::unfold(state, |mut state| async move {
@@ -236,20 +274,30 @@ impl ManifestStore for S3Publisher {
                     tokio::time::sleep(state.publisher.poll_interval).await;
                     state.sleep_first = false;
                 }
-                match state.publisher.read_current().await {
-                    Ok(Some((pointer, _))) if state.last_pointer.as_deref() != Some(pointer.as_str()) => {
-                        match state.publisher.fetch_manifest_body(&pointer).await {
-                            Ok(m) => {
-                                state.last_pointer = Some(pointer);
-                                return Some((Ok(m), state));
-                            }
-                            Err(e) => {
-                                state.sleep_first = true;
-                                return Some((Err(e), state));
+                let res = state
+                    .publisher
+                    .read_current_if_changed(state.last_etag.clone())
+                    .await;
+                match res {
+                    Ok(ReadCurrent::Body { pointer, version }) => {
+                        // refresh etag whether or not pointer text changed; a
+                        // republish under the same vN keeps the etag stable so
+                        // future polls stay cheap.
+                        state.last_etag = version.as_ref().and_then(|v| v.e_tag.clone());
+                        if state.last_pointer.as_deref() != Some(pointer.as_str()) {
+                            match state.publisher.fetch_manifest_body(&pointer).await {
+                                Ok(m) => {
+                                    state.last_pointer = Some(pointer);
+                                    return Some((Ok(m), state));
+                                }
+                                Err(e) => {
+                                    state.sleep_first = true;
+                                    return Some((Err(e), state));
+                                }
                             }
                         }
                     }
-                    Ok(_) => {}
+                    Ok(ReadCurrent::NotModified | ReadCurrent::Missing) => {}
                     Err(e) => {
                         state.sleep_first = true;
                         return Some((Err(e), state));
