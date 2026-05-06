@@ -31,9 +31,11 @@ pub use state::RuntimeState;
 const WARM_CONCURRENCY: usize = 8;
 const WARM_TIMEOUT: Duration = Duration::from_secs(10);
 
-fn default_render_concurrency() -> usize {
-    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4)
-}
+/// default budget of in-flight raw-pixmap pixels across all concurrent renders.
+/// 128M pixels ≈ 512 MiB at 4 bytes/pixel (premultiplied RGBA). a request
+/// reserves `width * height` permits for the duration of its render, so this
+/// caps total pixmap memory regardless of how many requests are dispatched.
+const DEFAULT_PIXEL_BUDGET: u32 = 128_000_000;
 
 /// hard limit on cells a single request may cover. prevents oom from
 /// pathological bbox / tiny cell size combinations.
@@ -75,6 +77,8 @@ pub enum RuntimeError {
     Config(#[from] mars_config::ConfigError),
     #[error("not implemented: {what}")]
     NotImplemented { what: &'static str },
+    #[error("request requires {requested} pixels but pixel_budget is {budget}")]
+    PixelBudgetExceeded { requested: u64, budget: u32 },
 }
 
 /// All ports the runtime needs.
@@ -104,29 +108,37 @@ pub struct Runtime {
     /// reason the most recent manifest swap was rejected, if any. exposed for
     /// the debug endpoint; cleared on a successful swap.
     last_reject_reason: ArcSwapOption<String>,
+    /// pixel-budget semaphore. each render acquires `width * height` permits
+    /// for the duration of its render, bounding total in-flight pixmap memory.
     render_sem: Arc<Semaphore>,
+    /// pixel budget the semaphore was sized with. used to fail fast on
+    /// requests that could never fit, instead of blocking forever.
+    pixel_budget: u32,
 }
 
 impl Runtime {
     /// Compose a runtime without an active manifest snapshot.
     #[must_use]
     pub fn empty(deps: Deps) -> Self {
-        Self {
-            state: ArcSwapOption::empty(),
-            deps,
-            last_reject_reason: ArcSwapOption::empty(),
-            render_sem: Arc::new(Semaphore::new(default_render_concurrency())),
-        }
+        Self::with_pixel_budget(deps, DEFAULT_PIXEL_BUDGET, None)
     }
 
     /// Compose a runtime from a pre-built state snapshot and the dep set.
     #[must_use]
     pub fn from_state(state: Arc<RuntimeState>, deps: Deps) -> Self {
+        Self::with_pixel_budget(deps, DEFAULT_PIXEL_BUDGET, Some(state))
+    }
+
+    /// Compose a runtime with a custom pixel budget (raw pixmap pixels in flight).
+    /// Used by the bin to thread the configured budget through.
+    #[must_use]
+    pub fn with_pixel_budget(deps: Deps, pixel_budget: u32, state: Option<Arc<RuntimeState>>) -> Self {
         Self {
-            state: ArcSwapOption::from(Some(state)),
+            state: state.map_or_else(ArcSwapOption::empty, |s| ArcSwapOption::from(Some(s))),
             deps,
             last_reject_reason: ArcSwapOption::empty(),
-            render_sem: Arc::new(Semaphore::new(default_render_concurrency())),
+            render_sem: Arc::new(Semaphore::new(pixel_budget as usize)),
+            pixel_budget,
         }
     }
 
@@ -174,6 +186,17 @@ impl Runtime {
             }
         }
 
+        // pixel-budget gate: fail fast if a single request exceeds the pool;
+        // upstream parsers should already cap this, but a non-WMS plan source
+        // (or a misconfigured budget) could otherwise wedge.
+        let pixels = u64::from(plan.width) * u64::from(plan.height);
+        if pixels > u64::from(self.pixel_budget) {
+            return Err(RuntimeError::PixelBudgetExceeded {
+                requested: pixels,
+                budget: self.pixel_budget,
+            });
+        }
+
         // reproject the request bbox into canonical CRS for cell selection.
         // forward (canonical -> request) transformer is built later inside
         // spawn_blocking — Transformer is !Send and must live on one thread.
@@ -193,6 +216,11 @@ impl Runtime {
         };
 
         // collect fetched artifacts under async; geometry + render run sync.
+        // ordered `buffered` (not `buffer_unordered`) is required: tasks are
+        // emitted in layer/cell z-order by `plan::resolve`, and the draw loop
+        // below consumes them in vec order. completion-order delivery would
+        // let a top-layer cell that finishes early sit beneath a later-finishing
+        // bottom-layer cell, producing non-deterministic output.
         let cache = self.deps.cache.clone();
         let store = self.deps.store.clone();
         let fetched: Vec<(ArtifactReader, ArtifactReader)> = stream::iter(tasks.into_iter().map(|task| {
@@ -242,7 +270,10 @@ impl Runtime {
         let renderer = self.deps.renderer.clone();
         let encoder = self.deps.encoder.clone();
         let format = plan.format;
-        let permit = self.render_sem.clone().acquire_owned().await.map_err(|_| {
+        // safe: pixels <= pixel_budget (validated above), and pixel_budget fits u32.
+        #[allow(clippy::cast_possible_truncation)]
+        let permits = pixels as u32;
+        let permit = self.render_sem.clone().acquire_many_owned(permits).await.map_err(|_| {
             RuntimeError::Render(mars_render_port::RenderError::Backend("render semaphore closed".into()))
         })?;
         let canonical_crs = state.canonical_crs.clone();
@@ -532,7 +563,7 @@ mod tests {
 
     fn source_artifact() -> Bytes {
         let mut w = ArtifactWriter::new(ArtifactKind::Source);
-        w.add_geometry_payload(&[FeatureGeom {
+        w.add_geometry_payload(vec![FeatureGeom {
             id: 1,
             bbox: [0.0, 0.0, 1.0, 1.0],
             geom: GeomKind::Point((5.0, 5.0)),
@@ -583,6 +614,7 @@ mod tests {
                     path: "/tmp".into(),
                     max_size: "1GiB".into(),
                     eviction: "lru".into(),
+                    trust_path_hash: false,
                 },
             },
             scales: Scales {

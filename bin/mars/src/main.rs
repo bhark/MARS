@@ -131,13 +131,21 @@ async fn run_runtime(config_path: &Path) -> Result<()> {
     let listen = resolve_listen(&cfg)?;
     let wms_cfg = mars_wms::WmsConfig::from_config(&cfg);
     let metrics = mars_observability::Metrics::new().context("init metrics")?;
-    let runtime = Arc::new(Runtime::empty(RuntimeDeps {
-        store,
-        cache,
-        renderer: Arc::new(TinySkiaRenderer),
-        encoder: Arc::new(TinySkiaEncoder::new(cfg.render.jpeg_quality)),
-        metrics: metrics.clone(),
-    }));
+    let pixel_budget = cfg
+        .render
+        .pixel_budget_permits()
+        .context("resolve render.pixel_budget")?;
+    let runtime = Arc::new(Runtime::with_pixel_budget(
+        RuntimeDeps {
+            store,
+            cache,
+            renderer: Arc::new(TinySkiaRenderer),
+            encoder: Arc::new(TinySkiaEncoder::new(cfg.render.jpeg_quality)),
+            metrics: metrics.clone(),
+        },
+        pixel_budget,
+        None,
+    ));
 
     let manifest_opt = match publisher.current().await {
         Ok(m) => m,
@@ -386,7 +394,8 @@ fn build_cache(cfg: &Config) -> Result<Arc<dyn LocalCache>> {
         .max_size_bytes()
         .map_err(|e| anyhow!("parse cache max_size: {e}"))?;
     Ok(Arc::new(
-        FsCache::new(&cfg.artifacts.cache.path, max).context("open fs cache")?,
+        FsCache::with_trust_path_hash(&cfg.artifacts.cache.path, max, cfg.artifacts.cache.trust_path_hash)
+            .context("open fs cache")?,
     ))
 }
 

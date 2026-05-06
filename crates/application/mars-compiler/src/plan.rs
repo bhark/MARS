@@ -448,6 +448,7 @@ mod tests {
                     path: "/tmp".into(),
                     max_size: "1GiB".into(),
                     eviction: "lru".into(),
+                    trust_path_hash: false,
                 },
             },
             scales: mars_config::Scales {
@@ -530,6 +531,7 @@ mod tests {
                     path: "/tmp".into(),
                     max_size: "1GiB".into(),
                     eviction: "lru".into(),
+                    trust_path_hash: false,
                 },
             },
             scales: mars_config::Scales {

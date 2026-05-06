@@ -31,6 +31,12 @@ pub enum WmsError {
 /// width / height parameters.
 const DEFAULT_MAX_IMAGE_DIMENSION: u32 = 8192;
 
+/// hard upper bound on `width * height` per request. tighter than
+/// `max_image_dimension²` so a 8192×8192 single-axis-max stays legal but a
+/// `width = 8192, height = 8192` request (256 MiB raw) trips this first.
+/// 16M ≈ 4096² ≈ 64 MiB raw pixmap.
+const DEFAULT_MAX_PIXELS: u64 = 16_000_000;
+
 /// hard upper bound on layers per request to prevent excessive allocation
 /// and artifact fetches.
 const DEFAULT_MAX_LAYERS: usize = 100;
@@ -51,6 +57,8 @@ pub struct WmsConfig {
     pub formats: Vec<ImageFormat>,
     /// maximum allowed width or height in pixels.
     pub max_image_dimension: u32,
+    /// maximum allowed `width * height` per request.
+    pub max_pixels: u64,
     /// maximum number of layers per getmap request.
     pub max_layers: usize,
     /// maximum absolute value of any bbox coordinate.
@@ -63,10 +71,8 @@ impl WmsConfig {
     #[must_use]
     pub fn from_config(cfg: &Config) -> Self {
         let allowlist_crs = cfg.reprojection.allowlist.clone();
-        let formats = cfg
-            .interfaces
-            .wms
-            .as_ref()
+        let wms = cfg.interfaces.wms.as_ref();
+        let formats = wms
             .map(|w| {
                 w.formats
                     .iter()
@@ -82,7 +88,10 @@ impl WmsConfig {
         Self {
             allowlist_crs,
             formats,
-            max_image_dimension: DEFAULT_MAX_IMAGE_DIMENSION,
+            max_image_dimension: wms
+                .and_then(|w| w.max_image_dimension)
+                .unwrap_or(DEFAULT_MAX_IMAGE_DIMENSION),
+            max_pixels: wms.and_then(|w| w.max_pixels).unwrap_or(DEFAULT_MAX_PIXELS),
             max_layers: DEFAULT_MAX_LAYERS,
             max_bbox_coord: DEFAULT_MAX_BBOX_COORD,
         }

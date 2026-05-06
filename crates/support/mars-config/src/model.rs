@@ -55,18 +55,38 @@ pub struct Render {
     /// JPEG quality, 1-100. Defaults to 85.
     #[serde(default = "default_jpeg_quality")]
     pub jpeg_quality: u8,
+    /// Total in-flight raw-pixmap memory budget across all concurrent renders,
+    /// expressed as a unit-suffixed byte literal (`512MiB`). The runtime
+    /// converts to a permit count of pixels (bytes / 4) and a render reserves
+    /// `width * height` permits for its lifetime.
+    #[serde(default = "default_pixel_budget")]
+    pub pixel_budget: String,
 }
 
 impl Default for Render {
     fn default() -> Self {
         Self {
             jpeg_quality: default_jpeg_quality(),
+            pixel_budget: default_pixel_budget(),
         }
+    }
+}
+
+impl Render {
+    /// Resolve `pixel_budget` to permit count (raw pixels). Saturates at u32::MAX.
+    pub fn pixel_budget_permits(&self) -> Result<u32, ConfigError> {
+        let bytes = units::parse_bytes(&self.pixel_budget)?;
+        let pixels = bytes / 4;
+        Ok(u32::try_from(pixels).unwrap_or(u32::MAX))
     }
 }
 
 fn default_jpeg_quality() -> u8 {
     85
+}
+
+fn default_pixel_budget() -> String {
+    "512MiB".to_owned()
 }
 
 /// Service identity. SPEC §5.2.
@@ -156,6 +176,12 @@ pub struct ArtifactCache {
     /// Eviction policy.
     #[serde(default = "default_eviction")]
     pub eviction: String,
+    /// When true, the cache treats the content-hashed key path as authority
+    /// and verifies each artifact only once per process via BLAKE3. Cuts
+    /// hot-path cost on hits at the price of skipping bit-rot detection
+    /// after the first verification.
+    #[serde(default)]
+    pub trust_path_hash: bool,
 }
 
 fn default_eviction() -> String {
@@ -241,6 +267,14 @@ pub struct WmsConfig {
     /// falls back to `MARS_HTTP_LISTEN` and finally `0.0.0.0:8080`.
     #[serde(default)]
     pub listen: Option<String>,
+    /// Maximum width or height in pixels per GetMap request. Adapter default
+    /// applies when unset.
+    #[serde(default)]
+    pub max_image_dimension: Option<u32>,
+    /// Maximum `width * height` per GetMap request. Adapter default applies
+    /// when unset.
+    #[serde(default)]
+    pub max_pixels: Option<u64>,
 }
 
 /// WMTS endpoint configuration.

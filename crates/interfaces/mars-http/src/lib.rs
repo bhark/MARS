@@ -328,6 +328,11 @@ fn map_runtime_error(e: &RuntimeError) -> WmsException {
                 message: "Internal server error".into(),
             },
         },
+        RuntimeError::PixelBudgetExceeded { requested, budget } => WmsException {
+            semantic_status: StatusCode::BAD_REQUEST,
+            code: Some("InvalidParameterValue"),
+            message: format!("Request requires {requested} pixels but server budget is {budget}"),
+        },
         RuntimeError::ManifestEntryMissing { .. }
         | RuntimeError::SourceMissing { .. }
         | RuntimeError::BadKey { .. }
@@ -394,6 +399,7 @@ mod tests {
             allowlist_crs: vec![CrsCode::new("EPSG:25832")],
             formats: vec![ImageFormat::Png],
             max_image_dimension: 8192,
+            max_pixels: 16_000_000,
             max_layers: 100,
             max_bbox_coord: 1e9,
         };
@@ -452,6 +458,7 @@ mod tests {
             allowlist_crs: vec![CrsCode::new("EPSG:25832")],
             formats: vec![ImageFormat::Png],
             max_image_dimension: 8192,
+            max_pixels: 16_000_000,
             max_layers: 100,
             max_bbox_coord: 1e9,
         };
@@ -490,6 +497,7 @@ mod tests {
             allowlist_crs: vec![CrsCode::new("EPSG:25832")],
             formats: vec![ImageFormat::Png],
             max_image_dimension: 8192,
+            max_pixels: 16_000_000,
             max_layers: 100,
             max_bbox_coord: 1e9,
         };
@@ -576,6 +584,7 @@ mod tests {
             allowlist_crs: vec![CrsCode::new("EPSG:25832")],
             formats: vec![ImageFormat::Png],
             max_image_dimension: 8192,
+            max_pixels: 16_000_000,
             max_layers: 100,
             max_bbox_coord: 1e9,
         };
@@ -604,6 +613,7 @@ mod tests {
             allowlist_crs: vec![CrsCode::new("EPSG:25832")],
             formats: vec![ImageFormat::Png],
             max_image_dimension: 8192,
+            max_pixels: 16_000_000,
             max_layers: 100,
             max_bbox_coord: 1e9,
         };

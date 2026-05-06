@@ -3,6 +3,7 @@
 
 use std::sync::Arc;
 
+use bytes::Bytes;
 use mars_artifact::{ArtifactKind, ArtifactWriter, SourceRef, compute_content_hash};
 use mars_source::{RowAttrs, RowBytes, Source};
 use mars_store::ObjectStore;
@@ -28,46 +29,48 @@ impl SnapshotOutput {
     }
 }
 
-pub async fn run_task(
-    task: &BuildTask,
+/// Run a single cell of a build task. Cells are the unit of parallelism;
+/// the driver fans these out via `buffer_unordered`.
+pub async fn run_cell(
+    task: &Arc<BuildTask>,
+    cell: &Cell,
     source: &Arc<dyn Source>,
     store: &Arc<dyn ObjectStore>,
 ) -> Result<SnapshotOutput, CompilerError> {
     let mut out = SnapshotOutput::default();
-    for cell in &task.cells {
-        let bbox = cell_bbox(task.origin, task.cell_size, cell);
-        let rows = source.fetch_cell(&task.binding, cell, bbox, None).await?;
-        if rows.is_empty() {
-            out.empty_layer_cells.push(EmptyLayerCell {
-                layer: task.layer.clone(),
-                cell: Cell {
-                    band: task.band.clone(),
-                    x: cell.x,
-                    y: cell.y,
-                },
-            });
-            continue;
-        }
-        // sort by feature id for deterministic layout
-        let mut rows = rows;
-        rows.sort_by_key(|r| r.feature_id);
-
-        let task = task.clone();
-        let cell = cell.clone();
-        let (src_entry, src_bytes, layer_entry, layer_bytes) = tokio::task::spawn_blocking(move || {
-            let (src_entry, src_bytes) = build_source_artifact(&task, &cell, &rows)?;
-            let (layer_entry, layer_bytes) = build_layer_artifact(&task, &cell, &rows, src_entry.hash, bbox)?;
-            Ok::<_, CompilerError>((src_entry, src_bytes, layer_entry, layer_bytes))
-        })
-        .await
-        .map_err(|e| CompilerError::BuildTaskPanic { reason: e.to_string() })??;
-
-        store.put(&src_entry.key, src_bytes.into()).await?;
-        out.source_artifacts.push(src_entry);
-
-        store.put(&layer_entry.key, layer_bytes.into()).await?;
-        out.layer_artifacts.push(layer_entry);
+    let bbox = cell_bbox(task.origin, task.cell_size, cell);
+    let rows = source.fetch_cell(&task.binding, cell, bbox, None).await?;
+    if rows.is_empty() {
+        out.empty_layer_cells.push(EmptyLayerCell {
+            layer: task.layer.clone(),
+            cell: Cell {
+                band: task.band.clone(),
+                x: cell.x,
+                y: cell.y,
+            },
+        });
+        return Ok(out);
     }
+    // sort by feature id for deterministic layout
+    let mut rows = rows;
+    rows.sort_by_key(|r| r.feature_id);
+
+    let task_for_blocking = task.clone();
+    let cell_for_blocking = cell.clone();
+    let (src_entry, src_bytes, layer_entry, layer_bytes) = tokio::task::spawn_blocking(move || {
+        let (src_entry, src_bytes) = build_source_artifact(&task_for_blocking, &cell_for_blocking, &rows)?;
+        let (layer_entry, layer_bytes) =
+            build_layer_artifact(&task_for_blocking, &cell_for_blocking, &rows, src_entry.hash, bbox)?;
+        Ok::<_, CompilerError>((src_entry, src_bytes, layer_entry, layer_bytes))
+    })
+    .await
+    .map_err(|e| CompilerError::BuildTaskPanic { reason: e.to_string() })??;
+
+    store.put(&src_entry.key, src_bytes).await?;
+    out.source_artifacts.push(src_entry);
+
+    store.put(&layer_entry.key, layer_bytes).await?;
+    out.layer_artifacts.push(layer_entry);
     Ok(out)
 }
 
@@ -75,7 +78,7 @@ fn build_source_artifact(
     task: &BuildTask,
     cell: &Cell,
     rows: &[RowBytes],
-) -> Result<(ArtifactEntry, Vec<u8>), CompilerError> {
+) -> Result<(ArtifactEntry, Bytes), CompilerError> {
     let expected_srid = task
         .binding
         .crs
@@ -90,9 +93,10 @@ fn build_source_artifact(
         features.push(f);
     }
     let mut writer = ArtifactWriter::new(ArtifactKind::Source);
-    writer.add_geometry_payload(&features);
+    let feature_count = features.len() as u64;
+    writer.add_geometry_payload(features);
     writer.set_bbox(acc.into_bbox());
-    writer.set_feature_count(features.len() as u64);
+    writer.set_feature_count(feature_count);
     let bytes = writer.finish()?;
     let hash = compute_content_hash(&bytes);
     let cell_with_band = Cell {
@@ -107,7 +111,7 @@ fn build_source_artifact(
         hash,
         size_bytes: bytes.len() as u64,
     };
-    Ok((entry, bytes.to_vec()))
+    Ok((entry, bytes))
 }
 
 fn build_layer_artifact(
@@ -116,7 +120,7 @@ fn build_layer_artifact(
     rows: &[RowBytes],
     source_hash: ContentHash,
     bbox: Bbox,
-) -> Result<(ArtifactEntry, Vec<u8>), CompilerError> {
+) -> Result<(ArtifactEntry, Bytes), CompilerError> {
     let mut assignments: Vec<(u64, u16)> = Vec::with_capacity(rows.len());
     for row in rows {
         let attrs = RowAttrs::new(&row.attributes);
@@ -158,7 +162,7 @@ fn build_layer_artifact(
         hash,
         size_bytes: bytes.len() as u64,
     };
-    Ok((entry, bytes.to_vec()))
+    Ok((entry, bytes))
 }
 
 struct BboxAcc {

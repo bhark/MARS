@@ -14,7 +14,7 @@
 //!    and surfaced as `bytes::Bytes` through `Bytes::from_owner`. zero-copy
 //!    for downstream codecs.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -87,6 +87,15 @@ pub struct FsCache {
     root: PathBuf,
     state: Mutex<CacheState>,
     flights: Flights,
+    /// when true, after a key has been BLAKE3-verified once in this process,
+    /// subsequent cache hits skip the rehash. paths embed the content hash
+    /// (`{hash}.mars`) so a file at the validated path *is* the artifact
+    /// with that hash; bit-rot is the only thing the rehash protects against,
+    /// and one rehash per (process, key) is enough for that signal.
+    trust_path_hash: bool,
+    /// keys whose on-disk content has been BLAKE3-verified at least once.
+    /// only consulted when `trust_path_hash` is true.
+    verified: Mutex<HashSet<ArtifactKey>>,
 }
 
 impl FsCache {
@@ -96,6 +105,18 @@ impl FsCache {
     ///
     /// `max_size_bytes` is the hard size cap; zero disables eviction.
     pub fn new(root: impl Into<PathBuf>, max_size_bytes: u64) -> Result<Self, StoreError> {
+        Self::with_trust_path_hash(root, max_size_bytes, false)
+    }
+
+    /// Open / create a cache with the `trust_path_hash` optimisation set.
+    /// When `true`, cache hits skip the BLAKE3 rehash after the first
+    /// successful verification of a key in this process. See the field doc
+    /// on `FsCache::trust_path_hash` for the integrity contract.
+    pub fn with_trust_path_hash(
+        root: impl Into<PathBuf>,
+        max_size_bytes: u64,
+        trust_path_hash: bool,
+    ) -> Result<Self, StoreError> {
         let raw = root.into();
         if !raw.exists() {
             std::fs::create_dir_all(&raw).map_err(|e| StoreError::Backend(format!("create cache root: {e}")))?;
@@ -116,6 +137,8 @@ impl FsCache {
             root,
             state: Mutex::new(state),
             flights: Mutex::new(HashMap::new()),
+            trust_path_hash,
+            verified: Mutex::new(HashSet::new()),
         };
 
         // bring on-disk state inside the budget if the existing footprint
@@ -260,6 +283,10 @@ impl LocalCache for FsCache {
         let path = validate_artifact_key(&self.root, key)?;
 
         loop {
+            // already verified in this process? skip the BLAKE3 rehash on hit.
+            // a missing file falls through to the miss path naturally.
+            let already_verified = self.trust_path_hash && self.verified.lock().contains(key);
+
             // try local first; treat NotFound and HashMismatch as miss.
             let local = {
                 let p = path.clone();
@@ -267,7 +294,7 @@ impl LocalCache for FsCache {
                     match read_mmap(&p)? {
                         None => Ok(None),
                         Some(bytes) => {
-                            if compute_content_hash(&bytes) == expected {
+                            if already_verified || compute_content_hash(&bytes) == expected {
                                 Ok(Some(bytes))
                             } else {
                                 Ok(None)
@@ -282,6 +309,10 @@ impl LocalCache for FsCache {
             if let Some(bytes) = local {
                 let mut state = self.state.lock();
                 state.touch(key.clone());
+                drop(state);
+                if self.trust_path_hash && !already_verified {
+                    self.verified.lock().insert(key.clone());
+                }
                 return Ok(bytes);
             }
 
@@ -335,6 +366,16 @@ impl FsCache {
             let mut state = self.state.lock();
             state.insert(key.clone(), size)
         };
+        if self.trust_path_hash {
+            // origin.get already hashed; record so future cache hits skip rehash.
+            let mut verified = self.verified.lock();
+            verified.insert(key.clone());
+            // clear any evicted entries: their on-disk file is gone, and a
+            // future re-fetch must re-verify.
+            for v in &evicted {
+                verified.remove(v);
+            }
+        }
         if !evicted.is_empty() {
             let root = self.root.clone();
             tokio::task::spawn_blocking(move || {
@@ -639,5 +680,48 @@ mod tests {
             }
         }
         total
+    }
+
+    #[tokio::test]
+    async fn trust_path_hash_skips_corruption_after_first_verify() {
+        // with the optimisation enabled, an in-place file mutation post-verify
+        // is invisible to subsequent reads. this is the documented contract.
+        let store_dir = TempDir::new().unwrap();
+        let cache_dir = TempDir::new().unwrap();
+        let store = FsStore::new(store_dir.path()).unwrap();
+        let cache = FsCache::with_trust_path_hash(cache_dir.path(), u64::MAX, true).unwrap();
+
+        let key = k("a/b.bin");
+        let body = b"hello world".to_vec();
+        let h = store.put(&key, Bytes::from(body.clone())).await.unwrap();
+
+        let first = cache.get_or_fetch(&key, h, &store).await.unwrap();
+        assert_eq!(first.as_ref(), body.as_slice());
+
+        // poison the cached file in place; second hit must NOT detect it.
+        let cached_path = cache_dir.path().canonicalize().unwrap().join("a").join("b.bin");
+        std::fs::write(&cached_path, b"poisoned").unwrap();
+        let second = cache.get_or_fetch(&key, h, &store).await.unwrap();
+        assert_eq!(second.as_ref(), b"poisoned");
+    }
+
+    #[tokio::test]
+    async fn trust_path_hash_off_still_detects_corruption() {
+        // baseline: with the flag off, on-disk corruption is detected and the
+        // artifact is refetched from origin.
+        let store_dir = TempDir::new().unwrap();
+        let cache_dir = TempDir::new().unwrap();
+        let store = FsStore::new(store_dir.path()).unwrap();
+        let cache = FsCache::with_trust_path_hash(cache_dir.path(), u64::MAX, false).unwrap();
+
+        let key = k("a/b.bin");
+        let body = b"hello world".to_vec();
+        let h = store.put(&key, Bytes::from(body.clone())).await.unwrap();
+
+        cache.get_or_fetch(&key, h, &store).await.unwrap();
+        let cached_path = cache_dir.path().canonicalize().unwrap().join("a").join("b.bin");
+        std::fs::write(&cached_path, b"poisoned").unwrap();
+        let recovered = cache.get_or_fetch(&key, h, &store).await.unwrap();
+        assert_eq!(recovered.as_ref(), body.as_slice());
     }
 }

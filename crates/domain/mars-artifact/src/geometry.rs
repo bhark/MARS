@@ -254,18 +254,8 @@ pub fn encode_geometry_payload(features: &[FeatureGeom]) -> Result<Bytes, Artifa
     if !features.windows(2).all(|w| w[0].id < w[1].id) {
         return Err(ArtifactError::UnsortedFeatures);
     }
-    // pack coord blocks first to learn their offsets, then write index + blocks
-    let mut coord_blocks: Vec<Vec<u8>> = Vec::with_capacity(features.len());
-    let mut total_coord_bytes: usize = 0;
-    for f in features {
-        let mut buf = Vec::new();
-        write_geom(&mut buf, &f.geom)?;
-        total_coord_bytes = total_coord_bytes
-            .checked_add(buf.len())
-            .ok_or(ArtifactError::Malformed("geometry payload too large"))?;
-        coord_blocks.push(buf);
-    }
-
+    // single contiguous body buffer + parallel (offset, len) list. avoids
+    // a per-feature `Vec<u8>` allocation for the hot path on large cells.
     let header_len = 4usize
         .checked_add(
             features
@@ -274,31 +264,35 @@ pub fn encode_geometry_payload(features: &[FeatureGeom]) -> Result<Bytes, Artifa
                 .ok_or(ArtifactError::Malformed("geometry payload too large"))?,
         )
         .ok_or(ArtifactError::Malformed("geometry payload too large"))?;
+
+    let mut body: Vec<u8> = Vec::new();
+    let mut spans: Vec<(u32, u32)> = Vec::with_capacity(features.len());
+    for f in features {
+        let start = u32::try_from(body.len()).map_err(|_| ArtifactError::Malformed("geometry payload too large"))?;
+        write_geom(&mut body, &f.geom)?;
+        let len = u32::try_from(body.len() - start as usize)
+            .map_err(|_| ArtifactError::Malformed("geometry section too large"))?;
+        spans.push((start, len));
+    }
+
     let total_len = header_len
-        .checked_add(total_coord_bytes)
+        .checked_add(body.len())
         .ok_or(ArtifactError::Malformed("geometry payload too large"))?;
     let mut out = Vec::with_capacity(total_len);
     out.extend_from_slice(
         &(u32::try_from(features.len()).map_err(|_| ArtifactError::Malformed("too many features"))?).to_le_bytes(),
     );
 
-    let mut running_offset: u32 = 0;
-    for (f, block) in features.iter().zip(&coord_blocks) {
+    for (f, (off, len)) in features.iter().zip(&spans) {
         out.extend_from_slice(&f.id.to_le_bytes());
         for v in &f.bbox {
             out.extend_from_slice(&v.to_le_bytes());
         }
         out.push(geom_type_byte(&f.geom));
-        out.extend_from_slice(&running_offset.to_le_bytes());
-        let len = u32::try_from(block.len()).map_err(|_| ArtifactError::Malformed("geometry section too large"))?;
+        out.extend_from_slice(&off.to_le_bytes());
         out.extend_from_slice(&len.to_le_bytes());
-        running_offset = running_offset
-            .checked_add(len)
-            .ok_or(ArtifactError::Malformed("geometry payload too large"))?;
     }
-    for block in &coord_blocks {
-        out.extend_from_slice(block);
-    }
+    out.extend_from_slice(&body);
     Ok(Bytes::from(out))
 }
 
@@ -316,7 +310,145 @@ fn read_array<const N: usize>(slice: &[u8], offset: usize) -> Result<[u8; N], Ar
         .map_err(|_| ArtifactError::Truncated)
 }
 
-pub fn decode_geometry_payload(bytes: &[u8]) -> Result<Vec<FeatureGeom>, ArtifactError> {
+/// One feature's index entry: id, approximate bbox, and pointer into the
+/// coord area. Decoded lazily by [`FeatureIndexIter`]; coordinates stay
+/// untouched until [`decode_one_geom`] is called for a chosen entry.
+#[derive(Debug, Clone, Copy)]
+pub struct FeatureIndexEntry {
+    pub id: u64,
+    pub bbox: [f32; 4],
+    pub geom_type: u8,
+    /// offset into the coord area (the bytes after the index header).
+    pub coord_offset: u32,
+    pub coord_len: u32,
+}
+
+/// Lazy iterator over the geometry-payload index. Cheap: each step copies
+/// one 33-byte index entry. Coordinates are not touched.
+pub struct FeatureIndexIter<'a> {
+    bytes: &'a [u8],
+    coord_area_len: usize,
+    count: usize,
+    pos: usize,
+}
+
+impl<'a> FeatureIndexIter<'a> {
+    /// Bytes of the coord area (the region after the fixed-stride index
+    /// header). Useful for callers that decode geometries on the fly.
+    #[must_use]
+    pub fn coord_area(&self) -> &'a [u8] {
+        &self.bytes[self.bytes.len() - self.coord_area_len..]
+    }
+
+    /// Number of index entries in the payload.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.count
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+}
+
+impl Iterator for FeatureIndexIter<'_> {
+    type Item = Result<FeatureIndexEntry, ArtifactError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.pos >= self.count {
+            return None;
+        }
+        let off = 4 + self.pos * FEATURE_INDEX_ENTRY_LEN;
+        self.pos += 1;
+        let entry = (|| -> Result<FeatureIndexEntry, ArtifactError> {
+            let id = u64::from_le_bytes(read_array::<8>(self.bytes, off)?);
+            let bbox = [
+                f32::from_le_bytes(read_array::<4>(self.bytes, off + 8)?),
+                f32::from_le_bytes(read_array::<4>(self.bytes, off + 12)?),
+                f32::from_le_bytes(read_array::<4>(self.bytes, off + 16)?),
+                f32::from_le_bytes(read_array::<4>(self.bytes, off + 20)?),
+            ];
+            let geom_type = self.bytes[off + 24];
+            let coord_offset = u32::from_le_bytes(read_array::<4>(self.bytes, off + 25)?);
+            let coord_len = u32::from_le_bytes(read_array::<4>(self.bytes, off + 29)?);
+            // bound-check the entry up front so callers can decode by entry
+            // without re-validating each time.
+            let end = (coord_offset as usize)
+                .checked_add(coord_len as usize)
+                .ok_or(ArtifactError::Truncated)?;
+            if end > self.coord_area_len {
+                return Err(ArtifactError::Truncated);
+            }
+            Ok(FeatureIndexEntry {
+                id,
+                bbox,
+                geom_type,
+                coord_offset,
+                coord_len,
+            })
+        })();
+        Some(entry)
+    }
+}
+
+/// Build a [`FeatureIndexIter`] over a geometry-payload section.
+pub fn iter_feature_index(bytes: &[u8]) -> Result<FeatureIndexIter<'_>, ArtifactError> {
+    let (count, header_len) = parse_payload_header(bytes)?;
+    let coord_area_len = bytes.len() - header_len;
+    Ok(FeatureIndexIter {
+        bytes,
+        coord_area_len,
+        count,
+        pos: 0,
+    })
+}
+
+/// Decode the coordinates for a single index entry. The `coord_area` slice
+/// must be the one returned by `FeatureIndexIter::coord_area`.
+pub fn decode_one_geom(coord_area: &[u8], entry: &FeatureIndexEntry) -> Result<GeomKind, ArtifactError> {
+    let off = entry.coord_offset as usize;
+    let end = off
+        .checked_add(entry.coord_len as usize)
+        .ok_or(ArtifactError::Truncated)?;
+    if end > coord_area.len() {
+        return Err(ArtifactError::Truncated);
+    }
+    let mut pos = off;
+    let geom = read_geom(entry.geom_type, coord_area, &mut pos)?;
+    if pos != end {
+        return Err(ArtifactError::Malformed("coord block length mismatch"));
+    }
+    Ok(geom)
+}
+
+/// Decode only features whose `(id, bbox)` predicate returns `true`.
+/// Walks the cheap index, applies `pred`, and decodes coordinates only for
+/// survivors. Equivalent in result to filtering the output of
+/// [`decode_geometry_payload`], but avoids decoding skipped features.
+pub fn decode_geometry_payload_filtered<F>(bytes: &[u8], mut pred: F) -> Result<Vec<FeatureGeom>, ArtifactError>
+where
+    F: FnMut(u64, [f32; 4]) -> bool,
+{
+    let iter = iter_feature_index(bytes)?;
+    let coord_area = iter.coord_area();
+    let mut out = Vec::new();
+    for entry in iter {
+        let entry = entry?;
+        if !pred(entry.id, entry.bbox) {
+            continue;
+        }
+        let geom = decode_one_geom(coord_area, &entry)?;
+        out.push(FeatureGeom {
+            id: entry.id,
+            bbox: entry.bbox,
+            geom,
+        });
+    }
+    Ok(out)
+}
+
+fn parse_payload_header(bytes: &[u8]) -> Result<(usize, usize), ArtifactError> {
     if bytes.len() < 4 {
         return Err(ArtifactError::Truncated);
     }
@@ -331,31 +463,21 @@ pub fn decode_geometry_payload(bytes: &[u8]) -> Result<Vec<FeatureGeom>, Artifac
     if bytes.len() < header_len {
         return Err(ArtifactError::Truncated);
     }
-    let coord_area = &bytes[header_len..];
+    Ok((count, header_len))
+}
 
-    let mut out = Vec::with_capacity(count);
-    for i in 0..count {
-        let off = 4 + i * FEATURE_INDEX_ENTRY_LEN;
-        let id = u64::from_le_bytes(read_array::<8>(bytes, off)?);
-        let bbox = [
-            f32::from_le_bytes(read_array::<4>(bytes, off + 8)?),
-            f32::from_le_bytes(read_array::<4>(bytes, off + 12)?),
-            f32::from_le_bytes(read_array::<4>(bytes, off + 16)?),
-            f32::from_le_bytes(read_array::<4>(bytes, off + 20)?),
-        ];
-        let geom_type = bytes[off + 24];
-        let coff = u32::from_le_bytes(read_array::<4>(bytes, off + 25)?) as usize;
-        let clen = u32::from_le_bytes(read_array::<4>(bytes, off + 29)?) as usize;
-        let coord_end = coff.checked_add(clen).ok_or(ArtifactError::Truncated)?;
-        if coord_end > coord_area.len() {
-            return Err(ArtifactError::Truncated);
-        }
-        let mut pos = coff;
-        let geom = read_geom(geom_type, coord_area, &mut pos)?;
-        if pos != coord_end {
-            return Err(ArtifactError::Malformed("coord block length mismatch"));
-        }
-        out.push(FeatureGeom { id, bbox, geom });
+pub fn decode_geometry_payload(bytes: &[u8]) -> Result<Vec<FeatureGeom>, ArtifactError> {
+    let iter = iter_feature_index(bytes)?;
+    let coord_area = iter.coord_area();
+    let mut out = Vec::with_capacity(iter.len());
+    for entry in iter {
+        let entry = entry?;
+        let geom = decode_one_geom(coord_area, &entry)?;
+        out.push(FeatureGeom {
+            id: entry.id,
+            bbox: entry.bbox,
+            geom,
+        });
     }
     Ok(out)
 }

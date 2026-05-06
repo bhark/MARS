@@ -4,8 +4,8 @@
 use std::sync::Arc;
 
 use mars_artifact::{
-    ArtifactReader, FeatureGeom, GeomKind, SectionKind, decode_class_assignment, decode_geometry_payload,
-    decode_style_refs,
+    ArtifactReader, FeatureGeom, GeomKind, SectionKind, decode_class_assignment, decode_one_geom, decode_style_refs,
+    iter_feature_index,
 };
 use mars_proj::Transformer;
 use mars_render_port::{DrawOp, Path, Subpath};
@@ -74,7 +74,6 @@ pub(crate) fn emit_layer_cell(
         return Ok(());
     }
     let geom_section = source.section(SectionKind::GeometryPayload)?;
-    let features = decode_geometry_payload(&geom_section)?;
 
     let class_section = layer.section(SectionKind::ClassAssignment)?;
     let class_assignment = decode_class_assignment(&class_section)?;
@@ -82,19 +81,25 @@ pub(crate) fn emit_layer_cell(
     let style_refs_section = layer.section(SectionKind::StyleRefs)?;
     let style_refs = decode_style_refs(&style_refs_section)?;
 
-    // merge-walk: features sorted by id ASC, class_assignment sorted by id ASC.
+    // walk the geometry index merge-style against class_assignment (both sorted
+    // by id ASC). only decode coords for features that survive both the class
+    // join and the canonical-bbox cull. on viewports that intersect ≪ 100% of
+    // a cell this skips the bulk of varint decoding.
+    let iter = iter_feature_index(&geom_section)?;
+    let coord_area = iter.coord_area();
     let mut ai = 0usize;
-    for feat in &features {
-        while ai < class_assignment.len() && class_assignment[ai].0 < feat.id {
+    for entry in iter {
+        let entry = entry?;
+        while ai < class_assignment.len() && class_assignment[ai].0 < entry.id {
             ai += 1;
         }
-        if ai >= class_assignment.len() || class_assignment[ai].0 != feat.id {
+        if ai >= class_assignment.len() || class_assignment[ai].0 != entry.id {
             continue;
         }
         let class_index = class_assignment[ai].1 as usize;
         ai += 1;
 
-        if !bbox_intersects(feat.bbox, canonical_bbox) {
+        if !bbox_intersects(entry.bbox, canonical_bbox) {
             continue;
         }
 
@@ -116,7 +121,13 @@ pub(crate) fn emit_layer_cell(
             }
         };
 
-        if let Some(op) = build_draw_op(feat, viewport, reproject, &style)? {
+        let geom = decode_one_geom(coord_area, &entry)?;
+        let feat = FeatureGeom {
+            id: entry.id,
+            bbox: entry.bbox,
+            geom,
+        };
+        if let Some(op) = build_draw_op(&feat, viewport, reproject, &style)? {
             out.push(op);
         }
     }
@@ -301,11 +312,12 @@ mod tests {
         assert!(sq.closed);
     }
 
-    fn build_source(features: &[FeatureGeom]) -> ArtifactReader {
+    fn build_source(features: Vec<FeatureGeom>) -> ArtifactReader {
         let mut w = ArtifactWriter::new(ArtifactKind::Source);
+        let n = features.len() as u64;
         w.add_geometry_payload(features)
             .set_bbox(Bbox::new(0.0, 0.0, 10.0, 10.0))
-            .set_feature_count(features.len() as u64);
+            .set_feature_count(n);
         ArtifactReader::open(w.finish().unwrap()).unwrap()
     }
 
@@ -332,7 +344,7 @@ mod tests {
 
     #[test]
     fn zero_area_viewport_returns_empty() {
-        let src = build_source(&[FeatureGeom {
+        let src = build_source(vec![FeatureGeom {
             id: 1,
             bbox: [0.0, 0.0, 10.0, 10.0],
             geom: GeomKind::Point((5.0, 5.0)),
@@ -348,7 +360,7 @@ mod tests {
 
     #[test]
     fn out_of_range_style_ref_skips_feature() {
-        let src = build_source(&[FeatureGeom {
+        let src = build_source(vec![FeatureGeom {
             id: 1,
             bbox: [0.0, 0.0, 10.0, 10.0],
             geom: GeomKind::Point((5.0, 5.0)),
@@ -365,7 +377,7 @@ mod tests {
 
     #[test]
     fn missing_style_in_stylesheet_skips_feature() {
-        let src = build_source(&[FeatureGeom {
+        let src = build_source(vec![FeatureGeom {
             id: 1,
             bbox: [0.0, 0.0, 10.0, 10.0],
             geom: GeomKind::Point((5.0, 5.0)),
@@ -380,7 +392,7 @@ mod tests {
 
     #[test]
     fn point_without_fill_is_skipped() {
-        let src = build_source(&[FeatureGeom {
+        let src = build_source(vec![FeatureGeom {
             id: 1,
             bbox: [0.0, 0.0, 10.0, 10.0],
             geom: GeomKind::Point((5.0, 5.0)),
@@ -396,7 +408,7 @@ mod tests {
 
     #[test]
     fn point_with_fill_emits_square() {
-        let src = build_source(&[FeatureGeom {
+        let src = build_source(vec![FeatureGeom {
             id: 1,
             bbox: [0.0, 0.0, 10.0, 10.0],
             geom: GeomKind::Point((5.0, 5.0)),

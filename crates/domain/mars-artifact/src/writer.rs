@@ -51,9 +51,10 @@ impl ArtifactWriter {
     }
 
     /// Stage geometry features. Encoding (and any errors) is deferred to
-    /// `finish()` so that the builder API stays uniformly infallible.
-    pub fn add_geometry_payload(&mut self, features: &[FeatureGeom]) -> &mut Self {
-        self.pending_features = Some(features.to_vec());
+    /// `finish()` so that the builder API stays uniformly infallible. Takes
+    /// ownership to avoid an unnecessary clone of what is often a large vec.
+    pub fn add_geometry_payload(&mut self, features: Vec<FeatureGeom>) -> &mut Self {
+        self.pending_features = Some(features);
         self
     }
 

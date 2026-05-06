@@ -50,6 +50,7 @@ fn make_config() -> Config {
                 path: "/tmp".to_string(),
                 max_size: "1MiB".to_string(),
                 eviction: "lru".to_string(),
+                trust_path_hash: false,
             },
         },
         scales: Scales {

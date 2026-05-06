@@ -36,7 +36,10 @@ pub fn leader_lock_key(name: &str) -> i64 {
     h as i64
 }
 
-const SNAPSHOT_CONCURRENCY: usize = 4;
+/// Default number of concurrent in-flight cell builds in the snapshot driver.
+/// The connection pool size on the source side becomes the real ceiling, but
+/// 16 is a reasonable starting point for typical postgres pools.
+const DEFAULT_SNAPSHOT_CONCURRENCY: usize = 16;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CompilerError {
@@ -124,13 +127,25 @@ impl Compiler {
         let source = self.deps.source.clone();
         let store = self.deps.store.clone();
         let rebuild_start = Instant::now();
-        let mut stream = stream::iter(tasks)
-            .map(|task| {
+        // flatten (task × cell) so the unit of parallelism is one cell. with
+        // a single layer/source/band the previous task-level granularity was
+        // effectively serial; per-cell fan-out keeps the postgres pool busy.
+        // the per-task `Arc<BuildTask>` carries shared compiled-class state.
+        let units = tasks
+            .into_iter()
+            .flat_map(|t| {
+                let cells = t.cells.clone();
+                let task = Arc::new(t);
+                cells.into_iter().map(move |c| (task.clone(), c))
+            })
+            .collect::<Vec<_>>();
+        let mut stream = stream::iter(units)
+            .map(|(task, cell)| {
                 let source = source.clone();
                 let store = store.clone();
-                async move { snapshot::run_task(&task, &source, &store).await }
+                async move { snapshot::run_cell(&task, &cell, &source, &store).await }
             })
-            .buffer_unordered(SNAPSHOT_CONCURRENCY);
+            .buffer_unordered(DEFAULT_SNAPSHOT_CONCURRENCY);
         while let Some(result) = stream.next().await {
             if shutdown.is_cancelled() {
                 return Ok(());

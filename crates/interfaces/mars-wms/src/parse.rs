@@ -95,6 +95,16 @@ fn parse_get_map_inner(kvp: &Kvp, cfg: &WmsConfig) -> Result<RenderPlan, WmsErro
             reason: format!("max dimension is {}, got {}x{}", cfg.max_image_dimension, width, height),
         });
     }
+    let pixels = u64::from(width) * u64::from(height);
+    if pixels > cfg.max_pixels {
+        return Err(WmsError::InvalidParam {
+            name: "width|height",
+            reason: format!(
+                "max pixels per request is {}, got {} ({}x{})",
+                cfg.max_pixels, pixels, width, height
+            ),
+        });
+    }
 
     let format_raw = require(kvp, "format")?;
     let format = parse_format(&format_raw)?;
@@ -233,6 +243,7 @@ mod tests {
             allowlist_crs: vec![CrsCode::new("EPSG:25832"), CrsCode::new("EPSG:4326")],
             formats: vec![ImageFormat::Png],
             max_image_dimension: 8192,
+            max_pixels: 16_000_000,
             max_layers: 100,
             max_bbox_coord: 1e9,
         }

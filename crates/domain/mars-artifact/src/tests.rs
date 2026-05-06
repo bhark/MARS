@@ -4,7 +4,8 @@ use proptest::prelude::*;
 
 use crate::{
     ArtifactError, ArtifactKind, ArtifactReader, ArtifactWriter, FORMAT_VERSION, MAGIC, SectionKind, SourceRef,
-    compute_content_hash, decode_class_assignment, decode_geometry_payload, decode_style_refs, encode_geometry_payload,
+    compute_content_hash, decode_class_assignment, decode_geometry_payload, decode_geometry_payload_filtered,
+    decode_style_refs, encode_geometry_payload,
 };
 use crate::{Coord, FeatureGeom, GeomKind};
 
@@ -94,6 +95,29 @@ proptest! {
         let b = encode_geometry_payload(&features).unwrap();
         prop_assert_eq!(a, b);
     }
+
+    /// filtered decode must match decode-then-filter on equivalent predicates.
+    #[test]
+    fn geometry_payload_filter_parity(features in features_strategy()) {
+        let bytes = encode_geometry_payload(&features).unwrap();
+
+        // pred selects every other id: cheap, deterministic, mixes pass/skip.
+        let pred = |id: u64, _bbox: [f32; 4]| id.is_multiple_of(2);
+
+        let filtered = decode_geometry_payload_filtered(&bytes, pred).unwrap();
+        let full: Vec<FeatureGeom> = decode_geometry_payload(&bytes)
+            .unwrap()
+            .into_iter()
+            .filter(|f| pred(f.id, f.bbox))
+            .collect();
+
+        prop_assert_eq!(filtered.len(), full.len());
+        for (a, b) in filtered.iter().zip(&full) {
+            prop_assert_eq!(a.id, b.id);
+            prop_assert_eq!(a.bbox, b.bbox);
+            prop_assert!(geom_close(&a.geom, &b.geom));
+        }
+    }
 }
 
 #[test]
@@ -147,7 +171,7 @@ fn build_simple_artifact() -> Bytes {
         geom: GeomKind::LineString(vec![(0.0, 0.0), (10.0, 10.0)]),
     }];
     let mut w = ArtifactWriter::new(ArtifactKind::Source);
-    w.add_geometry_payload(&features)
+    w.add_geometry_payload(features)
         .set_bbox(Bbox::new(0.0, 0.0, 10.0, 10.0))
         .set_feature_count(1);
     w.finish().unwrap()
@@ -287,7 +311,7 @@ fn writer_validates_feature_count_against_payload() {
         geom: GeomKind::Point((0.0, 0.0)),
     }];
     let mut w = ArtifactWriter::new(ArtifactKind::Source);
-    w.add_geometry_payload(&features)
+    w.add_geometry_payload(features)
         .set_bbox(Bbox::new(0.0, 0.0, 1.0, 1.0))
         .set_feature_count(99);
     assert!(matches!(w.finish(), Err(ArtifactError::InvalidWriterState(_))));

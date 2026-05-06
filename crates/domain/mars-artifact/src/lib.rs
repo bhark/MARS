@@ -38,7 +38,10 @@ mod writer;
 
 pub use attrs::{AttrError, AttrValue, MAX_ROW_BYTES, decode_row, encode_row};
 pub use class_assignment::{decode_class_assignment, encode_class_assignment};
-pub use geometry::{Coord, FeatureGeom, GeomKind, decode_geometry_payload, encode_geometry_payload};
+pub use geometry::{
+    Coord, FeatureGeom, FeatureIndexEntry, FeatureIndexIter, GeomKind, decode_geometry_payload,
+    decode_geometry_payload_filtered, decode_one_geom, encode_geometry_payload, iter_feature_index,
+};
 pub use hash::compute_content_hash;
 pub use reader::ArtifactReader;
 pub use style_refs::{decode_style_refs, encode_style_refs};

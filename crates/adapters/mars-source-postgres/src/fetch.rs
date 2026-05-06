@@ -24,8 +24,11 @@ pub(crate) async fn fetch_cell(
         .get()
         .await
         .map_err(|e| SourceError::Backend(format!("pool: {e}")))?;
+    // per-connection statement cache: within a snapshot the SQL shape is
+    // fixed per (binding, filter), so the second cell onward reuses the
+    // server-side prepared statement.
     let stmt = client
-        .prepare(&sql)
+        .prepare_cached(&sql)
         .await
         .map_err(|e| SourceError::Backend(format!("prepare: {e}")))?;
 
