@@ -1,5 +1,7 @@
 //! Translate decoded pgoutput messages into `ChangeEvent`s.
 
+use std::borrow::Cow;
+
 use mars_source::{ChangeEvent, SourceError};
 
 use super::pgoutput::{ColumnData, DeletePayload, Message, Relation, Tuple, UpdatePayload};
@@ -78,7 +80,7 @@ fn insert_event(
         )));
     };
     let geom = extract_geom_bytes(tuple, entry.geometry_col_idx)?;
-    let bbox = bbox_of(geom).map_err(|e| SourceError::Backend(format!("wkb: {e}")))?;
+    let bbox = bbox_of(&geom).map_err(|e| SourceError::Backend(format!("wkb: {e}")))?;
     let cells = cells_for_bbox(bbox, &topology.bands, topology.max_cells_per_row)?;
     Ok(Translated(vec![ChangeEvent::Insert {
         collection: entry.topology.collection.clone(),
@@ -109,7 +111,7 @@ fn update_event(
     let mut seen: std::collections::HashSet<(String, i64, i64)> = std::collections::HashSet::new();
 
     let old_geom = extract_geom_bytes(old, entry.geometry_col_idx)?;
-    let old_bbox = bbox_of(old_geom).map_err(|e| SourceError::Backend(format!("wkb (old): {e}")))?;
+    let old_bbox = bbox_of(&old_geom).map_err(|e| SourceError::Backend(format!("wkb (old): {e}")))?;
     for c in cells_for_bbox(old_bbox, &topology.bands, topology.max_cells_per_row)? {
         let k = (c.band.as_str().to_string(), c.x, c.y);
         if seen.insert(k) {
@@ -118,7 +120,7 @@ fn update_event(
     }
 
     let new_geom = extract_geom_bytes(&payload.new, entry.geometry_col_idx)?;
-    let new_bbox = bbox_of(new_geom).map_err(|e| SourceError::Backend(format!("wkb (new): {e}")))?;
+    let new_bbox = bbox_of(&new_geom).map_err(|e| SourceError::Backend(format!("wkb (new): {e}")))?;
     for c in cells_for_bbox(new_bbox, &topology.bands, topology.max_cells_per_row)? {
         let k = (c.band.as_str().to_string(), c.x, c.y);
         if seen.insert(k) {
@@ -165,7 +167,7 @@ fn delete_event(
         DeletePayload::KeyOnly(_) => return Err(missing_full_old_error(entry, "delete")),
     };
     let geom = extract_geom_bytes(tuple, entry.geometry_col_idx)?;
-    let bbox = bbox_of(geom).map_err(|e| SourceError::Backend(format!("wkb: {e}")))?;
+    let bbox = bbox_of(&geom).map_err(|e| SourceError::Backend(format!("wkb: {e}")))?;
     let cells = cells_for_bbox(bbox, &topology.bands, topology.max_cells_per_row)?;
     Ok(Translated(vec![ChangeEvent::Delete {
         collection: entry.topology.collection.clone(),
@@ -187,17 +189,53 @@ fn truncate_event(oids: &[u32], cache: &RelationCache) -> Result<Translated, Sou
     Ok(Translated(events))
 }
 
-fn extract_geom_bytes<'a>(tuple: &'a Tuple<'a>, idx: usize) -> Result<&'a [u8], SourceError> {
+/// Extract the geometry bytes from a pgoutput tuple column.
+///
+/// pgoutput's default proto_version 1 sends column values in text format -
+/// for PostGIS geometry that means the type's `out` function output, which
+/// is the EWKB hex string (e.g. `0101000020...`). When binary mode is in
+/// effect, the bytes are already raw EWKB. We always return a borrowed or
+/// owned slice of raw EWKB bytes, normalising the two encodings.
+fn extract_geom_bytes<'a>(tuple: &'a Tuple<'a>, idx: usize) -> Result<Cow<'a, [u8]>, SourceError> {
     let col = tuple
         .columns
         .get(idx)
         .ok_or_else(|| SourceError::Backend(format!("pgoutput: geom col index {idx} out of range")))?;
     match col {
-        ColumnData::Binary(b) | ColumnData::Text(b) => Ok(b),
+        ColumnData::Binary(b) => Ok(Cow::Borrowed(b)),
+        ColumnData::Text(b) => decode_geom_hex(b).map(Cow::Owned),
         ColumnData::Null => Err(SourceError::Backend("pgoutput: geometry is NULL".into())),
         ColumnData::Unchanged => Err(SourceError::Backend(
             "pgoutput: geometry column is TOAST-unchanged in OLD tuple (REPLICA IDENTITY FULL?)".into(),
         )),
+    }
+}
+
+/// Decode PostGIS' text-format EWKB (uppercase or lowercase hex, no prefix)
+/// into raw bytes ready for the WKB bbox extractor.
+fn decode_geom_hex(s: &[u8]) -> Result<Vec<u8>, SourceError> {
+    if !s.len().is_multiple_of(2) {
+        return Err(SourceError::Backend(format!(
+            "pgoutput: geometry hex has odd length {}",
+            s.len()
+        )));
+    }
+    let mut out = Vec::with_capacity(s.len() / 2);
+    for pair in s.chunks_exact(2) {
+        out.push((nibble(pair[0])? << 4) | nibble(pair[1])?);
+    }
+    Ok(out)
+}
+
+fn nibble(c: u8) -> Result<u8, SourceError> {
+    match c {
+        b'0'..=b'9' => Ok(c - b'0'),
+        b'a'..=b'f' => Ok(c - b'a' + 10),
+        b'A'..=b'F' => Ok(c - b'A' + 10),
+        _ => Err(SourceError::Backend(format!(
+            "pgoutput: invalid hex digit {:?} in geometry text",
+            c as char
+        ))),
     }
 }
 
@@ -284,6 +322,36 @@ mod tests {
         let entry = cache.get(100).unwrap();
         assert_eq!(entry.geometry_col_idx, 1);
         assert_eq!(entry.topology.collection, "roads");
+    }
+
+    #[test]
+    fn insert_decodes_text_mode_hex_geometry() {
+        // text-mode pgoutput delivers PostGIS geometry as ASCII hex of the
+        // EWKB bytes. translate must round-trip through hex decoding.
+        let mut cache = RelationCache::default();
+        let t = topo();
+        let _ = translate(Message::Relation(relation_msg()), &mut cache, &t).unwrap();
+        let raw = point_le(50.0, 50.0);
+        let mut hex = String::new();
+        for b in &raw {
+            hex.push_str(&format!("{:02x}", b));
+        }
+        let tuple = Tuple {
+            columns: vec![ColumnData::Text(b"42"), ColumnData::Text(hex.as_bytes())],
+        };
+        let res = translate(
+            Message::Insert {
+                relation_oid: 100,
+                tuple,
+            },
+            &mut cache,
+            &t,
+        )
+        .unwrap();
+        match one_event(res) {
+            ChangeEvent::Insert { cells, .. } => assert_eq!(cells.len(), 1),
+            other => panic!("expected Insert, got {other:?}"),
+        }
     }
 
     #[test]

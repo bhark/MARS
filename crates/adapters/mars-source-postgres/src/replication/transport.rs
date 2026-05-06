@@ -44,6 +44,20 @@ const BATCH_CHANNEL_CAPACITY: usize = 64;
 /// a burst of XLogData frames between commits without blocking the wire.
 const WORKER_EVENT_BUFFER: usize = 8192;
 
+/// How often the library flushes the latest applied/flush LSN to the server
+/// as a standby status update. The library default (10s) is fine for batch
+/// CDC but is too lazy for our ack semantics — between ack and disconnect
+/// we must have flushed the cursor or the next subscription will replay an
+/// already-persisted window. One second balances quick advancement with
+/// keepalive overhead.
+const STATUS_FLUSH_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// How long the library parks in a socket read before waking up to send
+/// a periodic status update. Must be <= STATUS_FLUSH_INTERVAL or the
+/// worker may sleep through several intervals when the stream is idle and
+/// no acks would be flushed in time for a graceful shutdown.
+const IDLE_WAKEUP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
 /// Spawn the replication subscriber task and return the ack-aware subscription.
 pub(crate) async fn run(
     cfg: Arc<PgConfig>,
@@ -298,7 +312,8 @@ fn build_replication_config(cfg: &PgConfig) -> Result<ReplicationConfig, SourceE
         start_lsn: Lsn::ZERO,
         stop_at_lsn: None,
         buffer_events: WORKER_EVENT_BUFFER,
-        ..Default::default()
+        status_interval: STATUS_FLUSH_INTERVAL,
+        idle_wakeup_interval: IDLE_WAKEUP_INTERVAL,
     })
 }
 
