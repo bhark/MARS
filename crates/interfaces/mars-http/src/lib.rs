@@ -4,12 +4,11 @@
 //!
 //! ```text
 //! /wms        WMS 1.3.0
+//! /wmts       reserved (501 until Phase 1 tile-cache lands)
 //! /healthz    liveness
 //! /readyz     readiness (gated on a usable manifest)
 //! /metrics    Prometheus scrape
 //! ```
-//!
-//! WMTS lands in Phase 1 alongside the tile-cache.
 
 #![forbid(unsafe_code)]
 
@@ -100,6 +99,7 @@ pub fn router(runtime: Arc<Runtime>, capabilities: CapabilitiesHandle, wms_cfg: 
     };
     Router::new()
         .route("/wms", get(handle_wms))
+        .route("/wmts", get(handle_wmts_not_implemented))
         .route("/healthz", get(|| async { (StatusCode::OK, "ok") }))
         .route("/readyz", get(handle_ready))
         .route("/metrics", get(handle_metrics))
@@ -214,6 +214,18 @@ async fn handle_wms(State(state): State<AppState>, headers: HeaderMap, raw_query
     }
     .instrument(span)
     .await
+}
+
+/// /wmts is reserved for the WMTS interface that lands with the tile cache.
+/// Until then, return a clean 501 so probing clients get a typed answer
+/// rather than a 404 that suggests the route does not exist.
+async fn handle_wmts_not_implemented() -> Response {
+    let exc = WmsException {
+        status: StatusCode::NOT_IMPLEMENTED,
+        code: Some("OperationNotSupported"),
+        message: "WMTS is not yet implemented".into(),
+    };
+    wms_exception_response(exc)
 }
 
 async fn handle_ready(State(state): State<AppState>) -> Response {
@@ -466,6 +478,19 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(body_str(resp).await, "ok");
+    }
+
+    #[tokio::test]
+    async fn wmts_returns_501_with_service_exception() {
+        let app = empty_router();
+        let resp = app
+            .oneshot(Request::builder().uri("/wmts").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_IMPLEMENTED);
+        let body = body_str(resp).await;
+        assert!(body.contains("ServiceExceptionReport"));
+        assert!(body.contains("OperationNotSupported"));
     }
 
     #[tokio::test]
