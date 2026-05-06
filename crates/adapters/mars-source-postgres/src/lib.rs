@@ -272,6 +272,7 @@ mod e2e_tests {
             dsn: dsn.clone(),
             publication: String::new(),
             slot: String::new(),
+            ..Default::default()
         };
         let src = PgSource::connect(setup).await.unwrap();
         let client = src.pool.get().await.unwrap();

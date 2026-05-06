@@ -36,6 +36,7 @@ async fn try_acquire_grants_one_leader_and_denies_concurrent() {
         dsn,
         publication: String::new(),
         slot: String::new(),
+        ..Default::default()
     };
     let a = PgSource::connect(cfg.clone()).await.unwrap();
     let b = PgSource::connect(cfg).await.unwrap();
