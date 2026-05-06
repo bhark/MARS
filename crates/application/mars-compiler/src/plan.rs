@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use mars_config::{Band, ClassStyle, Config, Layer, ScaleWindow, SourceBinding as CfgBinding};
+use mars_config::{ClassStyle, Config, Layer, ScaleWindow, SourceBinding as CfgBinding};
 use mars_expr::ExprError;
 use mars_grid::{BandConfig, GridError, cells_in_bbox};
 use mars_source::{SourceBinding, SourceCollectionId, SourceError};
@@ -39,16 +39,31 @@ pub struct BuildTask {
     pub classes: Vec<CompiledClass>,
 }
 
+/// hard limit on cells a single band+binding may cover. prevents oom from
+/// pathological extent / tiny cell size combinations.
+pub const MAX_CELLS_PER_BAND_PER_BINDING: usize = 16_000_000;
+
 /// build the full plan from the config.
 pub fn build_plan(cfg: &Config) -> Result<Vec<BuildTask>, PlanError> {
     let cell_sizes = cfg.cells.size_per_band_m()?;
-    let band_index: BTreeMap<&str, &Band> = cfg.scales.bands.iter().map(|b| (b.name.as_str(), b)).collect();
+    let band_index: BTreeMap<&str, &mars_config::Band> =
+        cfg.scales.bands.iter().map(|b| (b.name.as_str(), b)).collect();
     let origin = (cfg.cells.origin[0], cfg.cells.origin[1]);
     let extent = cfg.cells.extent.unwrap_or_else(|| {
         // single-cell fallback at the origin for phase-0 in-memory tests
         Bbox::new(origin.0, origin.1, origin.0 + 1.0, origin.1 + 1.0)
     });
     let crs = cfg.source.native_crs.clone();
+
+    // compute per-band lower bound (previous band's max_denom, or 0)
+    let mut sorted_bands: Vec<_> = cfg.scales.bands.iter().collect();
+    sorted_bands.sort_by_key(|b| b.max_denom);
+    let mut band_mins: BTreeMap<&str, u64> = BTreeMap::new();
+    let mut prev_max = 0u64;
+    for band in &sorted_bands {
+        band_mins.insert(band.name.as_str(), prev_max);
+        prev_max = band.max_denom;
+    }
 
     let mut tasks = Vec::new();
     for layer in &cfg.layers {
@@ -58,7 +73,10 @@ pub fn build_plan(cfg: &Config) -> Result<Vec<BuildTask>, PlanError> {
                 let band = band_index
                     .get(band_name.as_str())
                     .ok_or_else(|| PlanError::Invalid(format!("unknown band {band_name}")))?;
-                if !window_intersects(&layer.scale, band) || !window_intersects(&binding.scale, band) {
+                let band_min = band_mins.get(band_name.as_str()).copied().unwrap_or(0);
+                if !window_intersects(&layer.scale, band_min, band.max_denom)
+                    || !window_intersects(&binding.scale, band_min, band.max_denom)
+                {
                     continue;
                 }
                 if let Some(ref b) = binding.band
@@ -73,7 +91,13 @@ pub fn build_plan(cfg: &Config) -> Result<Vec<BuildTask>, PlanError> {
                     cell_size,
                 };
                 let extent_for_layer = layer.bbox.unwrap_or(extent);
-                let cells = cells_in_bbox(extent_for_layer, &band_cfg, usize::MAX)?;
+                let cells = cells_in_bbox(extent_for_layer, &band_cfg, MAX_CELLS_PER_BAND_PER_BINDING).map_err(|e| match e {
+                    GridError::TooManyCells { .. } => PlanError::Invalid(format!(
+                        "band '{band_name}' covers too many cells for layer '{}'; tighten extent or coarsen cell size",
+                        layer.name
+                    )),
+                    other => PlanError::Grid(other),
+                })?;
                 if cells.is_empty() {
                     continue;
                 }
@@ -102,19 +126,15 @@ pub fn cell_bbox(origin: (f64, f64), cell_size: f64, cell: &Cell) -> Bbox {
     Bbox::new(min_x, min_y, min_x + cell_size, min_y + cell_size)
 }
 
-pub(crate) fn window_intersects(window: &Option<ScaleWindow>, band: &Band) -> bool {
-    // a band spans [prev_max .. band.max_denom). without prev_max here we
-    // accept anything overlapping (0, band.max_denom). good enough for phase-0
-    // since the test config has one band.
+pub(crate) fn window_intersects(window: &Option<ScaleWindow>, band_min: u64, band_max: u64) -> bool {
     let Some(w) = window else { return true };
-    let band_max = band.max_denom;
     if let Some(min) = w.min
         && min >= band_max
     {
         return false;
     }
     if let Some(max) = w.max
-        && max == 0
+        && max <= band_min
     {
         return false;
     }
@@ -207,51 +227,54 @@ mod tests {
 
     #[test]
     fn window_intersects_no_window() {
-        let band = Band {
-            name: "hi".into(),
-            max_denom: 25000,
-        };
-        assert!(window_intersects(&None, &band));
+        assert!(window_intersects(&None, 0, 25000));
     }
 
     #[test]
     fn window_intersects_min_at_threshold_rejected() {
         // band covers [0, 25000); window.min = 25000 means no overlap
-        let band = Band {
-            name: "hi".into(),
-            max_denom: 25000,
-        };
         let w = ScaleWindow {
             min: Some(25000),
             max: None,
         };
-        assert!(!window_intersects(&Some(w), &band));
+        assert!(!window_intersects(&Some(w), 0, 25000));
     }
 
     #[test]
     fn window_intersects_min_below_threshold_accepted() {
-        let band = Band {
-            name: "hi".into(),
-            max_denom: 25000,
-        };
         let w = ScaleWindow {
             min: Some(24999),
             max: None,
         };
-        assert!(window_intersects(&Some(w), &band));
+        assert!(window_intersects(&Some(w), 0, 25000));
+    }
+
+    #[test]
+    fn window_intersects_max_at_threshold_rejected() {
+        // band covers [1000, 25000); window.max = 1000 means no overlap
+        let w = ScaleWindow {
+            min: None,
+            max: Some(1000),
+        };
+        assert!(!window_intersects(&Some(w), 1000, 25000));
+    }
+
+    #[test]
+    fn window_intersects_max_above_threshold_accepted() {
+        let w = ScaleWindow {
+            min: None,
+            max: Some(1001),
+        };
+        assert!(window_intersects(&Some(w), 1000, 25000));
     }
 
     #[test]
     fn window_intersects_max_zero_rejected() {
-        let band = Band {
-            name: "hi".into(),
-            max_denom: 25000,
-        };
         let w = ScaleWindow {
             min: None,
             max: Some(0),
         };
-        assert!(!window_intersects(&Some(w), &band));
+        assert!(!window_intersects(&Some(w), 0, 25000));
     }
 
     #[test]
@@ -371,6 +394,107 @@ mod tests {
         assert_eq!(binding.from_schema, "public");
         assert_eq!(binding.from_table, "mytable");
         assert_eq!(binding.id_column, "ogc_fid");
+    }
+
+    #[test]
+    fn window_intersects_across_two_bands() {
+        // bands: [0, 1000) and [1000, 5000)
+        // window [500, 1500) overlaps both
+        let w = ScaleWindow {
+            min: Some(500),
+            max: Some(1500),
+        };
+        assert!(window_intersects(&Some(w.clone()), 0, 1000));
+        assert!(window_intersects(&Some(w), 1000, 5000));
+
+        // window [2000, 3000) overlaps only second band
+        let w2 = ScaleWindow {
+            min: Some(2000),
+            max: Some(3000),
+        };
+        assert!(!window_intersects(&Some(w2.clone()), 0, 1000));
+        assert!(window_intersects(&Some(w2), 1000, 5000));
+    }
+
+    #[test]
+    fn build_plan_rejects_too_many_cells() {
+        use mars_config::{ArtifactCache, ArtifactStore, Artifacts, Config, ServiceMeta, Source};
+        use mars_types::Bbox;
+        use std::collections::BTreeMap;
+
+        let mut size_per_band = BTreeMap::new();
+        size_per_band.insert("hi".into(), "1m".into());
+
+        let cfg = Config {
+            service: ServiceMeta {
+                name: "t".into(),
+                ..Default::default()
+            },
+            source: Source {
+                kind: "memory".into(),
+                dsn: "memory://".into(),
+                native_crs: CrsCode::new("EPSG:25832"),
+                change_feed: None,
+            },
+            artifacts: Artifacts {
+                store: ArtifactStore {
+                    kind: "fs".into(),
+                    endpoint: None,
+                    bucket: None,
+                    prefix: None,
+                    path: Some("/tmp".into()),
+                },
+                cache: ArtifactCache {
+                    path: "/tmp".into(),
+                    max_size: "1GiB".into(),
+                    eviction: "lru".into(),
+                },
+            },
+            scales: mars_config::Scales {
+                bands: vec![mars_config::Band {
+                    name: "hi".into(),
+                    max_denom: 25000,
+                }],
+            },
+            cells: mars_config::Cells {
+                grid: "regular".into(),
+                origin: [0.0, 0.0],
+                size_per_band,
+                extent: Some(Bbox::new(0.0, 0.0, 1_000_000.0, 1_000_000.0)),
+            },
+            interfaces: Default::default(),
+            tile_matrix_sets: Default::default(),
+            reprojection: Default::default(),
+            styles: Default::default(),
+            layers: vec![Layer {
+                name: LayerId::new("roads"),
+                title: String::new(),
+                abstract_: String::new(),
+                kind: "line".into(),
+                scale: None,
+                group: None,
+                enable_get_feature_info: false,
+                bbox: None,
+                sources: vec![CfgBinding {
+                    scale: None,
+                    band: None,
+                    from: "roads".into(),
+                    geometry_column: "geom".into(),
+                    id_column: None,
+                    attributes: vec![],
+                }],
+                classes: vec![],
+                label: None,
+            }],
+            observability: Default::default(),
+            render: Default::default(),
+        };
+
+        let err = build_plan(&cfg).unwrap_err();
+        assert!(
+            matches!(err, PlanError::Invalid(ref s) if s.contains("too many cells")),
+            "expected Invalid with 'too many cells', got {err:?}"
+        );
     }
 
     #[test]
