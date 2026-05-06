@@ -340,6 +340,11 @@ pub struct Manifest {
     /// v1 manifests without the field load cleanly during rollback windows.
     #[serde(default)]
     pub empty_layer_cells: Vec<EmptyLayerCell>,
+    /// opaque source-side cursor (e.g. pgoutput LSN) at which this manifest's
+    /// state was captured. additive, optional; older manifests deserialise as
+    /// `None` and snapshot compiles set it to `None`.
+    #[serde(default)]
+    pub source_version: Option<String>,
 }
 
 impl Manifest {
@@ -362,6 +367,7 @@ impl Manifest {
             layer_artifacts,
             style_artifact,
             empty_layer_cells,
+            source_version: None,
         }
     }
 }
