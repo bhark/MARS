@@ -11,9 +11,9 @@ use std::time::{Duration, Instant};
 use futures_util::stream::{self, StreamExt};
 use mars_config::Config;
 use mars_observability::Metrics;
-use mars_source::{ChangeFeed, LeaderLock, LeaderLockGuard, Source};
+use mars_source::{ChangeFeed, LeaderLock, LeaderLockGuard, Source, SourceBinding};
 use mars_store::{ManifestStore, ObjectStore, StoreError};
-use mars_types::Manifest;
+use mars_types::{Bbox, Manifest};
 use tokio_util::sync::CancellationToken;
 
 pub mod class;
@@ -42,6 +42,12 @@ pub fn leader_lock_key(name: &str) -> i64 {
 /// a usable value. The connection pool size on the source side becomes the
 /// real ceiling, but 16 is a reasonable starting point for typical pg pools.
 const FALLBACK_SNAPSHOT_CONCURRENCY: usize = 16;
+
+/// Cells per pipelined `Source::fetch_cells` call. Keeps the fetch chunk small
+/// enough that each chunk only consumes one `parallel_cells` slot at a time —
+/// one giant batch per binding-shape would collapse the whole budget down to
+/// one connection. Promote to config if benches motivate it.
+const FETCH_CHUNK: usize = 48;
 
 /// Capped exponential backoff schedule for retrying a transient publish.
 /// On exhaustion the underlying error propagates so the supervisor restarts.
@@ -250,6 +256,12 @@ impl Compiler {
     /// Drive one plan through the per-source-cell rebuild pipeline. Concurrency
     /// comes from `compiler.parallel_cells` if set, else `available_parallelism`,
     /// else [`FALLBACK_SNAPSHOT_CONCURRENCY`].
+    ///
+    /// SourceTasks are grouped by their canonicalised `SourceBinding` and each
+    /// group is chunked to [`FETCH_CHUNK`] cells per `Source::fetch_cells`
+    /// call. The PG adapter pipelines a chunk's queries on one connection,
+    /// amortising RTT; the in-memory default loops `fetch_cell`. Per-chunk
+    /// futures fan out via `buffer_unordered(parallel_cells)`.
     async fn execute_plan(
         &self,
         plan: plan::Plan,
@@ -262,7 +274,7 @@ impl Compiler {
         let dependents = plan.dependents_by_source();
         let plan::Plan { sources, layers } = plan;
         let layer_arcs: Vec<Arc<plan::LayerTask>> = layers.into_iter().map(Arc::new).collect();
-        let units: Vec<(Arc<plan::SourceTask>, Vec<Arc<plan::LayerTask>>)> = sources
+        let units: Vec<SourceUnit> = sources
             .into_iter()
             .zip(dependents)
             .map(|(s, deps)| {
@@ -271,12 +283,14 @@ impl Compiler {
             })
             .collect();
 
+        let chunks = group_and_chunk_units(units, FETCH_CHUNK);
+
         let parallel = self.snapshot_concurrency();
-        let mut stream = stream::iter(units)
-            .map(|(task, deps)| {
+        let mut stream = stream::iter(chunks)
+            .map(|chunk| {
                 let source = source.clone();
                 let store = store.clone();
-                async move { snapshot::run_source_cell(&task, &deps, &source, &store).await }
+                async move { run_chunk(chunk, &source, &store).await }
             })
             .buffer_unordered(parallel);
         while let Some(result) = stream.next().await {
@@ -296,6 +310,87 @@ impl Compiler {
             .or_else(|| std::thread::available_parallelism().ok().map(NonZeroUsize::get))
             .unwrap_or(FALLBACK_SNAPSHOT_CONCURRENCY)
     }
+}
+
+/// One source-cell unit: a `SourceTask` plus the layer tasks it feeds.
+type SourceUnit = (Arc<plan::SourceTask>, Vec<Arc<plan::LayerTask>>);
+
+/// One executor unit: every cell in `chunk` shares `binding`, so a single
+/// `fetch_cells` call materialises every row and the per-cell builds run
+/// against pre-fetched rows.
+struct FetchChunk {
+    binding: SourceBinding,
+    units: Vec<SourceUnit>,
+}
+
+/// Group SourceTasks by their canonicalised `SourceBinding` (every field —
+/// schema, table, geom column, id column, attribute projection, CRS,
+/// collection name) and chunk each group to `chunk_size` cells per fetch.
+/// Two layers can reference the same `SourceCollectionId` with disjoint
+/// attribute unions or different schema/table; those produce different SQL
+/// shapes and cannot share a fetch call.
+fn group_and_chunk_units(units: Vec<SourceUnit>, chunk_size: usize) -> Vec<FetchChunk> {
+    // typical configs have a handful of distinct bindings, so a linear-search
+    // grouping is faster than building a hashmap here. SourceBinding has
+    // `PartialEq + Eq` already.
+    let mut groups: Vec<(SourceBinding, Vec<SourceUnit>)> = Vec::new();
+    for unit in units {
+        let key = &unit.0.binding;
+        if let Some(g) = groups.iter_mut().find(|(b, _)| b == key) {
+            g.1.push(unit);
+        } else {
+            groups.push((unit.0.binding.clone(), vec![unit]));
+        }
+    }
+
+    let chunk_size = chunk_size.max(1);
+    let mut out: Vec<FetchChunk> = Vec::new();
+    for (binding, group_units) in groups {
+        for chunk in group_units.chunks(chunk_size) {
+            out.push(FetchChunk {
+                binding: binding.clone(),
+                units: chunk.to_vec(),
+            });
+        }
+    }
+    out
+}
+
+/// Fetch every cell in `chunk` through one `Source::fetch_cells` call, then
+/// drive each cell's encode + publish from the pre-fetched rows. The
+/// `fetch_cells` port contract preserves input order, so we route results by
+/// position and assert the cell labels match for safety.
+async fn run_chunk(
+    chunk: FetchChunk,
+    source: &Arc<dyn Source>,
+    store: &Arc<dyn ObjectStore>,
+) -> Result<snapshot::SnapshotOutput, CompilerError> {
+    let FetchChunk { binding, units } = chunk;
+
+    let cells: Vec<(mars_types::Cell, Bbox)> = units
+        .iter()
+        .map(|(task, _)| {
+            let bbox = plan::cell_bbox(task.origin, task.cell_size, &task.cell);
+            (task.cell.clone(), bbox)
+        })
+        .collect();
+
+    let fetched = source.fetch_cells(&binding, &cells, None).await?;
+    if fetched.len() != units.len() {
+        return Err(CompilerError::Source(mars_source::SourceError::Backend(format!(
+            "fetch_cells returned {} results for {} cells",
+            fetched.len(),
+            units.len(),
+        ))));
+    }
+
+    let mut out = snapshot::SnapshotOutput::default();
+    for ((task, deps), (cell, rows)) in units.into_iter().zip(fetched) {
+        debug_assert_eq!(task.cell, cell, "fetch_cells must preserve input order");
+        let result = snapshot::build_and_publish(&task, &deps, rows, store).await?;
+        out.extend(result);
+    }
+    Ok(out)
 }
 
 /// Publish a manifest, retrying on transient `StoreError::Transient` with the
@@ -329,5 +424,76 @@ async fn publish_with_retry(
             _ = shutdown.cancelled() => return Err(CompilerError::Store(StoreError::Transient(reason))),
             _ = tokio::time::sleep(*d) => {}
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use super::*;
+    use mars_source::SourceCollectionId;
+    use mars_types::{Cell, CrsCode, ScaleBand};
+
+    fn binding(collection: &str, attrs: Vec<&str>) -> SourceBinding {
+        SourceBinding::new(
+            SourceCollectionId::new(collection),
+            "public",
+            "t",
+            "geom",
+            "gid",
+            attrs.into_iter().map(String::from).collect(),
+            CrsCode::new("EPSG:25832"),
+        )
+        .unwrap()
+    }
+
+    fn unit(binding: SourceBinding, x: i64) -> SourceUnit {
+        let task = plan::SourceTask {
+            band: ScaleBand::new("hi"),
+            cell: Cell {
+                band: ScaleBand::new("hi"),
+                x,
+                y: 0,
+            },
+            binding,
+            cell_size: 256.0,
+            origin: (0.0, 0.0),
+        };
+        (Arc::new(task), Vec::new())
+    }
+
+    #[test]
+    fn grouping_collapses_identical_bindings() {
+        let b1 = binding("c", vec!["name"]);
+        let units = vec![unit(b1.clone(), 0), unit(b1.clone(), 1), unit(b1, 2)];
+        let chunks = group_and_chunk_units(units, 48);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].units.len(), 3);
+    }
+
+    #[test]
+    fn grouping_separates_distinct_bindings() {
+        // same collection, different attribute projection — different SQL shape.
+        let units = vec![
+            unit(binding("c", vec!["name"]), 0),
+            unit(binding("c", vec!["name", "kind"]), 1),
+            unit(binding("c", vec!["name"]), 2),
+        ];
+        let chunks = group_and_chunk_units(units, 48);
+        assert_eq!(chunks.len(), 2, "two distinct bindings must produce two chunks");
+        let total: usize = chunks.iter().map(|c| c.units.len()).sum();
+        assert_eq!(total, 3);
+    }
+
+    #[test]
+    fn chunk_size_caps_in_flight_cells() {
+        let b = binding("c", vec![]);
+        let units: Vec<_> = (0..100i64).map(|x| unit(b.clone(), x)).collect();
+        let chunks = group_and_chunk_units(units, 48);
+        // 100 cells, chunk_size=48 -> 48, 48, 4
+        assert_eq!(chunks.len(), 3);
+        assert_eq!(chunks[0].units.len(), 48);
+        assert_eq!(chunks[1].units.len(), 48);
+        assert_eq!(chunks[2].units.len(), 4);
     }
 }
