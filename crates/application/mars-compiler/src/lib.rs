@@ -130,33 +130,37 @@ impl Compiler {
             return Ok(0);
         }
 
-        let tasks = plan::build_plan(&self.config)?;
-        tracing::info!(task_count = tasks.len(), "compiler: snapshot plan built");
+        let plan = plan::build_plan(&self.config)?;
+        tracing::info!(
+            sources = plan.sources.len(),
+            layers = plan.layers.len(),
+            "compiler: snapshot plan built",
+        );
         self.deps.metrics.inc_compiler_change_events();
-        self.deps.metrics.inc_compiler_dirty_cells(tasks.len() as u64);
+        self.deps.metrics.inc_compiler_dirty_cells(plan.sources.len() as u64);
         self.deps.metrics.set_compiler_window_lag(std::time::Duration::ZERO);
 
         let mut output = snapshot::SnapshotOutput::default();
         let source = self.deps.source.clone();
         let store = self.deps.store.clone();
         let rebuild_start = Instant::now();
-        // flatten (task × cell) so the unit of parallelism is one cell. with
-        // a single layer/source/band the previous task-level granularity was
-        // effectively serial; per-cell fan-out keeps the postgres pool busy.
-        // the per-task `Arc<BuildTask>` carries shared compiled-class state.
-        let units = tasks
+
+        let dependents = plan.dependents_by_source();
+        let plan::Plan { sources, layers } = plan;
+        let layer_arcs: Vec<Arc<plan::LayerTask>> = layers.into_iter().map(Arc::new).collect();
+        let units: Vec<(Arc<plan::SourceTask>, Vec<Arc<plan::LayerTask>>)> = sources
             .into_iter()
-            .flat_map(|t| {
-                let cells = t.cells.clone();
-                let task = Arc::new(t);
-                cells.into_iter().map(move |c| (task.clone(), c))
+            .zip(dependents.into_iter())
+            .map(|(s, deps)| {
+                let dep_arcs: Vec<Arc<plan::LayerTask>> = deps.into_iter().map(|i| layer_arcs[i].clone()).collect();
+                (Arc::new(s), dep_arcs)
             })
-            .collect::<Vec<_>>();
+            .collect();
         let mut stream = stream::iter(units)
-            .map(|(task, cell)| {
+            .map(|(task, deps)| {
                 let source = source.clone();
                 let store = store.clone();
-                async move { snapshot::run_cell(&task, &cell, &source, &store).await }
+                async move { snapshot::run_source_cell(&task, &deps, &source, &store).await }
             })
             .buffer_unordered(DEFAULT_SNAPSHOT_CONCURRENCY);
         while let Some(result) = stream.next().await {

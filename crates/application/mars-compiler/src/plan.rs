@@ -1,7 +1,13 @@
-//! Translate a typed `Config` into a flat list of per-binding `BuildTask`s.
+//! Translate a typed `Config` into a deduplicated source/layer build graph.
 //!
-//! one task = one (layer, band, binding) triple plus the cell list and the
-//! pre-parsed class table. the snapshot driver consumes these directly.
+//! - one [`SourceTask`] per distinct `(collection, band, cell)` carrying the
+//!   union of attributes required by every dependent layer;
+//! - one [`LayerTask`] per `(layer, band, cell)` referencing its source task
+//!   by index plus the pre-compiled class table.
+//!
+//! The snapshot driver iterates source tasks (the unit of parallelism); for
+//! each it fans out the dependent layer tasks once rows are in memory, so a
+//! source cell shared between layers is fetched and materialised exactly once.
 
 use std::collections::BTreeMap;
 
@@ -27,16 +33,51 @@ pub enum PlanError {
     Config(#[from] mars_config::ConfigError),
 }
 
-/// One unit of compiler work for the snapshot driver.
+/// One source-side rebuild target: fetch rows once, materialise one source
+/// artifact. Keyed by `(collection, band, cell)`.
 #[derive(Debug, Clone)]
-pub struct BuildTask {
-    pub layer: LayerId,
+pub struct SourceTask {
+    pub collection: SourceCollectionId,
     pub band: ScaleBand,
+    pub cell: Cell,
+    /// Binding with the *union* of attributes required across all dependent
+    /// layer tasks. Identity-bearing fields (schema/table/geom/id columns,
+    /// crs) must agree with every contributing layer binding.
     pub binding: SourceBinding,
-    pub cells: Vec<Cell>,
     pub cell_size: f64,
     pub origin: (f64, f64),
+}
+
+/// One layer-side rebuild target. Reads from the source task at
+/// [`LayerTask::source`] (an index into [`Plan::sources`]).
+#[derive(Debug, Clone)]
+pub struct LayerTask {
+    pub layer: LayerId,
+    pub band: ScaleBand,
+    pub cell: Cell,
+    pub source: usize,
     pub classes: Vec<CompiledClass>,
+}
+
+/// Full snapshot build plan: deduplicated source tasks + dependent layer tasks.
+#[derive(Debug, Default, Clone)]
+pub struct Plan {
+    pub sources: Vec<SourceTask>,
+    pub layers: Vec<LayerTask>,
+}
+
+impl Plan {
+    /// Group `LayerTask` indices by their source-task index. Returned vec is
+    /// indexed in lockstep with `self.sources`.
+    pub fn dependents_by_source(&self) -> Vec<Vec<usize>> {
+        let mut out: Vec<Vec<usize>> = (0..self.sources.len()).map(|_| Vec::new()).collect();
+        for (i, t) in self.layers.iter().enumerate() {
+            if let Some(slot) = out.get_mut(t.source) {
+                slot.push(i);
+            }
+        }
+        out
+    }
 }
 
 /// hard limit on cells a single band+binding may cover. prevents oom from
@@ -44,7 +85,7 @@ pub struct BuildTask {
 pub const MAX_CELLS_PER_BAND_PER_BINDING: usize = 16_000_000;
 
 /// build the full plan from the config.
-pub fn build_plan(cfg: &Config) -> Result<Vec<BuildTask>, PlanError> {
+pub fn build_plan(cfg: &Config) -> Result<Plan, PlanError> {
     let cell_sizes = cfg.cells.size_per_band_m()?;
     let band_index: BTreeMap<&str, &mars_config::Band> =
         cfg.scales.bands.iter().map(|b| (b.name.as_str(), b)).collect();
@@ -65,7 +106,10 @@ pub fn build_plan(cfg: &Config) -> Result<Vec<BuildTask>, PlanError> {
         prev_max = band.max_denom;
     }
 
-    let mut tasks = Vec::new();
+    // index of (collection, band, cell.x, cell.y) -> position in plan.sources
+    let mut source_index: BTreeMap<(String, String, i64, i64), usize> = BTreeMap::new();
+    let mut plan = Plan::default();
+
     for layer in &cfg.layers {
         let classes = compile_classes(layer)?;
         for binding in &layer.sources {
@@ -102,19 +146,72 @@ pub fn build_plan(cfg: &Config) -> Result<Vec<BuildTask>, PlanError> {
                     continue;
                 }
                 let port_binding = lower_binding(binding, &crs)?;
-                tasks.push(BuildTask {
-                    layer: layer.name.clone(),
-                    band: ScaleBand::new(band_name.as_str()),
-                    binding: port_binding,
-                    cells,
-                    cell_size,
-                    origin,
-                    classes: classes.clone(),
-                });
+                let band_id = ScaleBand::new(band_name.as_str());
+                for cell in cells {
+                    let key = (
+                        port_binding.collection.as_str().to_string(),
+                        band_name.clone(),
+                        cell.x,
+                        cell.y,
+                    );
+                    let source_idx = match source_index.get(&key) {
+                        Some(&idx) => {
+                            merge_source_binding(&mut plan.sources[idx].binding, &port_binding)?;
+                            idx
+                        }
+                        None => {
+                            let idx = plan.sources.len();
+                            plan.sources.push(SourceTask {
+                                collection: port_binding.collection.clone(),
+                                band: band_id.clone(),
+                                cell: cell.clone(),
+                                binding: port_binding.clone(),
+                                cell_size,
+                                origin,
+                            });
+                            source_index.insert(key, idx);
+                            idx
+                        }
+                    };
+                    plan.layers.push(LayerTask {
+                        layer: layer.name.clone(),
+                        band: band_id.clone(),
+                        cell,
+                        source: source_idx,
+                        classes: classes.clone(),
+                    });
+                }
             }
         }
     }
-    Ok(tasks)
+    Ok(plan)
+}
+
+/// Merge `incoming` into `existing` for a shared `(collection, band, cell)`.
+/// Identity-bearing fields must agree; attribute lists are unioned in stable
+/// order (existing first, new entries appended in incoming order).
+fn merge_source_binding(existing: &mut SourceBinding, incoming: &SourceBinding) -> Result<(), PlanError> {
+    if existing.from_schema != incoming.from_schema
+        || existing.from_table != incoming.from_table
+        || existing.geometry_column != incoming.geometry_column
+        || existing.id_column != incoming.id_column
+        || existing.crs != incoming.crs
+    {
+        return Err(PlanError::Invalid(format!(
+            "two layers reference source collection {:?} with conflicting bindings; \
+             schema/table/geometry_column/id_column/crs must match",
+            existing.collection.as_str()
+        )));
+    }
+    let known: std::collections::HashSet<&str> = existing.attributes.iter().map(String::as_str).collect();
+    let additions: Vec<String> = incoming
+        .attributes
+        .iter()
+        .filter(|a| !known.contains(a.as_str()))
+        .cloned()
+        .collect();
+    existing.attributes.extend(additions);
+    Ok(())
 }
 
 /// canonical-crs bbox of a single cell.
@@ -582,8 +679,127 @@ mod tests {
             compiler: Default::default(),
         };
 
-        let tasks = build_plan(&cfg).unwrap();
-        assert_eq!(tasks.len(), 1);
-        assert_eq!(tasks[0].band.as_str(), "lo");
+        let plan = build_plan(&cfg).unwrap();
+        assert_eq!(plan.sources.len(), 1);
+        assert_eq!(plan.layers.len(), 1);
+        assert_eq!(plan.sources[0].band.as_str(), "lo");
+        assert_eq!(plan.layers[0].band.as_str(), "lo");
+    }
+
+    fn make_layer(name: &str, from: &str, attrs: Vec<&str>) -> Layer {
+        Layer {
+            name: LayerId::new(name),
+            title: String::new(),
+            abstract_: String::new(),
+            kind: "polygon".into(),
+            scale: None,
+            group: None,
+            enable_get_feature_info: false,
+            bbox: None,
+            sources: vec![CfgBinding {
+                scale: None,
+                band: Some("hi".into()),
+                from: from.into(),
+                geometry_column: "geom".into(),
+                id_column: Some("gid".into()),
+                attributes: attrs.into_iter().map(String::from).collect(),
+            }],
+            classes: vec![],
+            label: None,
+        }
+    }
+
+    fn shared_source_cfg(layers: Vec<Layer>) -> Config {
+        use mars_config::{ArtifactCache, ArtifactStore, Artifacts, Config, ServiceMeta, Source};
+        use mars_types::Bbox;
+        use std::collections::BTreeMap;
+
+        let mut size_per_band = BTreeMap::new();
+        size_per_band.insert("hi".into(), "4096m".into());
+        Config {
+            service: ServiceMeta {
+                name: "t".into(),
+                ..Default::default()
+            },
+            source: Source {
+                kind: "memory".into(),
+                dsn: "memory://".into(),
+                native_crs: CrsCode::new("EPSG:25832"),
+                change_feed: None,
+            },
+            artifacts: Artifacts {
+                store: ArtifactStore {
+                    kind: "fs".into(),
+                    endpoint: None,
+                    bucket: None,
+                    prefix: None,
+                    path: Some("/tmp".into()),
+                },
+                cache: ArtifactCache {
+                    path: "/tmp".into(),
+                    max_size: "1GiB".into(),
+                    eviction: "lru".into(),
+                    trust_path_hash: false,
+                },
+            },
+            scales: mars_config::Scales {
+                bands: vec![mars_config::Band {
+                    name: "hi".into(),
+                    max_denom: 25_000,
+                }],
+            },
+            cells: mars_config::Cells {
+                grid: "regular".into(),
+                origin: [0.0, 0.0],
+                size_per_band,
+                extent: Some(Bbox::new(0.0, 0.0, 1.0, 1.0)),
+            },
+            interfaces: Default::default(),
+            tile_matrix_sets: Default::default(),
+            reprojection: Default::default(),
+            styles: Default::default(),
+            layers,
+            observability: Default::default(),
+            render: Default::default(),
+            compiler: Default::default(),
+        }
+    }
+
+    #[test]
+    fn build_plan_dedups_shared_source_cells_and_unions_attrs() {
+        let cfg = shared_source_cfg(vec![
+            make_layer("a", "public.shared", vec!["x"]),
+            make_layer("b", "public.shared", vec!["y", "x"]),
+        ]);
+        let plan = build_plan(&cfg).unwrap();
+        assert_eq!(plan.sources.len(), 1, "shared source cell deduplicated");
+        assert_eq!(plan.layers.len(), 2, "one layer task per layer");
+        let attrs = &plan.sources[0].binding.attributes;
+        assert_eq!(attrs, &vec!["x".to_string(), "y".to_string()]);
+        assert_eq!(plan.layers[0].source, 0);
+        assert_eq!(plan.layers[1].source, 0);
+    }
+
+    #[test]
+    fn build_plan_rejects_conflicting_bindings_for_same_collection() {
+        let cfg = shared_source_cfg(vec![
+            make_layer("a", "public.shared", vec![]),
+            Layer {
+                sources: vec![CfgBinding {
+                    scale: None,
+                    band: Some("hi".into()),
+                    from: "public.shared".into(),
+                    geometry_column: "other_geom".into(),
+                    id_column: Some("gid".into()),
+                    attributes: vec![],
+                }],
+                ..make_layer("b", "public.shared", vec![])
+            },
+        ]);
+        let err = build_plan(&cfg).unwrap_err();
+        assert!(
+            matches!(err, PlanError::Invalid(ref s) if s.contains("conflicting bindings")),
+            "expected conflicting-bindings error, got {err:?}"
+        );
     }
 }
