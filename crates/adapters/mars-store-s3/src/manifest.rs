@@ -34,6 +34,7 @@ pub struct S3Publisher {
     backend: Arc<dyn OsStore>,
     prefix: String,
     poll_interval: Duration,
+    allow_non_atomic_publish: bool,
 }
 
 impl std::fmt::Debug for S3Publisher {
@@ -54,6 +55,7 @@ impl S3Publisher {
             backend: store.backend(),
             prefix: store.prefix().to_owned(),
             poll_interval: DEFAULT_POLL_INTERVAL,
+            allow_non_atomic_publish: false,
         }
     }
 
@@ -61,6 +63,13 @@ impl S3Publisher {
     #[must_use]
     pub fn with_poll_interval(mut self, d: Duration) -> Self {
         self.poll_interval = d;
+        self
+    }
+
+    /// Allow non-atomic manifest publish when the backend lacks CAS support.
+    #[must_use]
+    pub fn with_allow_non_atomic_publish(mut self, allow: bool) -> Self {
+        self.allow_non_atomic_publish = allow;
         self
     }
 
@@ -109,8 +118,8 @@ impl S3Publisher {
             .bytes()
             .await
             .map_err(|e| StoreError::Backend(format!("s3 read manifest {pointer}: {e}")))?;
-        let manifest: Manifest =
-            serde_json::from_slice(&bytes).map_err(|e| StoreError::Backend(format!("parse manifest {pointer}: {e}")))?;
+        let manifest: Manifest = serde_json::from_slice(&bytes)
+            .map_err(|e| StoreError::Backend(format!("parse manifest {pointer}: {e}")))?;
         if manifest.format_version > MANIFEST_FORMAT_VERSION {
             return Err(StoreError::UnsupportedManifestVersion {
                 found: manifest.format_version,
@@ -142,19 +151,28 @@ impl ManifestStore for S3Publisher {
             _ => PutOptions::from(PutMode::Create),
         };
 
-        match self.backend.put_opts(&current_path, pointer_body.clone().into(), opts).await {
+        match self
+            .backend
+            .put_opts(&current_path, pointer_body.clone().into(), opts)
+            .await
+        {
             Ok(_) => Ok(n),
-            // bucket lacks CAS support -> fall back to overwrite. visible in logs;
-            // operator can switch to a backend that supports it.
+            // bucket lacks CAS support -> fall back to overwrite only when allowed.
             Err(object_store::Error::NotSupported { .. }) => {
-                tracing::warn!(
-                    "s3 backend does not support conditional put; manifest swap is not atomic across writers"
-                );
-                self.backend
-                    .put(&current_path, pointer_body.into())
-                    .await
-                    .map_err(|e| StoreError::Backend(format!("s3 put current: {e}")))?;
-                Ok(n)
+                if self.allow_non_atomic_publish {
+                    tracing::warn!(
+                        "s3 backend does not support conditional put; manifest swap is not atomic across writers"
+                    );
+                    self.backend
+                        .put(&current_path, pointer_body.into())
+                        .await
+                        .map_err(|e| StoreError::Backend(format!("s3 put current: {e}")))?;
+                    Ok(n)
+                } else {
+                    Err(StoreError::Backend(
+                        "s3 backend does not support conditional put; set allow_non_atomic_publish to override".into(),
+                    ))
+                }
             }
             Err(object_store::Error::Precondition { .. } | object_store::Error::AlreadyExists { .. }) => Err(
                 StoreError::Backend("manifest pointer changed concurrently; retry publish".into()),

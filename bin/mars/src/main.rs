@@ -334,9 +334,7 @@ async fn build_source(cfg: &Config) -> Result<Arc<PgSource>> {
     Ok(Arc::new(PgSource::connect(pg_cfg).await.context("connect postgres")?))
 }
 
-fn build_store_and_publisher(
-    cfg: &Config,
-) -> Result<(Arc<dyn ObjectStore>, Arc<dyn ManifestStore>)> {
+fn build_store_and_publisher(cfg: &Config) -> Result<(Arc<dyn ObjectStore>, Arc<dyn ManifestStore>)> {
     match cfg.artifacts.store.kind.as_str() {
         "fs" => {
             let p = cfg
@@ -346,8 +344,7 @@ fn build_store_and_publisher(
                 .as_deref()
                 .ok_or_else(|| anyhow!("artifacts.store.path required for type=fs"))?;
             let store: Arc<dyn ObjectStore> = Arc::new(FsStore::new(p).context("open fs store")?);
-            let publisher: Arc<dyn ManifestStore> =
-                Arc::new(FsPublisher::new(p).context("open fs manifest store")?);
+            let publisher: Arc<dyn ManifestStore> = Arc::new(FsPublisher::new(p).context("open fs manifest store")?);
             Ok((store, publisher))
         }
         "s3" => {
@@ -373,15 +370,16 @@ fn build_store_and_publisher(
                     .endpoint
                     .as_deref()
                     .is_some_and(|e| e.starts_with("http://")),
+                allow_non_atomic_publish: false,
             };
             let store_inner = S3Store::from_config(&s3).context("open s3 store")?;
-            let publisher: Arc<dyn ManifestStore> = Arc::new(S3Publisher::from_store(&store_inner));
+            let publisher: Arc<dyn ManifestStore> = Arc::new(
+                S3Publisher::from_store(&store_inner).with_allow_non_atomic_publish(s3.allow_non_atomic_publish),
+            );
             let store: Arc<dyn ObjectStore> = Arc::new(store_inner);
             Ok((store, publisher))
         }
-        other => Err(anyhow!(
-            "artifacts.store.type='{other}' unsupported; use 'fs' or 's3'"
-        )),
+        other => Err(anyhow!("artifacts.store.type='{other}' unsupported; use 'fs' or 's3'")),
     }
 }
 

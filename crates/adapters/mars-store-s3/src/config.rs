@@ -24,6 +24,9 @@ pub struct S3Config {
     pub secret_access_key: Option<String>,
     /// Allow http endpoints (needed for minio in tests).
     pub allow_http: bool,
+    /// When true, fall back to non-atomic manifest publish if the backend
+    /// does not support conditional put. Defaults to false (fail loudly).
+    pub allow_non_atomic_publish: bool,
 }
 
 impl S3Config {

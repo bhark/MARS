@@ -92,7 +92,10 @@ async fn delete_then_missing() {
 async fn rejects_bad_keys() {
     let s = store("");
     for bad in ["", "/a", "a/../b", "a\\b", "a\0b", "."] {
-        let err = s.put(&ArtifactKey::new(bad), Bytes::from_static(b"")).await.unwrap_err();
+        let err = s
+            .put(&ArtifactKey::new(bad), Bytes::from_static(b""))
+            .await
+            .unwrap_err();
         assert!(matches!(err, StoreError::Backend(_)), "{bad:?} should be rejected");
     }
 }
@@ -115,6 +118,125 @@ async fn manifest_publish_and_current() {
     assert_eq!(m.version, 2);
 }
 
+// wrapper that rejects conditional put with NotSupported
+#[derive(Debug)]
+struct NoCasBackend(Arc<InMemory>);
+
+impl std::fmt::Display for NoCasBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "NoCasBackend")
+    }
+}
+
+#[async_trait::async_trait]
+impl object_store::ObjectStore for NoCasBackend {
+    async fn put_opts(
+        &self,
+        location: &object_store::path::Path,
+        payload: object_store::PutPayload,
+        opts: object_store::PutOptions,
+    ) -> object_store::Result<object_store::PutResult> {
+        if matches!(opts.mode, object_store::PutMode::Update(_)) {
+            return Err(object_store::Error::NotSupported {
+                source: Box::new(std::io::Error::new(
+                    std::io::ErrorKind::Unsupported,
+                    "conditional put not supported",
+                )),
+            });
+        }
+        self.0.put_opts(location, payload, opts).await
+    }
+
+    async fn put_multipart_opts(
+        &self,
+        location: &object_store::path::Path,
+        opts: object_store::PutMultipartOptions,
+    ) -> object_store::Result<Box<dyn object_store::MultipartUpload>> {
+        self.0.put_multipart_opts(location, opts).await
+    }
+
+    async fn get_opts(
+        &self,
+        location: &object_store::path::Path,
+        options: object_store::GetOptions,
+    ) -> object_store::Result<object_store::GetResult> {
+        self.0.get_opts(location, options).await
+    }
+
+    fn delete_stream(
+        &self,
+        locations: futures_util::stream::BoxStream<'static, object_store::Result<object_store::path::Path>>,
+    ) -> futures_util::stream::BoxStream<'static, object_store::Result<object_store::path::Path>> {
+        self.0.delete_stream(locations)
+    }
+
+    fn list(
+        &self,
+        prefix: Option<&object_store::path::Path>,
+    ) -> futures_util::stream::BoxStream<'static, object_store::Result<object_store::ObjectMeta>> {
+        self.0.list(prefix)
+    }
+
+    fn list_with_offset(
+        &self,
+        prefix: Option<&object_store::path::Path>,
+        offset: &object_store::path::Path,
+    ) -> futures_util::stream::BoxStream<'static, object_store::Result<object_store::ObjectMeta>> {
+        self.0.list_with_offset(prefix, offset)
+    }
+
+    async fn list_with_delimiter(
+        &self,
+        prefix: Option<&object_store::path::Path>,
+    ) -> object_store::Result<object_store::ListResult> {
+        self.0.list_with_delimiter(prefix).await
+    }
+
+    async fn copy_opts(
+        &self,
+        from: &object_store::path::Path,
+        to: &object_store::path::Path,
+        options: object_store::CopyOptions,
+    ) -> object_store::Result<()> {
+        self.0.copy_opts(from, to, options).await
+    }
+
+    async fn rename_opts(
+        &self,
+        from: &object_store::path::Path,
+        to: &object_store::path::Path,
+        options: object_store::RenameOptions,
+    ) -> object_store::Result<()> {
+        self.0.rename_opts(from, to, options).await
+    }
+}
+
+#[tokio::test]
+async fn manifest_publish_rejects_non_atomic_by_default() {
+    let backend: Arc<dyn object_store::ObjectStore> = Arc::new(NoCasBackend(Arc::new(InMemory::new())));
+    let s = S3Store::from_backend(backend, String::new());
+    // first publish succeeds (no prior -> PutMode::Create)
+    let pub_ok = S3Publisher::from_store(&s).with_allow_non_atomic_publish(true);
+    pub_ok.publish(&manifest(1)).await.unwrap();
+
+    // second publish uses PutMode::Update -> NotSupported -> rejected
+    let pub_strict = S3Publisher::from_store(&s);
+    let err = pub_strict.publish(&manifest(2)).await.unwrap_err();
+    assert!(
+        err.to_string().contains("allow_non_atomic_publish"),
+        "expected refusal, got {err}"
+    );
+}
+
+#[tokio::test]
+async fn manifest_publish_allows_non_atomic_when_flag_set() {
+    let backend: Arc<dyn object_store::ObjectStore> = Arc::new(NoCasBackend(Arc::new(InMemory::new())));
+    let s = S3Store::from_backend(backend, String::new());
+    let pub_ = S3Publisher::from_store(&s).with_allow_non_atomic_publish(true);
+    let v = pub_.publish(&manifest(1)).await.unwrap();
+    assert_eq!(v, 1);
+}
+
 #[tokio::test]
 async fn manifest_watch_yields_on_change() {
     let backend = Arc::new(InMemory::new());
@@ -124,12 +246,16 @@ async fn manifest_watch_yields_on_change() {
     pub_.publish(&manifest(1)).await.unwrap();
     let mut stream = pub_.watch().await.unwrap();
 
-    let first = tokio::time::timeout(Duration::from_secs(2), stream.next()).await.unwrap();
+    let first = tokio::time::timeout(Duration::from_secs(2), stream.next())
+        .await
+        .unwrap();
     let m = first.unwrap().unwrap();
     assert_eq!(m.version, 1);
 
     pub_.publish(&manifest(2)).await.unwrap();
-    let second = tokio::time::timeout(Duration::from_secs(2), stream.next()).await.unwrap();
+    let second = tokio::time::timeout(Duration::from_secs(2), stream.next())
+        .await
+        .unwrap();
     let m = second.unwrap().unwrap();
     assert_eq!(m.version, 2);
 }
