@@ -23,7 +23,7 @@ futures-core   = { workspace = true }
 futures-util   = { workspace = true }
 rand = { workspace = true }
 tracing        = { workspace = true }
-linked-hash-map = { workspace = true }
+hashlink        = { workspace = true }
 parking_lot    = { workspace = true }
 memmap2        = { workspace = true }
 

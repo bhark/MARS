@@ -21,7 +21,7 @@ use std::time::SystemTime;
 
 use parking_lot::Mutex;
 
-use linked_hash_map::LinkedHashMap;
+use hashlink::LinkedHashMap;
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -47,7 +47,7 @@ struct CacheState {
 impl CacheState {
     fn touch(&mut self, key: ArtifactKey) {
         // refresh position to back if already present
-        let _ = self.lru.get_refresh(&key);
+        let _ = self.lru.to_back(&key);
     }
 
     /// inserts (or overwrites) `key` with `size`. caller is responsible for
