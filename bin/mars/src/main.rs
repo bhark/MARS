@@ -272,8 +272,13 @@ async fn run_compiler(cfg: Config) -> Result<()> {
 
 async fn run_all_in_one(config_path: &Path) -> Result<()> {
     let cfg = load_and_validate(config_path)?;
-    run_compiler(cfg).await?;
-    run_runtime(config_path).await
+    // both halves run concurrently; an error in one cancels the other through
+    // try_join's drop-on-failure semantics. Sequential composition would block
+    // the runtime forever once the change feed is live.
+    let compiler_fut = run_compiler(cfg);
+    let runtime_fut = run_runtime(config_path);
+    tokio::try_join!(compiler_fut, runtime_fut)?;
+    Ok(())
 }
 
 // ---------- tooling ----------
