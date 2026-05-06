@@ -54,7 +54,7 @@ fn parse_get_map_inner(kvp: &Kvp, cfg: &WmsConfig) -> Result<RenderPlan, WmsErro
     let layers: Vec<LayerId> = layers_raw
         .split(',')
         .filter(|s| !s.is_empty())
-        .map(|s| LayerId::new(s.to_owned()))
+        .map(LayerId::new)
         .collect();
     if layers.is_empty() {
         return Err(WmsError::InvalidParam {
@@ -70,7 +70,7 @@ fn parse_get_map_inner(kvp: &Kvp, cfg: &WmsConfig) -> Result<RenderPlan, WmsErro
     }
 
     let crs_raw = require(kvp, "crs")?;
-    let crs = CrsCode::new(crs_raw.clone());
+    let crs = CrsCode::new(crs_raw.as_str());
     if !cfg.allowlist_crs.is_empty() && !cfg.allowlist_crs.iter().any(|c| c.as_str() == crs_raw) {
         return Err(WmsError::InvalidParam {
             name: "crs",
