@@ -26,7 +26,6 @@ pub(crate) fn read_mmap(path: &Path) -> Result<Option<Bytes>, StoreError> {
     if meta.len() == 0 {
         return Ok(Some(Bytes::new()));
     }
-    let mmap = unsafe { memmap2::Mmap::map(&file) }
-        .map_err(|e| StoreError::Backend(format!("cache mmap: {e}")))?;
+    let mmap = unsafe { memmap2::Mmap::map(&file) }.map_err(|e| StoreError::Backend(format!("cache mmap: {e}")))?;
     Ok(Some(Bytes::from_owner(mmap)))
 }

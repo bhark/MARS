@@ -45,12 +45,9 @@ const MAX_DIFF_RATIO: f32 = 0.005;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn demo_mini_matches_golden() -> Result<()> {
-    let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/parcels-mini");
-    let seed_sql = std::fs::read_to_string(fixture_dir.join("seed.sql"))
-        .context("read seed.sql")?;
-    let yaml_template = std::fs::read_to_string(fixture_dir.join("service.yaml"))
-        .context("read service.yaml")?;
+    let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/parcels-mini");
+    let seed_sql = std::fs::read_to_string(fixture_dir.join("seed.sql")).context("read seed.sql")?;
+    let yaml_template = std::fs::read_to_string(fixture_dir.join("service.yaml")).context("read service.yaml")?;
     let golden_path = fixture_dir.join("goldens/parcels-cell-0-0.png");
 
     let password = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
@@ -152,8 +149,7 @@ async fn demo_mini_matches_golden() -> Result<()> {
         )
     })?;
 
-    let report = diff_pngs(&png_bytes, &golden, TOLERANCE_CHANNELS)
-        .map_err(|e| anyhow::anyhow!("diff: {e}"))?;
+    let report = diff_pngs(&png_bytes, &golden, TOLERANCE_CHANNELS).map_err(|e| anyhow::anyhow!("diff: {e}"))?;
     eprintln!("image-diff: {report}");
     assert_within_tolerance(&report, MAX_DIFF_RATIO);
     Ok(())
@@ -196,14 +192,9 @@ async fn run_compile(cfg: &Config) -> Result<()> {
         slot: String::new(),
     };
     let source = Arc::new(PgSource::connect(pg_cfg).await.context("pg connect")?);
-    let store = Arc::new(
-        FsStore::new(cfg.artifacts.store.path.as_deref().unwrap())
-            .context("open compile store")?,
-    );
-    let publisher = Arc::new(
-        FsPublisher::new(cfg.artifacts.store.path.as_deref().unwrap())
-            .context("open compile publisher")?,
-    );
+    let store = Arc::new(FsStore::new(cfg.artifacts.store.path.as_deref().unwrap()).context("open compile store")?);
+    let publisher =
+        Arc::new(FsPublisher::new(cfg.artifacts.store.path.as_deref().unwrap()).context("open compile publisher")?);
     let compiler = Compiler::new(
         CompilerDeps {
             source: source.clone(),
@@ -265,4 +256,3 @@ where
         }
     }
 }
-

@@ -44,8 +44,18 @@ impl fmt::Display for DiffReport {
 pub enum DiffError {
     DecodeActual(png::DecodingError),
     DecodeGolden(png::DecodingError),
-    DimensionMismatch { aw: u32, ah: u32, gw: u32, gh: u32 },
-    FormatMismatch { a: png::ColorType, abd: u8, g: png::ColorType, gbd: u8 },
+    DimensionMismatch {
+        aw: u32,
+        ah: u32,
+        gw: u32,
+        gh: u32,
+    },
+    FormatMismatch {
+        a: png::ColorType,
+        abd: u8,
+        g: png::ColorType,
+        gbd: u8,
+    },
     UnsupportedColor(png::ColorType),
 }
 

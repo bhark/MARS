@@ -19,15 +19,13 @@ pub fn service_exception_report(code: Option<&str>, message: &str) -> String {
     let mut root = BytesStart::new("ServiceExceptionReport");
     root.push_attribute(("version", "1.3.0"));
     root.push_attribute(("xmlns", "http://www.opengis.net/ogc"));
-    w.write_event(Event::Start(root))
-        .expect("infallible write to Vec<u8>");
+    w.write_event(Event::Start(root)).expect("infallible write to Vec<u8>");
 
     let mut exc = BytesStart::new("ServiceException");
     if let Some(c) = code {
         exc.push_attribute(("code", c));
     }
-    w.write_event(Event::Start(exc))
-        .expect("infallible write to Vec<u8>");
+    w.write_event(Event::Start(exc)).expect("infallible write to Vec<u8>");
     w.write_event(Event::Text(BytesText::new(message)))
         .expect("infallible write to Vec<u8>");
     w.write_event(Event::End(BytesEnd::new("ServiceException")))

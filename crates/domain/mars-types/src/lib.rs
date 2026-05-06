@@ -184,21 +184,12 @@ impl core::fmt::Display for ContentHash {
 
 /// true when `s` is a non-empty, bounded, path-safe segment.
 fn is_safe_segment(s: &str) -> bool {
-    !s.is_empty()
-        && s.len() <= 128
-        && !s.contains('/')
-        && !s.contains('\0')
-        && s != "."
-        && s != ".."
+    !s.is_empty() && s.len() <= 128 && !s.contains('/') && !s.contains('\0') && s != "." && s != ".."
 }
 
 impl ArtifactKey {
     /// canonical layer-artifact key. shape is `lyr/{layer}/{band}/{cx}_{cy}/v{schema}/{hash}.mars`.
-    pub fn try_build_layer(
-        layer: &LayerId,
-        cell: &Cell,
-        hash: ContentHash,
-    ) -> Result<Self, ArtifactKeyError> {
+    pub fn try_build_layer(layer: &LayerId, cell: &Cell, hash: ContentHash) -> Result<Self, ArtifactKeyError> {
         let layer_s = layer.as_str();
         let band_s = cell.band.as_str();
         if !is_safe_segment(layer_s) || !is_safe_segment(band_s) {
@@ -216,11 +207,7 @@ impl ArtifactKey {
     }
 
     /// canonical source-artifact key. shape is `src/{collection}/{band}/{cx}_{cy}/{hash}.mars`.
-    pub fn try_build_source(
-        collection: &str,
-        cell: &Cell,
-        hash: ContentHash,
-    ) -> Result<Self, ArtifactKeyError> {
+    pub fn try_build_source(collection: &str, cell: &Cell, hash: ContentHash) -> Result<Self, ArtifactKeyError> {
         let band_s = cell.band.as_str();
         if !is_safe_segment(collection) || !is_safe_segment(band_s) {
             return Err(ArtifactKeyError::Malformed {

@@ -166,7 +166,8 @@ impl Transformer {
             // visualization (lon/lat axis order independent of CRS metadata),
             // matching what every WMS-style caller in this codebase expects.
             unsafe {
-                let raw = proj_sys::proj_create_crs_to_crs(ctx_ptr, from_c.as_ptr(), to_c.as_ptr(), std::ptr::null_mut());
+                let raw =
+                    proj_sys::proj_create_crs_to_crs(ctx_ptr, from_c.as_ptr(), to_c.as_ptr(), std::ptr::null_mut());
                 if raw.is_null() {
                     return Err(ProjError::UnknownCrs(format!("{from} -> {to}")));
                 }
