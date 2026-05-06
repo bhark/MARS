@@ -5,7 +5,7 @@
 //! postgis 3+ when SRID is set). geometry collections and unknown types
 //! are rejected.
 
-use mars_artifact::{FeatureGeom, GeomKind};
+use mars_artifact::{ArtifactError, FeatureGeom, GeomKind, GeomPayloadBuilder, GeomType};
 
 #[derive(Debug, thiserror::Error)]
 pub enum WkbError {
@@ -19,6 +19,8 @@ pub enum WkbError {
     NestedSrid,
     #[error("srid mismatch: expected {expected}, got {actual}")]
     SridMismatch { expected: u32, actual: u32 },
+    #[error("artifact codec rejected streamed geometry: {0}")]
+    Artifact(#[from] ArtifactError),
 }
 
 const WKB_POINT: u32 = 1;
@@ -177,6 +179,150 @@ pub fn decode_feature(id: u64, wkb: &[u8], expected_srid: Option<u32>) -> Result
     let geom = read_geom(&mut c, true, expected_srid)?;
     let bbox = geom_bbox(&geom);
     Ok(FeatureGeom { id, bbox, geom })
+}
+
+/// stream a WKB blob directly into the geometry-payload builder. avoids the
+/// `Vec<FeatureGeom>` + `Vec<Coord>`-per-ring intermediate that
+/// [`decode_feature`] + [`mars_artifact::encode_geometry_payload`] allocate.
+/// produces byte-identical output for the same logical feature.
+pub fn write_into(builder: &mut GeomPayloadBuilder, id: u64, wkb: &[u8], expected_srid: Option<u32>) -> Result<(), WkbError> {
+    let mut c = Cursor::new(wkb);
+    let (le, has_z, has_m, gtype) = read_header(&mut c, true, expected_srid)?;
+    match gtype {
+        WKB_POINT => {
+            let x = c.f64(le)?;
+            let y = c.f64(le)?;
+            skip_zm(&mut c, le, has_z, has_m)?;
+            let mut fw = builder.begin(id, GeomType::Point)?;
+            fw.coord_abs(x, y)?;
+            fw.end()?;
+        }
+        WKB_LINESTRING => {
+            let n = c.u32(le)? as usize;
+            let mut fw = builder.begin(id, GeomType::LineString)?;
+            fw.count(n)?;
+            for _ in 0..n {
+                let x = c.f64(le)?;
+                let y = c.f64(le)?;
+                skip_zm(&mut c, le, has_z, has_m)?;
+                fw.coord_delta(x, y)?;
+            }
+            fw.end()?;
+        }
+        WKB_POLYGON => {
+            let nrings = c.u32(le)? as usize;
+            let mut fw = builder.begin(id, GeomType::Polygon)?;
+            fw.count(nrings)?;
+            for _ in 0..nrings {
+                let n = c.u32(le)? as usize;
+                fw.count(n)?;
+                fw.reset_ring();
+                for _ in 0..n {
+                    let x = c.f64(le)?;
+                    let y = c.f64(le)?;
+                    skip_zm(&mut c, le, has_z, has_m)?;
+                    fw.coord_delta(x, y)?;
+                }
+            }
+            fw.end()?;
+        }
+        WKB_MULTIPOINT => {
+            let n = c.u32(le)? as usize;
+            let mut fw = builder.begin(id, GeomType::MultiPoint)?;
+            fw.count(n)?;
+            for _ in 0..n {
+                // each sub-point carries its own header
+                let (sub_le, sub_z, sub_m, sub_t) = read_header(&mut c, false, None)?;
+                if sub_t != WKB_POINT {
+                    return Err(WkbError::UnsupportedType(WKB_MULTIPOINT));
+                }
+                let x = c.f64(sub_le)?;
+                let y = c.f64(sub_le)?;
+                skip_zm(&mut c, sub_le, sub_z, sub_m)?;
+                fw.coord_abs(x, y)?;
+            }
+            fw.end()?;
+        }
+        WKB_MULTILINESTRING => {
+            let n = c.u32(le)? as usize;
+            let mut fw = builder.begin(id, GeomType::MultiLineString)?;
+            fw.count(n)?;
+            for _ in 0..n {
+                let (sub_le, sub_z, sub_m, sub_t) = read_header(&mut c, false, None)?;
+                if sub_t != WKB_LINESTRING {
+                    return Err(WkbError::UnsupportedType(WKB_MULTILINESTRING));
+                }
+                let m = c.u32(sub_le)? as usize;
+                fw.count(m)?;
+                fw.reset_ring();
+                for _ in 0..m {
+                    let x = c.f64(sub_le)?;
+                    let y = c.f64(sub_le)?;
+                    skip_zm(&mut c, sub_le, sub_z, sub_m)?;
+                    fw.coord_delta(x, y)?;
+                }
+            }
+            fw.end()?;
+        }
+        WKB_MULTIPOLYGON => {
+            let n = c.u32(le)? as usize;
+            let mut fw = builder.begin(id, GeomType::MultiPolygon)?;
+            fw.count(n)?;
+            for _ in 0..n {
+                let (sub_le, sub_z, sub_m, sub_t) = read_header(&mut c, false, None)?;
+                if sub_t != WKB_POLYGON {
+                    return Err(WkbError::UnsupportedType(WKB_MULTIPOLYGON));
+                }
+                let nrings = c.u32(sub_le)? as usize;
+                fw.count(nrings)?;
+                for _ in 0..nrings {
+                    let m = c.u32(sub_le)? as usize;
+                    fw.count(m)?;
+                    fw.reset_ring();
+                    for _ in 0..m {
+                        let x = c.f64(sub_le)?;
+                        let y = c.f64(sub_le)?;
+                        skip_zm(&mut c, sub_le, sub_z, sub_m)?;
+                        fw.coord_delta(x, y)?;
+                    }
+                }
+            }
+            fw.end()?;
+        }
+        other => return Err(WkbError::UnsupportedType(other)),
+    }
+    Ok(())
+}
+
+/// shared header reader used by both [`decode_feature`] and [`write_into`].
+/// returns `(little_endian, has_z, has_m, base_geom_type)`.
+fn read_header(
+    c: &mut Cursor<'_>,
+    allow_srid: bool,
+    expected_srid: Option<u32>,
+) -> Result<(bool, bool, bool, u32), WkbError> {
+    let endian = c.u8()?;
+    let le = match endian {
+        1 => true,
+        0 => false,
+        other => return Err(WkbError::BadEndian(other)),
+    };
+    let raw_type = c.u32(le)?;
+    let has_z = raw_type & EWKB_Z_FLAG != 0;
+    let has_m = raw_type & EWKB_M_FLAG != 0;
+    let has_srid = raw_type & EWKB_SRID_FLAG != 0;
+    if has_srid {
+        if !allow_srid {
+            return Err(WkbError::NestedSrid);
+        }
+        let srid = c.u32(le)?;
+        if let Some(expected) = expected_srid
+            && srid != expected
+        {
+            return Err(WkbError::SridMismatch { expected, actual: srid });
+        }
+    }
+    Ok((le, has_z, has_m, raw_type & 0x0000_00FF))
 }
 
 fn geom_bbox(g: &GeomKind) -> [f32; 4] {
@@ -461,5 +607,71 @@ mod tests {
         }
         let f = decode_feature(0, &mp, None).unwrap();
         assert!(matches!(f.geom, GeomKind::MultiPoint(ref pts) if pts.len() == 2));
+    }
+
+    /// asserts the streaming `write_into` path produces a byte-identical
+    /// geometry-payload section to the bulk `decode_feature + encode_geometry_payload`
+    /// pipeline. covers each geom variant.
+    #[test]
+    fn streaming_matches_bulk_byte_for_byte() {
+        use mars_artifact::encode_geometry_payload;
+
+        // same fixture set, drives both pipelines.
+        let multipoint = {
+            let mut v = vec![1u8];
+            v.extend_from_slice(&4u32.to_le_bytes());
+            v.extend_from_slice(&3u32.to_le_bytes());
+            for (x, y) in [(1.0_f64, 2.0_f64), (3.0, 4.0), (5.5, -6.5)] {
+                v.push(1u8);
+                v.extend_from_slice(&1u32.to_le_bytes());
+                v.extend_from_slice(&x.to_le_bytes());
+                v.extend_from_slice(&y.to_le_bytes());
+            }
+            v
+        };
+        let mls = {
+            let inner = linestring_le(&[(0.0, 0.0), (10.0, 5.0), (20.0, -5.0)]);
+            let mut v = vec![1u8];
+            v.extend_from_slice(&5u32.to_le_bytes());
+            v.extend_from_slice(&1u32.to_le_bytes());
+            v.extend_from_slice(&inner);
+            v
+        };
+        let cases: Vec<(u64, Vec<u8>)> = vec![
+            (1, point_le()),
+            (2, linestring_le(&[(0.0, 0.0), (1.0, 1.5), (2.5, 0.5)])),
+            (
+                3,
+                polygon_le(&[
+                    &[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (0.0, 0.0)],
+                    &[(2.0, 2.0), (4.0, 2.0), (4.0, 4.0), (2.0, 4.0), (2.0, 2.0)],
+                ]),
+            ),
+            (4, multipoint),
+            (5, mls),
+            (
+                6,
+                multipolygon_le(&[
+                    &[&[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 0.0)]],
+                    &[&[(5.0, 5.0), (6.0, 5.0), (6.0, 6.0), (5.0, 5.0)]],
+                ]),
+            ),
+        ];
+
+        // bulk pipeline: decode each WKB to FeatureGeom, then encode in one shot.
+        let mut features = Vec::with_capacity(cases.len());
+        for (id, wkb) in &cases {
+            features.push(decode_feature(*id, wkb, None).unwrap());
+        }
+        let bulk = encode_geometry_payload(&features).unwrap();
+
+        // streaming pipeline: write each WKB straight into the builder.
+        let mut b = mars_artifact::GeomPayloadBuilder::new();
+        for (id, wkb) in &cases {
+            write_into(&mut b, *id, wkb, None).unwrap();
+        }
+        let streamed = b.finish().unwrap();
+
+        assert_eq!(bulk.as_ref(), streamed.as_ref(), "streaming output diverged from bulk");
     }
 }

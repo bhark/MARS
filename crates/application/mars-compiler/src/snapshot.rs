@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-use mars_artifact::{ArtifactKind, ArtifactWriter, SourceRef, compute_content_hash};
+use mars_artifact::{ArtifactKind, ArtifactWriter, GeomPayloadBuilder, SectionKind, SourceRef, compute_content_hash};
 use mars_source::{RowAttrs, RowBytes, Source};
 use mars_store::ObjectStore;
 use mars_types::{ArtifactEntry, ArtifactKey, Bbox, Cell, ContentHash, EmptyLayerCell};
@@ -90,17 +90,21 @@ fn build_source_artifact(task: &SourceTask, rows: &[RowBytes]) -> Result<(Artifa
         .as_str()
         .strip_prefix("EPSG:")
         .and_then(|s| s.parse::<u32>().ok());
-    let mut features = Vec::with_capacity(rows.len());
-    let mut acc = BboxAcc::new();
+    // stream WKB straight into the geometry-payload builder. eliminates the
+    // Vec<FeatureGeom> intermediate (and the per-ring Vec<Coord> hidden inside
+    // it). bbox is walked in iter_feature_index after the section is built so
+    // we don't carry a parallel accumulator here.
+    let mut geom = GeomPayloadBuilder::new();
     for row in rows {
-        let f = crate::wkb::decode_feature(row.feature_id, &row.geometry, expected_srid)?;
-        acc.fold(f.bbox);
-        features.push(f);
+        crate::wkb::write_into(&mut geom, row.feature_id, &row.geometry, expected_srid)?;
     }
+    let geom_bytes = geom.finish()?;
+    let bbox = bbox_from_geometry_section(&geom_bytes)?;
+
     let mut writer = ArtifactWriter::new(ArtifactKind::Source);
-    let feature_count = features.len() as u64;
-    writer.add_geometry_payload(features);
-    writer.set_bbox(acc.into_bbox());
+    let feature_count = rows.len() as u64;
+    writer.add_section(SectionKind::GeometryPayload, geom_bytes);
+    writer.set_bbox(bbox);
     writer.set_feature_count(feature_count);
     let bytes = writer.finish()?;
     let hash = compute_content_hash(&bytes);
@@ -112,6 +116,19 @@ fn build_source_artifact(task: &SourceTask, rows: &[RowBytes]) -> Result<(Artifa
         size_bytes: bytes.len() as u64,
     };
     Ok((entry, bytes))
+}
+
+/// derive the cell-level bbox from an already-encoded geometry-payload
+/// section. cheap: walks the 33-byte index entries only, never touches
+/// coordinates.
+fn bbox_from_geometry_section(section: &[u8]) -> Result<Bbox, CompilerError> {
+    let mut acc = BboxAcc::new();
+    let iter = mars_artifact::iter_feature_index(section)?;
+    for entry in iter {
+        let entry = entry?;
+        acc.fold(entry.bbox);
+    }
+    Ok(acc.into_bbox())
 }
 
 fn build_layer_artifact(

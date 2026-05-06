@@ -6,8 +6,8 @@
 use std::hint::black_box;
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
-use mars_artifact::{ArtifactKind, ArtifactWriter, FeatureGeom, encode_geometry_payload};
-use mars_compiler::wkb::decode_feature;
+use mars_artifact::{ArtifactKind, ArtifactWriter, FeatureGeom, GeomPayloadBuilder, SectionKind, encode_geometry_payload};
+use mars_compiler::wkb::{decode_feature, write_into};
 use mars_types::Bbox;
 
 const FEATURES: u64 = 1024;
@@ -98,5 +98,34 @@ fn bench_decode_then_write(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_decode_wkb, bench_encode_payload, bench_decode_then_write);
+fn bench_streaming_then_write(c: &mut Criterion) {
+    let corpus: Vec<(u64, Vec<u8>)> = (0..FEATURES).map(|id| (id, polygon_wkb(id))).collect();
+
+    let mut group = c.benchmark_group("compiler_decode");
+    group.throughput(Throughput::Elements(FEATURES));
+    group.bench_function("streaming_wkb_to_artifact", |b| {
+        b.iter(|| {
+            let mut geom = GeomPayloadBuilder::new();
+            for (id, wkb) in &corpus {
+                write_into(&mut geom, *id, wkb, None).unwrap();
+            }
+            let geom_bytes = geom.finish().unwrap();
+            let mut w = ArtifactWriter::new(ArtifactKind::Source);
+            w.add_section(SectionKind::GeometryPayload, geom_bytes);
+            w.set_bbox(Bbox::new(-1.0e6, -1.0e6, 1.0e6, 1.0e6));
+            w.set_feature_count(FEATURES);
+            let out = w.finish().unwrap();
+            black_box(out.len())
+        });
+    });
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_decode_wkb,
+    bench_encode_payload,
+    bench_decode_then_write,
+    bench_streaming_then_write,
+);
 criterion_main!(benches);
