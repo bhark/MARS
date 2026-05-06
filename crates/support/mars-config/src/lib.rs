@@ -161,21 +161,13 @@ pub fn validate(config: &Config, config_dir: &Path) -> Result<(), ConfigError> {
                 ClassStyle::Inline(_) => {}
             }
 
-            if let Some(when) = &class.when {
-                match mars_expr::parse(when) {
-                    Ok(_) => {}
-                    // tighten once Slice B lands: today the parser returns
-                    // NotImplemented for any non-empty input. tolerate it so
-                    // configs validate end-to-end while the parser is in
-                    // flight.
-                    Err(mars_expr::ExprError::NotImplemented { .. }) => {}
-                    Err(e) => {
-                        return Err(ConfigError::Invalid(format!(
-                            "layer {} class {:?} when: parse error: {e}",
-                            layer.name, class.name
-                        )));
-                    }
-                }
+            if let Some(when) = &class.when
+                && let Err(e) = mars_expr::parse(when)
+            {
+                return Err(ConfigError::Invalid(format!(
+                    "layer {} class {:?} when: parse error: {e}",
+                    layer.name, class.name
+                )));
             }
         }
 
@@ -317,6 +309,33 @@ mod tests {
         assert!(matches!(
             validate(&cfg, Path::new(".")),
             Err(ConfigError::Invalid(ref s)) if s.contains("size_per_band")
+        ));
+    }
+
+    #[test]
+    fn rejects_unparseable_when_clause() {
+        let mut cfg = minimal_config();
+        cfg.layers = vec![Layer {
+            name: mars_types::LayerId::new("roads"),
+            title: String::new(),
+            abstract_: String::new(),
+            kind: "line".into(),
+            scale: None,
+            group: None,
+            enable_get_feature_info: false,
+            bbox: None,
+            sources: vec![],
+            classes: vec![crate::model::Class {
+                name: "default".into(),
+                title: String::new(),
+                when: Some("(((".into()),
+                style: ClassStyle::Inline(Default::default()),
+            }],
+            label: None,
+        }];
+        assert!(matches!(
+            validate(&cfg, Path::new(".")),
+            Err(ConfigError::Invalid(ref s)) if s.contains("when: parse error")
         ));
     }
 
