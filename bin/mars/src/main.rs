@@ -61,8 +61,7 @@ enum Mode {
 
 #[derive(Debug, Subcommand)]
 enum Tool {
-    /// Validate a configuration file: parse YAML, check expressions, ping
-    /// the source DB, dry-run the change-feed setup.
+    /// Validate a configuration file: parse YAML and run cross-cutting checks.
     Validate {
         /// Path to the configuration file.
         path: PathBuf,
@@ -185,10 +184,7 @@ async fn run_runtime(config_path: &Path) -> Result<()> {
     ));
 
     mars_http::serve(
-        mars_http::ServerConfig {
-            listen,
-            debug_endpoints: false,
-        },
+        mars_http::ServerConfig { listen },
         runtime,
         caps_handle,
         wms_cfg,

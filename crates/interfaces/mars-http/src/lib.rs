@@ -46,7 +46,6 @@ pub enum HttpError {
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
     pub listen: SocketAddr,
-    pub debug_endpoints: bool,
 }
 
 /// Atomically swappable capabilities document. Cheap clone, lock-free reads.
