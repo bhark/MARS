@@ -204,9 +204,17 @@ pub(crate) fn project_ring(
     close: bool,
 ) -> Result<Subpath, RuntimeError> {
     let mut points: Vec<(f32, f32)> = Vec::with_capacity(verts.len() + usize::from(close));
-    for &(x, y) in verts {
-        let (rx, ry) = reproject_point(x, y, reproject)?;
-        points.push(vp.project(rx, ry));
+    if let Some(t) = reproject {
+        // batch the per-vertex FFI hops into one proj_trans_generic call.
+        let mut buf: Vec<[f64; 2]> = verts.iter().map(|&(x, y)| [x, y]).collect();
+        t.transform_points(&mut buf)?;
+        for [rx, ry] in buf {
+            points.push(vp.project(rx, ry));
+        }
+    } else {
+        for &(x, y) in verts {
+            points.push(vp.project(x, y));
+        }
     }
     if close && points.len() >= 2 && points[0] != points[points.len() - 1] {
         points.push(points[0]);

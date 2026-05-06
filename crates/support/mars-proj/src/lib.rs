@@ -249,6 +249,69 @@ impl Transformer {
             .map_err(|_| ProjError::Transform("transformer mutex poisoned".into()))?;
         densified_bbox(guard.pj, bbox, self.densify_segments)
     }
+
+    /// Forward-transform an in-place array of `[x, y]` pairs in a single FFI
+    /// call. For a 1000-vertex ring this collapses 1000 lock-acquire+FFI hops
+    /// into one, which is where most of the per-feature reproject cost lives.
+    pub fn transform_points(&self, points: &mut [[f64; 2]]) -> Result<(), ProjError> {
+        if points.is_empty() {
+            return Ok(());
+        }
+        let guard = self
+            .inner
+            .lock()
+            .map_err(|_| ProjError::Transform("transformer mutex poisoned".into()))?;
+        let n = points.len();
+        // [f64; 2] has well-defined layout: sizeof == 2*sizeof::<f64>(), no padding.
+        let stride = std::mem::size_of::<[f64; 2]>();
+        // SAFETY: `points` is &mut so we have exclusive access for the call.
+        // x_ptr / y_ptr cover the same allocation; PROJ reads/writes each lane
+        // with the given stride, which the layout guarantee makes well-defined.
+        unsafe {
+            let base = points.as_mut_ptr().cast::<f64>();
+            let x_ptr = base;
+            let y_ptr = base.add(1);
+            let count = proj_sys::proj_trans_generic(
+                guard.pj,
+                proj_sys::PJ_DIRECTION_PJ_FWD,
+                x_ptr,
+                stride,
+                n,
+                y_ptr,
+                stride,
+                n,
+                std::ptr::null_mut(),
+                0,
+                0,
+                std::ptr::null_mut(),
+                0,
+                0,
+            );
+            if count != n {
+                let err = proj_sys::proj_errno(guard.pj);
+                let msg = if err != 0 {
+                    let p = proj_sys::proj_errno_string(err);
+                    if p.is_null() {
+                        format!("PROJ errno {err}")
+                    } else {
+                        CStr::from_ptr(p).to_string_lossy().into_owned()
+                    }
+                } else {
+                    format!("proj_trans_generic transformed {count}/{n} points")
+                };
+                proj_sys::proj_errno_reset(guard.pj);
+                return Err(ProjError::Transform(msg));
+            }
+        }
+        // PROJ writes HUGE_VAL on per-point failure without setting errno;
+        // a final scan surfaces those rather than poisoning downstream math.
+        for [x, y] in points.iter() {
+            if !x.is_finite() || !y.is_finite() {
+                return Err(ProjError::Transform("transform produced non-finite output".into()));
+            }
+        }
+        Ok(())
+    }
 }
 
 fn transform_one(pj: *mut PJ, x: f64, y: f64) -> Result<(f64, f64), ProjError> {
@@ -405,5 +468,30 @@ mod tests {
     fn unknown_crs_returns_unknown_crs_error() {
         let err = Transformer::new(&CrsCode::new("EPSG:9999999"), &CrsCode::new("EPSG:4326")).unwrap_err();
         assert!(matches!(err, ProjError::UnknownCrs(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn transform_points_matches_per_point_transform() {
+        let t = Transformer::new(&CrsCode::new("EPSG:25832"), &CrsCode::new("EPSG:4326")).unwrap();
+        let inputs: Vec<(f64, f64)> = vec![
+            (725_386.0, 6_177_286.0),
+            (440_000.0, 6_050_000.0),
+            (900_000.0, 6_400_000.0),
+            (600_000.0, 6_200_000.0),
+        ];
+        let mut batch: Vec<[f64; 2]> = inputs.iter().map(|&(x, y)| [x, y]).collect();
+        t.transform_points(&mut batch).unwrap();
+        for (i, &(x, y)) in inputs.iter().enumerate() {
+            let (sx, sy) = t.transform_point(x, y).unwrap();
+            assert!((batch[i][0] - sx).abs() < 1e-9, "x mismatch at {i}");
+            assert!((batch[i][1] - sy).abs() < 1e-9, "y mismatch at {i}");
+        }
+    }
+
+    #[test]
+    fn transform_points_empty_is_ok() {
+        let t = Transformer::new(&CrsCode::new("EPSG:25832"), &CrsCode::new("EPSG:4326")).unwrap();
+        let mut empty: Vec<[f64; 2]> = vec![];
+        t.transform_points(&mut empty).unwrap();
     }
 }
