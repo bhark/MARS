@@ -61,6 +61,8 @@ pub enum ArtifactError {
     UnknownKind(u8),
     #[error("section {0:?} not present")]
     SectionMissing(SectionKind),
+    #[error("section kind {0:#04x} listed more than once in footer")]
+    DuplicateSection(u16),
     #[error("compressed sections are not supported in v1")]
     CompressedNotSupported,
     #[error("invalid writer state: {0}")]

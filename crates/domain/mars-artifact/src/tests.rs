@@ -265,6 +265,19 @@ fn rejects_unsupported_version() {
 }
 
 #[test]
+fn rejects_duplicate_section_kinds() {
+    let payload = encode_geometry_payload(&[]).unwrap();
+    let mut w = ArtifactWriter::new(ArtifactKind::Source);
+    w.add_section(SectionKind::GeometryPayload, payload.clone())
+        .add_section(SectionKind::GeometryPayload, payload)
+        .set_bbox(Bbox::new(0.0, 0.0, 1.0, 1.0))
+        .set_feature_count(0);
+    let bytes = w.finish().unwrap();
+    let err = ArtifactReader::open(bytes).unwrap_err();
+    assert!(matches!(err, ArtifactError::DuplicateSection(_)), "got {err:?}");
+}
+
+#[test]
 fn rejects_compressed_section_flag() {
     // synthesize an artifact whose lone section header has FLAG_COMPRESSED set,
     // by patching the writer's output.

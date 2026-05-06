@@ -80,8 +80,14 @@ impl ArtifactReader {
         let mut sections = Vec::new();
         if let Some(list) = sections_vec {
             for entry in list.iter() {
+                let kind = entry.kind();
+                // duplicate kinds would be silently shadowed by `section()`'s
+                // first-match lookup; reject up front.
+                if sections.iter().any(|s: &SectionIndexEntry| s.kind == kind) {
+                    return Err(ArtifactError::DuplicateSection(kind));
+                }
                 sections.push(SectionIndexEntry {
-                    kind: entry.kind(),
+                    kind,
                     file_offset: entry.file_offset(),
                     length: entry.length(),
                 });
