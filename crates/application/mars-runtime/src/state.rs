@@ -143,15 +143,19 @@ impl RuntimeState {
         for entry in &manifest.layer_artifacts {
             match parse(&entry.key)? {
                 ParsedKey::Layer { layer, cell } => {
-                    layer_index.insert(
-                        LayerCellKey {
-                            layer,
-                            band: cell.band,
-                            x: cell.x,
-                            y: cell.y,
-                        },
-                        LayerCellState::Present(entry.clone()),
-                    );
+                    let key = LayerCellKey {
+                        layer,
+                        band: cell.band,
+                        x: cell.x,
+                        y: cell.y,
+                    };
+                    if layer_index.contains_key(&key) {
+                        return Err(RuntimeError::BadKey {
+                            key: entry.key.to_string(),
+                            reason: "duplicate (layer, band, cell) in layer_artifacts".into(),
+                        });
+                    }
+                    layer_index.insert(key, LayerCellState::Present(entry.clone()));
                 }
                 ParsedKey::Source { .. } => {
                     return Err(RuntimeError::BadKey {
@@ -181,15 +185,19 @@ impl RuntimeState {
         for entry in &manifest.source_artifacts {
             match parse(&entry.key)? {
                 ParsedKey::Source { collection, cell } => {
-                    source_index.insert(
-                        SourceCellKey {
-                            collection: Arc::<str>::from(collection),
-                            band: cell.band,
-                            x: cell.x,
-                            y: cell.y,
-                        },
-                        entry.clone(),
-                    );
+                    let key = SourceCellKey {
+                        collection: Arc::<str>::from(collection),
+                        band: cell.band,
+                        x: cell.x,
+                        y: cell.y,
+                    };
+                    if source_index.contains_key(&key) {
+                        return Err(RuntimeError::BadKey {
+                            key: entry.key.to_string(),
+                            reason: "duplicate (collection, band, cell) in source_artifacts".into(),
+                        });
+                    }
+                    source_index.insert(key, entry.clone());
                 }
                 ParsedKey::Layer { .. } => {
                     return Err(RuntimeError::BadKey {
@@ -408,6 +416,38 @@ mod tests {
             msg.contains("both layer_artifacts and empty_layer_cells"),
             "error: {msg}"
         );
+    }
+
+    #[test]
+    fn rejects_duplicate_layer_artifact_cells() {
+        let cfg = minimal_config();
+        let key = "lyr/l/hi/0_0/v1/abcd.mars";
+        let entry = ArtifactEntry {
+            key: ArtifactKey::new(key),
+            hash: ContentHash::zero(),
+            size_bytes: 0,
+        };
+        let manifest = Manifest::new(1, "t", vec![], vec![entry.clone(), entry], None, vec![]);
+        let err = RuntimeState::from_config_and_manifest(&cfg, Stylesheet::default(), manifest).unwrap_err();
+        let msg = err.to_string();
+        assert!(matches!(err, RuntimeError::BadKey { .. }));
+        assert!(msg.contains("duplicate"), "error: {msg}");
+    }
+
+    #[test]
+    fn rejects_duplicate_source_artifact_cells() {
+        let cfg = minimal_config();
+        let key = "src/coll/hi/0_0/abcd.mars";
+        let entry = ArtifactEntry {
+            key: ArtifactKey::new(key),
+            hash: ContentHash::zero(),
+            size_bytes: 0,
+        };
+        let manifest = Manifest::new(1, "t", vec![entry.clone(), entry], vec![], None, vec![]);
+        let err = RuntimeState::from_config_and_manifest(&cfg, Stylesheet::default(), manifest).unwrap_err();
+        let msg = err.to_string();
+        assert!(matches!(err, RuntimeError::BadKey { .. }));
+        assert!(msg.contains("duplicate"), "error: {msg}");
     }
 
     #[test]
