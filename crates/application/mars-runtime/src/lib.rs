@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use arc_swap::ArcSwapOption;
-use futures_util::{StreamExt, stream};
+use futures_util::{StreamExt, TryStreamExt, stream};
 use mars_artifact::ArtifactReader;
 use mars_observability::{Metrics, reject_reason};
 use mars_render_port::{Canvas, Encoder, Renderer};
@@ -193,41 +193,55 @@ impl Runtime {
         };
 
         // collect fetched artifacts under async; geometry + render run sync.
-        let mut fetched: Vec<(ArtifactReader, ArtifactReader)> = Vec::with_capacity(tasks.len());
-        for task in &tasks {
-            let layer_art = match fetch::fetch_layer(
-                &state,
-                self.deps.cache.as_ref(),
-                self.deps.store.as_ref(),
-                &task.layer,
-                &task.cell,
-            )
-            .await?
-            {
-                Some(reader) => reader,
-                None => continue, // explicit empty marker: no draw ops, no source fetch
-            };
-            let source_ref = layer_art.source_ref().cloned().ok_or_else(|| {
-                RuntimeError::Config(mars_config::ConfigError::Invalid(format!(
-                    "layer artifact '{}' is missing source_ref footer",
-                    task.layer
-                )))
-            })?;
-            let source_cell = mars_types::Cell {
-                band: mars_types::ScaleBand::new(source_ref.band.clone()),
-                x: source_ref.cell_x,
-                y: source_ref.cell_y,
-            };
-            let source_art = fetch::fetch_source(
-                &state,
-                self.deps.cache.as_ref(),
-                self.deps.store.as_ref(),
-                &source_ref.collection,
-                &source_cell,
-            )
-            .await?;
-            fetched.push((source_art, layer_art));
-        }
+        let cache = self.deps.cache.clone();
+        let store = self.deps.store.clone();
+        let fetched: Vec<(ArtifactReader, ArtifactReader)> = stream::iter(
+            tasks.into_iter().map(|task| {
+                let state = state.clone();
+                let cache = cache.clone();
+                let store = store.clone();
+                async move {
+                    let layer_art = match fetch::fetch_layer(
+                        &state,
+                        cache.as_ref(),
+                        store.as_ref(),
+                        &task.layer,
+                        &task.cell,
+                    )
+                    .await?
+                    {
+                        Some(reader) => reader,
+                        None => return Ok(None),
+                    };
+                    let source_ref = layer_art.source_ref().cloned().ok_or_else(|| {
+                        RuntimeError::Config(mars_config::ConfigError::Invalid(format!(
+                            "layer artifact '{}' is missing source_ref footer",
+                            task.layer
+                        )))
+                    })?;
+                    let source_cell = mars_types::Cell {
+                        band: mars_types::ScaleBand::new(source_ref.band.clone()),
+                        x: source_ref.cell_x,
+                        y: source_ref.cell_y,
+                    };
+                    let source_art = fetch::fetch_source(
+                        &state,
+                        cache.as_ref(),
+                        store.as_ref(),
+                        &source_ref.collection,
+                        &source_cell,
+                    )
+                    .await?;
+                    Ok::<_, RuntimeError>(Some((source_art, layer_art)))
+                }
+            }),
+        )
+        .buffer_unordered(8)
+        .try_collect::<Vec<_>>()
+        .await?
+        .into_iter()
+        .flatten()
+        .collect();
 
         let canvas = Canvas {
             width: plan.width,
