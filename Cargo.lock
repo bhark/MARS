@@ -2058,6 +2058,7 @@ dependencies = [
  "mars-store",
  "mars-types",
  "memmap2",
+ "parking_lot",
  "proptest",
  "rand 0.8.6",
  "serde_json",

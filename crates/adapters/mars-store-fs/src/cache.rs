@@ -16,8 +16,10 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::SystemTime;
+
+use parking_lot::Mutex;
 
 use linked_hash_map::LinkedHashMap;
 
@@ -129,7 +131,7 @@ impl FsCache {
 
     fn evict_to_budget(&self) -> Result<(), StoreError> {
         let evicted = {
-            let mut state = lock_state(&self.state);
+            let mut state = self.state.lock();
             state.evict()
         };
         for key in evicted {
@@ -147,7 +149,7 @@ impl FsCache {
     /// register the current task as the flight leader for `key` if no flight
     /// is active, otherwise return a handle to await the existing leader.
     fn join_or_lead(&self, key: &ArtifactKey) -> FlightRole {
-        let mut flights = lock_flights(&self.flights);
+        let mut flights = self.flights.lock();
         if let Some(notify) = flights.get(key) {
             return FlightRole::Waiter(notify.clone());
         }
@@ -160,7 +162,7 @@ impl FsCache {
     /// leader, including on error and on panic (via `LeaderGuard`).
     fn finish_flight(&self, key: &ArtifactKey) {
         let notify = {
-            let mut flights = lock_flights(&self.flights);
+            let mut flights = self.flights.lock();
             flights.remove(key)
         };
         if let Some(n) = notify {
@@ -188,18 +190,6 @@ impl Drop for LeaderGuard<'_> {
             self.cache.finish_flight(self.key);
         }
     }
-}
-
-/// scope a `Mutex` lock so it never crosses an `.await`. on poison we panic;
-/// the cache state is in-process and a poison is unrecoverable.
-#[allow(clippy::expect_used)]
-fn lock_state(m: &Mutex<CacheState>) -> std::sync::MutexGuard<'_, CacheState> {
-    m.lock().expect("cache state poisoned")
-}
-
-#[allow(clippy::expect_used)]
-fn lock_flights(m: &Flights) -> std::sync::MutexGuard<'_, HashMap<ArtifactKey, Arc<Notify>>> {
-    m.lock().expect("cache flights poisoned")
 }
 
 /// walk `root` recursively, collecting (key, size, mtime) for every file.
@@ -315,7 +305,7 @@ impl LocalCache for FsCache {
             };
 
             if let Some(bytes) = local {
-                let mut state = lock_state(&self.state);
+                let mut state = self.state.lock();
                 state.touch(key.clone());
                 return Ok(bytes);
             }
@@ -367,7 +357,7 @@ impl FsCache {
         .map_err(|e| StoreError::Backend(format!("join: {e}")))??;
 
         let evicted = {
-            let mut state = lock_state(&self.state);
+            let mut state = self.state.lock();
             state.insert(key.clone(), size)
         };
         if !evicted.is_empty() {
@@ -570,7 +560,7 @@ mod tests {
 
         let total = walk_total(cache_dir.path());
         assert!(total <= 4096, "on-disk footprint {total} exceeds budget");
-        let state_total = cache.state.lock().unwrap().total_size;
+        let state_total = cache.state.lock().total_size;
         assert_eq!(state_total, total);
 
         // oldest entries should have been evicted.
@@ -625,7 +615,7 @@ mod tests {
             total <= 2048,
             "expected on-disk footprint <= 2KiB after reopen, got {total}"
         );
-        let state_total = tight.state.lock().unwrap().total_size;
+        let state_total = tight.state.lock().total_size;
         assert_eq!(state_total, total);
     }
 
@@ -642,12 +632,12 @@ mod tests {
         store.put(&key, Bytes::from(payload.clone())).await.unwrap();
 
         cache.get_or_fetch(&key, h, &store).await.unwrap();
-        let after_first = cache.state.lock().unwrap().total_size;
+        let after_first = cache.state.lock().total_size;
         assert_eq!(after_first, payload.len() as u64);
 
         std::fs::remove_file(cache_dir.path().canonicalize().unwrap().join("x/y.bin")).unwrap();
         cache.get_or_fetch(&key, h, &store).await.unwrap();
-        let after_second = cache.state.lock().unwrap().total_size;
+        let after_second = cache.state.lock().total_size;
         assert_eq!(after_second, payload.len() as u64);
     }
 
