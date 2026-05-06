@@ -14,6 +14,7 @@ pub mod access;
 use async_trait::async_trait;
 use bytes::Bytes;
 use mars_expr::Expr;
+pub use mars_types::SourceCollectionId;
 use mars_types::{Bbox, Cell, CrsCode};
 
 pub use access::RowAttrs;
@@ -54,28 +55,28 @@ pub enum ChangeEvent {
     /// A row was inserted; new geometry occupies the listed cells.
     Insert {
         /// Logical name of the source table / collection.
-        collection: String,
+        collection: SourceCollectionId,
         /// Cells touched by the new geometry.
         cells: Vec<Cell>,
     },
     /// A row was updated; cells = touched-by-old ∪ touched-by-new.
     Update {
         /// Logical name of the source table / collection.
-        collection: String,
+        collection: SourceCollectionId,
         /// Cells touched by the old or new geometry.
         cells: Vec<Cell>,
     },
     /// A row was deleted; cells = touched-by-old.
     Delete {
         /// Logical name of the source table / collection.
-        collection: String,
+        collection: SourceCollectionId,
         /// Cells touched by the old geometry.
         cells: Vec<Cell>,
     },
     /// The whole collection was truncated; every cell is dirty.
     Truncate {
         /// Logical name of the source table / collection.
-        collection: String,
+        collection: SourceCollectionId,
     },
 }
 
@@ -90,31 +91,6 @@ pub struct ChangeBatch {
     /// Opaque source-side cursor identifying the committed position. `None`
     /// when the adapter has no notion of a cursor (polling fallback).
     pub source_version: Option<String>,
-}
-
-/// Stable identifier for a source collection (logical name shared between
-/// the binding, change feed, and compiled artifact metadata).
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SourceCollectionId(String);
-
-impl SourceCollectionId {
-    /// Construct from any string-like value.
-    #[must_use]
-    pub fn new(name: impl Into<String>) -> Self {
-        Self(name.into())
-    }
-
-    /// Borrow as a `&str`.
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl std::fmt::Display for SourceCollectionId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
 }
 
 /// Source-side binding: maps a logical `SourceCollectionId` onto the physical

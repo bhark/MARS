@@ -29,6 +29,7 @@ mod quote;
 mod replication;
 
 pub use lower::lower_to_sql;
+pub use mars_source::SourceCollectionId;
 pub use replication::{CollectionTopology, ReplicationTopology};
 
 /// Connection / topology configuration.

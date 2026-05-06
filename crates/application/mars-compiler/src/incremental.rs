@@ -4,13 +4,15 @@
 use std::collections::BTreeSet;
 use std::time::SystemTime;
 
-use mars_source::{ChangeBatch, ChangeEvent};
-use mars_types::{ArtifactEntry, EmptyLayerCell, MANIFEST_FORMAT_VERSION, Manifest, ParsedArtifactKey};
+use mars_source::{ChangeBatch, ChangeEvent, SourceCollectionId};
+use mars_types::{ArtifactEntry, EmptyLayerCell, MANIFEST_FORMAT_VERSION, Manifest, ParsedArtifactKey, ScaleBand};
 
 use crate::plan::Plan;
 
 /// Canonical key for a dirty source cell: `(collection, band, x, y)`.
-pub type SourceCellKey = (String, String, i64, i64);
+/// Both string components are cheap-clone newtypes, so building keys in
+/// fan-out hot paths costs only a refcount bump.
+pub type SourceCellKey = (SourceCollectionId, ScaleBand, i64, i64);
 
 /// Set of `(collection, band, cell)` tuples that an incremental window has
 /// invalidated. Deduplicated and ordered for stable iteration.
@@ -37,15 +39,14 @@ pub fn dirty_cells_for(batches: &[ChangeBatch], plan: &Plan) -> DirtySet {
                 | ChangeEvent::Update { collection, cells }
                 | ChangeEvent::Delete { collection, cells } => {
                     for c in cells {
-                        out.cells
-                            .insert((collection.clone(), c.band.as_str().to_string(), c.x, c.y));
+                        out.cells.insert((collection.clone(), c.band.clone(), c.x, c.y));
                     }
                 }
                 ChangeEvent::Truncate { collection } => {
                     for s in &plan.sources {
-                        if s.collection().as_str() == collection {
+                        if s.collection() == collection {
                             out.cells
-                                .insert((collection.clone(), s.band.as_str().to_string(), s.cell.x, s.cell.y));
+                                .insert((collection.clone(), s.band.clone(), s.cell.x, s.cell.y));
                         }
                     }
                 }
@@ -62,12 +63,7 @@ pub fn filter_plan(plan: &Plan, dirty: &DirtySet) -> Plan {
     let mut out = Plan::default();
     let mut idx_map: Vec<Option<usize>> = Vec::with_capacity(plan.sources.len());
     for s in &plan.sources {
-        let key = (
-            s.collection().as_str().to_string(),
-            s.band.as_str().to_string(),
-            s.cell.x,
-            s.cell.y,
-        );
+        let key = (s.collection().clone(), s.band.clone(), s.cell.x, s.cell.y);
         if dirty.cells.contains(&key) {
             idx_map.push(Some(out.sources.len()));
             out.sources.push(s.clone());
@@ -133,7 +129,7 @@ pub fn merge_manifest(
             Ok(ParsedArtifactKey::Source { collection, cell }) => {
                 !dirty
                     .cells
-                    .contains(&(collection, cell.band.as_str().to_string(), cell.x, cell.y))
+                    .contains(&(SourceCollectionId::new(collection), cell.band, cell.x, cell.y))
             }
             _ => true,
         })
@@ -266,8 +262,16 @@ mod tests {
         };
         let dirty = dirty_cells_for(&[batch], &plan);
         assert_eq!(dirty.cells.len(), 2);
-        assert!(dirty.cells.contains(&("roads".into(), "hi".into(), 1, 2)));
-        assert!(dirty.cells.contains(&("roads".into(), "hi".into(), 3, 4)));
+        assert!(
+            dirty
+                .cells
+                .contains(&(SourceCollectionId::new("roads"), ScaleBand::new("hi"), 1, 2))
+        );
+        assert!(
+            dirty
+                .cells
+                .contains(&(SourceCollectionId::new("roads"), ScaleBand::new("hi"), 3, 4))
+        );
     }
 
     #[test]
@@ -284,8 +288,16 @@ mod tests {
         };
         let dirty = dirty_cells_for(&[batch], &plan);
         assert_eq!(dirty.cells.len(), 2);
-        assert!(dirty.cells.contains(&("roads".into(), "hi".into(), 0, 0)));
-        assert!(dirty.cells.contains(&("roads".into(), "hi".into(), 1, 0)));
+        assert!(
+            dirty
+                .cells
+                .contains(&(SourceCollectionId::new("roads"), ScaleBand::new("hi"), 0, 0))
+        );
+        assert!(
+            dirty
+                .cells
+                .contains(&(SourceCollectionId::new("roads"), ScaleBand::new("hi"), 1, 0))
+        );
     }
 
     #[test]
@@ -298,7 +310,9 @@ mod tests {
         plan.layers.push(layer_task("l_a2", "hi", 0, 0, 0));
 
         let mut dirty = DirtySet::default();
-        dirty.cells.insert(("a".into(), "hi".into(), 0, 0));
+        dirty
+            .cells
+            .insert((SourceCollectionId::new("a"), ScaleBand::new("hi"), 0, 0));
 
         let filtered = filter_plan(&plan, &dirty);
         assert_eq!(filtered.sources.len(), 1);
@@ -338,7 +352,9 @@ mod tests {
         };
 
         let mut dirty = DirtySet::default();
-        dirty.cells.insert(("a".into(), "hi".into(), 0, 0));
+        dirty
+            .cells
+            .insert((SourceCollectionId::new("a"), ScaleBand::new("hi"), 0, 0));
 
         let merged = merge_manifest(&prev, 6, "svc", rebuild, &dirty, Some("0/200".into()));
         assert_eq!(merged.version, 6);
@@ -383,7 +399,9 @@ mod tests {
         };
 
         let mut dirty = DirtySet::default();
-        dirty.cells.insert(("a".into(), "hi".into(), 0, 0));
+        dirty
+            .cells
+            .insert((SourceCollectionId::new("a"), ScaleBand::new("hi"), 0, 0));
 
         let merged = merge_manifest(&prev, 6, "svc", rebuild, &dirty, None);
         assert!(merged.source_artifacts.is_empty(), "dirty source dropped");

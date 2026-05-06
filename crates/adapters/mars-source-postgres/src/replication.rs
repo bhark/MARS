@@ -35,7 +35,7 @@ pub(crate) mod wkb_bbox;
 #[derive(Debug, Clone)]
 pub struct CollectionTopology {
     /// Logical collection identifier reported in `ChangeEvent`.
-    pub collection: String,
+    pub collection: mars_source::SourceCollectionId,
     /// Schema name as known to postgres (e.g. `public`).
     pub schema: String,
     /// Table name as known to postgres.

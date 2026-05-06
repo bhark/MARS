@@ -55,7 +55,7 @@ impl Bbox {
 macro_rules! impl_string_newtype {
     ($(#[$meta:meta])* $vis:vis $name:ident) => {
         $(#[$meta])*
-        #[derive(Debug, Clone, PartialEq, Eq, Hash, ::serde::Serialize)]
+        #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, ::serde::Serialize)]
         #[serde(transparent)]
         $vis struct $name(::std::sync::Arc<str>);
 
@@ -140,6 +140,12 @@ impl_string_newtype!(
 impl_string_newtype!(
     /// per-request id, propagated end-to-end through tracing spans.
     pub RequestId
+);
+
+impl_string_newtype!(
+    /// stable identifier for a source collection (logical name shared between
+    /// the binding, change feed, and compiled artifact metadata).
+    pub SourceCollectionId
 );
 
 /// a spatial partition cell, addressed by `(band, x, y)` in canonical CRS.

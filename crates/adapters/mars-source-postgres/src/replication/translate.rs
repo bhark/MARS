@@ -321,7 +321,7 @@ mod tests {
         let _ = translate(Message::Relation(relation_msg()), &mut cache, &t).unwrap();
         let entry = cache.get(100).unwrap();
         assert_eq!(entry.geometry_col_idx, 1);
-        assert_eq!(entry.topology.collection, "roads");
+        assert_eq!(entry.topology.collection.as_str(), "roads");
     }
 
     #[test]
@@ -374,7 +374,7 @@ mod tests {
         .unwrap();
         match one_event(res) {
             ChangeEvent::Insert { collection, cells } => {
-                assert_eq!(collection, "roads");
+                assert_eq!(collection.as_str(), "roads");
                 assert_eq!(cells.len(), 1);
                 assert_eq!(cells[0].band.as_str(), "hi");
             }

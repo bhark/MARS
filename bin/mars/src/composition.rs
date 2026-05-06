@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use anyhow::{Context, Result, anyhow};
 use mars_config::Config;
 use mars_grid::BandConfig;
-use mars_source_postgres::{CollectionTopology, ReplicationTopology};
+use mars_source_postgres::{CollectionTopology, ReplicationTopology, SourceCollectionId};
 use mars_types::ScaleBand;
 
 /// Hard ceiling on cells emitted per row by the change-feed translator.
@@ -44,7 +44,7 @@ pub(crate) fn build_replication_topology(cfg: &Config) -> Result<ReplicationTopo
             let (schema, table) = binding.schema_table();
             let key = (schema.to_string(), table.to_string(), binding.geometry_column.clone());
             seen.entry(key).or_insert_with(|| CollectionTopology {
-                collection: binding.from.clone(),
+                collection: SourceCollectionId::new(binding.from.clone()),
                 schema: schema.to_string(),
                 table: table.to_string(),
                 geometry_column: binding.geometry_column.clone(),
@@ -227,7 +227,7 @@ mod tests {
         let cfg = cfg_with_layers(vec![layer("a", vec![("public.roads", "the_geom")])]);
         let topo = build_replication_topology(&cfg).unwrap();
         assert_eq!(topo.collections[0].geometry_column, "the_geom");
-        assert_eq!(topo.collections[0].collection, "public.roads");
+        assert_eq!(topo.collections[0].collection.as_str(), "public.roads");
     }
 
     #[test]

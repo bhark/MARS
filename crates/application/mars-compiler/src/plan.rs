@@ -113,8 +113,10 @@ pub fn build_plan(cfg: &Config) -> Result<Plan, PlanError> {
         prev_max = band.max_denom;
     }
 
-    // index of (collection, band, cell.x, cell.y) -> position in plan.sources
-    let mut source_index: BTreeMap<(String, String, i64, i64), usize> = BTreeMap::new();
+    // index of (collection, band, cell.x, cell.y) -> position in plan.sources.
+    // both newtypes are Arc<str>-backed, so building keys per cell is a refcount
+    // bump rather than a String clone.
+    let mut source_index: BTreeMap<(SourceCollectionId, ScaleBand, i64, i64), usize> = BTreeMap::new();
     let mut plan = Plan::default();
 
     for layer in &cfg.layers {
@@ -155,12 +157,7 @@ pub fn build_plan(cfg: &Config) -> Result<Plan, PlanError> {
                 let port_binding = lower_binding(binding, &crs)?;
                 let band_id = ScaleBand::new(band_name.as_str());
                 for cell in cells {
-                    let key = (
-                        port_binding.collection.as_str().to_string(),
-                        band_name.clone(),
-                        cell.x,
-                        cell.y,
-                    );
+                    let key = (port_binding.collection.clone(), band_id.clone(), cell.x, cell.y);
                     let source_idx = match source_index.get(&key) {
                         Some(&idx) => {
                             merge_source_binding(&mut plan.sources[idx].binding, &port_binding)?;
