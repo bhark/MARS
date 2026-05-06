@@ -227,7 +227,8 @@ async fn run_compile(cfg: &Config) -> Result<()> {
     let compiler = Compiler::new(
         CompilerDeps {
             source: source.clone(),
-            change_feed: source,
+            change_feed: source.clone(),
+            leader_lock: source,
             store,
             manifest: publisher,
             metrics: mars_observability::Metrics::new().unwrap(),
