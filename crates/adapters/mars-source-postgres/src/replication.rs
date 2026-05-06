@@ -133,6 +133,10 @@ pub(crate) struct RelationCache {
 pub(crate) struct CachedRelation {
     pub topology: CollectionTopology,
     pub geometry_col_idx: usize,
+    /// pgoutput replica-identity byte: `d` default, `n` nothing, `f` full,
+    /// `i` index. used by the translator to produce a useful operator-facing
+    /// error when an UPDATE/DELETE arrives without the old tuple we need.
+    pub replica_identity: u8,
 }
 
 #[allow(dead_code)]

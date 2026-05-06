@@ -10,10 +10,10 @@ use super::{CachedRelation, RelationCache, ReplicationTopology, cells_for_bbox};
 /// transaction boundaries are not events; they're cache or no-op signals.
 #[derive(Debug)]
 pub(crate) enum Translated {
-    /// A consumer-visible event was produced.
-    Event(ChangeEvent),
-    /// No event but the loop should keep going.
-    Skip,
+    /// Zero or more consumer-visible events from a single pgoutput message.
+    /// row events return one; multi-relation truncate returns one per known
+    /// relation oid; relation/begin/origin messages return zero.
+    Events(Vec<ChangeEvent>),
     /// The Commit's `end_lsn`. Used by the transport to advance flushed LSN.
     Committed { end_lsn: u64 },
 }
@@ -26,11 +26,11 @@ pub(crate) fn translate(
     topology: &ReplicationTopology,
 ) -> Result<Translated, SourceError> {
     match msg {
-        Message::Begin { .. } | Message::Unhandled => Ok(Translated::Skip),
+        Message::Begin { .. } | Message::Unhandled => Ok(Translated::Events(Vec::new())),
         Message::Commit { end_lsn, .. } => Ok(Translated::Committed { end_lsn }),
         Message::Relation(rel) => {
             cache_relation(rel, cache, topology);
-            Ok(Translated::Skip)
+            Ok(Translated::Events(Vec::new()))
         }
         Message::Insert { relation_oid, tuple } => row_event(relation_oid, &tuple, cache, topology, EventKind::Insert),
         Message::Update { relation_oid, payload } => update_event(relation_oid, payload, cache, topology),
@@ -65,6 +65,7 @@ fn cache_relation(rel: Relation, cache: &mut RelationCache, topology: &Replicati
         CachedRelation {
             topology: top.clone(),
             geometry_col_idx: geom_col_idx,
+            replica_identity: rel.replica_identity,
         },
     );
 }
@@ -103,7 +104,7 @@ fn row_event(
             cells,
         },
     };
-    Ok(Translated::Event(ev))
+    Ok(Translated::Events(vec![ev]))
 }
 
 fn update_event(
@@ -117,50 +118,56 @@ fn update_event(
             "pgoutput: update for unknown relation oid {oid}"
         )));
     };
+
+    // SPEC §8.2.1: bound tables MUST carry REPLICA IDENTITY FULL so the
+    // OLD geometry is present on every UPDATE/DELETE. without it,
+    // deletes-of-moved-geometry leak old cells.
+    let Some(old) = payload.full_old.as_ref() else {
+        return Err(missing_full_old_error(entry, "update"));
+    };
+
     let mut cells: Vec<mars_types::Cell> = Vec::new();
     let mut seen: std::collections::HashSet<(String, i64, i64)> = std::collections::HashSet::new();
 
-    // OLD bbox: full_old has priority (REPLICA IDENTITY FULL); key_old does
-    // not carry geometry, so its absence simply means the OLD bbox is
-    // unavailable. without it, deletes-of-moved-geometry leak. SPEC §8.2.1
-    // mandates REPLICA IDENTITY FULL for bound tables.
-    if let Some(old) = payload.full_old.as_ref()
-        && let Ok(geom) = extract_geom_bytes(old, entry.geometry_col_idx)
-        && let Ok(bbox) = bbox_of(geom)
-    {
-        let old_cells = cells_for_bbox(bbox, &topology.bands, topology.max_cells_per_row)?;
-        for c in old_cells {
-            let k = (c.band.as_str().to_string(), c.x, c.y);
-            if seen.insert(k) {
-                cells.push(c);
-            }
+    let old_geom = extract_geom_bytes(old, entry.geometry_col_idx)?;
+    let old_bbox = bbox_of(old_geom).map_err(|e| SourceError::Backend(format!("wkb (old): {e}")))?;
+    for c in cells_for_bbox(old_bbox, &topology.bands, topology.max_cells_per_row)? {
+        let k = (c.band.as_str().to_string(), c.x, c.y);
+        if seen.insert(k) {
+            cells.push(c);
         }
     }
 
-    // NEW bbox is always present.
     let new_geom = extract_geom_bytes(&payload.new, entry.geometry_col_idx)?;
-    if let Ok(bbox) = bbox_of(new_geom) {
-        let new_cells = cells_for_bbox(bbox, &topology.bands, topology.max_cells_per_row)?;
-        for c in new_cells {
-            let k = (c.band.as_str().to_string(), c.x, c.y);
-            if seen.insert(k) {
-                cells.push(c);
-            }
+    let new_bbox = bbox_of(new_geom).map_err(|e| SourceError::Backend(format!("wkb (new): {e}")))?;
+    for c in cells_for_bbox(new_bbox, &topology.bands, topology.max_cells_per_row)? {
+        let k = (c.band.as_str().to_string(), c.x, c.y);
+        if seen.insert(k) {
+            cells.push(c);
         }
     }
 
-    if cells.is_empty() {
-        // an update where neither bbox is decodable is a hard error: the
-        // dependent invalidation cannot be computed correctly.
-        return Err(SourceError::Backend(
-            "pgoutput: update produced no decodable bbox (REPLICA IDENTITY FULL configured?)".into(),
-        ));
-    }
-
-    Ok(Translated::Event(ChangeEvent::Update {
+    Ok(Translated::Events(vec![ChangeEvent::Update {
         collection: entry.topology.collection.clone(),
         cells,
-    }))
+    }]))
+}
+
+fn missing_full_old_error(entry: &CachedRelation, op: &str) -> SourceError {
+    let schema = &entry.topology.schema;
+    let table = &entry.topology.table;
+    if entry.replica_identity == b'f' {
+        // pgoutput claims FULL but no O tuple arrived: defensive — should
+        // not happen unless the upstream behaviour changes mid-stream.
+        SourceError::Backend(format!(
+            "pgoutput: {op} on {schema}.{table} declares REPLICA IDENTITY FULL but old tuple is missing"
+        ))
+    } else {
+        SourceError::Backend(format!(
+            "pgoutput: {op} on {schema}.{table} requires REPLICA IDENTITY FULL (got identity {:?})",
+            entry.replica_identity as char
+        ))
+    }
 }
 
 fn delete_event(
@@ -176,37 +183,29 @@ fn delete_event(
     };
     let tuple = match &payload {
         DeletePayload::Full(t) => t,
-        DeletePayload::KeyOnly(_) => {
-            return Err(SourceError::Backend(
-                "pgoutput: delete carried key-only old row; REPLICA IDENTITY FULL required for correctness".into(),
-            ));
-        }
+        DeletePayload::KeyOnly(_) => return Err(missing_full_old_error(entry, "delete")),
     };
     let geom = extract_geom_bytes(tuple, entry.geometry_col_idx)?;
     let bbox = bbox_of(geom).map_err(|e| SourceError::Backend(format!("wkb: {e}")))?;
     let cells = cells_for_bbox(bbox, &topology.bands, topology.max_cells_per_row)?;
-    Ok(Translated::Event(ChangeEvent::Delete {
+    Ok(Translated::Events(vec![ChangeEvent::Delete {
         collection: entry.topology.collection.clone(),
         cells,
-    }))
+    }]))
 }
 
 fn truncate_event(oids: &[u32], cache: &RelationCache) -> Result<Translated, SourceError> {
-    // multi-relation truncate: emit one event per known oid. unknown oids are
-    // silently skipped — they belong to relations outside our topology.
-    // first known oid wins; subsequent ones are still emitted by the loop
-    // because translate is called once per pgoutput message and one message
-    // can yield multiple events. for v1 we keep it simple and emit just the
-    // first known one; multi-emit can be added by lifting Translated to a
-    // Vec.
+    // multi-relation truncate: emit one event per known oid. unknown oids
+    // belong to relations outside the configured topology and are skipped.
+    let mut events = Vec::new();
     for oid in oids {
         if let Some(entry) = cache.get(*oid) {
-            return Ok(Translated::Event(ChangeEvent::Truncate {
+            events.push(ChangeEvent::Truncate {
                 collection: entry.topology.collection.clone(),
-            }));
+            });
         }
     }
-    Ok(Translated::Skip)
+    Ok(Translated::Events(events))
 }
 
 fn extract_geom_bytes<'a>(tuple: &'a Tuple<'a>, idx: usize) -> Result<&'a [u8], SourceError> {
@@ -241,12 +240,20 @@ mod tests {
 
     fn topo() -> ReplicationTopology {
         ReplicationTopology {
-            collections: vec![CollectionTopology {
-                collection: "roads".into(),
-                schema: "public".into(),
-                table: "roads_t".into(),
-                geometry_column: "geom".into(),
-            }],
+            collections: vec![
+                CollectionTopology {
+                    collection: "roads".into(),
+                    schema: "public".into(),
+                    table: "roads_t".into(),
+                    geometry_column: "geom".into(),
+                },
+                CollectionTopology {
+                    collection: "buildings".into(),
+                    schema: "public".into(),
+                    table: "buildings_t".into(),
+                    geometry_column: "geom".into(),
+                },
+            ],
             bands: vec![BandConfig {
                 name: ScaleBand::new("hi"),
                 max_denom: 25_000,
@@ -257,12 +264,12 @@ mod tests {
         }
     }
 
-    fn relation_msg() -> super::Relation {
+    fn relation_msg_with_identity(oid: u32, name: &str, replica_identity: u8) -> super::Relation {
         super::Relation {
-            oid: 100,
+            oid,
             namespace: "public".into(),
-            name: "roads_t".into(),
-            replica_identity: b'f',
+            name: name.into(),
+            replica_identity,
             columns: vec![
                 super::super::pgoutput::RelationColumn {
                     flags: 0,
@@ -277,6 +284,17 @@ mod tests {
                     type_modifier: -1,
                 },
             ],
+        }
+    }
+
+    fn relation_msg() -> super::Relation {
+        relation_msg_with_identity(100, "roads_t", b'f')
+    }
+
+    fn one_event(t: Translated) -> ChangeEvent {
+        match t {
+            Translated::Events(mut v) if v.len() == 1 => v.remove(0),
+            other => panic!("expected exactly one event, got {other:?}"),
         }
     }
 
@@ -308,8 +326,8 @@ mod tests {
             &t,
         )
         .unwrap();
-        match res {
-            Translated::Event(ChangeEvent::Insert { collection, cells }) => {
+        match one_event(res) {
+            ChangeEvent::Insert { collection, cells } => {
                 assert_eq!(collection, "roads");
                 assert_eq!(cells.len(), 1);
                 assert_eq!(cells[0].band.as_str(), "hi");
@@ -343,12 +361,71 @@ mod tests {
             &t,
         )
         .unwrap();
-        match res {
-            Translated::Event(ChangeEvent::Update { cells, .. }) => {
-                assert_eq!(cells.len(), 2);
-            }
+        match one_event(res) {
+            ChangeEvent::Update { cells, .. } => assert_eq!(cells.len(), 2),
             other => panic!("expected Update, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn update_without_full_old_errors_on_default_identity() {
+        let mut cache = RelationCache::default();
+        let t = topo();
+        // relation has REPLICA IDENTITY DEFAULT (b'd'), not FULL.
+        let _ = translate(
+            Message::Relation(relation_msg_with_identity(100, "roads_t", b'd')),
+            &mut cache,
+            &t,
+        )
+        .unwrap();
+        let new_geom = point_le(50.0, 50.0);
+        let payload = UpdatePayload {
+            key_old: None,
+            full_old: None,
+            new: Tuple {
+                columns: vec![ColumnData::Text(b"42"), ColumnData::Binary(&new_geom)],
+            },
+        };
+        let err = translate(
+            Message::Update {
+                relation_oid: 100,
+                payload,
+            },
+            &mut cache,
+            &t,
+        );
+        match err {
+            Err(SourceError::Backend(msg)) => {
+                assert!(msg.contains("REPLICA IDENTITY FULL"), "msg = {msg}");
+                assert!(msg.contains("public.roads_t"), "msg = {msg}");
+            }
+            other => panic!("expected Backend error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn update_without_full_old_errors_on_full_identity() {
+        // defensive: relation declares FULL but pgoutput omitted the O tuple.
+        let mut cache = RelationCache::default();
+        let t = topo();
+        let _ = translate(Message::Relation(relation_msg()), &mut cache, &t).unwrap();
+        let new_geom = point_le(50.0, 50.0);
+        let payload = UpdatePayload {
+            key_old: None,
+            full_old: None,
+            new: Tuple {
+                columns: vec![ColumnData::Text(b"42"), ColumnData::Binary(&new_geom)],
+            },
+        };
+        let err = translate(
+            Message::Update {
+                relation_oid: 100,
+                payload,
+            },
+            &mut cache,
+            &t,
+        );
+        assert!(matches!(err, Err(SourceError::Backend(_))));
     }
 
     #[test]
@@ -368,7 +445,7 @@ mod tests {
             &t,
         )
         .unwrap();
-        assert!(matches!(res, Translated::Event(ChangeEvent::Delete { .. })));
+        assert!(matches!(one_event(res), ChangeEvent::Delete { .. }));
 
         // key-only must error
         let err = translate(
@@ -398,7 +475,43 @@ mod tests {
             &t,
         )
         .unwrap();
-        assert!(matches!(res, Translated::Event(ChangeEvent::Truncate { .. })));
+        assert!(matches!(one_event(res), ChangeEvent::Truncate { .. }));
+    }
+
+    #[test]
+    fn truncate_emits_one_event_per_known_relation() {
+        let mut cache = RelationCache::default();
+        let t = topo();
+        let _ = translate(Message::Relation(relation_msg()), &mut cache, &t).unwrap();
+        let _ = translate(
+            Message::Relation(relation_msg_with_identity(200, "buildings_t", b'f')),
+            &mut cache,
+            &t,
+        )
+        .unwrap();
+        // mix of known + unknown oids.
+        let res = translate(
+            Message::Truncate(super::super::pgoutput::TruncatePayload {
+                relation_oids: vec![100, 999, 200],
+                flags: 0,
+            }),
+            &mut cache,
+            &t,
+        )
+        .unwrap();
+        match res {
+            Translated::Events(events) => {
+                let names: Vec<_> = events
+                    .iter()
+                    .map(|e| match e {
+                        ChangeEvent::Truncate { collection } => collection.as_str(),
+                        _ => panic!("expected only Truncate events"),
+                    })
+                    .collect();
+                assert_eq!(names, vec!["roads", "buildings"]);
+            }
+            other => panic!("expected Events, got {other:?}"),
+        }
     }
 
     #[test]
@@ -414,7 +527,10 @@ mod tests {
             &t,
         )
         .unwrap();
-        assert!(matches!(res, Translated::Skip));
+        match res {
+            Translated::Events(v) => assert!(v.is_empty()),
+            other => panic!("expected empty Events, got {other:?}"),
+        }
     }
 
     #[test]
