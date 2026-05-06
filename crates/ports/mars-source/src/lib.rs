@@ -200,6 +200,26 @@ pub trait Source: Send + Sync + 'static {
         bbox: Bbox,
         filter: Option<&Expr>,
     ) -> Result<Vec<RowBytes>, SourceError>;
+
+    /// Materialise rows for a batch of `(cell, bbox)` pairs sharing one
+    /// binding and filter. Adapters that can pipeline (e.g. postgres) override
+    /// this to amortise per-call overhead; the default fans out to
+    /// `fetch_cell`. The returned vec is ordered to mirror the input slice;
+    /// each result carries its `Cell` back so the caller can route rows
+    /// without relying on order.
+    async fn fetch_cells(
+        &self,
+        binding: &SourceBinding,
+        cells: &[(Cell, Bbox)],
+        filter: Option<&Expr>,
+    ) -> Result<Vec<(Cell, Vec<RowBytes>)>, SourceError> {
+        let mut out = Vec::with_capacity(cells.len());
+        for (cell, bbox) in cells {
+            let rows = self.fetch_cell(binding, cell, *bbox, filter).await?;
+            out.push((cell.clone(), rows));
+        }
+        Ok(out)
+    }
 }
 
 /// Per-row record returned by `Source`. Geometry is opaque adapter-native
@@ -355,5 +375,90 @@ mod tests {
             CrsCode::new("EPSG:4326"),
         );
         assert!(matches!(r, Err(SourceError::InvalidBinding(_))));
+    }
+
+    // fake source counting fetch_cell invocations; verifies the default
+    // fetch_cells impl fans out one call per (cell, bbox) pair and preserves
+    // routing of rows back to their cell.
+    struct CountingSource {
+        counter: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait]
+    impl Source for CountingSource {
+        async fn fetch_cell(
+            &self,
+            _binding: &SourceBinding,
+            cell: &Cell,
+            _bbox: Bbox,
+            _filter: Option<&Expr>,
+        ) -> Result<Vec<RowBytes>, SourceError> {
+            self.counter
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(vec![RowBytes {
+                feature_id: cell.x as u64 * 1000 + cell.y as u64,
+                geometry: bytes::Bytes::new(),
+                attributes: Vec::new(),
+            }])
+        }
+    }
+
+    fn binding_for_test() -> SourceBinding {
+        SourceBinding::new(
+            SourceCollectionId::new("c"),
+            "s",
+            "t",
+            "g",
+            "id",
+            vec![],
+            CrsCode::new("EPSG:4326"),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn default_fetch_cells_fans_out_to_fetch_cell() {
+        let src = CountingSource {
+            counter: std::sync::atomic::AtomicUsize::new(0),
+        };
+        let band = mars_types::ScaleBand::new("hi");
+        let bbox = Bbox::new(0.0, 0.0, 1.0, 1.0);
+        let cells = vec![
+            (
+                Cell {
+                    band: band.clone(),
+                    x: 1,
+                    y: 2,
+                },
+                bbox,
+            ),
+            (
+                Cell {
+                    band: band.clone(),
+                    x: 3,
+                    y: 4,
+                },
+                bbox,
+            ),
+            (
+                Cell {
+                    band: band.clone(),
+                    x: 5,
+                    y: 6,
+                },
+                bbox,
+            ),
+        ];
+        let out = src.fetch_cells(&binding_for_test(), &cells, None).await.unwrap();
+        assert_eq!(out.len(), 3);
+        assert_eq!(src.counter.load(std::sync::atomic::Ordering::Relaxed), 3);
+        for ((in_cell, _), (out_cell, rows)) in cells.iter().zip(&out) {
+            assert_eq!(in_cell, out_cell);
+            assert_eq!(rows.len(), 1);
+            assert_eq!(
+                rows[0].feature_id,
+                in_cell.x as u64 * 1000 + in_cell.y as u64
+            );
+        }
     }
 }
