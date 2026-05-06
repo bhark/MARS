@@ -393,8 +393,7 @@ mod tests {
             _bbox: Bbox,
             _filter: Option<&Expr>,
         ) -> Result<Vec<RowBytes>, SourceError> {
-            self.counter
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             Ok(vec![RowBytes {
                 feature_id: cell.x as u64 * 1000 + cell.y as u64,
                 geometry: bytes::Bytes::new(),
@@ -455,10 +454,7 @@ mod tests {
         for ((in_cell, _), (out_cell, rows)) in cells.iter().zip(&out) {
             assert_eq!(in_cell, out_cell);
             assert_eq!(rows.len(), 1);
-            assert_eq!(
-                rows[0].feature_id,
-                in_cell.x as u64 * 1000 + in_cell.y as u64
-            );
+            assert_eq!(rows[0].feature_id, in_cell.x as u64 * 1000 + in_cell.y as u64);
         }
     }
 }

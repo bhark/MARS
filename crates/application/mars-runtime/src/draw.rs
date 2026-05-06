@@ -2,8 +2,8 @@
 //! feature_id, viewport bbox filter, world→pixel transform, push DrawOp::Path.
 
 use mars_artifact::{
-    ArtifactReader, GeomType, GeomVisitor, SectionKind, decode_class_assignment, decode_style_refs,
-    iter_feature_index, visit_one_geom,
+    ArtifactReader, GeomType, GeomVisitor, SectionKind, decode_class_assignment, decode_style_refs, iter_feature_index,
+    visit_one_geom,
 };
 use mars_proj::Transformer;
 use mars_render_port::{DrawOp, Path, Subpath};

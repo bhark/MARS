@@ -185,7 +185,12 @@ pub fn decode_feature(id: u64, wkb: &[u8], expected_srid: Option<u32>) -> Result
 /// `Vec<FeatureGeom>` + `Vec<Coord>`-per-ring intermediate that
 /// [`decode_feature`] + [`mars_artifact::encode_geometry_payload`] allocate.
 /// produces byte-identical output for the same logical feature.
-pub fn write_into(builder: &mut GeomPayloadBuilder, id: u64, wkb: &[u8], expected_srid: Option<u32>) -> Result<(), WkbError> {
+pub fn write_into(
+    builder: &mut GeomPayloadBuilder,
+    id: u64,
+    wkb: &[u8],
+    expected_srid: Option<u32>,
+) -> Result<(), WkbError> {
     let mut c = Cursor::new(wkb);
     let (le, has_z, has_m, gtype) = read_header(&mut c, true, expected_srid)?;
     match gtype {

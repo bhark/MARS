@@ -87,9 +87,7 @@ pub(crate) async fn fetch_cells(
         .map(|p| p.iter().map(|x| x as &(dyn ToSql + Sync)).collect())
         .collect();
 
-    let futs = pg_params
-        .iter()
-        .map(|params| client.query(&stmt, params.as_slice()));
+    let futs = pg_params.iter().map(|params| client.query(&stmt, params.as_slice()));
     let results = try_join_all(futs)
         .await
         .map_err(|e| SourceError::Backend(format!("query: {e}")))?;

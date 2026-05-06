@@ -31,7 +31,10 @@ use crate::store::{S3Store, join_prefix, map_backend_error, retry_transient};
 
 /// Result of a conditional read of `manifests/current`.
 enum ReadCurrent {
-    Body { pointer: String, version: Option<UpdateVersion> },
+    Body {
+        pointer: String,
+        version: Option<UpdateVersion>,
+    },
     NotModified,
     Missing,
 }
@@ -274,10 +277,7 @@ impl ManifestStore for S3Publisher {
                     tokio::time::sleep(state.publisher.poll_interval).await;
                     state.sleep_first = false;
                 }
-                let res = state
-                    .publisher
-                    .read_current_if_changed(state.last_etag.clone())
-                    .await;
+                let res = state.publisher.read_current_if_changed(state.last_etag.clone()).await;
                 match res {
                     Ok(ReadCurrent::Body { pointer, version }) => {
                         // refresh etag whether or not pointer text changed; a

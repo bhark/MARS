@@ -741,12 +741,7 @@ fn visit_ring<V: GeomVisitor>(buf: &[u8], pos: &mut usize, v: &mut V) -> Result<
     Ok(())
 }
 
-fn visit_geom<V: GeomVisitor>(
-    geom_type: u8,
-    buf: &[u8],
-    pos: &mut usize,
-    v: &mut V,
-) -> Result<(), ArtifactError> {
+fn visit_geom<V: GeomVisitor>(geom_type: u8, buf: &[u8], pos: &mut usize, v: &mut V) -> Result<(), ArtifactError> {
     match geom_type {
         GT_POINT => {
             let x = read_ivarint(buf, pos)?;
