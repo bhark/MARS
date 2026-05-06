@@ -2106,6 +2106,7 @@ dependencies = [
 name = "mars-expr"
 version = "0.0.1"
 dependencies = [
+ "criterion",
  "proptest",
  "serde",
  "thiserror 2.0.18",
@@ -2165,6 +2166,7 @@ dependencies = [
 name = "mars-proj"
 version = "0.0.1"
 dependencies = [
+ "criterion",
  "mars-types",
  "proj-sys",
  "thiserror 2.0.18",
@@ -2174,6 +2176,7 @@ dependencies = [
 name = "mars-render"
 version = "0.0.1"
 dependencies = [
+ "criterion",
  "jpeg-decoder",
  "jpeg-encoder",
  "mars-render-port",

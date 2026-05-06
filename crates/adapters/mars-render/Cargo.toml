@@ -22,3 +22,8 @@ jpeg-encoder     = "0.6"
 [dev-dependencies]
 png              = { workspace = true }
 jpeg-decoder     = "0.3"
+criterion        = { workspace = true }
+
+[[bench]]
+name    = "draw_encode"
+harness = false

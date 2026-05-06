@@ -16,3 +16,10 @@ workspace = true
 mars-types  = { workspace = true }
 thiserror   = { workspace = true }
 proj-sys    = "0.27"
+
+[dev-dependencies]
+criterion   = { workspace = true }
+
+[[bench]]
+name    = "transform"
+harness = false

@@ -212,6 +212,9 @@ impl Runtime {
         // reproject the request bbox into canonical CRS for cell selection.
         // forward (canonical -> request) transformer is built later inside
         // spawn_blocking — Transformer is !Send and must live on one thread.
+        // Both legs go through the per-thread cache so a busy worker amortises
+        // proj_create_crs_to_crs + proj_normalize_for_visualization across
+        // requests.
         let needs_reproject = plan.crs != state.canonical_crs;
         // both legs of reprojection go through the per-thread proj cache so a
         // busy worker amortises proj_create_crs_to_crs + normalize across
@@ -332,8 +335,8 @@ impl Runtime {
         let stylesheet_state = state.clone();
         let bytes = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, RuntimeError> {
             let _permit = permit;
-            // build the forward transformer on the blocking thread so its
-            // thread-local PJ context lives only here.
+            // build the forward transformer through the per-thread cache so
+            // back-to-back requests on the same blocking worker reuse it.
             let forward = if needs_reproject {
                 Some(mars_proj::cached_transformer(&canonical_crs, &request_crs)?)
             } else {
