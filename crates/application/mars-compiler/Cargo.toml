@@ -32,3 +32,8 @@ futures-util       = { workspace = true }
 mars-store         = { workspace = true, features = ["test-utils"] }
 tokio              = { workspace = true, features = ["rt-multi-thread", "macros"] }
 futures-core       = { workspace = true }
+criterion          = { workspace = true }
+
+[[bench]]
+name    = "decode"
+harness = false

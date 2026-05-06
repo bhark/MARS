@@ -28,4 +28,9 @@ planus-translation = "1"
 ignored = ["serde"]
 
 [dev-dependencies]
-proptest = { workspace = true }
+proptest  = { workspace = true }
+criterion = { workspace = true }
+
+[[bench]]
+name    = "iter"
+harness = false

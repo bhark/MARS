@@ -34,3 +34,8 @@ hashbrown          = { workspace = true }
 [dev-dependencies]
 mars-store = { workspace = true, features = ["test-utils"] }
 tokio      = { workspace = true, features = ["macros", "rt-multi-thread"] }
+criterion  = { workspace = true }
+
+[[bench]]
+name    = "render"
+harness = false
