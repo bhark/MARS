@@ -48,7 +48,7 @@ pub(crate) fn resolve(
     let band = pick_band(denom, &state.bands)?;
     let cells = cells_in_bbox(canonical_bbox, band, crate::MAX_CELLS_PER_REQUEST)?;
 
-    let cap = plan.layers.len().checked_mul(cells.len()).unwrap_or(usize::MAX);
+    let cap = plan.layers.len().saturating_mul(cells.len());
     let mut out = Vec::with_capacity(cap);
     for layer in &plan.layers {
         for cell in &cells {
