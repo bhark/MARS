@@ -1,6 +1,8 @@
 //! `ObjectStore` implementation backed by the `object_store` crate.
 
+use std::future::Future;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -12,6 +14,47 @@ use object_store::path::Path as OsPath;
 use object_store::{ObjectStore as OsStore, ObjectStoreExt};
 
 use crate::config::S3Config;
+
+const RETRY_DELAYS: &[Duration] = &[
+    Duration::from_millis(50),
+    Duration::from_millis(200),
+    Duration::from_millis(800),
+];
+
+/// Returns true for errors that are worth retrying. Conservatively limited to
+/// `Generic` (network / 5xx-class) and `JoinError`. Anything semantic
+/// (NotFound, Precondition, AlreadyExists, NotSupported, PermissionDenied,
+/// Unauthenticated, UnknownConfigurationKey, InvalidPath, NotImplemented,
+/// NotModified) is terminal and must not be retried.
+fn is_transient(e: &object_store::Error) -> bool {
+    matches!(
+        e,
+        object_store::Error::Generic { .. } | object_store::Error::JoinError { .. }
+    )
+}
+
+/// Run `f` with capped exponential backoff. Only [`is_transient`] failures are
+/// retried; the final attempt's error is propagated as-is.
+pub(crate) async fn retry_transient<T, F, Fut>(mut f: F) -> object_store::Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = object_store::Result<T>>,
+{
+    let mut delays = RETRY_DELAYS.iter();
+    loop {
+        match f().await {
+            Ok(v) => return Ok(v),
+            Err(e) if is_transient(&e) => match delays.next() {
+                Some(d) => {
+                    tracing::warn!(error = %e, delay_ms = d.as_millis() as u64, "s3 transient; retrying");
+                    tokio::time::sleep(*d).await;
+                }
+                None => return Err(e),
+            },
+            Err(e) => return Err(e),
+        }
+    }
+}
 
 /// Object-store-backed adapter. Implements `mars_store::ObjectStore`. Holds an
 /// `Arc<dyn object_store::ObjectStore>` so test harnesses can substitute
@@ -71,11 +114,12 @@ impl ObjectStore for S3Store {
     async fn get(&self, key: &ArtifactKey, expected: ContentHash) -> Result<Bytes, StoreError> {
         validate_key(key.as_str())?;
         let path = self.os_path(key.as_str());
-        let result = self.backend.get(&path).await.map_err(|e| map_get_error(e, key))?;
-        let bytes = result
-            .bytes()
-            .await
-            .map_err(|e| StoreError::Backend(format!("s3 read body: {e}")))?;
+        let bytes = retry_transient(|| async {
+            let result = self.backend.get(&path).await?;
+            result.bytes().await
+        })
+        .await
+        .map_err(|e| map_get_error(e, key))?;
         let actual = compute_content_hash(&bytes);
         if actual != expected {
             return Err(StoreError::HashMismatch { key: key.clone() });

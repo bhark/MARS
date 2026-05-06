@@ -254,6 +254,123 @@ async fn manifest_publish_allows_non_atomic_when_flag_set() {
     assert_eq!(v, 1);
 }
 
+// flaky-on-purpose backend that fails reads N times with `Generic` then
+// delegates to InMemory. used to verify transient retry behaviour.
+#[derive(Debug)]
+struct FlakyBackend {
+    inner: Arc<InMemory>,
+    fails_remaining: std::sync::atomic::AtomicUsize,
+}
+
+impl std::fmt::Display for FlakyBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "FlakyBackend")
+    }
+}
+
+#[async_trait::async_trait]
+impl object_store::ObjectStore for FlakyBackend {
+    async fn put_opts(
+        &self,
+        location: &object_store::path::Path,
+        payload: object_store::PutPayload,
+        opts: object_store::PutOptions,
+    ) -> object_store::Result<object_store::PutResult> {
+        self.inner.put_opts(location, payload, opts).await
+    }
+
+    async fn put_multipart_opts(
+        &self,
+        location: &object_store::path::Path,
+        opts: object_store::PutMultipartOptions,
+    ) -> object_store::Result<Box<dyn object_store::MultipartUpload>> {
+        self.inner.put_multipart_opts(location, opts).await
+    }
+
+    async fn get_opts(
+        &self,
+        location: &object_store::path::Path,
+        options: object_store::GetOptions,
+    ) -> object_store::Result<object_store::GetResult> {
+        use std::sync::atomic::Ordering;
+        let prev = self.fails_remaining.load(Ordering::SeqCst);
+        if prev > 0
+            && self
+                .fails_remaining
+                .compare_exchange(prev, prev - 1, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+        {
+            return Err(object_store::Error::Generic {
+                store: "Flaky",
+                source: Box::new(std::io::Error::other("transient")),
+            });
+        }
+        self.inner.get_opts(location, options).await
+    }
+
+    fn delete_stream(
+        &self,
+        locations: futures_util::stream::BoxStream<'static, object_store::Result<object_store::path::Path>>,
+    ) -> futures_util::stream::BoxStream<'static, object_store::Result<object_store::path::Path>> {
+        self.inner.delete_stream(locations)
+    }
+
+    fn list(
+        &self,
+        prefix: Option<&object_store::path::Path>,
+    ) -> futures_util::stream::BoxStream<'static, object_store::Result<object_store::ObjectMeta>> {
+        self.inner.list(prefix)
+    }
+
+    fn list_with_offset(
+        &self,
+        prefix: Option<&object_store::path::Path>,
+        offset: &object_store::path::Path,
+    ) -> futures_util::stream::BoxStream<'static, object_store::Result<object_store::ObjectMeta>> {
+        self.inner.list_with_offset(prefix, offset)
+    }
+
+    async fn list_with_delimiter(
+        &self,
+        prefix: Option<&object_store::path::Path>,
+    ) -> object_store::Result<object_store::ListResult> {
+        self.inner.list_with_delimiter(prefix).await
+    }
+
+    async fn copy_opts(
+        &self,
+        from: &object_store::path::Path,
+        to: &object_store::path::Path,
+        options: object_store::CopyOptions,
+    ) -> object_store::Result<()> {
+        self.inner.copy_opts(from, to, options).await
+    }
+
+    async fn rename_opts(
+        &self,
+        from: &object_store::path::Path,
+        to: &object_store::path::Path,
+        options: object_store::RenameOptions,
+    ) -> object_store::Result<()> {
+        self.inner.rename_opts(from, to, options).await
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn get_retries_transient_errors() {
+    let backend = Arc::new(FlakyBackend {
+        inner: Arc::new(InMemory::new()),
+        fails_remaining: std::sync::atomic::AtomicUsize::new(2),
+    });
+    let s = S3Store::from_backend(backend, String::new());
+    let key = ArtifactKey::new("a/b.bin");
+    let payload = Bytes::from_static(b"hello");
+    let hash = compute_content_hash(&payload);
+    s.put(&key, payload.clone()).await.unwrap();
+    let got = s.get(&key, hash).await.expect("should succeed after retries");
+    assert_eq!(got, payload);
+}
+
 #[tokio::test]
 async fn manifest_watch_yields_on_change() {
     let backend = Arc::new(InMemory::new());

@@ -27,7 +27,7 @@ use mars_types::{MANIFEST_FORMAT_VERSION, Manifest};
 use object_store::path::Path as OsPath;
 use object_store::{ObjectStore as OsStore, ObjectStoreExt, PutMode, PutOptions, UpdateVersion};
 
-use crate::store::{S3Store, join_prefix};
+use crate::store::{S3Store, join_prefix, retry_transient};
 
 const MANIFEST_DIR: &str = "manifests";
 const CURRENT_FILE: &str = "manifests/current";
@@ -92,14 +92,16 @@ impl S3Publisher {
     /// not yet published.
     async fn read_current(&self) -> Result<Option<(String, Option<UpdateVersion>)>, StoreError> {
         let path = self.current_path();
-        match self.backend.get(&path).await {
-            Ok(result) => {
-                let etag = result.meta.e_tag.clone();
-                let version = result.meta.version.clone();
-                let bytes = result
-                    .bytes()
-                    .await
-                    .map_err(|e| StoreError::Backend(format!("s3 read current: {e}")))?;
+        let result = retry_transient(|| async {
+            let r = self.backend.get(&path).await?;
+            let etag = r.meta.e_tag.clone();
+            let version = r.meta.version.clone();
+            let bytes = r.bytes().await?;
+            Ok((bytes, etag, version))
+        })
+        .await;
+        match result {
+            Ok((bytes, etag, version)) => {
                 let pointer = String::from_utf8(bytes.to_vec())
                     .map_err(|e| StoreError::Backend(format!("manifest pointer not utf-8: {e}")))?
                     .trim()
@@ -116,15 +118,12 @@ impl S3Publisher {
             return Err(StoreError::Backend(format!("malformed manifest pointer: {pointer:?}")));
         }
         let path = join_prefix(&self.prefix, &format!("{MANIFEST_DIR}/{pointer}.json"));
-        let result = self
-            .backend
-            .get(&path)
-            .await
-            .map_err(|e| StoreError::Backend(format!("s3 get manifest {pointer}: {e}")))?;
-        let bytes = result
-            .bytes()
-            .await
-            .map_err(|e| StoreError::Backend(format!("s3 read manifest {pointer}: {e}")))?;
+        let bytes = retry_transient(|| async {
+            let r = self.backend.get(&path).await?;
+            r.bytes().await
+        })
+        .await
+        .map_err(|e| StoreError::Backend(format!("s3 get manifest {pointer}: {e}")))?;
         let manifest: Manifest = serde_json::from_slice(&bytes)
             .map_err(|e| StoreError::Backend(format!("parse manifest {pointer}: {e}")))?;
         if manifest.format_version > MANIFEST_FORMAT_VERSION {
