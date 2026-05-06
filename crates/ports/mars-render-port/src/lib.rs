@@ -40,12 +40,21 @@ pub enum EncodeError {
     Backend(String),
 }
 
+/// One subpath within a [`Path`].
+#[derive(Debug, Clone)]
+pub struct Subpath {
+    /// Sequence of `(x, y)` vertices in pixel space.
+    pub points: Vec<(f32, f32)>,
+    /// Whether the subpath is closed (polygon) or open (linestring).
+    pub closed: bool,
+}
+
 /// 2D path. Coordinates are in render-target pixel space; the application
 /// crate handles vector reprojection and scaling before constructing draw ops.
 #[derive(Debug, Clone)]
 pub struct Path {
-    /// Sequence of subpath rings; each ring is a polyline of `(x, y)` points.
-    pub rings: Vec<Vec<(f32, f32)>>,
+    /// Sequence of subpaths. polygons are closed, linestrings are open.
+    pub subpaths: Vec<Subpath>,
 }
 
 /// One draw operation. Intentionally narrow - adding shapes goes through this enum.

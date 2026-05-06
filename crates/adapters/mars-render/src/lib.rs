@@ -85,7 +85,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use mars_render_port::Path as PortPath;
+    use mars_render_port::{Path as PortPath, Subpath};
     use mars_style::{Colour, Style};
 
     fn red() -> Colour {
@@ -107,12 +107,15 @@ mod tests {
 
     fn square(cx: f32, cy: f32, half: f32) -> PortPath {
         PortPath {
-            rings: vec![vec![
-                (cx - half, cy - half),
-                (cx + half, cy - half),
-                (cx + half, cy + half),
-                (cx - half, cy + half),
-            ]],
+            subpaths: vec![Subpath {
+                points: vec![
+                    (cx - half, cy - half),
+                    (cx + half, cy - half),
+                    (cx + half, cy + half),
+                    (cx - half, cy + half),
+                ],
+                closed: true,
+            }],
         }
     }
 
@@ -180,7 +183,10 @@ mod tests {
             background: None,
         };
         let path = PortPath {
-            rings: vec![vec![(8.0, 32.0), (56.0, 32.0)]],
+            subpaths: vec![Subpath {
+                points: vec![(8.0, 32.0), (56.0, 32.0)],
+                closed: false,
+            }],
         };
         let ops = vec![DrawOp::Path {
             path,
@@ -198,6 +204,36 @@ mod tests {
             .filter(|p| p[3] > 0)
             .count();
         assert!(on_row >= 40, "expected stroked pixels on row 32, got {on_row}");
+    }
+
+    #[test]
+    fn open_linestring_does_not_close() {
+        // a v-shaped open line drawn near the top-left corner should not have
+        // pixels in the bottom-right, which it would if tiny-skia closed it.
+        let canvas = Canvas {
+            width: 64,
+            height: 64,
+            background: None,
+        };
+        let path = PortPath {
+            subpaths: vec![Subpath {
+                points: vec![(10.0, 10.0), (30.0, 10.0), (30.0, 30.0)],
+                closed: false,
+            }],
+        };
+        let ops = vec![DrawOp::Path {
+            path,
+            style: Arc::new(Style {
+                stroke: Some(red()),
+                stroke_width: Some(1.0),
+                ..Default::default()
+            }),
+        }];
+        let png_bytes = render_png(canvas, &ops);
+        let (w, _, rgba) = decode(&png_bytes);
+        // bottom-right corner should remain transparent
+        let br = ((w - 2) * 4) as usize + ((w * (canvas.height - 2)) * 4) as usize;
+        assert_eq!(rgba[br + 3], 0, "open linestring must not close to bottom-right");
     }
 
     #[test]

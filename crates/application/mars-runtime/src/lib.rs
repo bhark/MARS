@@ -765,13 +765,13 @@ mod tests {
         match &ops[0] {
             DrawOp::Path { path, .. } => {
                 // layer_a point at (5,5) projected to pixel space
-                assert_eq!(path.rings[0][0], (50.0, 50.0));
+                assert_eq!(path.subpaths[0].points[0], (50.0, 50.0));
             }
             other => panic!("expected Path, got {other:?}"),
         }
         match &ops[1] {
             DrawOp::Path { path, .. } => {
-                assert_eq!(path.rings[0][0], (50.0, 50.0));
+                assert_eq!(path.subpaths[0].points[0], (50.0, 50.0));
             }
             other => panic!("expected Path, got {other:?}"),
         }

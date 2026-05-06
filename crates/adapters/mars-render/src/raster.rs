@@ -4,21 +4,24 @@ use mars_render_port::Path as PortPath;
 use mars_style::{Colour, LineCap as SLineCap, LineJoin as SLineJoin, Style};
 use tiny_skia::{Color, FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Stroke, StrokeDash, Transform};
 
-/// build a tiny-skia path from port rings. each ring is closed after its last vertex.
-/// returns None if no ring has at least 2 points (tiny-skia rejects empty paths).
+/// build a tiny-skia path from port subpaths. closed subpaths are finished
+/// with `close()`, open ones are left open.
+/// returns None if no subpath has at least 2 points (tiny-skia rejects empty paths).
 pub(crate) fn build_path(path: &PortPath) -> Option<tiny_skia::Path> {
     let mut pb = PathBuilder::new();
     let mut any = false;
-    for ring in &path.rings {
-        if ring.len() < 2 {
+    for sub in &path.subpaths {
+        if sub.points.len() < 2 {
             continue;
         }
-        let (x0, y0) = ring[0];
+        let (x0, y0) = sub.points[0];
         pb.move_to(x0, y0);
-        for &(x, y) in &ring[1..] {
+        for &(x, y) in &sub.points[1..] {
             pb.line_to(x, y);
         }
-        pb.close();
+        if sub.closed {
+            pb.close();
+        }
         any = true;
     }
     if !any {

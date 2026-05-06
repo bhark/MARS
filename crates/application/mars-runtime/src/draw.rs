@@ -8,7 +8,7 @@ use mars_artifact::{
     decode_style_refs,
 };
 use mars_proj::Transformer;
-use mars_render_port::{DrawOp, Path};
+use mars_render_port::{DrawOp, Path, Subpath};
 use mars_style::{Style, Stylesheet};
 use mars_types::Bbox;
 
@@ -129,12 +129,12 @@ fn build_draw_op(
     reproject: Reproject<'_>,
     style: &Arc<Style>,
 ) -> Result<Option<DrawOp>, RuntimeError> {
-    let rings = match &feat.geom {
-        GeomKind::Polygon(rs) => project_polygon(rs, vp, reproject, true)?,
+    let subpaths = match &feat.geom {
+        GeomKind::Polygon(rs) => project_polygon(rs, vp, reproject)?,
         GeomKind::MultiPolygon(parts) => {
             let mut acc = Vec::new();
             for rs in parts {
-                acc.extend(project_polygon(rs, vp, reproject, true)?);
+                acc.extend(project_polygon(rs, vp, reproject)?);
             }
             acc
         }
@@ -165,11 +165,11 @@ fn build_draw_op(
             acc
         }
     };
-    if rings.is_empty() {
+    if subpaths.is_empty() {
         return Ok(None);
     }
     Ok(Some(DrawOp::Path {
-        path: Path { rings },
+        path: Path { subpaths },
         style: style.clone(),
     }))
 }
@@ -178,11 +178,10 @@ fn project_polygon(
     rings: &[Vec<(f64, f64)>],
     vp: Viewport,
     reproject: Reproject<'_>,
-    close: bool,
-) -> Result<Vec<Vec<(f32, f32)>>, RuntimeError> {
+) -> Result<Vec<Subpath>, RuntimeError> {
     let mut out = Vec::with_capacity(rings.len());
     for r in rings {
-        out.push(project_ring(r, vp, reproject, close)?);
+        out.push(project_ring(r, vp, reproject, true)?);
     }
     Ok(out)
 }
@@ -192,16 +191,16 @@ pub(crate) fn project_ring(
     vp: Viewport,
     reproject: Reproject<'_>,
     close: bool,
-) -> Result<Vec<(f32, f32)>, RuntimeError> {
-    let mut out: Vec<(f32, f32)> = Vec::with_capacity(verts.len() + usize::from(close));
+) -> Result<Subpath, RuntimeError> {
+    let mut points: Vec<(f32, f32)> = Vec::with_capacity(verts.len() + usize::from(close));
     for &(x, y) in verts {
         let (rx, ry) = reproject_point(x, y, reproject)?;
-        out.push(vp.project(rx, ry));
+        points.push(vp.project(rx, ry));
     }
-    if close && out.len() >= 2 && out[0] != out[out.len() - 1] {
-        out.push(out[0]);
+    if close && points.len() >= 2 && points[0] != points[points.len() - 1] {
+        points.push(points[0]);
     }
-    Ok(out)
+    Ok(Subpath { points, closed: close })
 }
 
 pub(crate) fn project_point_square(
@@ -209,16 +208,13 @@ pub(crate) fn project_point_square(
     y: f64,
     vp: Viewport,
     reproject: Reproject<'_>,
-) -> Result<Vec<(f32, f32)>, RuntimeError> {
+) -> Result<Subpath, RuntimeError> {
     let (rx, ry) = reproject_point(x, y, reproject)?;
     let (px, py) = vp.project(rx, ry);
-    Ok(vec![
-        (px, py),
-        (px + 1.0, py),
-        (px + 1.0, py + 1.0),
-        (px, py + 1.0),
-        (px, py),
-    ])
+    Ok(Subpath {
+        points: vec![(px, py), (px + 1.0, py), (px + 1.0, py + 1.0), (px, py + 1.0), (px, py)],
+        closed: true,
+    })
 }
 
 #[inline]
@@ -274,7 +270,12 @@ mod tests {
         let vp = viewport(Bbox::new(0.0, 0.0, 10.0, 10.0), 100, 100);
         let ring = vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)];
         let out = project_ring(&ring, vp, None, true).unwrap();
-        assert_eq!(out[0], out[out.len() - 1], "polygon ring should be closed");
+        assert_eq!(
+            out.points[0],
+            out.points[out.points.len() - 1],
+            "polygon ring should be closed"
+        );
+        assert!(out.closed);
     }
 
     #[test]
@@ -282,16 +283,22 @@ mod tests {
         let vp = viewport(Bbox::new(0.0, 0.0, 10.0, 10.0), 100, 100);
         let ring = vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)];
         let out = project_ring(&ring, vp, None, false).unwrap();
-        assert_ne!(out[0], out[out.len() - 1], "linestring should stay open");
+        assert_ne!(
+            out.points[0],
+            out.points[out.points.len() - 1],
+            "linestring should stay open"
+        );
+        assert!(!out.closed);
     }
 
     #[test]
     fn project_point_square_1px() {
         let vp = viewport(Bbox::new(0.0, 0.0, 10.0, 10.0), 100, 100);
         let sq = project_point_square(5.0, 5.0, vp, None).unwrap();
-        assert_eq!(sq.len(), 5);
-        assert_eq!(sq[0], sq[4]);
-        assert_eq!(sq[1].0, sq[0].0 + 1.0);
+        assert_eq!(sq.points.len(), 5);
+        assert_eq!(sq.points[0], sq.points[4]);
+        assert_eq!(sq.points[1].0, sq.points[0].0 + 1.0);
+        assert!(sq.closed);
     }
 
     fn build_source(features: &[FeatureGeom]) -> ArtifactReader {
@@ -403,8 +410,9 @@ mod tests {
         assert_eq!(out.len(), 1);
         match &out[0] {
             DrawOp::Path { path, .. } => {
-                assert_eq!(path.rings.len(), 1);
-                assert_eq!(path.rings[0].len(), 5); // 4 corners + close
+                assert_eq!(path.subpaths.len(), 1);
+                assert_eq!(path.subpaths[0].points.len(), 5); // 4 corners + close
+                assert!(path.subpaths[0].closed);
             }
             other => panic!("expected Path, got {other:?}"),
         }
