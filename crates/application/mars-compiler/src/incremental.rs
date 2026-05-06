@@ -43,7 +43,7 @@ pub fn dirty_cells_for(batches: &[ChangeBatch], plan: &Plan) -> DirtySet {
                 }
                 ChangeEvent::Truncate { collection } => {
                     for s in &plan.sources {
-                        if s.collection.as_str() == collection {
+                        if s.collection().as_str() == collection {
                             out.cells.insert((
                                 collection.clone(),
                                 s.band.as_str().to_string(),
@@ -67,7 +67,7 @@ pub fn filter_plan(plan: &Plan, dirty: &DirtySet) -> Plan {
     let mut idx_map: Vec<Option<usize>> = Vec::with_capacity(plan.sources.len());
     for s in &plan.sources {
         let key = (
-            s.collection.as_str().to_string(),
+            s.collection().as_str().to_string(),
             s.band.as_str().to_string(),
             s.cell.x,
             s.cell.y,
@@ -215,7 +215,6 @@ mod tests {
 
     fn source_task(coll: &str, band_s: &str, x: i64, y: i64) -> SourceTask {
         SourceTask {
-            collection: SourceCollectionId::new(coll.to_string()),
             band: band(band_s),
             cell: cell(band_s, x, y),
             binding: SourceBinding::new(
@@ -305,7 +304,7 @@ mod tests {
 
         let filtered = filter_plan(&plan, &dirty);
         assert_eq!(filtered.sources.len(), 1);
-        assert_eq!(filtered.sources[0].collection.as_str(), "a");
+        assert_eq!(filtered.sources[0].collection().as_str(), "a");
         assert_eq!(filtered.layers.len(), 2);
         for l in &filtered.layers {
             assert_eq!(l.source, 0, "renumbered to point at the kept source");

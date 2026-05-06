@@ -62,7 +62,7 @@ pub async fn run_source_cell(
     let deps_blocking: Vec<Arc<LayerTask>> = dependents.to_vec();
     let (src_entry, src_bytes, layer_outputs) = tokio::task::spawn_blocking(move || {
         let (src_entry, src_bytes) = build_source_artifact(&task_blocking, &rows)?;
-        let collection = task_blocking.collection.as_str();
+        let collection = task_blocking.collection().as_str();
         let mut layer_outputs: Vec<(ArtifactEntry, Bytes)> = Vec::with_capacity(deps_blocking.len());
         for dep in &deps_blocking {
             let (entry, bytes) = build_layer_artifact(dep, &rows, src_entry.hash, bbox, collection)?;
@@ -104,7 +104,7 @@ fn build_source_artifact(task: &SourceTask, rows: &[RowBytes]) -> Result<(Artifa
     writer.set_feature_count(feature_count);
     let bytes = writer.finish()?;
     let hash = compute_content_hash(&bytes);
-    let key = ArtifactKey::try_build_source(task.collection.as_str(), &task.cell, hash)
+    let key = ArtifactKey::try_build_source(task.collection().as_str(), &task.cell, hash)
         .map_err(|e| crate::plan::PlanError::Invalid(e.to_string()))?;
     let entry = ArtifactEntry {
         key,

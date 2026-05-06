@@ -70,8 +70,6 @@ pub enum CompilerError {
     },
     #[error("config: {0}")]
     Config(#[from] mars_config::ConfigError),
-    #[error("incremental loop expected current manifest after bootstrap, found none")]
-    BootstrapManifestMissing,
 }
 
 /// All ports the compiler depends on, bundled for easy composition by the bin.
@@ -101,7 +99,7 @@ impl Compiler {
     /// step inside [`Compiler::run`] when no manifest exists yet.
     pub async fn run_snapshot_once(&self, shutdown: CancellationToken) -> Result<u64, CompilerError> {
         let _guard = self.acquire_leader().await?;
-        self.snapshot_inner(shutdown).await
+        Ok(self.snapshot_inner(shutdown).await?.version)
     }
 
     /// Long-running service mode: bootstrap with a snapshot if no manifest
@@ -113,14 +111,7 @@ impl Compiler {
 
         let mut prev = match self.deps.manifest.current().await? {
             Some(m) => m,
-            None => {
-                self.snapshot_inner(shutdown.clone()).await?;
-                self.deps
-                    .manifest
-                    .current()
-                    .await?
-                    .ok_or(CompilerError::BootstrapManifestMissing)?
-            }
+            None => self.snapshot_inner(shutdown.clone()).await?,
         };
 
         let mut stream = match self.deps.change_feed.subscribe().await {
@@ -209,11 +200,7 @@ impl Compiler {
         }
     }
 
-    async fn snapshot_inner(&self, shutdown: CancellationToken) -> Result<u64, CompilerError> {
-        if shutdown.is_cancelled() {
-            return Ok(0);
-        }
-
+    async fn snapshot_inner(&self, shutdown: CancellationToken) -> Result<Manifest, CompilerError> {
         let plan = plan::build_plan(&self.config)?;
         tracing::info!(
             sources = plan.sources.len(),
@@ -240,7 +227,7 @@ impl Compiler {
             .metrics
             .observe_compiler_rebuild_duration(rebuild_start.elapsed());
         tracing::info!(version = v, "compiler: manifest published");
-        Ok(v)
+        Ok(manifest)
     }
 
     /// Drive one plan through the per-source-cell rebuild pipeline. Concurrency

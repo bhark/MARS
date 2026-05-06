@@ -34,10 +34,10 @@ pub enum PlanError {
 }
 
 /// One source-side rebuild target: fetch rows once, materialise one source
-/// artifact. Keyed by `(collection, band, cell)`.
+/// artifact. Keyed by `(binding.collection, band, cell)` — the collection id
+/// lives canonically on the binding and is exposed via [`Self::collection`].
 #[derive(Debug, Clone)]
 pub struct SourceTask {
-    pub collection: SourceCollectionId,
     pub band: ScaleBand,
     pub cell: Cell,
     /// Binding with the *union* of attributes required across all dependent
@@ -46,6 +46,13 @@ pub struct SourceTask {
     pub binding: SourceBinding,
     pub cell_size: f64,
     pub origin: (f64, f64),
+}
+
+impl SourceTask {
+    #[must_use]
+    pub fn collection(&self) -> &SourceCollectionId {
+        &self.binding.collection
+    }
 }
 
 /// One layer-side rebuild target. Reads from the source task at
@@ -162,7 +169,6 @@ pub fn build_plan(cfg: &Config) -> Result<Plan, PlanError> {
                         None => {
                             let idx = plan.sources.len();
                             plan.sources.push(SourceTask {
-                                collection: port_binding.collection.clone(),
                                 band: band_id.clone(),
                                 cell: cell.clone(),
                                 binding: port_binding.clone(),
