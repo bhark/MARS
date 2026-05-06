@@ -36,6 +36,11 @@ deadpool-postgres      = "0.14"
 tokio-postgres-rustls  = { workspace = true }
 rustls-native-certs    = { workspace = true }
 rustls                 = { workspace = true }
+# logical replication client. owns pgwire framing, SCRAM/MD5 auth, TLS, and
+# CopyBoth/standby-status handling; mars-source-postgres owns the pgoutput
+# decoder + translator that consume `XLogData` payload bytes.
+pgwire-replication     = "0.3"
+tokio-util             = { workspace = true }
 # optional, gated behind `e2e` feature; lives under [dependencies] because
 # cargo does not allow optional [dev-dependencies].
 testcontainers = { version = "0.27", optional = true }

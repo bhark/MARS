@@ -7,14 +7,12 @@
 //!   geometries; we only need the cell-touching extents.
 //! - `translate`: relation-cache + topology-aware lowering from pgoutput
 //!   messages to `ChangeEvent`s.
-//! - `transport`: the actual replication-protocol I/O loop (`START_REPLICATION
-//!   SLOT ... LOGICAL`, CopyBoth framing, standby status updates). Currently
-//!   gated as `NotImplemented` because the pinned `tokio-postgres 0.7.17`
-//!   does not expose the `replication=database` connect mode nor a
-//!   CopyBothResponse stream; lifting either requires either vendoring a
-//!   substantial slice of the connection state machine or pulling in a
-//!   heavy crate that does the same. The decoder + translator are wired
-//!   so a future transport drops in cleanly.
+//! - `transport`: replication-protocol I/O loop. Drives a
+//!   `pgwire-replication` client connected with `replication=database`,
+//!   handles SCRAM/MD5 auth, TLS, CopyBoth framing, and standby status
+//!   updates. XLogData payloads are fed through `pgoutput::decode` and
+//!   `translate`; pgoutput Begin/Commit boundaries arrive as separate
+//!   events from the library and frame the per-transaction `ChangeBatch`.
 //!
 //! See `subscribe` for the surface called by `PgSource::subscribe`.
 
@@ -25,16 +23,9 @@ use mars_grid::{BandConfig, cells_in_bbox};
 use mars_source::{ChangeSubscription, SourceError};
 use mars_types::Bbox;
 
-// dead_code allowed: these modules are fully tested via their own unit tests
-// and wired to be driven by `transport` once the replication protocol I/O is
-// in place. silencing here keeps `-D warnings` clean while the wiring is
-// the only consumer of the symbols.
-#[allow(dead_code)]
 pub(crate) mod pgoutput;
-#[allow(dead_code)]
 pub(crate) mod translate;
 pub(crate) mod transport;
-#[allow(dead_code)]
 pub(crate) mod wkb_bbox;
 
 /// Per-collection topology the change-feed needs to compute dirty cells.
@@ -85,9 +76,6 @@ impl ReplicationTopology {
 }
 
 /// Glue: spawn the replication task and return the ack-aware subscription.
-///
-/// transport returns `NotImplemented` today. when it gains a real impl, the
-/// shape here (bounded mpsc, cancellable spawn) does not change.
 pub(crate) async fn subscribe(
     cfg: Arc<crate::PgConfig>,
     topology: Arc<ReplicationTopology>,
@@ -97,7 +85,6 @@ pub(crate) async fn subscribe(
 
 /// Compute the union of cells touched by `bbox` across every configured band.
 /// Used by both Insert/Update/Delete event lowering.
-#[allow(dead_code)]
 pub(crate) fn cells_for_bbox(
     bbox: Bbox,
     bands: &[BandConfig],
@@ -123,13 +110,11 @@ pub(crate) fn cells_for_bbox(
 /// relation message arrives once per relation per session; we cache it for
 /// every subsequent row event referencing that oid.
 #[derive(Debug, Default)]
-#[allow(dead_code)]
 pub(crate) struct RelationCache {
     entries: HashMap<u32, CachedRelation>,
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub(crate) struct CachedRelation {
     pub topology: CollectionTopology,
     pub geometry_col_idx: usize,
@@ -139,7 +124,6 @@ pub(crate) struct CachedRelation {
     pub replica_identity: u8,
 }
 
-#[allow(dead_code)]
 impl RelationCache {
     pub(crate) fn insert(&mut self, oid: u32, entry: CachedRelation) {
         self.entries.insert(oid, entry);

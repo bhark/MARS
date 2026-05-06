@@ -6,17 +6,12 @@ use super::pgoutput::{ColumnData, DeletePayload, Message, Relation, Tuple, Updat
 use super::wkb_bbox::bbox_of;
 use super::{CachedRelation, RelationCache, ReplicationTopology, cells_for_bbox};
 
-/// Decision returned to the loop. relation messages, type/origin frames, and
-/// transaction boundaries are not events; they're cache or no-op signals.
+/// Zero or more consumer-visible events from a single pgoutput message.
+/// row events return one; multi-relation truncate returns one per known
+/// relation oid; relation/begin/commit/origin messages return zero
+/// (transaction boundaries are framed by the transport).
 #[derive(Debug)]
-pub(crate) enum Translated {
-    /// Zero or more consumer-visible events from a single pgoutput message.
-    /// row events return one; multi-relation truncate returns one per known
-    /// relation oid; relation/begin/origin messages return zero.
-    Events(Vec<ChangeEvent>),
-    /// The Commit's `end_lsn`. Used by the transport to advance flushed LSN.
-    Committed { end_lsn: u64 },
-}
+pub(crate) struct Translated(pub Vec<ChangeEvent>);
 
 /// Translate one decoded pgoutput message. on Relation, mutate the cache;
 /// on row events, look up the cache and produce a `ChangeEvent`.
@@ -26,13 +21,12 @@ pub(crate) fn translate(
     topology: &ReplicationTopology,
 ) -> Result<Translated, SourceError> {
     match msg {
-        Message::Begin { .. } | Message::Unhandled => Ok(Translated::Events(Vec::new())),
-        Message::Commit { end_lsn, .. } => Ok(Translated::Committed { end_lsn }),
+        Message::Begin { .. } | Message::Commit { .. } | Message::Unhandled => Ok(Translated(Vec::new())),
         Message::Relation(rel) => {
             cache_relation(rel, cache, topology);
-            Ok(Translated::Events(Vec::new()))
+            Ok(Translated(Vec::new()))
         }
-        Message::Insert { relation_oid, tuple } => row_event(relation_oid, &tuple, cache, topology, EventKind::Insert),
+        Message::Insert { relation_oid, tuple } => insert_event(relation_oid, &tuple, cache, topology),
         Message::Update { relation_oid, payload } => update_event(relation_oid, payload, cache, topology),
         Message::Delete { relation_oid, payload } => delete_event(relation_oid, payload, cache, topology),
         Message::Truncate(t) => truncate_event(&t.relation_oids, cache),
@@ -70,41 +64,26 @@ fn cache_relation(rel: Relation, cache: &mut RelationCache, topology: &Replicati
     );
 }
 
-#[derive(Copy, Clone)]
-enum EventKind {
-    Insert,
-    Delete,
-}
-
-fn row_event(
+fn insert_event(
     oid: u32,
     tuple: &Tuple<'_>,
     cache: &RelationCache,
     topology: &ReplicationTopology,
-    kind: EventKind,
 ) -> Result<Translated, SourceError> {
     let Some(entry) = cache.get(oid) else {
-        // unknown relation oid: the loop has not yet seen its Relation
-        // message. pgoutput guarantees Relation precedes the first row event
-        // referencing the same oid, so this is a stream-state error.
+        // pgoutput guarantees Relation precedes the first row event for the
+        // same oid; an unknown oid is a stream-state error, not a stale cache.
         return Err(SourceError::Backend(format!(
-            "pgoutput: row for unknown relation oid {oid}"
+            "pgoutput: insert for unknown relation oid {oid}"
         )));
     };
     let geom = extract_geom_bytes(tuple, entry.geometry_col_idx)?;
     let bbox = bbox_of(geom).map_err(|e| SourceError::Backend(format!("wkb: {e}")))?;
     let cells = cells_for_bbox(bbox, &topology.bands, topology.max_cells_per_row)?;
-    let ev = match kind {
-        EventKind::Insert => ChangeEvent::Insert {
-            collection: entry.topology.collection.clone(),
-            cells,
-        },
-        EventKind::Delete => ChangeEvent::Delete {
-            collection: entry.topology.collection.clone(),
-            cells,
-        },
-    };
-    Ok(Translated::Events(vec![ev]))
+    Ok(Translated(vec![ChangeEvent::Insert {
+        collection: entry.topology.collection.clone(),
+        cells,
+    }]))
 }
 
 fn update_event(
@@ -147,7 +126,7 @@ fn update_event(
         }
     }
 
-    Ok(Translated::Events(vec![ChangeEvent::Update {
+    Ok(Translated(vec![ChangeEvent::Update {
         collection: entry.topology.collection.clone(),
         cells,
     }]))
@@ -188,7 +167,7 @@ fn delete_event(
     let geom = extract_geom_bytes(tuple, entry.geometry_col_idx)?;
     let bbox = bbox_of(geom).map_err(|e| SourceError::Backend(format!("wkb: {e}")))?;
     let cells = cells_for_bbox(bbox, &topology.bands, topology.max_cells_per_row)?;
-    Ok(Translated::Events(vec![ChangeEvent::Delete {
+    Ok(Translated(vec![ChangeEvent::Delete {
         collection: entry.topology.collection.clone(),
         cells,
     }]))
@@ -205,7 +184,7 @@ fn truncate_event(oids: &[u32], cache: &RelationCache) -> Result<Translated, Sou
             });
         }
     }
-    Ok(Translated::Events(events))
+    Ok(Translated(events))
 }
 
 fn extract_geom_bytes<'a>(tuple: &'a Tuple<'a>, idx: usize) -> Result<&'a [u8], SourceError> {
@@ -292,10 +271,9 @@ mod tests {
     }
 
     fn one_event(t: Translated) -> ChangeEvent {
-        match t {
-            Translated::Events(mut v) if v.len() == 1 => v.remove(0),
-            other => panic!("expected exactly one event, got {other:?}"),
-        }
+        let Translated(mut v) = t;
+        assert_eq!(v.len(), 1, "expected exactly one event, got {v:?}");
+        v.remove(0)
     }
 
     #[test]
@@ -490,7 +468,7 @@ mod tests {
         )
         .unwrap();
         // mix of known + unknown oids.
-        let res = translate(
+        let Translated(events) = translate(
             Message::Truncate(super::super::pgoutput::TruncatePayload {
                 relation_oids: vec![100, 999, 200],
                 flags: 0,
@@ -499,26 +477,21 @@ mod tests {
             &t,
         )
         .unwrap();
-        match res {
-            Translated::Events(events) => {
-                let names: Vec<_> = events
-                    .iter()
-                    .map(|e| match e {
-                        ChangeEvent::Truncate { collection } => collection.as_str(),
-                        _ => panic!("expected only Truncate events"),
-                    })
-                    .collect();
-                assert_eq!(names, vec!["roads", "buildings"]);
-            }
-            other => panic!("expected Events, got {other:?}"),
-        }
+        let names: Vec<_> = events
+            .iter()
+            .map(|e| match e {
+                ChangeEvent::Truncate { collection } => collection.as_str(),
+                _ => panic!("expected only Truncate events"),
+            })
+            .collect();
+        assert_eq!(names, vec!["roads", "buildings"]);
     }
 
     #[test]
     fn unknown_relation_in_truncate_is_skipped() {
         let mut cache = RelationCache::default();
         let t = topo();
-        let res = translate(
+        let Translated(events) = translate(
             Message::Truncate(super::super::pgoutput::TruncatePayload {
                 relation_oids: vec![999],
                 flags: 0,
@@ -527,17 +500,17 @@ mod tests {
             &t,
         )
         .unwrap();
-        match res {
-            Translated::Events(v) => assert!(v.is_empty()),
-            other => panic!("expected empty Events, got {other:?}"),
-        }
+        assert!(events.is_empty());
     }
 
     #[test]
-    fn commit_returns_end_lsn() {
+    fn commit_is_a_noop_at_translator() {
+        // Commit boundaries are framed by the transport (pgwire-replication
+        // surfaces them as a separate event); translate should produce no
+        // ChangeEvents for them.
         let mut cache = RelationCache::default();
         let t = topo();
-        let res = translate(
+        let Translated(events) = translate(
             Message::Commit {
                 flags: 0,
                 commit_lsn: 1,
@@ -548,6 +521,6 @@ mod tests {
             &t,
         )
         .unwrap();
-        assert!(matches!(res, Translated::Committed { end_lsn: 999 }));
+        assert!(events.is_empty());
     }
 }
