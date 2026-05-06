@@ -150,9 +150,15 @@ async fn loop_accepts_increasing_versions_and_clears_reject() {
     let watch = Arc::new(VecWatch {
         items: std::sync::Mutex::new(Some(vec![Ok(manifest(1)), Ok(manifest(2))])),
     });
-    run_manifest_reload_loop(runtime.clone(), watch, minimal_config(), Stylesheet::default(), tokio_util::sync::CancellationToken::new())
-        .await
-        .unwrap();
+    run_manifest_reload_loop(
+        runtime.clone(),
+        watch,
+        minimal_config(),
+        Stylesheet::default(),
+        tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+    .unwrap();
     let state = runtime.current_state().expect("state present");
     assert_eq!(state.manifest.version, 2);
     assert!(runtime.last_reject_reason().is_none(), "no reject reason after success");
@@ -164,9 +170,15 @@ async fn loop_rejects_older_version_and_records_reason() {
     let watch = Arc::new(VecWatch {
         items: std::sync::Mutex::new(Some(vec![Ok(manifest(5)), Ok(manifest(3))])),
     });
-    run_manifest_reload_loop(runtime.clone(), watch, minimal_config(), Stylesheet::default(), tokio_util::sync::CancellationToken::new())
-        .await
-        .unwrap();
+    run_manifest_reload_loop(
+        runtime.clone(),
+        watch,
+        minimal_config(),
+        Stylesheet::default(),
+        tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+    .unwrap();
     let state = runtime.current_state().expect("state present");
     assert_eq!(state.manifest.version, 5, "older v3 must be rejected");
     let reason = runtime.last_reject_reason().expect("reject reason recorded");
@@ -180,9 +192,15 @@ async fn loop_records_reason_when_state_build_fails() {
     let watch = Arc::new(VecWatch {
         items: std::sync::Mutex::new(Some(vec![Ok(manifest_with_bad_key(7))])),
     });
-    run_manifest_reload_loop(runtime.clone(), watch, minimal_config(), Stylesheet::default(), tokio_util::sync::CancellationToken::new())
-        .await
-        .unwrap();
+    run_manifest_reload_loop(
+        runtime.clone(),
+        watch,
+        minimal_config(),
+        Stylesheet::default(),
+        tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+    .unwrap();
     assert!(runtime.current_state().is_none(), "no state on rejection");
     let reason = runtime.last_reject_reason().expect("reject reason recorded");
     assert!(reason.contains("v7"), "reason mentions version: {reason}");
@@ -194,9 +212,15 @@ async fn loop_records_reason_for_invalid_snapshot() {
     let watch = Arc::new(VecWatch {
         items: std::sync::Mutex::new(Some(vec![Err(StoreError::Backend("garbled".into()))])),
     });
-    run_manifest_reload_loop(runtime.clone(), watch, minimal_config(), Stylesheet::default(), tokio_util::sync::CancellationToken::new())
-        .await
-        .unwrap();
+    run_manifest_reload_loop(
+        runtime.clone(),
+        watch,
+        minimal_config(),
+        Stylesheet::default(),
+        tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+    .unwrap();
     let reason = runtime.last_reject_reason().expect("reject reason recorded");
     assert!(reason.contains("invalid snapshot"), "reason: {reason}");
 }
