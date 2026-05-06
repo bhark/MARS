@@ -195,48 +195,39 @@ impl Runtime {
         // collect fetched artifacts under async; geometry + render run sync.
         let cache = self.deps.cache.clone();
         let store = self.deps.store.clone();
-        let fetched: Vec<(ArtifactReader, ArtifactReader)> = stream::iter(
-            tasks.into_iter().map(|task| {
-                let state = state.clone();
-                let cache = cache.clone();
-                let store = store.clone();
-                async move {
-                    let layer_art = match fetch::fetch_layer(
-                        &state,
-                        cache.as_ref(),
-                        store.as_ref(),
-                        &task.layer,
-                        &task.cell,
-                    )
-                    .await?
-                    {
+        let fetched: Vec<(ArtifactReader, ArtifactReader)> = stream::iter(tasks.into_iter().map(|task| {
+            let state = state.clone();
+            let cache = cache.clone();
+            let store = store.clone();
+            async move {
+                let layer_art =
+                    match fetch::fetch_layer(&state, cache.as_ref(), store.as_ref(), &task.layer, &task.cell).await? {
                         Some(reader) => reader,
                         None => return Ok(None),
                     };
-                    let source_ref = layer_art.source_ref().cloned().ok_or_else(|| {
-                        RuntimeError::Config(mars_config::ConfigError::Invalid(format!(
-                            "layer artifact '{}' is missing source_ref footer",
-                            task.layer
-                        )))
-                    })?;
-                    let source_cell = mars_types::Cell {
-                        band: mars_types::ScaleBand::new(source_ref.band.clone()),
-                        x: source_ref.cell_x,
-                        y: source_ref.cell_y,
-                    };
-                    let source_art = fetch::fetch_source(
-                        &state,
-                        cache.as_ref(),
-                        store.as_ref(),
-                        &source_ref.collection,
-                        &source_cell,
-                    )
-                    .await?;
-                    Ok::<_, RuntimeError>(Some((source_art, layer_art)))
-                }
-            }),
-        )
-        .buffer_unordered(8)
+                let source_ref = layer_art.source_ref().cloned().ok_or_else(|| {
+                    RuntimeError::Config(mars_config::ConfigError::Invalid(format!(
+                        "layer artifact '{}' is missing source_ref footer",
+                        task.layer
+                    )))
+                })?;
+                let source_cell = mars_types::Cell {
+                    band: mars_types::ScaleBand::new(source_ref.band.clone()),
+                    x: source_ref.cell_x,
+                    y: source_ref.cell_y,
+                };
+                let source_art = fetch::fetch_source(
+                    &state,
+                    cache.as_ref(),
+                    store.as_ref(),
+                    &source_ref.collection,
+                    &source_cell,
+                )
+                .await?;
+                Ok::<_, RuntimeError>(Some((source_art, layer_art)))
+            }
+        }))
+        .buffered(8)
         .try_collect::<Vec<_>>()
         .await?
         .into_iter()
@@ -465,4 +456,324 @@ fn spawn_warming(
             })
             .await;
     })
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    use async_trait::async_trait;
+    use bytes::Bytes;
+    use mars_artifact::{ArtifactKind, ArtifactWriter, FeatureGeom, GeomKind, SourceRef};
+    use mars_config::{
+        ArtifactCache, ArtifactStore, Artifacts, Band, Cells, Class, ClassStyle, Config, Layer, Scales, ServiceMeta,
+        Source,
+    };
+    use mars_render_port::{Canvas, DrawOp, EncodeError, Encoder, ImageFormat, Pixmap, RenderError, Renderer};
+    use mars_store::mem::{InMemoryCache, InMemoryStore};
+    use mars_store::{LocalCache, ObjectStore, StoreError};
+    use mars_style::{Colour, Style, Stylesheet};
+    use mars_types::{ArtifactEntry, ArtifactKey, Bbox, Cell, ContentHash, CrsCode, LayerId, Manifest, ScaleBand};
+    use tokio::time::sleep;
+
+    use crate::{Deps, RenderPlan, Runtime, RuntimeState, key};
+
+    #[derive(Debug, Default)]
+    struct RecordingRenderer {
+        ops: Mutex<Vec<DrawOp>>,
+    }
+
+    impl Renderer for RecordingRenderer {
+        fn render(&self, canvas: Canvas, ops: &[DrawOp]) -> Result<Pixmap, RenderError> {
+            self.ops.lock().expect("poison").extend_from_slice(ops);
+            Ok(Pixmap {
+                width: canvas.width,
+                height: canvas.height,
+                premultiplied_rgba: vec![0; (canvas.width * canvas.height * 4) as usize],
+            })
+        }
+    }
+
+    #[derive(Debug, Default)]
+    struct NoopEncoder;
+
+    impl Encoder for NoopEncoder {
+        fn encode(&self, _pixmap: &Pixmap, _format: ImageFormat) -> Result<Vec<u8>, EncodeError> {
+            Ok(vec![])
+        }
+    }
+
+    struct DelayingStore {
+        delays: HashMap<ArtifactKey, Duration>,
+        inner: InMemoryStore,
+    }
+
+    #[async_trait]
+    impl ObjectStore for DelayingStore {
+        async fn get(&self, key: &ArtifactKey, expected: ContentHash) -> Result<Bytes, StoreError> {
+            if let Some(delay) = self.delays.get(key) {
+                sleep(*delay).await;
+            }
+            self.inner.get(key, expected).await
+        }
+        async fn put(&self, key: &ArtifactKey, body: Bytes) -> Result<ContentHash, StoreError> {
+            self.inner.put(key, body).await
+        }
+        async fn delete(&self, key: &ArtifactKey) -> Result<(), StoreError> {
+            self.inner.delete(key).await
+        }
+        async fn list(&self, prefix: &str) -> Result<Vec<ArtifactKey>, StoreError> {
+            self.inner.list(prefix).await
+        }
+    }
+
+    fn source_artifact() -> Bytes {
+        let mut w = ArtifactWriter::new(ArtifactKind::Source);
+        w.add_geometry_payload(&[FeatureGeom {
+            id: 1,
+            bbox: [0.0, 0.0, 1.0, 1.0],
+            geom: GeomKind::Point((5.0, 5.0)),
+        }])
+        .set_bbox(Bbox::new(0.0, 0.0, 10.0, 10.0))
+        .set_feature_count(1);
+        w.finish().unwrap()
+    }
+
+    fn layer_artifact(collection: &str) -> Bytes {
+        let mut w = ArtifactWriter::new(ArtifactKind::Layer);
+        w.add_class_assignment(&[(1, 0)])
+            .add_style_refs(&["red".into()])
+            .set_source_ref(SourceRef {
+                collection: collection.into(),
+                band: "hi".into(),
+                cell_x: 0,
+                cell_y: 0,
+                content_hash: ContentHash::zero(),
+            })
+            .set_bbox(Bbox::new(0.0, 0.0, 10.0, 10.0));
+        w.finish().unwrap()
+    }
+
+    fn minimal_config() -> Config {
+        let mut size_per_band = std::collections::BTreeMap::new();
+        size_per_band.insert("hi".into(), "4096m".into());
+        Config {
+            service: ServiceMeta {
+                name: "t".into(),
+                ..Default::default()
+            },
+            source: Source {
+                kind: "memory".into(),
+                dsn: "memory://".into(),
+                native_crs: CrsCode::new("EPSG:25832"),
+                change_feed: None,
+            },
+            artifacts: Artifacts {
+                store: ArtifactStore {
+                    kind: "fs".into(),
+                    endpoint: None,
+                    bucket: None,
+                    prefix: None,
+                    path: Some("/tmp".into()),
+                },
+                cache: ArtifactCache {
+                    path: "/tmp".into(),
+                    max_size: "1GiB".into(),
+                    eviction: "lru".into(),
+                },
+            },
+            scales: Scales {
+                bands: vec![Band {
+                    name: "hi".into(),
+                    max_denom: 25000,
+                }],
+            },
+            cells: Cells {
+                grid: "regular".into(),
+                origin: [0.0, 0.0],
+                size_per_band,
+                extent: None,
+            },
+            interfaces: Default::default(),
+            tile_matrix_sets: Default::default(),
+            reprojection: Default::default(),
+            styles: Default::default(),
+            layers: vec![],
+            observability: Default::default(),
+            render: Default::default(),
+        }
+    }
+
+    async fn build_state_with_two_layers(
+        store: &InMemoryStore,
+    ) -> (RuntimeState, Vec<ArtifactEntry>, Vec<ArtifactEntry>) {
+        let cell = Cell {
+            band: ScaleBand::new("hi"),
+            x: 0,
+            y: 0,
+        };
+
+        let layer_a_key = key::layer_key(&LayerId::new("layer_a"), &cell, "a");
+        let layer_b_key = key::layer_key(&LayerId::new("layer_b"), &cell, "b");
+        let source_a_key = key::source_key("src_a", &cell, "sa");
+        let source_b_key = key::source_key("src_b", &cell, "sb");
+
+        let hash_a = store.put(&layer_a_key, layer_artifact("src_a")).await.unwrap();
+        let hash_b = store.put(&layer_b_key, layer_artifact("src_b")).await.unwrap();
+        let hash_sa = store.put(&source_a_key, source_artifact()).await.unwrap();
+        let hash_sb = store.put(&source_b_key, source_artifact()).await.unwrap();
+
+        let layer_entries = vec![
+            ArtifactEntry {
+                key: layer_a_key,
+                hash: hash_a,
+                size_bytes: 0,
+            },
+            ArtifactEntry {
+                key: layer_b_key,
+                hash: hash_b,
+                size_bytes: 0,
+            },
+        ];
+        let source_entries = vec![
+            ArtifactEntry {
+                key: source_a_key,
+                hash: hash_sa,
+                size_bytes: 0,
+            },
+            ArtifactEntry {
+                key: source_b_key,
+                hash: hash_sb,
+                size_bytes: 0,
+            },
+        ];
+
+        let mut config = minimal_config();
+        config.layers = vec![
+            Layer {
+                name: LayerId::new("layer_a"),
+                title: String::new(),
+                abstract_: String::new(),
+                kind: "point".into(),
+                scale: None,
+                group: None,
+                enable_get_feature_info: false,
+                bbox: None,
+                sources: vec![mars_config::SourceBinding {
+                    scale: None,
+                    band: Some("hi".into()),
+                    from: "src_a".into(),
+                    geometry_column: "geom".into(),
+                    id_column: None,
+                    attributes: vec![],
+                }],
+                classes: vec![Class {
+                    name: "default".into(),
+                    title: String::new(),
+                    when: None,
+                    style: ClassStyle::Ref { name: "red".into() },
+                }],
+                label: None,
+            },
+            Layer {
+                name: LayerId::new("layer_b"),
+                title: String::new(),
+                abstract_: String::new(),
+                kind: "point".into(),
+                scale: None,
+                group: None,
+                enable_get_feature_info: false,
+                bbox: None,
+                sources: vec![mars_config::SourceBinding {
+                    scale: None,
+                    band: Some("hi".into()),
+                    from: "src_b".into(),
+                    geometry_column: "geom".into(),
+                    id_column: None,
+                    attributes: vec![],
+                }],
+                classes: vec![Class {
+                    name: "default".into(),
+                    title: String::new(),
+                    when: None,
+                    style: ClassStyle::Ref { name: "red".into() },
+                }],
+                label: None,
+            },
+        ];
+
+        let mut stylesheet = Stylesheet::default();
+        stylesheet.geometry.insert(
+            "red".into(),
+            Arc::new(Style {
+                fill: Some(Colour::rgb(255, 0, 0)),
+                ..Default::default()
+            }),
+        );
+
+        let manifest = Manifest::new(1, "t", source_entries.clone(), layer_entries.clone(), None, vec![]);
+
+        let state = RuntimeState::from_config_and_manifest(&config, stylesheet, manifest).unwrap();
+        (state, layer_entries, source_entries)
+    }
+
+    #[tokio::test]
+    async fn render_preserves_plan_order_with_inverted_latencies() {
+        let inner_store = InMemoryStore::new();
+        let (state, layer_entries, _source_entries) = build_state_with_two_layers(&inner_store).await;
+
+        // delay first layer (layer_a) longer than second (layer_b)
+        let mut delays = HashMap::new();
+        delays.insert(layer_entries[0].key.clone(), Duration::from_millis(100));
+        delays.insert(layer_entries[1].key.clone(), Duration::from_millis(10));
+
+        let store = Arc::new(DelayingStore {
+            delays,
+            inner: inner_store,
+        });
+        let cache: Arc<dyn LocalCache> = Arc::new(InMemoryCache::new());
+        let renderer = Arc::new(RecordingRenderer::default());
+
+        let runtime = Runtime::from_state(
+            Arc::new(state),
+            Deps {
+                store,
+                cache,
+                renderer: renderer.clone(),
+                encoder: Arc::new(NoopEncoder),
+                metrics: mars_observability::Metrics::new().unwrap(),
+            },
+        );
+
+        let plan = RenderPlan {
+            layers: vec![LayerId::new("layer_a"), LayerId::new("layer_b")],
+            bbox: Bbox::new(0.0, 0.0, 10.0, 10.0),
+            width: 100,
+            height: 100,
+            crs: CrsCode::new("EPSG:25832"),
+            format: ImageFormat::Png,
+        };
+
+        let _ = runtime.render(&plan).await.unwrap();
+
+        let ops = renderer.ops.lock().unwrap().clone();
+        // each layer emits one DrawOp::Path for its point feature
+        assert_eq!(ops.len(), 2, "expected two draw ops");
+        match &ops[0] {
+            DrawOp::Path { path, .. } => {
+                // layer_a point at (5,5) projected to pixel space
+                assert_eq!(path.rings[0][0], (50.0, 50.0));
+            }
+            other => panic!("expected Path, got {other:?}"),
+        }
+        match &ops[1] {
+            DrawOp::Path { path, .. } => {
+                assert_eq!(path.rings[0][0], (50.0, 50.0));
+            }
+            other => panic!("expected Path, got {other:?}"),
+        }
+    }
 }
