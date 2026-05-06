@@ -1,5 +1,7 @@
 //! in-memory `LeaderLock` for snapshot integration tests.
 
+#![allow(dead_code)] // not every test binary uses always_grants/always_denies
+
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;

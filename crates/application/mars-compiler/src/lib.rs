@@ -152,13 +152,14 @@ impl Compiler {
             let source_version = batches.iter().rev().find_map(|b| b.source_version.clone());
 
             let dirty = incremental::dirty_cells_for(&batches, &plan);
-            if dirty.is_empty() {
-                // no manifest change, but the source cursor advanced; ack so
-                // the upstream slot does not retain logs we no longer need.
+            let next_plan = incremental::filter_plan(&plan, &dirty);
+            if next_plan.sources.is_empty() {
+                // window had no events touching the configured plan; advance
+                // the cursor so the upstream slot does not retain logs but
+                // skip publishing — nothing changed.
                 sub.acknowledge(source_version.as_deref()).await?;
                 continue;
             }
-            let next_plan = incremental::filter_plan(&plan, &dirty);
             let rebuild_start = Instant::now();
             // rebuild and publish before acking. on failure we return without
             // calling acknowledge, so the next subscription replays the window.
