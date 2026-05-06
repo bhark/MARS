@@ -356,9 +356,14 @@ fn map_runtime_error(e: &RuntimeError) -> WmsException {
             code: Some("InvalidParameterValue"),
             message: format!("Request requires {requested} pixels but server budget is {budget}"),
         },
-        RuntimeError::ManifestEntryMissing { .. }
-        | RuntimeError::SourceMissing { .. }
-        | RuntimeError::BadKey { .. }
+        // SPEC §8.5: a cell missing from both lists is a broken manifest;
+        // surface as 404 so clients can distinguish "no data" from "we broke".
+        RuntimeError::ManifestEntryMissing { .. } | RuntimeError::SourceMissing { .. } => WmsException {
+            status: StatusCode::NOT_FOUND,
+            code: Some("LayerNotQueryable"),
+            message: "No data available for the requested area".into(),
+        },
+        RuntimeError::BadKey { .. }
         | RuntimeError::Config(_)
         | RuntimeError::Store(_)
         | RuntimeError::Render(_)
@@ -680,10 +685,12 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
         let body = body_str(resp).await;
         assert!(body.contains("ServiceExceptionReport"));
-        assert!(body.contains("Internal server error"));
+        assert!(body.contains(r#"code="LayerNotQueryable""#));
+        assert!(body.contains("No data available"));
+        // never leak internal cell coordinates / file paths to the client.
         assert!(!body.contains("manifest entry missing"));
         assert!(!body.contains("cell ("));
     }
