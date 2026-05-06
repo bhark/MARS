@@ -61,6 +61,11 @@ pub fn build_plan(cfg: &Config) -> Result<Vec<BuildTask>, PlanError> {
                 if !window_intersects(&layer.scale, band) || !window_intersects(&binding.scale, band) {
                     continue;
                 }
+                if let Some(ref b) = binding.band
+                    && b.as_str() != band_name.as_str()
+                {
+                    continue;
+                }
                 let band_cfg = BandConfig {
                     name: ScaleBand::new(band_name.as_str()),
                     max_denom: u32::try_from(band.max_denom).unwrap_or(u32::MAX),
@@ -366,5 +371,91 @@ mod tests {
         assert_eq!(binding.from_schema, "public");
         assert_eq!(binding.from_table, "mytable");
         assert_eq!(binding.id_column, "ogc_fid");
+    }
+
+    #[test]
+    fn build_plan_honours_binding_band() {
+        use mars_config::{ArtifactCache, ArtifactStore, Artifacts, Config, ServiceMeta, Source};
+        use mars_types::Bbox;
+        use std::collections::BTreeMap;
+
+        let mut size_per_band = BTreeMap::new();
+        size_per_band.insert("hi".into(), "4096m".into());
+        size_per_band.insert("lo".into(), "8192m".into());
+
+        let cfg = Config {
+            service: ServiceMeta {
+                name: "t".into(),
+                ..Default::default()
+            },
+            source: Source {
+                kind: "memory".into(),
+                dsn: "memory://".into(),
+                native_crs: CrsCode::new("EPSG:25832"),
+                change_feed: None,
+            },
+            artifacts: Artifacts {
+                store: ArtifactStore {
+                    kind: "fs".into(),
+                    endpoint: None,
+                    bucket: None,
+                    prefix: None,
+                    path: Some("/tmp".into()),
+                },
+                cache: ArtifactCache {
+                    path: "/tmp".into(),
+                    max_size: "1GiB".into(),
+                    eviction: "lru".into(),
+                },
+            },
+            scales: mars_config::Scales {
+                bands: vec![
+                    mars_config::Band {
+                        name: "hi".into(),
+                        max_denom: 25000,
+                    },
+                    mars_config::Band {
+                        name: "lo".into(),
+                        max_denom: 100000,
+                    },
+                ],
+            },
+            cells: mars_config::Cells {
+                grid: "regular".into(),
+                origin: [0.0, 0.0],
+                size_per_band,
+                extent: Some(Bbox::new(0.0, 0.0, 1.0, 1.0)),
+            },
+            interfaces: Default::default(),
+            tile_matrix_sets: Default::default(),
+            reprojection: Default::default(),
+            styles: Default::default(),
+            layers: vec![Layer {
+                name: LayerId::new("roads"),
+                title: String::new(),
+                abstract_: String::new(),
+                kind: "line".into(),
+                scale: None,
+                group: None,
+                enable_get_feature_info: false,
+                bbox: None,
+                sources: vec![CfgBinding {
+                    scale: None,
+                    band: Some("lo".into()),
+                    from: "roads".into(),
+                    geometry_column: "geom".into(),
+                    id_column: None,
+                    attributes: vec![],
+                }],
+                classes: vec![],
+                label: None,
+            }],
+            observability: Default::default(),
+            render: Default::default(),
+        };
+
+        let tasks = build_plan(&cfg).unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].band.as_str(), "lo");
     }
 }
