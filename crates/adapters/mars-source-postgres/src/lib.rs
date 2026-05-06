@@ -15,7 +15,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use deadpool_postgres::{Config as PoolConfig, Pool, Runtime};
+use deadpool_postgres::{Pool, Runtime};
 use futures_core::stream::BoxStream;
 use mars_expr::Expr;
 use mars_source::{ChangeEvent, ChangeFeed, RowBytes, Source, SourceBinding, SourceError};
@@ -112,19 +112,25 @@ impl PgSource {
     pub async fn connect(cfg: PgConfig) -> Result<Self, SourceError> {
         let pg_cfg =
             tokio_postgres::Config::from_str(&cfg.dsn).map_err(|e| SourceError::Backend(format!("dsn: {e}")))?;
-        let mut pool_cfg = PoolConfig::new();
-        pool_cfg.host = pg_cfg.get_hosts().first().and_then(|h| match h {
-            tokio_postgres::config::Host::Tcp(s) => Some(s.clone()),
-            #[cfg(unix)]
-            tokio_postgres::config::Host::Unix(p) => p.to_str().map(str::to_owned),
-        });
-        pool_cfg.port = pg_cfg.get_ports().first().copied();
-        pool_cfg.user = pg_cfg.get_user().map(str::to_owned);
-        pool_cfg.password = pg_cfg.get_password().map(|b| String::from_utf8_lossy(b).into_owned());
-        pool_cfg.dbname = pg_cfg.get_dbname().map(str::to_owned);
 
-        let pool = pool_cfg
-            .create_pool(Some(Runtime::Tokio1), NoTls)
+        let mgr = if pg_cfg.get_ssl_mode() == tokio_postgres::config::SslMode::Disable {
+            deadpool_postgres::Manager::from_config(pg_cfg, NoTls, deadpool_postgres::ManagerConfig::default())
+        } else {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+            let mut roots = rustls::RootCertStore::empty();
+            for cert in rustls_native_certs::load_native_certs().certs {
+                let _ = roots.add(cert);
+            }
+            let tls_cfg = rustls::ClientConfig::builder()
+                .with_root_certificates(roots)
+                .with_no_client_auth();
+            let tls = tokio_postgres_rustls::MakeRustlsConnect::new(tls_cfg);
+            deadpool_postgres::Manager::from_config(pg_cfg, tls, deadpool_postgres::ManagerConfig::default())
+        };
+
+        let pool = Pool::builder(mgr)
+            .runtime(Runtime::Tokio1)
+            .build()
             .map_err(|e| SourceError::Backend(format!("pool create: {e}")))?;
 
         Ok(Self {
