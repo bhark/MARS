@@ -489,6 +489,7 @@ mod tests {
             }],
             observability: Default::default(),
             render: Default::default(),
+            compiler: Default::default(),
         };
 
         let err = build_plan(&cfg).unwrap_err();
@@ -578,6 +579,7 @@ mod tests {
             }],
             observability: Default::default(),
             render: Default::default(),
+            compiler: Default::default(),
         };
 
         let tasks = build_plan(&cfg).unwrap();

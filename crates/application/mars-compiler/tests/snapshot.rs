@@ -109,6 +109,7 @@ fn make_config() -> Config {
         }],
         observability: Default::default(),
         render: Default::default(),
+        compiler: Default::default(),
     }
 }
 

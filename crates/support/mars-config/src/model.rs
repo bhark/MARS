@@ -47,6 +47,37 @@ pub struct Config {
     /// Renderer / encoder settings.
     #[serde(default)]
     pub render: Render,
+    /// Compiler settings (incremental window, etc).
+    #[serde(default)]
+    pub compiler: Compiler,
+}
+
+/// Compiler settings. SPEC §8.3.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Compiler {
+    /// Window over which incremental change events are batched before
+    /// publishing a manifest. Unit-suffixed duration (`5min`, `30s`).
+    #[serde(default = "default_compiler_window")]
+    pub window: String,
+}
+
+impl Default for Compiler {
+    fn default() -> Self {
+        Self {
+            window: default_compiler_window(),
+        }
+    }
+}
+
+impl Compiler {
+    /// Resolve `window` to a `Duration`.
+    pub fn window_dur(&self) -> Result<Duration, ConfigError> {
+        units::parse_duration(&self.window)
+    }
+}
+
+fn default_compiler_window() -> String {
+    "5min".to_owned()
 }
 
 /// Renderer / encoder configuration.

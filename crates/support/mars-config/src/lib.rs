@@ -215,7 +215,7 @@ mod tests {
     use mars_types::{Bbox, CrsCode};
 
     fn minimal_config() -> Config {
-        use crate::model::{ArtifactCache, ArtifactStore, Interfaces, Observability, Render};
+        use crate::model::{ArtifactCache, ArtifactStore, Compiler, Interfaces, Observability, Render};
         let mut size_per_band = BTreeMap::new();
         size_per_band.insert("hi".into(), "1024m".into());
         Config {
@@ -263,6 +263,7 @@ mod tests {
             layers: vec![],
             observability: Observability::default(),
             render: Render::default(),
+            compiler: Compiler::default(),
         }
     }
 

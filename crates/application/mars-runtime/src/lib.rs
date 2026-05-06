@@ -636,6 +636,7 @@ mod tests {
             layers: vec![],
             observability: Default::default(),
             render: Default::default(),
+            compiler: Default::default(),
         }
     }
 
