@@ -60,8 +60,8 @@ async fn run_snapshot(cfg: Config) -> Result<()> {
         },
         cfg,
     );
-    match compiler.run(CancellationToken::new()).await {
-        Ok(()) => Ok(()),
+    match compiler.run_snapshot_once(CancellationToken::new()).await {
+        Ok(_) => Ok(()),
         Err(mars_compiler::CompilerError::NotLeader) => {
             eprintln!("compiler: another instance is leader; exiting cleanly");
             Ok(())

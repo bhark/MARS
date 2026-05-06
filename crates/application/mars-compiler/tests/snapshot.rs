@@ -171,7 +171,7 @@ async fn snapshot_writes_artifacts_and_publishes_manifest() {
     let cfg = make_config();
     let (deps, store, publisher) = build_deps(make_rows());
     let compiler = Compiler::new(deps, cfg);
-    compiler.run(CancellationToken::new()).await.unwrap();
+    compiler.run_snapshot_once(CancellationToken::new()).await.unwrap();
 
     let src_keys = store.list("src").await.unwrap();
     assert_eq!(src_keys.len(), 1, "one source artifact: {src_keys:?}");
@@ -202,7 +202,7 @@ async fn snapshot_omits_unmatched_rows_from_layer_assignment() {
     let cfg = make_config();
     let (deps, store, publisher) = build_deps(make_rows_with_unmatched_class());
     let compiler = Compiler::new(deps, cfg);
-    compiler.run(CancellationToken::new()).await.unwrap();
+    compiler.run_snapshot_once(CancellationToken::new()).await.unwrap();
 
     let manifest = publisher.current().await.unwrap().unwrap();
     let lyr_entry = &manifest.layer_artifacts[0];
@@ -276,7 +276,7 @@ async fn snapshot_emits_empty_layer_cells_for_sparse_data() {
     let cfg = make_config_two_cells();
     let (deps, store, publisher) = build_deps_one_cell(make_rows());
     let compiler = Compiler::new(deps, cfg);
-    compiler.run(CancellationToken::new()).await.unwrap();
+    compiler.run_snapshot_once(CancellationToken::new()).await.unwrap();
 
     let src_keys = store.list("src").await.unwrap();
     assert_eq!(src_keys.len(), 1, "one source artifact: {src_keys:?}");

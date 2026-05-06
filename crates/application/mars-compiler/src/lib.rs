@@ -91,30 +91,43 @@ impl Compiler {
         Self { deps, config }
     }
 
-    /// Run one snapshot pass. The change-feed dependency is held but not
-    /// subscribed in Phase 0 (SPEC §8.2; deferred to Phase 1).
+    /// Acquire the leader lock and run a single snapshot compile, publishing
+    /// manifest version 1. Used by `mars-compile`, tests, and as the bootstrap
+    /// step inside [`Compiler::run`] when no manifest exists yet.
+    pub async fn run_snapshot_once(&self, shutdown: CancellationToken) -> Result<u64, CompilerError> {
+        let _guard = self.acquire_leader().await?;
+        self.snapshot_inner(shutdown).await
+    }
+
+    /// Long-running service mode. Today this is just a snapshot compile;
+    /// incremental change-feed consumption lands in a follow-up slice.
     pub async fn run(&self, shutdown: CancellationToken) -> Result<(), CompilerError> {
-        // singleton enforcement: hold the leader lock for the whole run.
+        tracing::warn!("phase-1: change feed deferred");
+        let _ = &self.deps.change_feed;
+        let _ = self.run_snapshot_once(shutdown).await?;
+        Ok(())
+    }
+
+    async fn acquire_leader(&self) -> Result<Box<dyn LeaderLockGuard>, CompilerError> {
         let key = leader_lock_key(&self.config.service.name);
-        let _guard: Box<dyn LeaderLockGuard> = match self
+        match self
             .deps
             .leader_lock
             .try_acquire(key)
             .await
             .map_err(|source| CompilerError::LeaderLock { source })?
         {
-            Some(g) => g,
+            Some(g) => Ok(g),
             None => {
                 tracing::info!(service = %self.config.service.name, "compiler: not leader, exiting");
-                return Err(CompilerError::NotLeader);
+                Err(CompilerError::NotLeader)
             }
-        };
+        }
+    }
 
-        tracing::warn!("phase-1: change feed deferred");
-        let _ = &self.deps.change_feed;
-
+    async fn snapshot_inner(&self, shutdown: CancellationToken) -> Result<u64, CompilerError> {
         if shutdown.is_cancelled() {
-            return Ok(());
+            return Ok(0);
         }
 
         let tasks = plan::build_plan(&self.config)?;
@@ -148,7 +161,7 @@ impl Compiler {
             .buffer_unordered(DEFAULT_SNAPSHOT_CONCURRENCY);
         while let Some(result) = stream.next().await {
             if shutdown.is_cancelled() {
-                return Ok(());
+                return Ok(0);
             }
             let part = result?;
             output.extend(part);
@@ -167,6 +180,6 @@ impl Compiler {
             .metrics
             .observe_compiler_rebuild_duration(rebuild_start.elapsed());
         tracing::info!(version = v, "compiler: manifest published");
-        Ok(())
+        Ok(v)
     }
 }
