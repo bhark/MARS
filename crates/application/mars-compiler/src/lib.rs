@@ -16,6 +16,7 @@ use mars_types::Manifest;
 use tokio_util::sync::CancellationToken;
 
 pub mod class;
+pub mod incremental;
 pub mod plan;
 pub mod snapshot;
 pub mod wkb;
@@ -67,6 +68,10 @@ pub enum CompilerError {
         #[source]
         source: mars_source::SourceError,
     },
+    #[error("config: {0}")]
+    Config(#[from] mars_config::ConfigError),
+    #[error("incremental loop expected current manifest after bootstrap, found none")]
+    BootstrapManifestMissing,
 }
 
 /// All ports the compiler depends on, bundled for easy composition by the bin.
@@ -99,13 +104,92 @@ impl Compiler {
         self.snapshot_inner(shutdown).await
     }
 
-    /// Long-running service mode. Today this is just a snapshot compile;
-    /// incremental change-feed consumption lands in a follow-up slice.
+    /// Long-running service mode: bootstrap with a snapshot if no manifest
+    /// exists, then consume committed change batches in `compiler.window`
+    /// chunks, rebuilding only dirty source cells and republishing a merged
+    /// manifest at version+1 per cycle. SPEC §8.3.
     pub async fn run(&self, shutdown: CancellationToken) -> Result<(), CompilerError> {
-        tracing::warn!("phase-1: change feed deferred");
-        let _ = &self.deps.change_feed;
-        let _ = self.run_snapshot_once(shutdown).await?;
-        Ok(())
+        let _guard = self.acquire_leader().await?;
+
+        let mut prev = match self.deps.manifest.current().await? {
+            Some(m) => m,
+            None => {
+                self.snapshot_inner(shutdown.clone()).await?;
+                self.deps
+                    .manifest
+                    .current()
+                    .await?
+                    .ok_or(CompilerError::BootstrapManifestMissing)?
+            }
+        };
+
+        let mut stream = match self.deps.change_feed.subscribe().await {
+            Ok(s) => s,
+            Err(mars_source::SourceError::NotImplemented { what }) => {
+                tracing::warn!(what, "compiler: change feed not implemented; idling after bootstrap");
+                return Ok(());
+            }
+            Err(e) => return Err(e.into()),
+        };
+
+        let window = self.config.compiler.window_dur()?;
+        let plan = plan::build_plan(&self.config)?;
+
+        loop {
+            if shutdown.is_cancelled() {
+                return Ok(());
+            }
+            let mut batches: Vec<mars_source::ChangeBatch> = Vec::new();
+            let deadline = tokio::time::Instant::now() + window;
+            loop {
+                tokio::select! {
+                    _ = shutdown.cancelled() => return Ok(()),
+                    _ = tokio::time::sleep_until(deadline) => break,
+                    next = stream.next() => match next {
+                        Some(Ok(b)) => batches.push(b),
+                        Some(Err(e)) => return Err(e.into()),
+                        None => {
+                            tracing::info!("compiler: change feed closed");
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+            if batches.is_empty() {
+                continue;
+            }
+
+            let dirty = incremental::dirty_cells_for(&batches, &plan);
+            if dirty.is_empty() {
+                continue;
+            }
+            let next_plan = incremental::filter_plan(&plan, &dirty);
+            let rebuild_start = Instant::now();
+            let rebuild = self.execute_plan(next_plan, shutdown.clone()).await?;
+            self.deps.metrics.inc_compiler_change_events();
+            self.deps.metrics.inc_compiler_dirty_cells(dirty.cells.len() as u64);
+            self.deps
+                .metrics
+                .observe_compiler_rebuild_duration(rebuild_start.elapsed());
+
+            let next_version = prev.version + 1;
+            let source_version = batches.iter().rev().find_map(|b| b.source_version.clone());
+            let merged = incremental::merge_manifest(
+                &prev,
+                next_version,
+                &self.config.service.name,
+                rebuild,
+                &dirty,
+                source_version,
+            );
+            self.deps.manifest.publish(&merged).await?;
+            tracing::info!(
+                version = merged.version,
+                dirty_cells = dirty.cells.len(),
+                "compiler: incremental manifest published",
+            );
+            prev = merged;
+        }
     }
 
     async fn acquire_leader(&self) -> Result<Box<dyn LeaderLockGuard>, CompilerError> {
@@ -140,36 +224,8 @@ impl Compiler {
         self.deps.metrics.inc_compiler_dirty_cells(plan.sources.len() as u64);
         self.deps.metrics.set_compiler_window_lag(std::time::Duration::ZERO);
 
-        let mut output = snapshot::SnapshotOutput::default();
-        let source = self.deps.source.clone();
-        let store = self.deps.store.clone();
         let rebuild_start = Instant::now();
-
-        let dependents = plan.dependents_by_source();
-        let plan::Plan { sources, layers } = plan;
-        let layer_arcs: Vec<Arc<plan::LayerTask>> = layers.into_iter().map(Arc::new).collect();
-        let units: Vec<(Arc<plan::SourceTask>, Vec<Arc<plan::LayerTask>>)> = sources
-            .into_iter()
-            .zip(dependents.into_iter())
-            .map(|(s, deps)| {
-                let dep_arcs: Vec<Arc<plan::LayerTask>> = deps.into_iter().map(|i| layer_arcs[i].clone()).collect();
-                (Arc::new(s), dep_arcs)
-            })
-            .collect();
-        let mut stream = stream::iter(units)
-            .map(|(task, deps)| {
-                let source = source.clone();
-                let store = store.clone();
-                async move { snapshot::run_source_cell(&task, &deps, &source, &store).await }
-            })
-            .buffer_unordered(DEFAULT_SNAPSHOT_CONCURRENCY);
-        while let Some(result) = stream.next().await {
-            if shutdown.is_cancelled() {
-                return Ok(0);
-            }
-            let part = result?;
-            output.extend(part);
-        }
+        let output = self.execute_plan(plan, shutdown).await?;
 
         let manifest = Manifest::new(
             1,
@@ -185,5 +241,45 @@ impl Compiler {
             .observe_compiler_rebuild_duration(rebuild_start.elapsed());
         tracing::info!(version = v, "compiler: manifest published");
         Ok(v)
+    }
+
+    /// Drive one plan through the per-source-cell rebuild pipeline. Concurrency
+    /// is bounded by [`DEFAULT_SNAPSHOT_CONCURRENCY`]; callers handle metric
+    /// accounting and manifest publication.
+    async fn execute_plan(
+        &self,
+        plan: plan::Plan,
+        shutdown: CancellationToken,
+    ) -> Result<snapshot::SnapshotOutput, CompilerError> {
+        let mut output = snapshot::SnapshotOutput::default();
+        let source = self.deps.source.clone();
+        let store = self.deps.store.clone();
+
+        let dependents = plan.dependents_by_source();
+        let plan::Plan { sources, layers } = plan;
+        let layer_arcs: Vec<Arc<plan::LayerTask>> = layers.into_iter().map(Arc::new).collect();
+        let units: Vec<(Arc<plan::SourceTask>, Vec<Arc<plan::LayerTask>>)> = sources
+            .into_iter()
+            .zip(dependents.into_iter())
+            .map(|(s, deps)| {
+                let dep_arcs: Vec<Arc<plan::LayerTask>> = deps.into_iter().map(|i| layer_arcs[i].clone()).collect();
+                (Arc::new(s), dep_arcs)
+            })
+            .collect();
+
+        let mut stream = stream::iter(units)
+            .map(|(task, deps)| {
+                let source = source.clone();
+                let store = store.clone();
+                async move { snapshot::run_source_cell(&task, &deps, &source, &store).await }
+            })
+            .buffer_unordered(DEFAULT_SNAPSHOT_CONCURRENCY);
+        while let Some(result) = stream.next().await {
+            if shutdown.is_cancelled() {
+                return Ok(output);
+            }
+            output.extend(result?);
+        }
+        Ok(output)
     }
 }
