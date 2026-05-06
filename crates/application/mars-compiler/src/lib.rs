@@ -247,7 +247,7 @@ impl Compiler {
         let layer_arcs: Vec<Arc<plan::LayerTask>> = layers.into_iter().map(Arc::new).collect();
         let units: Vec<(Arc<plan::SourceTask>, Vec<Arc<plan::LayerTask>>)> = sources
             .into_iter()
-            .zip(dependents.into_iter())
+            .zip(dependents)
             .map(|(s, deps)| {
                 let dep_arcs: Vec<Arc<plan::LayerTask>> = deps.into_iter().map(|i| layer_arcs[i].clone()).collect();
                 (Arc::new(s), dep_arcs)
