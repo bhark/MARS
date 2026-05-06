@@ -47,18 +47,16 @@ const GT_MULTIPOLYGON: u8 = 6;
 // quantization is mm-precision fixed point. i64 holds ±9.2e18 mm = ±9.2e15 m
 // of representable canonical-CRS extent; anything beyond is a coding bug or
 // corrupt input and surfaces as ArtifactError::CoordOutOfRange.
-const QUANT_MAX: f64 = (i64::MAX / 1000) as f64;
-const QUANT_MIN: f64 = (i64::MIN / 1000) as f64;
-
 #[inline]
 fn quantize(c: f64) -> Result<i64, ArtifactError> {
     if !c.is_finite() {
         return Err(ArtifactError::CoordOutOfRange(c));
     }
-    if !(QUANT_MIN..=QUANT_MAX).contains(&c) {
+    let scaled = (c * 1000.0).round();
+    if scaled > i64::MAX as f64 || scaled < i64::MIN as f64 {
         return Err(ArtifactError::CoordOutOfRange(c));
     }
-    Ok((c * 1000.0).round() as i64)
+    Ok(scaled as i64)
 }
 
 #[inline]
