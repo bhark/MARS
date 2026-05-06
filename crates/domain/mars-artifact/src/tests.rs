@@ -5,9 +5,9 @@ use proptest::prelude::*;
 use crate::{
     ArtifactError, ArtifactKind, ArtifactReader, ArtifactWriter, FORMAT_VERSION, MAGIC, SectionKind, SourceRef,
     compute_content_hash, decode_class_assignment, decode_geometry_payload, decode_geometry_payload_filtered,
-    decode_style_refs, encode_geometry_payload,
+    decode_one_geom, decode_style_refs, encode_geometry_payload, iter_feature_index, visit_one_geom,
 };
-use crate::{Coord, FeatureGeom, GeomKind};
+use crate::{Coord, FeatureGeom, GeomKind, GeomVisitor};
 
 const MM_TOL: f64 = 1.0 / 1000.0;
 
@@ -117,6 +117,119 @@ proptest! {
             prop_assert_eq!(a.bbox, b.bbox);
             prop_assert!(geom_close(&a.geom, &b.geom));
         }
+    }
+
+    /// `visit_one_geom` must emit coords in the same document order as a
+    /// flatten of `decode_one_geom` for every geometry kind.
+    #[test]
+    fn visitor_coords_match_decode_one_geom(features in features_strategy()) {
+        let bytes = encode_geometry_payload(&features).unwrap();
+        let iter = iter_feature_index(&bytes).unwrap();
+        let coord_area = iter.coord_area();
+        for entry in iter {
+            let entry = entry.unwrap();
+            let decoded = decode_one_geom(coord_area, &entry).unwrap();
+            let mut visitor = PointCollector::default();
+            visit_one_geom(coord_area, &entry, &mut visitor).unwrap();
+            let want = flatten_geom(&decoded);
+            prop_assert_eq!(want.len(), visitor.coords.len());
+            for (a, b) in want.iter().zip(&visitor.coords) {
+                prop_assert!(coord_close(*a, *b));
+            }
+        }
+    }
+}
+
+#[derive(Default)]
+struct PointCollector {
+    coords: Vec<Coord>,
+}
+
+impl GeomVisitor for PointCollector {
+    fn point(&mut self, x: f64, y: f64) {
+        self.coords.push((x, y));
+    }
+    fn begin_ring(&mut self) {}
+    fn end_ring(&mut self) {}
+    fn begin_part(&mut self) {}
+    fn end_part(&mut self) {}
+}
+
+fn flatten_geom(g: &GeomKind) -> Vec<Coord> {
+    match g {
+        GeomKind::Point(p) => vec![*p],
+        GeomKind::LineString(verts) => verts.clone(),
+        GeomKind::Polygon(rings) => rings.iter().flatten().copied().collect(),
+        GeomKind::MultiPoint(pts) => pts.clone(),
+        GeomKind::MultiLineString(parts) => parts.iter().flatten().copied().collect(),
+        GeomKind::MultiPolygon(parts) => parts.iter().flatten().flatten().copied().collect(),
+    }
+}
+
+#[derive(Debug, Default, PartialEq)]
+struct EventTrace {
+    events: Vec<Event>,
+}
+
+#[derive(Debug, PartialEq)]
+enum Event {
+    Point,
+    BeginRing,
+    EndRing,
+    BeginPart,
+    EndPart,
+}
+
+impl GeomVisitor for EventTrace {
+    fn point(&mut self, _x: f64, _y: f64) {
+        self.events.push(Event::Point);
+    }
+    fn begin_ring(&mut self) {
+        self.events.push(Event::BeginRing);
+    }
+    fn end_ring(&mut self) {
+        self.events.push(Event::EndRing);
+    }
+    fn begin_part(&mut self) {
+        self.events.push(Event::BeginPart);
+    }
+    fn end_part(&mut self) {
+        self.events.push(Event::EndPart);
+    }
+}
+
+#[test]
+fn visitor_event_shape_per_geom_kind() {
+    use Event::*;
+    let cases: &[(GeomKind, &[Event])] = &[
+        (GeomKind::Point((1.0, 2.0)), &[BeginPart, Point, EndPart]),
+        (
+            GeomKind::LineString(vec![(0.0, 0.0), (1.0, 1.0)]),
+            &[BeginPart, BeginRing, Point, Point, EndRing, EndPart],
+        ),
+        (
+            GeomKind::Polygon(vec![vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 0.0)]]),
+            &[BeginPart, BeginRing, Point, Point, Point, Point, EndRing, EndPart],
+        ),
+        (
+            GeomKind::MultiPoint(vec![(0.0, 0.0), (1.0, 1.0)]),
+            &[BeginPart, Point, EndPart, BeginPart, Point, EndPart],
+        ),
+    ];
+
+    for (g, want) in cases {
+        let features = vec![FeatureGeom {
+            id: 1,
+            bbox: [0.0; 4],
+            geom: g.clone(),
+        }];
+        let bytes = encode_geometry_payload(&features).unwrap();
+        let iter = iter_feature_index(&bytes).unwrap();
+        let coord_area = iter.coord_area();
+        let entry = iter.into_iter().next().unwrap().unwrap();
+        let mut trace = EventTrace::default();
+        visit_one_geom(coord_area, &entry, &mut trace).unwrap();
+        assert_eq!(&trace.events, want, "event mismatch for {g:?}");
     }
 }
 
