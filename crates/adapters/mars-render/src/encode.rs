@@ -45,7 +45,11 @@ pub(crate) fn encode_jpeg(pm: &Pixmap, quality: u8) -> Result<Vec<u8>, EncodeErr
         scratch.reserve(pixels * 3);
         flatten_premul_over_white(&pm.premultiplied_rgba, &mut scratch);
         let enc = JpegEnc::new(&mut out, quality);
-        enc.encode(&scratch, pm.width as u16, pm.height as u16, JpegColorType::Rgb)
+        let width = u16::try_from(pm.width)
+            .map_err(|_| EncodeError::Backend(format!("jpeg width {} exceeds u16::MAX", pm.width)))?;
+        let height = u16::try_from(pm.height)
+            .map_err(|_| EncodeError::Backend(format!("jpeg height {} exceeds u16::MAX", pm.height)))?;
+        enc.encode(&scratch, width, height, JpegColorType::Rgb)
             .map_err(|e| EncodeError::Backend(format!("jpeg encode: {e}")))
     })?;
     Ok(out)
