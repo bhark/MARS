@@ -2,9 +2,10 @@
 
 use bytes::Bytes;
 use deadpool_postgres::Pool;
+use futures_util::future::try_join_all;
 use mars_expr::Expr;
 use mars_source::{AttrValue, RowBytes, SourceBinding, SourceError};
-use mars_types::Bbox;
+use mars_types::{Bbox, Cell};
 use tokio_postgres::types::{ToSql, Type};
 
 use crate::SqlParam;
@@ -41,6 +42,65 @@ pub(crate) async fn fetch_cell(
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
         out.push(decode_row(&row, binding)?);
+    }
+    Ok(out)
+}
+
+/// Pipelined batch variant: fetch every `(cell, bbox)` pair through one pool
+/// connection and one prepared statement, fanning out the executes
+/// concurrently. tokio-postgres queues them on the same wire so the server
+/// runs them serialised but RTT amortises across the batch.
+pub(crate) async fn fetch_cells(
+    pool: &Pool,
+    binding: &SourceBinding,
+    cells: &[(Cell, Bbox)],
+    filter: Option<&Expr>,
+) -> Result<Vec<(Cell, Vec<RowBytes>)>, SourceError> {
+    if cells.is_empty() {
+        return Ok(Vec::new());
+    }
+    let srid = parse_srid(binding.crs.as_str())?;
+
+    // SQL shape is identical across cells (placeholders, not literals); build
+    // once. Per-cell params still vary by bbox.
+    let mut all_params: Vec<Vec<SqlParam>> = Vec::with_capacity(cells.len());
+    let (sql, first_params) = build_query(binding, cells[0].1, srid, filter)?;
+    all_params.push(first_params);
+    for (_, bbox) in &cells[1..] {
+        let (_, params) = build_query(binding, *bbox, srid, filter)?;
+        all_params.push(params);
+    }
+
+    let client = pool
+        .get()
+        .await
+        .map_err(|e| SourceError::Backend(format!("pool: {e}")))?;
+    let stmt = client
+        .prepare_cached(&sql)
+        .await
+        .map_err(|e| SourceError::Backend(format!("prepare: {e}")))?;
+
+    // materialise per-cell `&dyn ToSql` slices first so each future holds a
+    // borrow into a stable `Vec<&dyn ToSql>` for its lifetime.
+    let pg_params: Vec<Vec<&(dyn ToSql + Sync)>> = all_params
+        .iter()
+        .map(|p| p.iter().map(|x| x as &(dyn ToSql + Sync)).collect())
+        .collect();
+
+    let futs = pg_params
+        .iter()
+        .map(|params| client.query(&stmt, params.as_slice()));
+    let results = try_join_all(futs)
+        .await
+        .map_err(|e| SourceError::Backend(format!("query: {e}")))?;
+
+    let mut out = Vec::with_capacity(cells.len());
+    for ((cell, _), rows) in cells.iter().zip(results) {
+        let mut decoded = Vec::with_capacity(rows.len());
+        for row in rows {
+            decoded.push(decode_row(&row, binding)?);
+        }
+        out.push((cell.clone(), decoded));
     }
     Ok(out)
 }

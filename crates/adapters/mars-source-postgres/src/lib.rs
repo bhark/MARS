@@ -206,6 +206,15 @@ impl Source for PgSource {
     ) -> Result<Vec<RowBytes>, SourceError> {
         fetch::fetch_cell(&self.pool, binding, bbox, filter).await
     }
+
+    async fn fetch_cells(
+        &self,
+        binding: &SourceBinding,
+        cells: &[(Cell, Bbox)],
+        filter: Option<&Expr>,
+    ) -> Result<Vec<(Cell, Vec<RowBytes>)>, SourceError> {
+        fetch::fetch_cells(&self.pool, binding, cells, filter).await
+    }
 }
 
 #[async_trait]
@@ -321,6 +330,35 @@ mod e2e_tests {
             assert_eq!(row.attributes.len(), 2);
             assert_eq!(row.attributes[0].0, "name");
             assert_eq!(row.attributes[1].0, "kind");
+        }
+
+        // pipelined fetch_cells over three disjoint bboxes; row sets must match
+        // serial fetch_cell calls and routing must pair each output with its
+        // input cell.
+        let band = ScaleBand::new("hi");
+        let mk_cell = |x| Cell {
+            band: band.clone(),
+            x,
+            y: 0,
+        };
+        let cells = vec![
+            (mk_cell(0), Bbox::new(-1.0, -1.0, 15.0, 20.0)),
+            (mk_cell(1), Bbox::new(35.0, -1.0, 55.0, 20.0)),
+            (mk_cell(2), Bbox::new(75.0, -1.0, 95.0, 20.0)),
+        ];
+
+        let batched = src.fetch_cells(&binding, &cells, None).await.unwrap();
+        assert_eq!(batched.len(), 3);
+
+        for ((in_cell, bbox), (out_cell, rows)) in cells.iter().zip(&batched) {
+            assert_eq!(in_cell, out_cell);
+            let serial = src.fetch_cell(&binding, in_cell, *bbox, None).await.unwrap();
+            assert_eq!(rows.len(), serial.len());
+            let mut got: Vec<u64> = rows.iter().map(|r| r.feature_id).collect();
+            let mut want: Vec<u64> = serial.iter().map(|r| r.feature_id).collect();
+            got.sort_unstable();
+            want.sort_unstable();
+            assert_eq!(got, want);
         }
     }
 }

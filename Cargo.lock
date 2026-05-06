@@ -2237,6 +2237,7 @@ dependencies = [
  "bytes",
  "deadpool-postgres",
  "futures-core",
+ "futures-util",
  "mars-expr",
  "mars-grid",
  "mars-source",

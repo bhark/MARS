@@ -27,6 +27,7 @@ mars-expr   = { workspace = true }
 mars-grid   = { workspace = true }
 async-trait = { workspace = true }
 futures-core = { workspace = true }
+futures-util = { workspace = true }
 bytes       = { workspace = true }
 thiserror   = { workspace = true }
 tracing     = { workspace = true }
