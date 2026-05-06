@@ -48,13 +48,34 @@ pub struct ServerConfig {
     pub listen: SocketAddr,
 }
 
+/// Capabilities document with a precomputed strong ETag.
+#[derive(Debug)]
+pub struct CapabilitiesDoc {
+    pub body: String,
+    pub etag: String,
+}
+
+impl CapabilitiesDoc {
+    #[must_use]
+    pub fn new(body: String) -> Self {
+        let etag = etag_for(body.as_bytes());
+        Self { body, etag }
+    }
+}
+
+fn etag_for(bytes: &[u8]) -> String {
+    let hash = blake3::hash(bytes);
+    // strong validator, hex-truncated to 16 chars (64 bits) - collision-safe for caps.
+    format!("\"{}\"", &hash.to_hex().as_str()[..16])
+}
+
 /// Atomically swappable capabilities document. Cheap clone, lock-free reads.
-pub type CapabilitiesHandle = Arc<ArcSwap<String>>;
+pub type CapabilitiesHandle = Arc<ArcSwap<CapabilitiesDoc>>;
 
 /// Helper to build a fresh [`CapabilitiesHandle`] seeded with `body`.
 #[must_use]
 pub fn capabilities_handle(body: String) -> CapabilitiesHandle {
-    Arc::new(ArcSwap::from(Arc::new(body)))
+    Arc::new(ArcSwap::from(Arc::new(CapabilitiesDoc::new(body))))
 }
 
 /// Shared per-request state.
@@ -162,10 +183,22 @@ async fn handle_wms(State(state): State<AppState>, headers: HeaderMap, raw_query
 
         match parsed {
             WmsRequest::GetCapabilities => {
+                let doc = state.capabilities.load_full();
+                let etag_value = match HeaderValue::from_str(&doc.etag) {
+                    Ok(v) => v,
+                    Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "bad etag").into_response(),
+                };
+                if let Some(req_etag) = headers.get(header::IF_NONE_MATCH)
+                    && req_etag == etag_value
+                {
+                    let mut h = HeaderMap::new();
+                    h.insert(header::ETAG, etag_value);
+                    return (StatusCode::NOT_MODIFIED, h).into_response();
+                }
                 let mut h = HeaderMap::new();
                 h.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/xml"));
-                let body = state.capabilities.load_full();
-                (StatusCode::OK, h, body.as_str().to_owned()).into_response()
+                h.insert(header::ETAG, etag_value);
+                (StatusCode::OK, h, doc.body.clone()).into_response()
             }
             WmsRequest::GetMap(plan) => {
                 let mime = plan.format.mime();
@@ -478,6 +511,36 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let ct = resp.headers().get(header::CONTENT_TYPE).cloned();
         assert_eq!(ct.unwrap(), "application/xml");
+        assert!(resp.headers().get(header::ETAG).is_some(), "etag header expected");
+    }
+
+    #[tokio::test]
+    async fn wms_capabilities_304_on_matching_etag() {
+        let app = empty_router();
+        let first = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/wms?service=WMS&version=1.3.0&request=GetCapabilities")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let etag = first.headers().get(header::ETAG).cloned().unwrap();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/wms?service=WMS&version=1.3.0&request=GetCapabilities")
+                    .header(header::IF_NONE_MATCH, etag.clone())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(resp.headers().get(header::ETAG).cloned().unwrap(), etag);
+        assert!(body_str(resp).await.is_empty());
     }
 
     #[tokio::test]
@@ -493,7 +556,7 @@ mod tests {
             max_bbox_coord: 1e9,
         };
         let app = router(empty_runtime(&metrics), caps.clone(), cfg, metrics);
-        caps.store(Arc::new("<caps>v2</caps>".to_owned()));
+        caps.store(Arc::new(CapabilitiesDoc::new("<caps>v2</caps>".to_owned())));
         let resp = app
             .oneshot(
                 Request::builder()

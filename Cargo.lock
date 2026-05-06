@@ -1995,6 +1995,7 @@ version = "0.0.1"
 dependencies = [
  "arc-swap",
  "axum",
+ "blake3",
  "mars-grid",
  "mars-observability",
  "mars-proj",

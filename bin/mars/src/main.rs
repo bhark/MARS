@@ -226,7 +226,7 @@ async fn rebuild_capabilities_loop(
             }
         };
         match mars_wms::capabilities_xml(&cfg, &manifest) {
-            Ok(body) => handle.store(Arc::new(body)),
+            Ok(body) => handle.store(Arc::new(mars_http::CapabilitiesDoc::new(body))),
             Err(e) => tracing::error!(error = %e, "capabilities: rebuild failed"),
         }
     }
