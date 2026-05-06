@@ -9,7 +9,7 @@ pub mod key;
 mod plan;
 pub mod state;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -40,6 +40,18 @@ const DEFAULT_PIXEL_BUDGET: u32 = 128_000_000;
 /// hard limit on cells a single request may cover. prevents oom from
 /// pathological bbox / tiny cell size combinations.
 pub(crate) const MAX_CELLS_PER_REQUEST: usize = 1_000_000;
+
+/// owned key for source-artifact dedup within a single render. layer artifacts'
+/// `source_ref` carries owned strings so we can't borrow into the index without
+/// extra plumbing; the cost is two heap clones per task, which is dwarfed by
+/// the avoided artifact reopen.
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+struct SourceKey {
+    collection: String,
+    band: String,
+    x: i64,
+    y: i64,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
@@ -223,7 +235,7 @@ impl Runtime {
         // bottom-layer cell, producing non-deterministic output.
         let cache = self.deps.cache.clone();
         let store = self.deps.store.clone();
-        let fetched: Vec<(ArtifactReader, ArtifactReader)> = stream::iter(tasks.into_iter().map(|task| {
+        let layer_with_refs: Vec<(ArtifactReader, SourceKey)> = stream::iter(tasks.into_iter().map(|task| {
             let state = state.clone();
             let cache = cache.clone();
             let store = store.clone();
@@ -239,20 +251,13 @@ impl Runtime {
                         task.layer
                     )))
                 })?;
-                let source_cell = mars_types::Cell {
-                    band: mars_types::ScaleBand::new(source_ref.band.clone()),
+                let key = SourceKey {
+                    collection: source_ref.collection,
+                    band: source_ref.band,
                     x: source_ref.cell_x,
                     y: source_ref.cell_y,
                 };
-                let source_art = fetch::fetch_source(
-                    &state,
-                    cache.as_ref(),
-                    store.as_ref(),
-                    &source_ref.collection,
-                    &source_cell,
-                )
-                .await?;
-                Ok::<_, RuntimeError>(Some((source_art, layer_art)))
+                Ok::<_, RuntimeError>(Some((layer_art, key)))
             }
         }))
         .buffered(8)
@@ -261,6 +266,50 @@ impl Runtime {
         .into_iter()
         .flatten()
         .collect();
+
+        // dedupe source fetches: a single render often binds the same source
+        // cell from several layers; opening the artifact twice would re-parse
+        // the footer for no gain.
+        let mut unique_keys: Vec<SourceKey> = Vec::new();
+        let mut seen: HashSet<SourceKey> = HashSet::new();
+        for (_, k) in &layer_with_refs {
+            if seen.insert(k.clone()) {
+                unique_keys.push(k.clone());
+            }
+        }
+        let source_readers: Vec<(SourceKey, ArtifactReader)> = stream::iter(unique_keys.into_iter().map(|k| {
+            let state = state.clone();
+            let cache = cache.clone();
+            let store = store.clone();
+            async move {
+                let cell = mars_types::Cell {
+                    band: mars_types::ScaleBand::new(k.band.clone()),
+                    x: k.x,
+                    y: k.y,
+                };
+                let reader = fetch::fetch_source(&state, cache.as_ref(), store.as_ref(), &k.collection, &cell).await?;
+                Ok::<_, RuntimeError>((k, reader))
+            }
+        }))
+        .buffer_unordered(8)
+        .try_collect::<Vec<_>>()
+        .await?;
+        let source_by_key: HashMap<SourceKey, ArtifactReader> = source_readers.into_iter().collect();
+
+        let fetched: Vec<(ArtifactReader, ArtifactReader)> = layer_with_refs
+            .into_iter()
+            .map(|(layer_art, key)| {
+                source_by_key
+                    .get(&key)
+                    .cloned()
+                    .map(|source_art| (source_art, layer_art))
+                    .ok_or_else(|| {
+                        RuntimeError::Render(mars_render_port::RenderError::Backend(
+                            "internal: source artifact fetch table missing a key".into(),
+                        ))
+                    })
+            })
+            .collect::<Result<_, RuntimeError>>()?;
 
         let canvas = Canvas {
             width: plan.width,
