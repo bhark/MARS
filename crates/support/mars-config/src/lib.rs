@@ -88,19 +88,41 @@ pub fn load(path: impl AsRef<Path>) -> Result<Config, ConfigError> {
 pub fn validate(config: &Config, config_dir: &Path) -> Result<(), ConfigError> {
     let _ = config_dir;
 
-    // canonical CRS must be metric: the runtime derives scale denominators
-    // assuming `units-per-metre = 1` (see `mars-runtime::denom_from_plan`).
-    // refusing here means the runtime can trust the assumption.
-    if !is_metric_crs(config.source.native_crs.as_str()) {
+    if config.service.name.trim().is_empty() {
+        return Err(ConfigError::Invalid("service.name must not be empty".into()));
+    }
+    if config.service.name.contains(' ') {
         return Err(ConfigError::Invalid(format!(
-            "source.native_crs {:?} is not a recognised metric CRS; mars-runtime requires a metric canonical CRS \
-             (units-per-metre = 1). Use a projected, metre-based EPSG code (e.g. EPSG:25832, EPSG:3857).",
-            config.source.native_crs.as_str()
+            "service.name {:?} must not contain spaces",
+            config.service.name
         )));
     }
 
-    let band_names: std::collections::BTreeSet<&str> = config.scales.bands.iter().map(|b| b.name.as_str()).collect();
+    let crs = config.source.native_crs.as_str().trim();
+    if crs.is_empty() {
+        return Err(ConfigError::Invalid("source.native_crs must not be empty".into()));
+    }
+    if !is_metric_crs(crs) {
+        return Err(ConfigError::Invalid(format!(
+            "source.native_crs {:?} is not a recognised metric CRS; mars-runtime requires a metric canonical CRS \
+             (units-per-metre = 1). Use a projected, metre-based EPSG code (e.g. EPSG:25832, EPSG:3857).",
+            crs
+        )));
+    }
 
+    let mut band_names = std::collections::BTreeSet::new();
+    for band in &config.scales.bands {
+        if !band_names.insert(band.name.as_str()) {
+            return Err(ConfigError::Invalid(format!(
+                "duplicate band name {:?} in scales.bands",
+                band.name
+            )));
+        }
+    }
+
+    if config.cells.size_per_band.is_empty() {
+        return Err(ConfigError::Invalid("cells.size_per_band must not be empty".into()));
+    }
     for k in config.cells.size_per_band.keys() {
         if !band_names.contains(k.as_str()) {
             return Err(ConfigError::Invalid(format!(
@@ -109,7 +131,12 @@ pub fn validate(config: &Config, config_dir: &Path) -> Result<(), ConfigError> {
         }
     }
 
+    let mut layer_names = std::collections::BTreeSet::new();
     for layer in &config.layers {
+        if !layer_names.insert(layer.name.as_str()) {
+            return Err(ConfigError::Invalid(format!("duplicate layer name {:?}", layer.name)));
+        }
+
         for (i, binding) in layer.sources.iter().enumerate() {
             if let Some(band) = &binding.band
                 && !band_names.contains(band.as_str())
@@ -176,4 +203,141 @@ pub fn config_dir(path: &Path) -> PathBuf {
 fn is_metric_crs(code: &str) -> bool {
     let crs = mars_types::CrsCode::new(code.trim());
     mars_proj::is_projected(&crs).unwrap_or(false)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::*;
+    use crate::model::{Band, Cells, Layer, Scales, ServiceMeta, Source};
+    use mars_types::{Bbox, CrsCode};
+
+    fn minimal_config() -> Config {
+        use crate::model::{ArtifactCache, ArtifactStore, Interfaces, Observability, Render};
+        let mut size_per_band = BTreeMap::new();
+        size_per_band.insert("hi".into(), "1024m".into());
+        Config {
+            service: ServiceMeta {
+                name: "test".into(),
+                ..Default::default()
+            },
+            source: Source {
+                kind: "memory".into(),
+                dsn: "memory://".into(),
+                native_crs: CrsCode::new("EPSG:25832"),
+                change_feed: None,
+            },
+            artifacts: Artifacts {
+                store: ArtifactStore {
+                    kind: "fs".into(),
+                    endpoint: None,
+                    bucket: None,
+                    prefix: None,
+                    path: Some("/tmp".into()),
+                },
+                cache: ArtifactCache {
+                    path: "/tmp".into(),
+                    max_size: "1GiB".into(),
+                    eviction: "lru".into(),
+                },
+            },
+            scales: Scales {
+                bands: vec![Band {
+                    name: "hi".into(),
+                    max_denom: 25000,
+                }],
+            },
+            cells: Cells {
+                grid: "regular".into(),
+                origin: [0.0, 0.0],
+                size_per_band,
+                extent: Some(Bbox::new(0.0, 0.0, 1_000.0, 1_000.0)),
+            },
+            interfaces: Interfaces::default(),
+            tile_matrix_sets: Default::default(),
+            reprojection: Default::default(),
+            styles: Default::default(),
+            layers: vec![],
+            observability: Observability::default(),
+            render: Render::default(),
+        }
+    }
+
+    #[test]
+    fn rejects_empty_service_name() {
+        let mut cfg = minimal_config();
+        cfg.service.name = String::new();
+        assert!(matches!(
+            validate(&cfg, Path::new(".")),
+            Err(ConfigError::Invalid(ref s)) if s.contains("service.name")
+        ));
+    }
+
+    #[test]
+    fn rejects_service_name_with_spaces() {
+        let mut cfg = minimal_config();
+        cfg.service.name = "foo bar".into();
+        assert!(matches!(
+            validate(&cfg, Path::new(".")),
+            Err(ConfigError::Invalid(ref s)) if s.contains("spaces")
+        ));
+    }
+
+    #[test]
+    fn rejects_empty_native_crs() {
+        let mut cfg = minimal_config();
+        cfg.source.native_crs = CrsCode::new("");
+        assert!(matches!(
+            validate(&cfg, Path::new(".")),
+            Err(ConfigError::Invalid(ref s)) if s.contains("native_crs")
+        ));
+    }
+
+    #[test]
+    fn rejects_duplicate_band_names() {
+        let mut cfg = minimal_config();
+        cfg.scales.bands.push(Band {
+            name: "hi".into(),
+            max_denom: 5000,
+        });
+        assert!(matches!(
+            validate(&cfg, Path::new(".")),
+            Err(ConfigError::Invalid(ref s)) if s.contains("duplicate band")
+        ));
+    }
+
+    #[test]
+    fn rejects_empty_size_per_band() {
+        let mut cfg = minimal_config();
+        cfg.cells.size_per_band.clear();
+        assert!(matches!(
+            validate(&cfg, Path::new(".")),
+            Err(ConfigError::Invalid(ref s)) if s.contains("size_per_band")
+        ));
+    }
+
+    #[test]
+    fn rejects_duplicate_layer_names() {
+        let mut cfg = minimal_config();
+        let layer = Layer {
+            name: mars_types::LayerId::new("roads"),
+            title: String::new(),
+            abstract_: String::new(),
+            kind: "line".into(),
+            scale: None,
+            group: None,
+            enable_get_feature_info: false,
+            bbox: None,
+            sources: vec![],
+            classes: vec![],
+            label: None,
+        };
+        cfg.layers = vec![layer.clone(), layer];
+        assert!(matches!(
+            validate(&cfg, Path::new(".")),
+            Err(ConfigError::Invalid(ref s)) if s.contains("duplicate layer")
+        ));
+    }
 }
