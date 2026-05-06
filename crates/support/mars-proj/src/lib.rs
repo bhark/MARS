@@ -128,6 +128,27 @@ struct TransformerInner {
 // no Send/Sync: the inner *mut PJ is bound to its construction-time
 // thread_local context. v1 keeps Transformer single-thread-bound; cross-thread
 // reuse would require lifting to a per-thread pool.
+//
+// compile-time guard: `*mut PJ` is `!Send + !Sync` automatically, but a future
+// derive or unsafe impl could relax this and segfault via the thread-local
+// PROJ_CTX. the trait disambiguation trick below errors with `multiple
+// applicable items in scope` if Transformer ever gains Send or Sync.
+const _: fn() = || {
+    struct Invalid;
+    trait AmbiguousIfSend<A> {
+        fn _check() {}
+    }
+    impl<T: ?Sized> AmbiguousIfSend<()> for T {}
+    impl<T: ?Sized + Send> AmbiguousIfSend<Invalid> for T {}
+    <Transformer as AmbiguousIfSend<_>>::_check();
+
+    trait AmbiguousIfSync<A> {
+        fn _check() {}
+    }
+    impl<T: ?Sized> AmbiguousIfSync<()> for T {}
+    impl<T: ?Sized + Sync> AmbiguousIfSync<Invalid> for T {}
+    <Transformer as AmbiguousIfSync<_>>::_check();
+};
 
 impl Drop for TransformerInner {
     fn drop(&mut self) {
