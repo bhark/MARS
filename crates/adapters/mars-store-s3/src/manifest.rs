@@ -27,7 +27,7 @@ use mars_types::{MANIFEST_FORMAT_VERSION, Manifest};
 use object_store::path::Path as OsPath;
 use object_store::{ObjectStore as OsStore, ObjectStoreExt, PutMode, PutOptions, UpdateVersion};
 
-use crate::store::{S3Store, join_prefix, retry_transient};
+use crate::store::{S3Store, join_prefix, map_backend_error, retry_transient};
 
 const MANIFEST_DIR: &str = "manifests";
 const CURRENT_FILE: &str = "manifests/current";
@@ -170,7 +170,7 @@ impl ManifestStore for S3Publisher {
                     "s3 backend does not support conditional create; set allow_non_atomic_publish to override".into(),
                 ));
             }
-            Err(e) => return Err(StoreError::Backend(format!("s3 put manifest body: {e}"))),
+            Err(e) => return Err(map_backend_error("s3 put manifest body", e)),
         }
 
         let pointer_body = Bytes::from(format!("v{n}"));
@@ -206,9 +206,9 @@ impl ManifestStore for S3Publisher {
                 }
             }
             Err(object_store::Error::Precondition { .. } | object_store::Error::AlreadyExists { .. }) => Err(
-                StoreError::Backend("manifest pointer changed concurrently; retry publish".into()),
+                StoreError::Transient("manifest pointer changed concurrently; retry publish".into()),
             ),
-            Err(e) => Err(StoreError::Backend(format!("s3 put current: {e}"))),
+            Err(e) => Err(map_backend_error("s3 put current", e)),
         }
     }
 

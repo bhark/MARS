@@ -5,13 +5,13 @@
 #![forbid(unsafe_code)]
 
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use futures_util::stream::{self, StreamExt};
 use mars_config::Config;
 use mars_observability::Metrics;
 use mars_source::{ChangeFeed, LeaderLock, LeaderLockGuard, Source};
-use mars_store::{ManifestStore, ObjectStore};
+use mars_store::{ManifestStore, ObjectStore, StoreError};
 use mars_types::Manifest;
 use tokio_util::sync::CancellationToken;
 
@@ -41,6 +41,15 @@ pub fn leader_lock_key(name: &str) -> i64 {
 /// The connection pool size on the source side becomes the real ceiling, but
 /// 16 is a reasonable starting point for typical postgres pools.
 const DEFAULT_SNAPSHOT_CONCURRENCY: usize = 16;
+
+/// Capped exponential backoff schedule for retrying a transient publish.
+/// On exhaustion the underlying error propagates so the supervisor restarts.
+const PUBLISH_RETRY_DELAYS: &[Duration] = &[
+    Duration::from_millis(100),
+    Duration::from_millis(500),
+    Duration::from_secs(2),
+    Duration::from_secs(8),
+];
 
 #[derive(Debug, thiserror::Error)]
 pub enum CompilerError {
@@ -179,7 +188,7 @@ impl Compiler {
                 &dirty,
                 source_version,
             );
-            self.deps.manifest.publish(&merged).await?;
+            publish_with_retry(self.deps.manifest.as_ref(), &merged, &self.deps.metrics, &shutdown).await?;
             sub.acknowledge(merged.source_version.as_deref()).await?;
             tracing::info!(
                 version = merged.version,
@@ -219,7 +228,7 @@ impl Compiler {
         self.deps.metrics.set_compiler_window_lag(std::time::Duration::ZERO);
 
         let rebuild_start = Instant::now();
-        let output = self.execute_plan(plan, shutdown).await?;
+        let output = self.execute_plan(plan, shutdown.clone()).await?;
 
         let manifest = Manifest::new(
             1,
@@ -229,7 +238,7 @@ impl Compiler {
             None,
             output.empty_layer_cells,
         );
-        let v = self.deps.manifest.publish(&manifest).await?;
+        let v = publish_with_retry(self.deps.manifest.as_ref(), &manifest, &self.deps.metrics, &shutdown).await?;
         self.deps
             .metrics
             .observe_compiler_rebuild_duration(rebuild_start.elapsed());
@@ -275,5 +284,42 @@ impl Compiler {
             output.extend(result?);
         }
         Ok(output)
+    }
+}
+
+/// Publish a manifest, retrying on transient `StoreError::Transient` with the
+/// schedule in [`PUBLISH_RETRY_DELAYS`]. Terminal errors propagate immediately.
+/// Honours `shutdown`: a cancellation during a backoff sleep aborts the retry
+/// loop and returns the most recent transient error.
+async fn publish_with_retry(
+    manifest_store: &dyn ManifestStore,
+    manifest: &Manifest,
+    metrics: &Metrics,
+    shutdown: &CancellationToken,
+) -> Result<u64, CompilerError> {
+    let mut delays = PUBLISH_RETRY_DELAYS.iter();
+    loop {
+        match manifest_store.publish(manifest).await {
+            Ok(v) => return Ok(v),
+            Err(StoreError::Transient(reason)) => match delays.next() {
+                Some(d) => {
+                    metrics.inc_compiler_publish_retries();
+                    tracing::warn!(
+                        version = manifest.version,
+                        delay_ms = d.as_millis() as u64,
+                        reason,
+                        "compiler: transient publish failure; retrying"
+                    );
+                    tokio::select! {
+                        _ = shutdown.cancelled() => {
+                            return Err(CompilerError::Store(StoreError::Transient(reason)));
+                        }
+                        _ = tokio::time::sleep(*d) => {}
+                    }
+                }
+                None => return Err(CompilerError::Store(StoreError::Transient(reason))),
+            },
+            Err(e) => return Err(CompilerError::Store(e)),
+        }
     }
 }

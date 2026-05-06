@@ -188,6 +188,7 @@ async fn run_runtime(cfg: Arc<Config>) -> Result<()> {
         manifests.clone(),
         cfg.clone(),
         caps_handle.clone(),
+        metrics.clone(),
     ));
 
     mars_http::serve(
@@ -209,10 +210,12 @@ async fn rebuild_capabilities_loop(
     manifests: Arc<dyn ManifestStore>,
     cfg: Arc<Config>,
     handle: mars_http::CapabilitiesHandle,
+    metrics: mars_observability::Metrics,
 ) {
     let mut stream = match manifests.watch().await {
         Ok(s) => s,
         Err(e) => {
+            metrics.inc_capabilities_rebuild_failures();
             tracing::error!(error = %e, "capabilities: manifest watch unavailable");
             return;
         }
@@ -221,13 +224,17 @@ async fn rebuild_capabilities_loop(
         let manifest = match next {
             Ok(m) => m,
             Err(e) => {
+                metrics.inc_capabilities_rebuild_failures();
                 tracing::warn!(error = %e, "capabilities: ignoring invalid snapshot");
                 continue;
             }
         };
         match mars_wms::capabilities_xml(&cfg, &manifest) {
             Ok(body) => handle.store(Arc::new(mars_http::CapabilitiesDoc::new(body))),
-            Err(e) => tracing::error!(error = %e, "capabilities: rebuild failed"),
+            Err(e) => {
+                metrics.inc_capabilities_rebuild_failures();
+                tracing::error!(error = %e, "capabilities: rebuild failed");
+            }
         }
     }
 }

@@ -26,11 +26,21 @@ const RETRY_DELAYS: &[Duration] = &[
 /// (NotFound, Precondition, AlreadyExists, NotSupported, PermissionDenied,
 /// Unauthenticated, UnknownConfigurationKey, InvalidPath, NotImplemented,
 /// NotModified) is terminal and must not be retried.
-fn is_transient(e: &object_store::Error) -> bool {
+pub(crate) fn is_transient(e: &object_store::Error) -> bool {
     matches!(
         e,
         object_store::Error::Generic { .. } | object_store::Error::JoinError { .. }
     )
+}
+
+/// Map an `object_store::Error` to a [`StoreError`], routing transient
+/// failures to the dedicated `Transient` variant so callers can retry.
+pub(crate) fn map_backend_error(prefix: &str, e: object_store::Error) -> StoreError {
+    if is_transient(&e) {
+        StoreError::Transient(format!("{prefix}: {e}"))
+    } else {
+        StoreError::Backend(format!("{prefix}: {e}"))
+    }
 }
 
 /// Run `f` with capped exponential backoff. Only [`is_transient`] failures are
@@ -134,7 +144,7 @@ impl ObjectStore for S3Store {
         self.backend
             .put(&path, body.into())
             .await
-            .map_err(|e| StoreError::Backend(format!("s3 put: {e}")))?;
+            .map_err(|e| map_backend_error("s3 put", e))?;
         Ok(hash)
     }
 
@@ -181,7 +191,7 @@ impl ObjectStore for S3Store {
 fn map_get_error(e: object_store::Error, key: &ArtifactKey) -> StoreError {
     match e {
         object_store::Error::NotFound { .. } => StoreError::NotFound(key.clone()),
-        other => StoreError::Backend(format!("s3 get: {other}")),
+        other => map_backend_error("s3 get", other),
     }
 }
 

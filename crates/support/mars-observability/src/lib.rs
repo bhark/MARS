@@ -48,6 +48,8 @@ pub mod metrics {
     pub const COMPILER_DIRTY_CELLS: &str = "mars_compiler_dirty_cells_total";
     pub const COMPILER_REBUILD_DURATION: &str = "mars_compiler_rebuild_duration_seconds";
     pub const COMPILER_WINDOW_LAG: &str = "mars_compiler_window_lag_seconds";
+    pub const COMPILER_PUBLISH_RETRIES: &str = "mars_compiler_publish_retries_total";
+    pub const CAPABILITIES_REBUILD_FAILURES: &str = "mars_capabilities_rebuild_failures_total";
     pub const MANIFEST_VERSION: &str = "mars_manifest_version";
     pub const MANIFEST_REJECT_TOTAL: &str = "mars_manifest_reject_total";
     pub const ARTIFACT_VERSION_IN_USE: &str = "mars_artifact_version_in_use";
@@ -102,6 +104,8 @@ struct MetricsInner {
     compiler_dirty_cells: IntCounter,
     compiler_rebuild_duration: Histogram,
     compiler_window_lag: Gauge,
+    compiler_publish_retries: IntCounter,
+    capabilities_rebuild_failures: IntCounter,
 }
 
 impl std::fmt::Debug for Metrics {
@@ -153,6 +157,14 @@ impl Metrics {
             metrics::COMPILER_WINDOW_LAG,
             "compiler change feed window lag in seconds",
         )?;
+        let compiler_publish_retries = IntCounter::new(
+            metrics::COMPILER_PUBLISH_RETRIES,
+            "total compiler publish retries on transient store errors",
+        )?;
+        let capabilities_rebuild_failures = IntCounter::new(
+            metrics::CAPABILITIES_REBUILD_FAILURES,
+            "total failures rebuilding the cached WMS capabilities document",
+        )?;
 
         registry.register(Box::new(request_total.clone()))?;
         registry.register(Box::new(request_duration.clone()))?;
@@ -162,6 +174,8 @@ impl Metrics {
         registry.register(Box::new(compiler_dirty_cells.clone()))?;
         registry.register(Box::new(compiler_rebuild_duration.clone()))?;
         registry.register(Box::new(compiler_window_lag.clone()))?;
+        registry.register(Box::new(compiler_publish_retries.clone()))?;
+        registry.register(Box::new(capabilities_rebuild_failures.clone()))?;
 
         Ok(Self {
             inner: Arc::new(MetricsInner {
@@ -174,6 +188,8 @@ impl Metrics {
                 compiler_dirty_cells,
                 compiler_rebuild_duration,
                 compiler_window_lag,
+                compiler_publish_retries,
+                capabilities_rebuild_failures,
             }),
         })
     }
@@ -223,6 +239,16 @@ impl Metrics {
     /// Set the compiler change-feed window lag gauge.
     pub fn set_compiler_window_lag(&self, duration: Duration) {
         self.inner.compiler_window_lag.set(duration.as_secs_f64());
+    }
+
+    /// Increment the compiler publish-retry counter.
+    pub fn inc_compiler_publish_retries(&self) {
+        self.inner.compiler_publish_retries.inc();
+    }
+
+    /// Increment the capabilities rebuild failure counter.
+    pub fn inc_capabilities_rebuild_failures(&self) {
+        self.inner.capabilities_rebuild_failures.inc();
     }
 
     /// Encode the current registry as Prometheus text exposition format.

@@ -31,6 +31,11 @@ pub enum StoreError {
     /// Backend / transport error.
     #[error("backend error: {0}")]
     Backend(String),
+    /// Transient backend error (network blip, throttling). Callers may retry
+    /// after backoff. Adapters opt in by mapping known-retriable errors here
+    /// instead of [`StoreError::Backend`].
+    #[error("transient backend error: {0}")]
+    Transient(String),
     /// Content hash mismatch on read (corruption or wrong version pointer).
     #[error("content hash mismatch for {key}")]
     HashMismatch {
