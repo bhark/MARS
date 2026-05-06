@@ -122,12 +122,9 @@ async fn observe_request(State(state): State<AppState>, req: Request, next: Next
     let interface = interface_label(req.uri().path());
     let start = Instant::now();
     let resp = next.run(req).await;
-    let status = resp
-        .extensions()
-        .get::<OriginalStatus>()
-        .map(|s| s.0.as_u16())
-        .unwrap_or_else(|| resp.status().as_u16());
-    state.metrics.observe_request(interface, status, start.elapsed());
+    state
+        .metrics
+        .observe_request(interface, resp.status().as_u16(), start.elapsed());
     resp
 }
 
@@ -222,42 +219,36 @@ fn request_id(state: &AppState, headers: &HeaderMap) -> String {
     format!("req-{n}")
 }
 
-#[derive(Clone, Copy, Debug)]
-struct OriginalStatus(StatusCode);
-
 struct WmsException {
-    semantic_status: StatusCode,
+    status: StatusCode,
     code: Option<&'static str>,
     message: String,
 }
 
 fn wms_exception_response(exc: WmsException) -> Response {
     let xml = mars_wms::service_exception_report(exc.code, &exc.message);
-    let mut resp = (StatusCode::OK, xml).into_response();
+    let mut resp = (exc.status, xml).into_response();
     resp.headers_mut().insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static("text/xml; charset=utf-8"),
     );
-    if exc.semantic_status != StatusCode::OK {
-        resp.extensions_mut().insert(OriginalStatus(exc.semantic_status));
-    }
     resp
 }
 
 fn wms_error_response(e: WmsError) -> Response {
     let exc = match e {
         WmsError::MissingParam(name) => WmsException {
-            semantic_status: StatusCode::BAD_REQUEST,
+            status: StatusCode::BAD_REQUEST,
             code: Some("MissingParameterValue"),
             message: format!("Missing required parameter: {name}"),
         },
         WmsError::InvalidParam { name, reason } => WmsException {
-            semantic_status: StatusCode::BAD_REQUEST,
+            status: StatusCode::BAD_REQUEST,
             code: Some("InvalidParameterValue"),
             message: format!("Invalid parameter '{name}': {reason}"),
         },
         WmsError::NotImplemented { what } => WmsException {
-            semantic_status: StatusCode::NOT_IMPLEMENTED,
+            status: StatusCode::NOT_IMPLEMENTED,
             code: Some("OperationNotSupported"),
             message: format!("Operation not supported: {what}"),
         },
@@ -285,51 +276,51 @@ fn runtime_error_response(e: RuntimeError, plan: &RenderPlan) -> Response {
 fn map_runtime_error(e: &RuntimeError) -> WmsException {
     match e {
         RuntimeError::NotReady => WmsException {
-            semantic_status: StatusCode::SERVICE_UNAVAILABLE,
+            status: StatusCode::SERVICE_UNAVAILABLE,
             code: None,
             message: "Service temporarily unavailable".into(),
         },
         RuntimeError::Proj(proj_err) => match proj_err {
             mars_proj::ProjError::UnknownCrs(name) => WmsException {
-                semantic_status: StatusCode::BAD_REQUEST,
+                status: StatusCode::BAD_REQUEST,
                 code: Some("InvalidCRS"),
                 message: format!("CRS '{name}' is not supported"),
             },
             _ => WmsException {
-                semantic_status: StatusCode::BAD_REQUEST,
+                status: StatusCode::BAD_REQUEST,
                 code: Some("InvalidCRS"),
                 message: "Coordinate transformation failed".into(),
             },
         },
         RuntimeError::NotImplemented { what } => WmsException {
-            semantic_status: StatusCode::NOT_IMPLEMENTED,
+            status: StatusCode::NOT_IMPLEMENTED,
             code: Some("OperationNotSupported"),
             message: format!("Operation not supported: {what}"),
         },
         RuntimeError::LayerNotDefined { layer } => WmsException {
-            semantic_status: StatusCode::BAD_REQUEST,
+            status: StatusCode::BAD_REQUEST,
             code: Some("LayerNotDefined"),
             message: format!("Layer '{layer}' is not defined"),
         },
         RuntimeError::Grid(grid_err) => match grid_err {
             GridError::TooManyCells { requested, limit } => WmsException {
-                semantic_status: StatusCode::BAD_REQUEST,
+                status: StatusCode::BAD_REQUEST,
                 code: Some("InvalidParameterValue"),
                 message: format!("Request covers too many cells ({requested} > {limit})"),
             },
             GridError::NoBandForScale(denom) => WmsException {
-                semantic_status: StatusCode::BAD_REQUEST,
+                status: StatusCode::BAD_REQUEST,
                 code: Some("InvalidParameterValue"),
                 message: format!("Scale {denom} is not supported"),
             },
             _ => WmsException {
-                semantic_status: StatusCode::INTERNAL_SERVER_ERROR,
+                status: StatusCode::INTERNAL_SERVER_ERROR,
                 code: None,
                 message: "Internal server error".into(),
             },
         },
         RuntimeError::PixelBudgetExceeded { requested, budget } => WmsException {
-            semantic_status: StatusCode::BAD_REQUEST,
+            status: StatusCode::BAD_REQUEST,
             code: Some("InvalidParameterValue"),
             message: format!("Request requires {requested} pixels but server budget is {budget}"),
         },
@@ -341,7 +332,7 @@ fn map_runtime_error(e: &RuntimeError) -> WmsException {
         | RuntimeError::Render(_)
         | RuntimeError::Encode(_)
         | RuntimeError::Artifact(_) => WmsException {
-            semantic_status: StatusCode::INTERNAL_SERVER_ERROR,
+            status: StatusCode::INTERNAL_SERVER_ERROR,
             code: None,
             message: "Internal server error".into(),
         },
@@ -545,7 +536,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         let ct = resp.headers().get(header::CONTENT_TYPE).cloned().unwrap();
         assert!(ct.to_str().unwrap().starts_with("text/xml"));
         let body = body_str(resp).await;
@@ -565,7 +556,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
         let ct = resp.headers().get(header::CONTENT_TYPE).cloned().unwrap();
         assert!(ct.to_str().unwrap().starts_with("text/xml"));
         let body = body_str(resp).await;
@@ -598,7 +589,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         let body = body_str(resp).await;
         assert!(body.contains(r#"code="LayerNotDefined""#));
         assert!(body.contains("Layer &apos;a&apos; is not defined"));
@@ -627,7 +618,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
         let body = body_str(resp).await;
         assert!(body.contains("ServiceExceptionReport"));
         assert!(body.contains("Internal server error"));
