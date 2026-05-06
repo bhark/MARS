@@ -5,6 +5,7 @@
 //! is preserved verbatim so a config can be round-tripped without loss.
 
 use std::collections::BTreeMap;
+use std::num::NonZeroUsize;
 use std::time::Duration;
 
 use mars_style::{LabelStyle, Style};
@@ -59,12 +60,18 @@ pub struct Compiler {
     /// publishing a manifest. Unit-suffixed duration (`5min`, `30s`).
     #[serde(default = "default_compiler_window")]
     pub window: String,
+    /// Maximum number of source cells the snapshot driver builds concurrently.
+    /// `None` resolves at runtime to `available_parallelism()` (capped by the
+    /// source-side connection pool). `NonZeroUsize` rejects 0 at deserialise.
+    #[serde(default)]
+    pub parallel_cells: Option<NonZeroUsize>,
 }
 
 impl Default for Compiler {
     fn default() -> Self {
         Self {
             window: default_compiler_window(),
+            parallel_cells: None,
         }
     }
 }

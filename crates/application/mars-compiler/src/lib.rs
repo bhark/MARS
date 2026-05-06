@@ -4,6 +4,7 @@
 
 #![forbid(unsafe_code)]
 
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -37,10 +38,10 @@ pub fn leader_lock_key(name: &str) -> i64 {
     h as i64
 }
 
-/// Default number of concurrent in-flight cell builds in the snapshot driver.
-/// The connection pool size on the source side becomes the real ceiling, but
-/// 16 is a reasonable starting point for typical postgres pools.
-const DEFAULT_SNAPSHOT_CONCURRENCY: usize = 16;
+/// Fallback concurrency when neither config nor `available_parallelism` yield
+/// a usable value. The connection pool size on the source side becomes the
+/// real ceiling, but 16 is a reasonable starting point for typical pg pools.
+const FALLBACK_SNAPSHOT_CONCURRENCY: usize = 16;
 
 /// Capped exponential backoff schedule for retrying a transient publish.
 /// On exhaustion the underlying error propagates so the supervisor restarts.
@@ -247,8 +248,8 @@ impl Compiler {
     }
 
     /// Drive one plan through the per-source-cell rebuild pipeline. Concurrency
-    /// is bounded by [`DEFAULT_SNAPSHOT_CONCURRENCY`]; callers handle metric
-    /// accounting and manifest publication.
+    /// comes from `compiler.parallel_cells` if set, else `available_parallelism`,
+    /// else [`FALLBACK_SNAPSHOT_CONCURRENCY`].
     async fn execute_plan(
         &self,
         plan: plan::Plan,
@@ -270,13 +271,14 @@ impl Compiler {
             })
             .collect();
 
+        let parallel = self.snapshot_concurrency();
         let mut stream = stream::iter(units)
             .map(|(task, deps)| {
                 let source = source.clone();
                 let store = store.clone();
                 async move { snapshot::run_source_cell(&task, &deps, &source, &store).await }
             })
-            .buffer_unordered(DEFAULT_SNAPSHOT_CONCURRENCY);
+            .buffer_unordered(parallel);
         while let Some(result) = stream.next().await {
             if shutdown.is_cancelled() {
                 return Ok(output);
@@ -284,6 +286,15 @@ impl Compiler {
             output.extend(result?);
         }
         Ok(output)
+    }
+
+    fn snapshot_concurrency(&self) -> usize {
+        self.config
+            .compiler
+            .parallel_cells
+            .map(NonZeroUsize::get)
+            .or_else(|| std::thread::available_parallelism().ok().map(NonZeroUsize::get))
+            .unwrap_or(FALLBACK_SNAPSHOT_CONCURRENCY)
     }
 }
 

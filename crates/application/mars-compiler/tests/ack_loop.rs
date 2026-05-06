@@ -184,6 +184,7 @@ fn make_config() -> Config {
         // 50ms keeps the run loop tight without pegging the test runner.
         compiler: CompilerCfg {
             window: "50ms".to_string(),
+            parallel_cells: None,
         },
     }
 }

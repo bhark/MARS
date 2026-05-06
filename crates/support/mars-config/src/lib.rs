@@ -218,6 +218,7 @@ fn is_metric_crs(code: &str) -> bool {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::num::NonZeroUsize;
 
     use super::*;
     use crate::model::{Band, Cells, Layer, Scales, ServiceMeta, Source};
@@ -404,6 +405,23 @@ mod tests {
             validate(&cfg, Path::new(".")),
             Err(ConfigError::Invalid(ref s)) if s.contains("more than once") && s.contains("default")
         ));
+    }
+
+    #[test]
+    fn compiler_parallel_cells_yaml_roundtrip() {
+        // unset → None
+        let yaml = "window: 5min\n";
+        let c: crate::model::Compiler = serde_yml::from_str(yaml).unwrap();
+        assert!(c.parallel_cells.is_none());
+
+        // explicit positive value → Some(N)
+        let yaml = "window: 5min\nparallel_cells: 8\n";
+        let c: crate::model::Compiler = serde_yml::from_str(yaml).unwrap();
+        assert_eq!(c.parallel_cells.map(NonZeroUsize::get), Some(8));
+
+        // zero must be rejected at parse (NonZeroUsize)
+        let yaml = "window: 5min\nparallel_cells: 0\n";
+        assert!(serde_yml::from_str::<crate::model::Compiler>(yaml).is_err());
     }
 
     #[test]
