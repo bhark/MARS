@@ -44,12 +44,8 @@ pub fn dirty_cells_for(batches: &[ChangeBatch], plan: &Plan) -> DirtySet {
                 ChangeEvent::Truncate { collection } => {
                     for s in &plan.sources {
                         if s.collection().as_str() == collection {
-                            out.cells.insert((
-                                collection.clone(),
-                                s.band.as_str().to_string(),
-                                s.cell.x,
-                                s.cell.y,
-                            ));
+                            out.cells
+                                .insert((collection.clone(), s.band.as_str().to_string(), s.cell.x, s.cell.y));
                         }
                     }
                 }
@@ -112,9 +108,12 @@ pub fn merge_manifest(
         .layer_artifacts
         .iter()
         .filter_map(|e| match e.key.parse() {
-            Ok(ParsedArtifactKey::Layer { layer, cell }) => {
-                Some((layer.as_str().to_string(), cell.band.as_str().to_string(), cell.x, cell.y))
-            }
+            Ok(ParsedArtifactKey::Layer { layer, cell }) => Some((
+                layer.as_str().to_string(),
+                cell.band.as_str().to_string(),
+                cell.x,
+                cell.y,
+            )),
             _ => None,
         })
         .chain(rebuild.empty_layer_cells.iter().map(|m| {
@@ -131,12 +130,11 @@ pub fn merge_manifest(
         .source_artifacts
         .iter()
         .filter(|e| match e.key.parse() {
-            Ok(ParsedArtifactKey::Source { collection, cell }) => !dirty.cells.contains(&(
-                collection,
-                cell.band.as_str().to_string(),
-                cell.x,
-                cell.y,
-            )),
+            Ok(ParsedArtifactKey::Source { collection, cell }) => {
+                !dirty
+                    .cells
+                    .contains(&(collection, cell.band.as_str().to_string(), cell.x, cell.y))
+            }
             _ => true,
         })
         .cloned()

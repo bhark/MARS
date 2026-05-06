@@ -22,16 +22,14 @@ const MAX_CELLS_PER_ROW: usize = 4096;
 /// appearing in multiple layers maps to a single replication entry.
 pub(crate) fn build_replication_topology(cfg: &Config) -> Result<ReplicationTopology> {
     let origin = (cfg.cells.origin[0], cfg.cells.origin[1]);
-    let cell_sizes = cfg
-        .cells
-        .size_per_band_m()
-        .context("resolve cells.size_per_band")?;
+    let cell_sizes = cfg.cells.size_per_band_m().context("resolve cells.size_per_band")?;
 
     let mut bands = Vec::with_capacity(cfg.scales.bands.len());
     for band in &cfg.scales.bands {
-        let cell_size = cell_sizes.get(&band.name).copied().ok_or_else(|| {
-            anyhow!("cells.size_per_band missing entry for band '{}'", band.name)
-        })?;
+        let cell_size = cell_sizes
+            .get(&band.name)
+            .copied()
+            .ok_or_else(|| anyhow!("cells.size_per_band missing entry for band '{}'", band.name))?;
         bands.push(BandConfig {
             name: ScaleBand::new(band.name.as_str()),
             max_denom: u32::try_from(band.max_denom).unwrap_or(u32::MAX),
@@ -80,9 +78,7 @@ pub(crate) fn validate_change_feed_config(cfg: &Config) -> Result<()> {
             let publication = feed.publication.as_deref().unwrap_or("");
             let slot = feed.slot.as_deref().unwrap_or("");
             if publication.is_empty() {
-                return Err(anyhow!(
-                    "source.change_feed.publication is required for type=pgoutput"
-                ));
+                return Err(anyhow!("source.change_feed.publication is required for type=pgoutput"));
             }
             if slot.is_empty() {
                 return Err(anyhow!("source.change_feed.slot is required for type=pgoutput"));
@@ -219,9 +215,17 @@ mod tests {
         let topo = build_replication_topology(&cfg).unwrap();
         assert_eq!(topo.collections.len(), 2);
         assert_eq!(topo.bands.len(), 2);
-        assert!(topo.collections.iter().any(|c| c.schema == "public" && c.table == "roads"));
+        assert!(
+            topo.collections
+                .iter()
+                .any(|c| c.schema == "public" && c.table == "roads")
+        );
         // unqualified `from` defaults to public
-        assert!(topo.collections.iter().any(|c| c.schema == "public" && c.table == "buildings"));
+        assert!(
+            topo.collections
+                .iter()
+                .any(|c| c.schema == "public" && c.table == "buildings")
+        );
     }
 
     #[test]

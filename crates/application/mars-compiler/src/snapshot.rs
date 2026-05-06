@@ -128,7 +128,11 @@ fn build_layer_artifact(
             assignments.push((row.feature_id, idx));
         }
     }
-    let style_refs: Vec<String> = task.classes.iter().map(|c: &CompiledClass| c.style_id.clone()).collect();
+    let style_refs: Vec<String> = task
+        .classes
+        .iter()
+        .map(|c: &CompiledClass| c.style_id.clone())
+        .collect();
 
     let mut writer = ArtifactWriter::new(ArtifactKind::Layer);
     writer.add_class_assignment(&assignments);

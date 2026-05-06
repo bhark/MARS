@@ -276,7 +276,11 @@ async fn run_acks_latest_source_version_after_publish() {
     assert_eq!(last, Some("0/200"), "ack should track latest batch source_version");
 
     let manifest = publisher.current().await.unwrap().unwrap();
-    assert!(manifest.version >= 2, "incremental publish bumps version: {}", manifest.version);
+    assert!(
+        manifest.version >= 2,
+        "incremental publish bumps version: {}",
+        manifest.version
+    );
     assert_eq!(manifest.source_version.as_deref(), Some("0/200"));
 }
 
