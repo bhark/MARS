@@ -555,6 +555,23 @@ pub struct FeatureIndexEntry {
     pub coord_len: u32,
 }
 
+impl FeatureIndexEntry {
+    /// Decode the geometry kind from the on-wire `geom_type` byte. Returns a
+    /// typed [`GeomType`] so callers can branch without re-knowing the byte
+    /// constants.
+    pub fn geom_kind(&self) -> Result<GeomType, ArtifactError> {
+        match self.geom_type {
+            GT_POINT => Ok(GeomType::Point),
+            GT_LINESTRING => Ok(GeomType::LineString),
+            GT_POLYGON => Ok(GeomType::Polygon),
+            GT_MULTIPOINT => Ok(GeomType::MultiPoint),
+            GT_MULTILINESTRING => Ok(GeomType::MultiLineString),
+            GT_MULTIPOLYGON => Ok(GeomType::MultiPolygon),
+            _ => Err(ArtifactError::Malformed("bad geom_type")),
+        }
+    }
+}
+
 /// Lazy iterator over the geometry-payload index. Cheap: each step copies
 /// one 33-byte index entry. Coordinates are not touched.
 pub struct FeatureIndexIter<'a> {

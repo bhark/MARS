@@ -1,15 +1,13 @@
 //! per-cell draw-op emission: decode source + layer artifacts, merge-walk by
 //! feature_id, viewport bbox filter, world→pixel transform, push DrawOp::Path.
 
-use std::sync::Arc;
-
 use mars_artifact::{
-    ArtifactReader, FeatureGeom, GeomKind, SectionKind, decode_class_assignment, decode_one_geom, decode_style_refs,
-    iter_feature_index,
+    ArtifactReader, GeomType, GeomVisitor, SectionKind, decode_class_assignment, decode_style_refs,
+    iter_feature_index, visit_one_geom,
 };
 use mars_proj::Transformer;
 use mars_render_port::{DrawOp, Path, Subpath};
-use mars_style::{Style, Stylesheet};
+use mars_style::Stylesheet;
 use mars_types::Bbox;
 
 use crate::RuntimeError;
@@ -81,6 +79,12 @@ pub(crate) fn emit_layer_cell(
     let style_refs_section = layer.section(SectionKind::StyleRefs)?;
     let style_refs = decode_style_refs(&style_refs_section)?;
 
+    // shared scratch buffers, reused across features. f64_scratch carries
+    // ring coords through the reproject FFI; subpaths is the per-feature
+    // accumulator drained into a DrawOp.
+    let mut f64_scratch: Vec<[f64; 2]> = Vec::new();
+    let mut subpaths: Vec<Subpath> = Vec::new();
+
     // walk the geometry index merge-style against class_assignment (both sorted
     // by id ASC). only decode coords for features that survive both the class
     // join and the canonical-bbox cull. on viewports that intersect ≪ 100% of
@@ -121,119 +125,119 @@ pub(crate) fn emit_layer_cell(
             }
         };
 
-        let geom = decode_one_geom(coord_area, &entry)?;
-        let feat = FeatureGeom {
-            id: entry.id,
-            bbox: entry.bbox,
-            geom,
-        };
-        if let Some(op) = build_draw_op(&feat, viewport, reproject, &style)? {
-            out.push(op);
+        let kind = entry.geom_kind()?;
+        let close_rings = matches!(kind, GeomType::Polygon | GeomType::MultiPolygon);
+
+        subpaths.clear();
+        {
+            let mut visitor = RenderVisitor {
+                vp: viewport,
+                reproject,
+                f64_scratch: &mut f64_scratch,
+                subpaths: &mut subpaths,
+                close_rings,
+                style_has_fill: style.fill.is_some(),
+                in_ring: false,
+                error: None,
+            };
+            visit_one_geom(coord_area, &entry, &mut visitor)?;
+            if let Some(e) = visitor.error.take() {
+                return Err(e);
+            }
         }
+        if subpaths.is_empty() {
+            continue;
+        }
+        out.push(DrawOp::Path {
+            path: Path {
+                subpaths: std::mem::take(&mut subpaths),
+            },
+            style,
+        });
     }
     Ok(())
 }
 
-fn build_draw_op(
-    feat: &FeatureGeom,
+/// Streaming visitor that converts decoded ring coords into pixel-space
+/// `Subpath`s. Per ring it fills `f64_scratch`, runs the optional canonical →
+/// request transform once, then projects to f32 pixel space into a fresh
+/// `Vec<(f32, f32)>` (the renderer ABI requires owned points). Standalone
+/// points (Point / MultiPoint) become 1px squares iff the style has a fill.
+struct RenderVisitor<'a, 'b> {
     vp: Viewport,
-    reproject: Reproject<'_>,
-    style: &Arc<Style>,
-) -> Result<Option<DrawOp>, RuntimeError> {
-    let subpaths = match &feat.geom {
-        GeomKind::Polygon(rs) => project_polygon(rs, vp, reproject)?,
-        GeomKind::MultiPolygon(parts) => {
-            let mut acc = Vec::new();
-            for rs in parts {
-                acc.extend(project_polygon(rs, vp, reproject)?);
-            }
-            acc
-        }
-        GeomKind::LineString(verts) => vec![project_ring(verts, vp, reproject, false)?],
-        GeomKind::MultiLineString(parts) => {
-            let mut acc = Vec::with_capacity(parts.len());
-            for p in parts {
-                acc.push(project_ring(p, vp, reproject, false)?);
-            }
-            acc
-        }
-        // phase 0: points only meaningful with a fill; emit a 1px square. skip
-        // if no fill style is configured.
-        GeomKind::Point((x, y)) => {
-            if style.fill.is_none() {
-                return Ok(None);
-            }
-            vec![project_point_square(*x, *y, vp, reproject)?]
-        }
-        GeomKind::MultiPoint(pts) => {
-            if style.fill.is_none() {
-                return Ok(None);
-            }
-            let mut acc = Vec::with_capacity(pts.len());
-            for (x, y) in pts {
-                acc.push(project_point_square(*x, *y, vp, reproject)?);
-            }
-            acc
-        }
-    };
-    if subpaths.is_empty() {
-        return Ok(None);
-    }
-    Ok(Some(DrawOp::Path {
-        path: Path { subpaths },
-        style: style.clone(),
-    }))
+    reproject: Reproject<'a>,
+    /// shared across rings and features: cleared on each `begin_ring`, holds
+    /// (x, y) pairs in canonical CRS until `end_ring` reprojects + projects.
+    f64_scratch: &'b mut Vec<[f64; 2]>,
+    subpaths: &'b mut Vec<Subpath>,
+    close_rings: bool,
+    style_has_fill: bool,
+    in_ring: bool,
+    /// Capture reproject errors encountered during traversal — `GeomVisitor`
+    /// methods are infallible, so emit_layer_cell drains this after the call.
+    error: Option<RuntimeError>,
 }
 
-fn project_polygon(
-    rings: &[Vec<(f64, f64)>],
-    vp: Viewport,
-    reproject: Reproject<'_>,
-) -> Result<Vec<Subpath>, RuntimeError> {
-    let mut out = Vec::with_capacity(rings.len());
-    for r in rings {
-        out.push(project_ring(r, vp, reproject, true)?);
-    }
-    Ok(out)
-}
-
-pub(crate) fn project_ring(
-    verts: &[(f64, f64)],
-    vp: Viewport,
-    reproject: Reproject<'_>,
-    close: bool,
-) -> Result<Subpath, RuntimeError> {
-    let mut points: Vec<(f32, f32)> = Vec::with_capacity(verts.len() + usize::from(close));
-    if let Some(t) = reproject {
-        // batch the per-vertex FFI hops into one proj_trans_generic call.
-        let mut buf: Vec<[f64; 2]> = verts.iter().map(|&(x, y)| [x, y]).collect();
-        t.transform_points(&mut buf)?;
-        for [rx, ry] in buf {
-            points.push(vp.project(rx, ry));
+impl GeomVisitor for RenderVisitor<'_, '_> {
+    #[inline]
+    fn point(&mut self, x: f64, y: f64) {
+        if self.error.is_some() {
+            return;
         }
-    } else {
-        for &(x, y) in verts {
-            points.push(vp.project(x, y));
+        if self.in_ring {
+            self.f64_scratch.push([x, y]);
+            return;
         }
+        // Point / MultiPoint: standalone vertex. emit 1px square if fill set.
+        if !self.style_has_fill {
+            return;
+        }
+        let (rx, ry) = match reproject_point(x, y, self.reproject) {
+            Ok(v) => v,
+            Err(e) => {
+                self.error = Some(e);
+                return;
+            }
+        };
+        let (px, py) = self.vp.project(rx, ry);
+        self.subpaths.push(Subpath {
+            points: vec![(px, py), (px + 1.0, py), (px + 1.0, py + 1.0), (px, py + 1.0), (px, py)],
+            closed: true,
+        });
     }
-    if close && points.len() >= 2 && points[0] != points[points.len() - 1] {
-        points.push(points[0]);
-    }
-    Ok(Subpath { points, closed: close })
-}
 
-pub(crate) fn project_point_square(
-    x: f64,
-    y: f64,
-    vp: Viewport,
-    reproject: Reproject<'_>,
-) -> Result<Subpath, RuntimeError> {
-    let (rx, ry) = reproject_point(x, y, reproject)?;
-    let (px, py) = vp.project(rx, ry);
-    Ok(Subpath {
-        points: vec![(px, py), (px + 1.0, py), (px + 1.0, py + 1.0), (px, py + 1.0), (px, py)],
-        closed: true,
-    })
+    fn begin_ring(&mut self) {
+        self.f64_scratch.clear();
+        self.in_ring = true;
+    }
+
+    fn end_ring(&mut self) {
+        self.in_ring = false;
+        if self.error.is_some() || self.f64_scratch.is_empty() {
+            return;
+        }
+        if let Some(t) = self.reproject
+            && let Err(e) = t.transform_points(self.f64_scratch)
+        {
+            self.error = Some(e.into());
+            return;
+        }
+        let n = self.f64_scratch.len();
+        let mut points: Vec<(f32, f32)> = Vec::with_capacity(n + usize::from(self.close_rings));
+        for &[x, y] in self.f64_scratch.iter() {
+            points.push(self.vp.project(x, y));
+        }
+        if self.close_rings && points.len() >= 2 && points[0] != points[points.len() - 1] {
+            points.push(points[0]);
+        }
+        self.subpaths.push(Subpath {
+            points,
+            closed: self.close_rings,
+        });
+    }
+
+    fn begin_part(&mut self) {}
+    fn end_part(&mut self) {}
 }
 
 #[inline]
@@ -247,6 +251,8 @@ fn reproject_point(x: f64, y: f64, reproject: Reproject<'_>) -> Result<(f64, f64
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
+    use std::sync::Arc;
+
     use mars_artifact::{ArtifactKind, ArtifactWriter, FeatureGeom, GeomKind};
     use mars_style::{Colour, Style, Stylesheet};
     use mars_types::Bbox;
@@ -282,42 +288,6 @@ mod tests {
         // feature just outside → excluded
         assert!(!bbox_intersects([10.1, 0.0, 11.0, 10.0], vp));
         assert!(!bbox_intersects([-1.0, 0.0, -0.1, 10.0], vp));
-    }
-
-    #[test]
-    fn project_ring_closes_polygon() {
-        let vp = viewport(Bbox::new(0.0, 0.0, 10.0, 10.0), 100, 100);
-        let ring = vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)];
-        let out = project_ring(&ring, vp, None, true).unwrap();
-        assert_eq!(
-            out.points[0],
-            out.points[out.points.len() - 1],
-            "polygon ring should be closed"
-        );
-        assert!(out.closed);
-    }
-
-    #[test]
-    fn project_ring_does_not_close_linestring() {
-        let vp = viewport(Bbox::new(0.0, 0.0, 10.0, 10.0), 100, 100);
-        let ring = vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)];
-        let out = project_ring(&ring, vp, None, false).unwrap();
-        assert_ne!(
-            out.points[0],
-            out.points[out.points.len() - 1],
-            "linestring should stay open"
-        );
-        assert!(!out.closed);
-    }
-
-    #[test]
-    fn project_point_square_1px() {
-        let vp = viewport(Bbox::new(0.0, 0.0, 10.0, 10.0), 100, 100);
-        let sq = project_point_square(5.0, 5.0, vp, None).unwrap();
-        assert_eq!(sq.points.len(), 5);
-        assert_eq!(sq.points[0], sq.points[4]);
-        assert_eq!(sq.points[1].0, sq.points[0].0 + 1.0);
-        assert!(sq.closed);
     }
 
     fn build_source(features: Vec<FeatureGeom>) -> ArtifactReader {
@@ -433,6 +403,84 @@ mod tests {
                 assert_eq!(path.subpaths.len(), 1);
                 assert_eq!(path.subpaths[0].points.len(), 5); // 4 corners + close
                 assert!(path.subpaths[0].closed);
+            }
+            other => panic!("expected Path, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn polygon_emits_closed_subpath() {
+        // GeomKind::Polygon with one open ring (last vertex != first); visitor
+        // must close it just like the old project_ring path did.
+        let src = build_source(vec![FeatureGeom {
+            id: 1,
+            bbox: [0.0, 0.0, 10.0, 10.0],
+            geom: GeomKind::Polygon(vec![vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)]]),
+        }]);
+        let lyr = build_layer(&[(1, 0)], &["red".into()]);
+        let mut ss = Stylesheet::default();
+        ss.geometry.insert("red".into(), Arc::new(red_style()));
+        let mut out = Vec::new();
+        let vp = viewport(Bbox::new(0.0, 0.0, 10.0, 10.0), 100, 100);
+        emit_layer_cell(&src, &lyr, &ss, vp, vp.bbox, None, &mut out).unwrap();
+        assert_eq!(out.len(), 1);
+        match &out[0] {
+            DrawOp::Path { path, .. } => {
+                assert_eq!(path.subpaths.len(), 1);
+                let pts = &path.subpaths[0].points;
+                assert!(path.subpaths[0].closed);
+                assert_eq!(pts[0], pts[pts.len() - 1], "polygon ring must close");
+            }
+            other => panic!("expected Path, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn linestring_emits_open_subpath() {
+        let src = build_source(vec![FeatureGeom {
+            id: 1,
+            bbox: [0.0, 0.0, 10.0, 10.0],
+            geom: GeomKind::LineString(vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)]),
+        }]);
+        let lyr = build_layer(&[(1, 0)], &["red".into()]);
+        let mut ss = Stylesheet::default();
+        ss.geometry.insert("red".into(), Arc::new(red_style()));
+        let mut out = Vec::new();
+        let vp = viewport(Bbox::new(0.0, 0.0, 10.0, 10.0), 100, 100);
+        emit_layer_cell(&src, &lyr, &ss, vp, vp.bbox, None, &mut out).unwrap();
+        assert_eq!(out.len(), 1);
+        match &out[0] {
+            DrawOp::Path { path, .. } => {
+                assert_eq!(path.subpaths.len(), 1);
+                let pts = &path.subpaths[0].points;
+                assert!(!path.subpaths[0].closed);
+                assert_ne!(pts[0], pts[pts.len() - 1], "linestring must stay open");
+            }
+            other => panic!("expected Path, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn multipolygon_emits_one_subpath_per_ring() {
+        let src = build_source(vec![FeatureGeom {
+            id: 1,
+            bbox: [0.0, 0.0, 10.0, 10.0],
+            geom: GeomKind::MultiPolygon(vec![
+                vec![vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 0.0)]],
+                vec![vec![(2.0, 2.0), (3.0, 2.0), (3.0, 3.0), (2.0, 2.0)]],
+            ]),
+        }]);
+        let lyr = build_layer(&[(1, 0)], &["red".into()]);
+        let mut ss = Stylesheet::default();
+        ss.geometry.insert("red".into(), Arc::new(red_style()));
+        let mut out = Vec::new();
+        let vp = viewport(Bbox::new(0.0, 0.0, 10.0, 10.0), 100, 100);
+        emit_layer_cell(&src, &lyr, &ss, vp, vp.bbox, None, &mut out).unwrap();
+        assert_eq!(out.len(), 1);
+        match &out[0] {
+            DrawOp::Path { path, .. } => {
+                assert_eq!(path.subpaths.len(), 2);
+                assert!(path.subpaths.iter().all(|s| s.closed));
             }
             other => panic!("expected Path, got {other:?}"),
         }
