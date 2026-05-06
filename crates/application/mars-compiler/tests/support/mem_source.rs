@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures_core::stream::BoxStream;
 use mars_expr::Expr;
-use mars_source::{ChangeEvent, ChangeFeed, RowBytes, Source, SourceBinding, SourceCollectionId, SourceError};
+use mars_source::{ChangeBatch, ChangeFeed, RowBytes, Source, SourceBinding, SourceCollectionId, SourceError};
 use mars_types::{Bbox, Cell};
 
 #[derive(Debug, Default)]
@@ -39,7 +39,7 @@ impl Source for MemSource {
 
 #[async_trait]
 impl ChangeFeed for MemSource {
-    async fn subscribe(&self) -> Result<BoxStream<'static, Result<ChangeEvent, SourceError>>, SourceError> {
+    async fn subscribe(&self) -> Result<BoxStream<'static, Result<ChangeBatch, SourceError>>, SourceError> {
         Err(SourceError::NotImplemented {
             what: "MemSource::subscribe",
         })

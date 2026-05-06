@@ -28,7 +28,7 @@
 use std::sync::Arc;
 
 use futures_core::stream::BoxStream;
-use mars_source::{ChangeEvent, SourceError};
+use mars_source::{ChangeBatch, SourceError};
 
 use super::ReplicationTopology;
 use crate::PgConfig;
@@ -37,7 +37,7 @@ use crate::PgConfig;
 pub(crate) async fn run(
     _cfg: Arc<PgConfig>,
     _topology: Arc<ReplicationTopology>,
-) -> Result<BoxStream<'static, Result<ChangeEvent, SourceError>>, SourceError> {
+) -> Result<BoxStream<'static, Result<ChangeBatch, SourceError>>, SourceError> {
     // Hard rule from the operator runbook: this stub is a typed
     // `NotImplemented`, never a panic. Wiring in the rest of the crate
     // (PgSource::subscribe, decoder, translator) is real and tested.

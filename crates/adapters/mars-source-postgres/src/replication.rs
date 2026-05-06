@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use futures_core::stream::BoxStream;
 use mars_grid::{BandConfig, cells_in_bbox};
-use mars_source::{ChangeEvent, SourceError};
+use mars_source::{ChangeBatch, SourceError};
 use mars_types::Bbox;
 
 // dead_code allowed: these modules are fully tested via their own unit tests
@@ -92,7 +92,7 @@ impl ReplicationTopology {
 pub(crate) async fn subscribe(
     cfg: Arc<crate::PgConfig>,
     topology: Arc<ReplicationTopology>,
-) -> Result<BoxStream<'static, Result<ChangeEvent, SourceError>>, SourceError> {
+) -> Result<BoxStream<'static, Result<ChangeBatch, SourceError>>, SourceError> {
     transport::run(cfg, topology).await
 }
 

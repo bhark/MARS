@@ -80,6 +80,19 @@ pub enum ChangeEvent {
     },
 }
 
+/// A committed batch of change events. Adapters MUST only emit a batch once
+/// the upstream transaction has committed; the `source_version` cursor (e.g.
+/// pgoutput LSN) lets the compiler advance manifest provenance atomically
+/// per batch.
+#[derive(Debug, Clone)]
+pub struct ChangeBatch {
+    /// Ordered events committed together.
+    pub events: Vec<ChangeEvent>,
+    /// Opaque source-side cursor identifying the committed position. `None`
+    /// when the adapter has no notion of a cursor (polling fallback).
+    pub source_version: Option<String>,
+}
+
 /// Stable identifier for a source collection (logical name shared between
 /// the binding, change feed, and compiled artifact metadata).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -230,7 +243,7 @@ pub struct RowBytes {
 /// Phase-0 stub adapters that satisfy the port traits with `NotImplemented`.
 /// Lets bins and tests compose the surface without naming a real backend.
 pub mod stub {
-    use super::{ChangeEvent, ChangeFeed, RowBytes, Source, SourceBinding, SourceError};
+    use super::{ChangeBatch, ChangeFeed, RowBytes, Source, SourceBinding, SourceError};
     use async_trait::async_trait;
     use futures_core::stream::BoxStream;
     use mars_expr::Expr;
@@ -257,7 +270,7 @@ pub mod stub {
 
     #[async_trait]
     impl ChangeFeed for NotImplementedSource {
-        async fn subscribe(&self) -> Result<BoxStream<'static, Result<ChangeEvent, SourceError>>, SourceError> {
+        async fn subscribe(&self) -> Result<BoxStream<'static, Result<ChangeBatch, SourceError>>, SourceError> {
             Err(SourceError::NotImplemented {
                 what: "mars-source::stub::NotImplementedSource::subscribe",
             })
@@ -265,13 +278,17 @@ pub mod stub {
     }
 }
 
-/// Subscription-side port: a stream of `ChangeEvent`s.
+/// Subscription-side port: a stream of committed [`ChangeBatch`]es.
+///
+/// Each yielded batch represents one upstream commit; events within a batch
+/// are ordered, and the `source_version` cursor (when present) points at the
+/// position immediately after the batch.
 #[async_trait]
 pub trait ChangeFeed: Send + Sync + 'static {
     /// Subscribe to the change feed. The returned stream lives for the
     /// lifetime of the compiler process; transient errors are reported
     /// inline as `Result::Err`.
-    async fn subscribe(&self) -> Result<BoxStream<'static, Result<ChangeEvent, SourceError>>, SourceError>;
+    async fn subscribe(&self) -> Result<BoxStream<'static, Result<ChangeBatch, SourceError>>, SourceError>;
 }
 
 /// Opaque guard returned by [`LeaderLock::try_acquire`]. Holding it keeps the
