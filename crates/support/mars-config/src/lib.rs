@@ -124,11 +124,34 @@ pub fn validate(config: &Config, config_dir: &Path) -> Result<(), ConfigError> {
             )));
         }
     }
+    // every declared band must have a cells.size_per_band entry — without one
+    // the planner errors at first use, far from the config that broke it.
+    for band in &config.scales.bands {
+        if !config.cells.size_per_band.contains_key(band.name.as_str()) {
+            return Err(ConfigError::Invalid(format!(
+                "scales.bands declares {:?} but cells.size_per_band has no entry for it",
+                band.name
+            )));
+        }
+    }
 
     let mut layer_names = std::collections::BTreeSet::new();
     for layer in &config.layers {
         if !layer_names.insert(layer.name.as_str()) {
             return Err(ConfigError::Invalid(format!("duplicate layer name {:?}", layer.name)));
+        }
+
+        // class names must be unique within a layer; a duplicate makes the
+        // second class unreachable (first-match wins) which is almost never
+        // the operator's intent.
+        let mut class_names = std::collections::BTreeSet::new();
+        for class in &layer.classes {
+            if !class_names.insert(class.name.as_str()) {
+                return Err(ConfigError::Invalid(format!(
+                    "layer {} declares class {:?} more than once",
+                    layer.name, class.name
+                )));
+            }
         }
 
         for (i, binding) in layer.sources.iter().enumerate() {
@@ -331,6 +354,55 @@ mod tests {
         assert!(matches!(
             validate(&cfg, Path::new(".")),
             Err(ConfigError::Invalid(ref s)) if s.contains("when: parse error")
+        ));
+    }
+
+    #[test]
+    fn rejects_band_without_size_per_band_entry() {
+        let mut cfg = minimal_config();
+        cfg.scales.bands.push(Band {
+            name: "lo".into(),
+            max_denom: 100_000,
+        });
+        // size_per_band still only knows about "hi"
+        assert!(matches!(
+            validate(&cfg, Path::new(".")),
+            Err(ConfigError::Invalid(ref s)) if s.contains("no entry") && s.contains("lo")
+        ));
+    }
+
+    #[test]
+    fn rejects_duplicate_class_names_within_layer() {
+        let mut cfg = minimal_config();
+        cfg.layers = vec![Layer {
+            name: mars_types::LayerId::new("roads"),
+            title: String::new(),
+            abstract_: String::new(),
+            kind: "line".into(),
+            scale: None,
+            group: None,
+            enable_get_feature_info: false,
+            bbox: None,
+            sources: vec![],
+            classes: vec![
+                crate::model::Class {
+                    name: "default".into(),
+                    title: String::new(),
+                    when: None,
+                    style: ClassStyle::Inline(Default::default()),
+                },
+                crate::model::Class {
+                    name: "default".into(),
+                    title: String::new(),
+                    when: None,
+                    style: ClassStyle::Inline(Default::default()),
+                },
+            ],
+            label: None,
+        }];
+        assert!(matches!(
+            validate(&cfg, Path::new(".")),
+            Err(ConfigError::Invalid(ref s)) if s.contains("more than once") && s.contains("default")
         ));
     }
 
