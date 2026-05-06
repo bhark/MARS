@@ -267,12 +267,7 @@ pub(crate) fn compile_classes(layer: &Layer) -> Result<Vec<CompiledClass>, PlanE
 }
 
 pub(crate) fn lower_binding(b: &CfgBinding, crs: &CrsCode) -> Result<SourceBinding, PlanError> {
-    // `from` is `schema.table`. tolerate single-segment names by routing to
-    // the public schema (matches postgres adapter convention).
-    let (schema, table) = match b.from.split_once('.') {
-        Some((s, t)) => (s.to_string(), t.to_string()),
-        None => ("public".to_string(), b.from.clone()),
-    };
+    let (schema, table) = b.schema_table();
     let id_column = b.id_column.clone().unwrap_or_else(|| "ogc_fid".to_string());
     let collection = SourceCollectionId::new(b.from.clone());
     Ok(SourceBinding::new(

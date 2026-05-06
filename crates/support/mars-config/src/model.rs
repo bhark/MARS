@@ -476,6 +476,18 @@ pub struct SourceBinding {
     pub attributes: Vec<String>,
 }
 
+impl SourceBinding {
+    /// Split `from` into `(schema, table)`. Single-segment names route to
+    /// `public` to match the postgres adapter convention.
+    #[must_use]
+    pub fn schema_table(&self) -> (&str, &str) {
+        match self.from.split_once('.') {
+            Some((s, t)) => (s, t),
+            None => ("public", self.from.as_str()),
+        }
+    }
+}
+
 /// Layer class. SPEC §5.3.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Class {

@@ -41,12 +41,12 @@ pub(crate) fn build_replication_topology(cfg: &Config) -> Result<ReplicationTopo
     let mut seen: BTreeMap<(String, String, String), CollectionTopology> = BTreeMap::new();
     for layer in &cfg.layers {
         for binding in &layer.sources {
-            let (schema, table) = split_qualified(&binding.from);
-            let key = (schema.clone(), table.clone(), binding.geometry_column.clone());
+            let (schema, table) = binding.schema_table();
+            let key = (schema.to_string(), table.to_string(), binding.geometry_column.clone());
             seen.entry(key).or_insert_with(|| CollectionTopology {
                 collection: binding.from.clone(),
-                schema,
-                table,
+                schema: schema.to_string(),
+                table: table.to_string(),
                 geometry_column: binding.geometry_column.clone(),
             });
         }
@@ -88,13 +88,6 @@ pub(crate) fn validate_change_feed_config(cfg: &Config) -> Result<()> {
         other => Err(anyhow!(
             "source.change_feed.type='{other}' unsupported; only 'pgoutput' is wired"
         )),
-    }
-}
-
-fn split_qualified(from: &str) -> (String, String) {
-    match from.split_once('.') {
-        Some((s, t)) => (s.to_string(), t.to_string()),
-        None => ("public".to_string(), from.to_string()),
     }
 }
 

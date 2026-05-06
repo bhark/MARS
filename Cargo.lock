@@ -2127,6 +2127,7 @@ dependencies = [
  "futures-core",
  "futures-util",
  "mars-types",
+ "parking_lot",
  "thiserror 2.0.18",
 ]
 

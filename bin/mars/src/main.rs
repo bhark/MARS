@@ -112,7 +112,7 @@ async fn async_main(cli: Cli) -> Result<()> {
         (None, None) => Err(anyhow!(
             "mars: provide --mode <runtime|compiler|all-in-one> or one of: validate, inspect"
         )),
-        (Some(Mode::Runtime), None) => run_runtime(&cli.config).await,
+        (Some(Mode::Runtime), None) => run_runtime(Arc::new(load_and_validate(&cli.config)?)).await,
         (Some(Mode::Compiler), None) => run_compiler_mode(&cli.config).await,
         (Some(Mode::AllInOne), None) => run_all_in_one(&cli.config).await,
         (None, Some(Tool::Validate { path })) => tool_validate(&path).await,
@@ -122,10 +122,7 @@ async fn async_main(cli: Cli) -> Result<()> {
 
 // ---------- runtime mode ----------
 
-async fn run_runtime(config_path: &Path) -> Result<()> {
-    let cfg = load_and_validate(config_path)?;
-    let cfg = Arc::new(cfg);
-
+async fn run_runtime(cfg: Arc<Config>) -> Result<()> {
     let (store, publisher) = build_store_and_publisher(&cfg)?;
     let cache = build_cache(&cfg)?;
     let stylesheet = build_stylesheet(&cfg);
@@ -275,8 +272,9 @@ async fn run_all_in_one(config_path: &Path) -> Result<()> {
     // both halves run concurrently; an error in one cancels the other through
     // try_join's drop-on-failure semantics. Sequential composition would block
     // the runtime forever once the change feed is live.
+    let runtime_cfg = Arc::new(cfg.clone());
     let compiler_fut = run_compiler(cfg);
-    let runtime_fut = run_runtime(config_path);
+    let runtime_fut = run_runtime(runtime_cfg);
     tokio::try_join!(compiler_fut, runtime_fut)?;
     Ok(())
 }

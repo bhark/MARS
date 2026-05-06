@@ -177,10 +177,10 @@ impl Compiler {
                 &self.config.service.name,
                 rebuild,
                 &dirty,
-                source_version.clone(),
+                source_version,
             );
             self.deps.manifest.publish(&merged).await?;
-            sub.acknowledge(source_version.as_deref()).await?;
+            sub.acknowledge(merged.source_version.as_deref()).await?;
             tracing::info!(
                 version = merged.version,
                 dirty_cells = dirty.cells.len(),
