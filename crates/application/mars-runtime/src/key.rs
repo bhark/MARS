@@ -22,16 +22,18 @@ pub(crate) fn parse(key: &ArtifactKey) -> Result<ParsedKey, RuntimeError> {
     }
 }
 
-/// thin wrapper around [`ArtifactKey::build_layer`] for tests that pass a hex string.
+/// thin wrapper around [`ArtifactKey::try_build_layer`] for tests that pass a hex string.
 #[must_use]
+#[allow(clippy::unwrap_used)]
 pub fn layer_key(layer: &LayerId, cell: &Cell, hash_hex: &str) -> ArtifactKey {
-    ArtifactKey::build_layer(layer, cell, hash_from_hex(hash_hex))
+    ArtifactKey::try_build_layer(layer, cell, hash_from_hex(hash_hex)).unwrap()
 }
 
-/// thin wrapper around [`ArtifactKey::build_source`] for tests that pass a hex string.
+/// thin wrapper around [`ArtifactKey::try_build_source`] for tests that pass a hex string.
 #[must_use]
+#[allow(clippy::unwrap_used)]
 pub fn source_key(collection: &str, cell: &Cell, hash_hex: &str) -> ArtifactKey {
-    ArtifactKey::build_source(collection, cell, hash_from_hex(hash_hex))
+    ArtifactKey::try_build_source(collection, cell, hash_from_hex(hash_hex)).unwrap()
 }
 
 // fixture helper: parse 0..=64 hex chars into a 32-byte hash, zero-padded.

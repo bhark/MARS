@@ -100,7 +100,8 @@ fn build_source_artifact(
         x: cell.x,
         y: cell.y,
     };
-    let key = ArtifactKey::build_source(task.binding.collection.as_str(), &cell_with_band, hash);
+    let key = ArtifactKey::try_build_source(task.binding.collection.as_str(), &cell_with_band, hash)
+        .map_err(|e| crate::plan::PlanError::Invalid(e.to_string()))?;
     let entry = ArtifactEntry {
         key,
         hash,
@@ -150,7 +151,8 @@ fn build_layer_artifact(
         x: cell.x,
         y: cell.y,
     };
-    let key = ArtifactKey::build_layer(&layer_id, &cell_with_band, hash);
+    let key = ArtifactKey::try_build_layer(&layer_id, &cell_with_band, hash)
+        .map_err(|e| crate::plan::PlanError::Invalid(e.to_string()))?;
     let entry = ArtifactEntry {
         key,
         hash,

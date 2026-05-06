@@ -306,7 +306,7 @@ layers:
             x: 0,
             y: 0,
         };
-        let key = ArtifactKey::build_layer(&layer, &cell, ContentHash::zero());
+        let key = ArtifactKey::try_build_layer(&layer, &cell, ContentHash::zero()).unwrap();
         let entry = ArtifactEntry {
             key,
             hash: ContentHash::zero(),

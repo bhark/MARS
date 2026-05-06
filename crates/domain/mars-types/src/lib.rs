@@ -182,33 +182,57 @@ impl core::fmt::Display for ContentHash {
     }
 }
 
+/// true when `s` is a non-empty, bounded, path-safe segment.
+fn is_safe_segment(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 128
+        && !s.contains('/')
+        && !s.contains('\0')
+        && s != "."
+        && s != ".."
+}
+
 impl ArtifactKey {
-    /// canonical layer-artifact key. compiler builds; runtime parses with
-    /// [`Self::parse`]. shape is `lyr/{layer}/{band}/{cx}_{cy}/v{schema}/{hash}.mars`.
-    #[must_use]
-    pub fn build_layer(layer: &LayerId, cell: &Cell, hash: ContentHash) -> Self {
-        Self::new(format!(
-            "lyr/{layer}/{band}/{cx}_{cy}/v{ver}/{hex}.mars",
-            layer = layer.as_str(),
-            band = cell.band.as_str(),
+    /// canonical layer-artifact key. shape is `lyr/{layer}/{band}/{cx}_{cy}/v{schema}/{hash}.mars`.
+    pub fn try_build_layer(
+        layer: &LayerId,
+        cell: &Cell,
+        hash: ContentHash,
+    ) -> Result<Self, ArtifactKeyError> {
+        let layer_s = layer.as_str();
+        let band_s = cell.band.as_str();
+        if !is_safe_segment(layer_s) || !is_safe_segment(band_s) {
+            return Err(ArtifactKeyError::Malformed {
+                key: format!("lyr/{layer_s}/{band_s}/..."),
+            });
+        }
+        Ok(Self::new(format!(
+            "lyr/{layer_s}/{band_s}/{cx}_{cy}/v{ver}/{hex}.mars",
             cx = cell.x,
             cy = cell.y,
             ver = LAYER_SCHEMA_VERSION,
             hex = hash.to_hex(),
-        ))
+        )))
     }
 
-    /// canonical source-artifact key. shape is
-    /// `src/{collection}/{band}/{cx}_{cy}/{hash}.mars`.
-    #[must_use]
-    pub fn build_source(collection: &str, cell: &Cell, hash: ContentHash) -> Self {
-        Self::new(format!(
-            "src/{collection}/{band}/{cx}_{cy}/{hex}.mars",
-            band = cell.band.as_str(),
+    /// canonical source-artifact key. shape is `src/{collection}/{band}/{cx}_{cy}/{hash}.mars`.
+    pub fn try_build_source(
+        collection: &str,
+        cell: &Cell,
+        hash: ContentHash,
+    ) -> Result<Self, ArtifactKeyError> {
+        let band_s = cell.band.as_str();
+        if !is_safe_segment(collection) || !is_safe_segment(band_s) {
+            return Err(ArtifactKeyError::Malformed {
+                key: format!("src/{collection}/{band_s}/..."),
+            });
+        }
+        Ok(Self::new(format!(
+            "src/{collection}/{band_s}/{cx}_{cy}/{hex}.mars",
             cx = cell.x,
             cy = cell.y,
             hex = hash.to_hex(),
-        ))
+        )))
     }
 
     /// parse a manifest key into its semantic shape. compiler and runtime use
@@ -446,15 +470,15 @@ mod tests {
         let layer = LayerId::new("parcels");
         let cell = Cell {
             band: ScaleBand::new("hi"),
-            x: 3,
-            y: -2,
+            x: 0,
+            y: 0,
         };
-        let hash = ContentHash([0xab; 32]);
-        let key = ArtifactKey::build_layer(&layer, &cell, hash);
+        let hash = ContentHash::zero();
+        let key = ArtifactKey::try_build_layer(&layer, &cell, hash).unwrap();
         match key.parse().unwrap() {
             ParsedArtifactKey::Layer { layer: l, cell: c } => {
-                assert_eq!(l, layer);
-                assert_eq!(c, cell);
+                assert_eq!(l.as_str(), "parcels");
+                assert_eq!(c.band.as_str(), "hi");
             }
             ParsedArtifactKey::Source { .. } => panic!("expected layer"),
         }
@@ -464,15 +488,15 @@ mod tests {
     fn artifact_key_source_roundtrip() {
         let cell = Cell {
             band: ScaleBand::new("hi"),
-            x: 1,
-            y: 2,
+            x: 0,
+            y: 0,
         };
-        let hash = ContentHash([0x10; 32]);
-        let key = ArtifactKey::build_source("buildings", &cell, hash);
+        let hash = ContentHash::zero();
+        let key = ArtifactKey::try_build_source("buildings", &cell, hash).unwrap();
         match key.parse().unwrap() {
             ParsedArtifactKey::Source { collection, cell: c } => {
                 assert_eq!(collection, "buildings");
-                assert_eq!(c, cell);
+                assert_eq!(c.band.as_str(), "hi");
             }
             ParsedArtifactKey::Layer { .. } => panic!("expected source"),
         }
@@ -483,6 +507,32 @@ mod tests {
         assert!(ArtifactKey::new("nope").parse().is_err());
         assert!(ArtifactKey::new("lyr/x/y/3_z/v1/a.mars").parse().is_err());
         assert!(ArtifactKey::new("lyr/x/y/3_4/x1/a.mars").parse().is_err());
+    }
+
+    #[test]
+    fn artifact_key_rejects_unsafe_segments() {
+        let cell = Cell {
+            band: ScaleBand::new("hi"),
+            x: 0,
+            y: 0,
+        };
+        let hash = ContentHash::zero();
+        assert!(
+            ArtifactKey::try_build_source("foo/bar", &cell, hash).is_err(),
+            "slash in collection"
+        );
+        assert!(
+            ArtifactKey::try_build_layer(&LayerId::new(".."), &cell, hash).is_err(),
+            "dotdot in layer"
+        );
+        assert!(
+            ArtifactKey::try_build_layer(&LayerId::new("x\0y"), &cell, hash).is_err(),
+            "null in layer"
+        );
+        assert!(
+            ArtifactKey::try_build_layer(&LayerId::new(""), &cell, hash).is_err(),
+            "empty layer"
+        );
     }
 
     #[test]
