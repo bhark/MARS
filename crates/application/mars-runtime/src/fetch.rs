@@ -6,7 +6,7 @@ use mars_types::{ArtifactEntry, Cell, LayerId};
 
 use crate::{
     RuntimeError,
-    state::{LayerCellState, RuntimeState},
+    state::{LayerCellRef, LayerCellState, RuntimeState, SourceCellRef},
 };
 
 pub(crate) async fn fetch_layer(
@@ -18,7 +18,12 @@ pub(crate) async fn fetch_layer(
 ) -> Result<Option<ArtifactReader>, RuntimeError> {
     let state = state
         .layer_index
-        .get(&(layer.clone(), cell.band.clone(), (cell.x, cell.y)))
+        .get(&LayerCellRef {
+            layer: layer.as_str(),
+            band: cell.band.as_str(),
+            x: cell.x,
+            y: cell.y,
+        })
         .ok_or_else(|| RuntimeError::ManifestEntryMissing {
             layer: layer.as_str().to_owned(),
             band: cell.band.as_str().to_owned(),
@@ -39,7 +44,12 @@ pub(crate) async fn fetch_source(
 ) -> Result<ArtifactReader, RuntimeError> {
     let entry = state
         .source_index
-        .get(&(collection.to_owned(), cell.band.clone(), (cell.x, cell.y)))
+        .get(&SourceCellRef {
+            collection,
+            band: cell.band.as_str(),
+            x: cell.x,
+            y: cell.y,
+        })
         .ok_or_else(|| RuntimeError::SourceMissing {
             collection: collection.to_owned(),
             band: cell.band.as_str().to_owned(),

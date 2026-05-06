@@ -1,7 +1,9 @@
 //! immutable per-snapshot runtime state. built once per manifest version.
 
-use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
+use hashbrown::{Equivalent, HashMap};
 use mars_config::Config;
 use mars_grid::BandConfig;
 use mars_style::Stylesheet;
@@ -11,10 +13,91 @@ use crate::RuntimeError;
 use crate::key::{ParsedKey, parse};
 
 /// composite indexing key for layer artifacts.
-pub type LayerCellKey = (LayerId, ScaleBand, (i64, i64));
-/// composite indexing key for source artifacts (collection name kept as String;
-/// `SourceCollectionId` is a port-side strong wrapper around the same string).
-pub type SourceCellKey = (String, ScaleBand, (i64, i64));
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LayerCellKey {
+    pub layer: LayerId,
+    pub band: ScaleBand,
+    pub x: i64,
+    pub y: i64,
+}
+
+/// composite indexing key for source artifacts. collection name is kept as
+/// `Arc<str>` rather than the port-side `SourceCollectionId` wrapper - the
+/// runtime only needs cheap-clone equality semantics here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceCellKey {
+    pub collection: Arc<str>,
+    pub band: ScaleBand,
+    pub x: i64,
+    pub y: i64,
+}
+
+/// borrowed view into a `LayerCellKey` for zero-allocation hashmap lookup.
+#[derive(Debug)]
+pub struct LayerCellRef<'a> {
+    pub layer: &'a str,
+    pub band: &'a str,
+    pub x: i64,
+    pub y: i64,
+}
+
+/// borrowed view into a `SourceCellKey` for zero-allocation hashmap lookup.
+#[derive(Debug)]
+pub struct SourceCellRef<'a> {
+    pub collection: &'a str,
+    pub band: &'a str,
+    pub x: i64,
+    pub y: i64,
+}
+
+// hash via the borrowed view so owned and ref forms produce identical hashes.
+impl Hash for LayerCellKey {
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        self.layer.as_str().hash(h);
+        self.band.as_str().hash(h);
+        self.x.hash(h);
+        self.y.hash(h);
+    }
+}
+
+impl Hash for LayerCellRef<'_> {
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        self.layer.hash(h);
+        self.band.hash(h);
+        self.x.hash(h);
+        self.y.hash(h);
+    }
+}
+
+impl Equivalent<LayerCellKey> for LayerCellRef<'_> {
+    fn equivalent(&self, key: &LayerCellKey) -> bool {
+        self.x == key.x && self.y == key.y && self.layer == key.layer.as_str() && self.band == key.band.as_str()
+    }
+}
+
+impl Hash for SourceCellKey {
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        (*self.collection).hash(h);
+        self.band.as_str().hash(h);
+        self.x.hash(h);
+        self.y.hash(h);
+    }
+}
+
+impl Hash for SourceCellRef<'_> {
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        self.collection.hash(h);
+        self.band.hash(h);
+        self.x.hash(h);
+        self.y.hash(h);
+    }
+}
+
+impl Equivalent<SourceCellKey> for SourceCellRef<'_> {
+    fn equivalent(&self, key: &SourceCellKey) -> bool {
+        self.x == key.x && self.y == key.y && self.collection == &*key.collection && self.band == key.band.as_str()
+    }
+}
 
 /// discriminant for layer-index lookups: a cell is either backed by a real
 /// artifact or is an explicit empty marker.
@@ -61,7 +144,12 @@ impl RuntimeState {
             match parse(&entry.key)? {
                 ParsedKey::Layer { layer, cell } => {
                     layer_index.insert(
-                        (layer, cell.band, (cell.x, cell.y)),
+                        LayerCellKey {
+                            layer,
+                            band: cell.band,
+                            x: cell.x,
+                            y: cell.y,
+                        },
                         LayerCellState::Present(entry.clone()),
                     );
                 }
@@ -74,7 +162,12 @@ impl RuntimeState {
             }
         }
         for EmptyLayerCell { layer, cell } in &manifest.empty_layer_cells {
-            let key = (layer.clone(), cell.band.clone(), (cell.x, cell.y));
+            let key = LayerCellKey {
+                layer: layer.clone(),
+                band: cell.band.clone(),
+                x: cell.x,
+                y: cell.y,
+            };
             if layer_index.contains_key(&key) {
                 return Err(RuntimeError::BadKey {
                     key: format!("{layer}/{band}/{x}_{y}", band = cell.band, x = cell.x, y = cell.y),
@@ -88,7 +181,15 @@ impl RuntimeState {
         for entry in &manifest.source_artifacts {
             match parse(&entry.key)? {
                 ParsedKey::Source { collection, cell } => {
-                    source_index.insert((collection, cell.band, (cell.x, cell.y)), entry.clone());
+                    source_index.insert(
+                        SourceCellKey {
+                            collection: Arc::<str>::from(collection),
+                            band: cell.band,
+                            x: cell.x,
+                            y: cell.y,
+                        },
+                        entry.clone(),
+                    );
                 }
                 ParsedKey::Layer { .. } => {
                     return Err(RuntimeError::BadKey {
@@ -328,9 +429,12 @@ mod tests {
         let state = RuntimeState::from_config_and_manifest(&cfg, Stylesheet::default(), manifest).unwrap();
         assert_eq!(state.layer_index.len(), 1);
         assert!(matches!(
-            state
-                .layer_index
-                .get(&(LayerId::new("l"), ScaleBand::new("hi"), (0, 0))),
+            state.layer_index.get(&LayerCellRef {
+                layer: "l",
+                band: "hi",
+                x: 0,
+                y: 0,
+            }),
             Some(LayerCellState::Empty)
         ));
     }

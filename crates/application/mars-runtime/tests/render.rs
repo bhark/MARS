@@ -19,7 +19,7 @@ use mars_render_port::{DrawOp, Renderer};
 use mars_runtime::{
     Deps, RenderPlan, Runtime, RuntimeError, RuntimeState,
     key::{layer_key, source_key},
-    state::LayerCellState,
+    state::{LayerCellKey, LayerCellState, SourceCellKey},
 };
 use mars_store::mem::{InMemoryCache, InMemoryStore};
 use mars_store::{LocalCache, ObjectStore, StoreError};
@@ -190,14 +190,24 @@ fn state_from_manifest(canonical_crs: CrsCode, manifest: Manifest) -> RuntimeSta
         cell_size: 1024.0,
     }];
 
-    let mut layer_index = std::collections::HashMap::new();
-    let mut source_index = std::collections::HashMap::new();
+    let mut layer_index = hashbrown::HashMap::new();
+    let mut source_index = hashbrown::HashMap::new();
     layer_index.insert(
-        (LayerId::new(LAYER), ScaleBand::new(BAND), (CELL_X, CELL_Y)),
+        LayerCellKey {
+            layer: LayerId::new(LAYER),
+            band: ScaleBand::new(BAND),
+            x: CELL_X,
+            y: CELL_Y,
+        },
         LayerCellState::Present(manifest.layer_artifacts[0].clone()),
     );
     source_index.insert(
-        (COLLECTION.to_owned(), ScaleBand::new(BAND), (CELL_X, CELL_Y)),
+        SourceCellKey {
+            collection: Arc::<str>::from(COLLECTION),
+            band: ScaleBand::new(BAND),
+            x: CELL_X,
+            y: CELL_Y,
+        },
         manifest.source_artifacts[0].clone(),
     );
 
@@ -426,10 +436,15 @@ async fn build_fixture_with_empty_neighbours() -> Fixture {
         cell_size: 1024.0,
     }];
 
-    let mut layer_index = std::collections::HashMap::new();
-    let mut source_index = std::collections::HashMap::new();
+    let mut layer_index = hashbrown::HashMap::new();
+    let mut source_index = hashbrown::HashMap::new();
     layer_index.insert(
-        (LayerId::new(LAYER), ScaleBand::new(BAND), (CELL_X, CELL_Y)),
+        LayerCellKey {
+            layer: LayerId::new(LAYER),
+            band: ScaleBand::new(BAND),
+            x: CELL_X,
+            y: CELL_Y,
+        },
         LayerCellState::Present(manifest.layer_artifacts[0].clone()),
     );
     for dx in -2i64..=2 {
@@ -438,13 +453,23 @@ async fn build_fixture_with_empty_neighbours() -> Fixture {
                 continue;
             }
             layer_index.insert(
-                (LayerId::new(LAYER), ScaleBand::new(BAND), (dx, dy)),
+                LayerCellKey {
+                    layer: LayerId::new(LAYER),
+                    band: ScaleBand::new(BAND),
+                    x: dx,
+                    y: dy,
+                },
                 LayerCellState::Empty,
             );
         }
     }
     source_index.insert(
-        (COLLECTION.to_owned(), ScaleBand::new(BAND), (CELL_X, CELL_Y)),
+        SourceCellKey {
+            collection: Arc::<str>::from(COLLECTION),
+            band: ScaleBand::new(BAND),
+            x: CELL_X,
+            y: CELL_Y,
+        },
         manifest.source_artifacts[0].clone(),
     );
 
@@ -632,18 +657,33 @@ fn state_with_empty_marker() -> RuntimeState {
         cell_size: 1024.0,
     }];
 
-    let mut layer_index = std::collections::HashMap::new();
-    let mut source_index = std::collections::HashMap::new();
+    let mut layer_index = hashbrown::HashMap::new();
+    let mut source_index = hashbrown::HashMap::new();
     layer_index.insert(
-        (LayerId::new(LAYER), ScaleBand::new(BAND), (CELL_X, CELL_Y)),
+        LayerCellKey {
+            layer: LayerId::new(LAYER),
+            band: ScaleBand::new(BAND),
+            x: CELL_X,
+            y: CELL_Y,
+        },
         LayerCellState::Present(manifest.layer_artifacts[0].clone()),
     );
     layer_index.insert(
-        (LayerId::new(LAYER), ScaleBand::new(BAND), (1, 0)),
+        LayerCellKey {
+            layer: LayerId::new(LAYER),
+            band: ScaleBand::new(BAND),
+            x: 1,
+            y: 0,
+        },
         LayerCellState::Empty,
     );
     source_index.insert(
-        (COLLECTION.to_owned(), ScaleBand::new(BAND), (CELL_X, CELL_Y)),
+        SourceCellKey {
+            collection: Arc::<str>::from(COLLECTION),
+            band: ScaleBand::new(BAND),
+            x: CELL_X,
+            y: CELL_Y,
+        },
         manifest.source_artifacts[0].clone(),
     );
 
