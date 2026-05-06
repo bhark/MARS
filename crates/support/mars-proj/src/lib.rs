@@ -6,14 +6,18 @@
 //! - swapping the underlying impl (e.g. to `proj4rs` pure-Rust) is a one-crate
 //!   change.
 //!
-//! Per-thread `PJ_CONTEXT` handling and transformer caching land in Phase 1.
+//! Per-thread `PJ_CONTEXT` plus a per-thread `(from,to) -> Transformer` cache
+//! to amortise PROJ context+normalize cost across requests on the same worker.
 
 // no `forbid(unsafe_code)`: this crate exists to encapsulate FFI. It must
 // remain the *only* place in the workspace that does so.
 #![allow(unsafe_code)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::ffi::{CStr, CString};
+use std::rc::Rc;
 use std::sync::Mutex;
 
 use mars_types::{Bbox, CrsCode};
@@ -37,6 +41,26 @@ thread_local! {
     // per-thread context used for one-shot lifecycle ops (is_projected) and as
     // the construction context for per-Transformer PJ handles.
     static PROJ_CTX: ContextHandle = ContextHandle::new();
+
+    // per-thread (from,to) -> Transformer cache. Rc (not Arc) keeps the
+    // single-thread invariant at the type level; Transformer is !Send because
+    // its PJ binds to PROJ_CTX above.
+    static TRANSFORMER_CACHE: RefCell<HashMap<(String, String), Rc<Transformer>>> = RefCell::new(HashMap::new());
+}
+
+/// Look up a cached `(from, to)` transformer for the calling thread,
+/// constructing one on the first miss. Returned `Rc` is `!Send`, keeping the
+/// PJ-context invariant enforced at the type level.
+pub fn cached_transformer(from: &CrsCode, to: &CrsCode) -> Result<Rc<Transformer>, ProjError> {
+    let key = (from.as_str().to_owned(), to.as_str().to_owned());
+    TRANSFORMER_CACHE.with(|c| {
+        if let Some(existing) = c.borrow().get(&key) {
+            return Ok(existing.clone());
+        }
+        let built = Rc::new(Transformer::new(from, to)?);
+        c.borrow_mut().insert(key, built.clone());
+        Ok(built)
+    })
 }
 
 struct ContextHandle(*mut PJ_CONTEXT);

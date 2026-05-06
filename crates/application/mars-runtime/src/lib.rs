@@ -213,9 +213,11 @@ impl Runtime {
         // forward (canonical -> request) transformer is built later inside
         // spawn_blocking — Transformer is !Send and must live on one thread.
         let needs_reproject = plan.crs != state.canonical_crs;
+        // both legs of reprojection go through the per-thread proj cache so a
+        // busy worker amortises proj_create_crs_to_crs + normalize across
+        // requests.
         let canonical_bbox = if needs_reproject {
-            let inverse = mars_proj::Transformer::new(&plan.crs, &state.canonical_crs)?;
-            inverse.transform_bbox(plan.bbox)?
+            mars_proj::cached_transformer(&plan.crs, &state.canonical_crs)?.transform_bbox(plan.bbox)?
         } else {
             plan.bbox
         };
@@ -333,7 +335,7 @@ impl Runtime {
             // build the forward transformer on the blocking thread so its
             // thread-local PJ context lives only here.
             let forward = if needs_reproject {
-                Some(mars_proj::Transformer::new(&canonical_crs, &request_crs)?)
+                Some(mars_proj::cached_transformer(&canonical_crs, &request_crs)?)
             } else {
                 None
             };
@@ -345,7 +347,7 @@ impl Runtime {
                     &stylesheet_state.stylesheet,
                     viewport,
                     canonical_bbox,
-                    forward.as_ref(),
+                    forward.as_deref(),
                     &mut ops,
                 )?;
             }
