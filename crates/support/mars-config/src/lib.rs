@@ -55,12 +55,6 @@ pub enum ConfigError {
     /// Post-parse validation failure.
     #[error("validation: {0}")]
     Invalid(String),
-    /// Reserved for stub call sites in other crates that haven't migrated yet.
-    #[error("not implemented: {what}")]
-    NotImplemented {
-        /// Human-readable name of the unimplemented surface.
-        what: &'static str,
-    },
 }
 
 /// Load a configuration document from `path`, resolving `!include` directives

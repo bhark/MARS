@@ -299,27 +299,24 @@ async fn publish_with_retry(
 ) -> Result<u64, CompilerError> {
     let mut delays = PUBLISH_RETRY_DELAYS.iter();
     loop {
-        match manifest_store.publish(manifest).await {
+        let reason = match manifest_store.publish(manifest).await {
             Ok(v) => return Ok(v),
-            Err(StoreError::Transient(reason)) => match delays.next() {
-                Some(d) => {
-                    metrics.inc_compiler_publish_retries();
-                    tracing::warn!(
-                        version = manifest.version,
-                        delay_ms = d.as_millis() as u64,
-                        reason,
-                        "compiler: transient publish failure; retrying"
-                    );
-                    tokio::select! {
-                        _ = shutdown.cancelled() => {
-                            return Err(CompilerError::Store(StoreError::Transient(reason)));
-                        }
-                        _ = tokio::time::sleep(*d) => {}
-                    }
-                }
-                None => return Err(CompilerError::Store(StoreError::Transient(reason))),
-            },
+            Err(StoreError::Transient(r)) => r,
             Err(e) => return Err(CompilerError::Store(e)),
+        };
+        let Some(d) = delays.next() else {
+            return Err(CompilerError::Store(StoreError::Transient(reason)));
+        };
+        metrics.inc_compiler_publish_retries();
+        tracing::warn!(
+            version = manifest.version,
+            delay_ms = d.as_millis() as u64,
+            reason,
+            "compiler: transient publish failure; retrying"
+        );
+        tokio::select! {
+            _ = shutdown.cancelled() => return Err(CompilerError::Store(StoreError::Transient(reason))),
+            _ = tokio::time::sleep(*d) => {}
         }
     }
 }

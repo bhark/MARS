@@ -242,8 +242,7 @@ async fn run_runtime(cfg: Arc<Config>, shutdown: CancellationToken) -> Result<()
     shutdown.cancel();
     let drain = Duration::from_secs(30);
     if tokio::time::timeout(drain, async {
-        let _ = reload_task.await;
-        let _ = caps_task.await;
+        let _ = tokio::join!(reload_task, caps_task);
     })
     .await
     .is_err()
