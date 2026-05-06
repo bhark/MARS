@@ -16,10 +16,11 @@ pub(crate) struct LayerCellTask {
 /// OGC 1.3.0 standard pixel size used to derive a denominator from a bbox.
 const OGC_PIXEL_M: f64 = 0.000_28;
 
-/// derive a scale denominator for the request. canonical CRS is metric
-/// (units-per-meter = 1) — validated up front in `mars-config::validate`, so
-/// here we can apply the simple formula:
-///   denom = bbox.width / (width_px * OGC_PIXEL_M)
+/// derive a scale denominator from the canonical bbox width in metres,
+/// never the request bbox. canonical CRS is metric (units-per-meter = 1) —
+/// validated up front in `mars-config::validate`, so here we can apply the
+/// simple formula:
+///   denom = bbox_width / (width_px * OGC_PIXEL_M)
 #[must_use]
 pub fn denom_from_plan(bbox_width: f64, width_px: u32) -> u32 {
     if width_px == 0 || bbox_width <= 0.0 {
@@ -44,7 +45,7 @@ pub(crate) fn resolve(
     state: &RuntimeState,
     canonical_bbox: mars_types::Bbox,
 ) -> Result<Vec<LayerCellTask>, RuntimeError> {
-    let denom = denom_from_plan(plan.bbox.width(), plan.width);
+    let denom = denom_from_plan(canonical_bbox.width(), plan.width);
     let band = pick_band(denom, &state.bands)?;
     let cells = cells_in_bbox(canonical_bbox, band, crate::MAX_CELLS_PER_REQUEST)?;
 
@@ -65,6 +66,7 @@ pub(crate) fn resolve(
 #[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
+    use mars_types::{Bbox, ScaleBand};
 
     #[test]
     fn denom_width_zero() {
@@ -103,5 +105,53 @@ mod tests {
         // very small denominator should clamp to 1
         let d = denom_from_plan(0.0001, 1000);
         assert_eq!(d, 1);
+    }
+
+    #[test]
+    fn resolve_uses_canonical_bbox_for_band_selection() {
+        // a 0.009 degree bbox (≈ 1000 m at equator) with a 1000 m canonical
+        // width. using the degree width would give denom ≈ 0.03 (clamps to 1),
+        // selecting a very fine band; using the metric width gives denom ≈ 3571,
+        // selecting a medium band.
+        use mars_grid::BandConfig;
+        use mars_style::Stylesheet;
+        use mars_types::{CrsCode, ImageFormat, Manifest};
+
+        let state = RuntimeState {
+            canonical_crs: CrsCode::new("EPSG:25832"),
+            bands: vec![
+                BandConfig {
+                    name: ScaleBand::new("fine"),
+                    max_denom: 100,
+                    origin: (0.0, 0.0),
+                    cell_size: 1024.0,
+                },
+                BandConfig {
+                    name: ScaleBand::new("med"),
+                    max_denom: 25_000,
+                    origin: (0.0, 0.0),
+                    cell_size: 4096.0,
+                },
+            ],
+            layer_order: vec![LayerId::new("roads")],
+            stylesheet: Stylesheet::default(),
+            manifest: Manifest::new(1, "t", vec![], vec![], None, vec![]),
+            layer_index: Default::default(),
+            source_index: Default::default(),
+        };
+
+        let plan = RenderPlan {
+            layers: vec![LayerId::new("roads")],
+            bbox: Bbox::new(0.0, 0.0, 0.009, 0.009),
+            width: 1000,
+            height: 1000,
+            crs: CrsCode::new("EPSG:4326"),
+            format: ImageFormat::Png,
+        };
+        let canonical_bbox = Bbox::new(0.0, 0.0, 1000.0, 1000.0);
+
+        let tasks = resolve(&plan, &state, canonical_bbox).unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].cell.band.as_str(), "med");
     }
 }
