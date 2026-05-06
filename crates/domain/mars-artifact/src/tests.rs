@@ -383,3 +383,107 @@ fn geometry_rejects_oversize_coord() {
         Err(ArtifactError::CoordOutOfRange(_))
     ));
 }
+
+fn malicious_payload(geom_type: u8, coord_bytes: &[u8]) -> Vec<u8> {
+    use crate::geometry::FEATURE_INDEX_ENTRY_LEN;
+    let mut out = Vec::new();
+    out.extend_from_slice(&1u32.to_le_bytes()); // count = 1
+    out.extend_from_slice(&0u64.to_le_bytes()); // id
+    for _ in 0..4 {
+        out.extend_from_slice(&0f32.to_le_bytes());
+    }
+    out.push(geom_type);
+    out.extend_from_slice(&0u32.to_le_bytes()); // coord offset
+    out.extend_from_slice(&(coord_bytes.len() as u32).to_le_bytes());
+    out.extend_from_slice(coord_bytes);
+    // pad to expected header_len so decode_geometry_payload doesn't truncate early
+    let header_len = 4 + FEATURE_INDEX_ENTRY_LEN;
+    while out.len() < header_len {
+        out.push(0);
+    }
+    out
+}
+
+#[test]
+fn geometry_rejects_huge_ring_count() {
+    use crate::geometry::{GT_LINESTRING, MAX_GEOM_COORDS};
+    use crate::varint::{write_ivarint, write_uvarint};
+    let mut coords = Vec::new();
+    write_uvarint(&mut coords, (MAX_GEOM_COORDS + 1) as u64);
+    write_ivarint(&mut coords, 0);
+    write_ivarint(&mut coords, 0);
+    let payload = malicious_payload(GT_LINESTRING, &coords);
+    assert!(matches!(
+        decode_geometry_payload(&payload),
+        Err(ArtifactError::Malformed(_))
+    ));
+}
+
+#[test]
+fn geometry_rejects_huge_polygon_ring_count() {
+    use crate::geometry::{GT_POLYGON, MAX_GEOM_PARTS};
+    use crate::varint::write_uvarint;
+    let mut coords = Vec::new();
+    write_uvarint(&mut coords, (MAX_GEOM_PARTS + 1) as u64);
+    let payload = malicious_payload(GT_POLYGON, &coords);
+    assert!(matches!(
+        decode_geometry_payload(&payload),
+        Err(ArtifactError::Malformed(_))
+    ));
+}
+
+#[test]
+fn geometry_rejects_huge_multipoint_count() {
+    use crate::geometry::{GT_MULTIPOINT, MAX_GEOM_COORDS};
+    use crate::varint::write_uvarint;
+    let mut coords = Vec::new();
+    write_uvarint(&mut coords, (MAX_GEOM_COORDS + 1) as u64);
+    let payload = malicious_payload(GT_MULTIPOINT, &coords);
+    assert!(matches!(
+        decode_geometry_payload(&payload),
+        Err(ArtifactError::Malformed(_))
+    ));
+}
+
+#[test]
+fn geometry_rejects_huge_multilinestring_part_count() {
+    use crate::geometry::{GT_MULTILINESTRING, MAX_GEOM_PARTS};
+    use crate::varint::write_uvarint;
+    let mut coords = Vec::new();
+    write_uvarint(&mut coords, (MAX_GEOM_PARTS + 1) as u64);
+    let payload = malicious_payload(GT_MULTILINESTRING, &coords);
+    assert!(matches!(
+        decode_geometry_payload(&payload),
+        Err(ArtifactError::Malformed(_))
+    ));
+}
+
+#[test]
+fn geometry_rejects_huge_multipolygon_count() {
+    use crate::geometry::{GT_MULTIPOLYGON, MAX_GEOM_PARTS};
+    use crate::varint::write_uvarint;
+    let mut coords = Vec::new();
+    write_uvarint(&mut coords, (MAX_GEOM_PARTS + 1) as u64);
+    let payload = malicious_payload(GT_MULTIPOLYGON, &coords);
+    assert!(matches!(
+        decode_geometry_payload(&payload),
+        Err(ArtifactError::Malformed(_))
+    ));
+}
+
+#[test]
+fn geometry_rejects_delta_overflow() {
+    use crate::geometry::GT_LINESTRING;
+    use crate::varint::{write_ivarint, write_uvarint};
+    let mut coords = Vec::new();
+    write_uvarint(&mut coords, 2u64); // 2 points
+    write_ivarint(&mut coords, 1); // first x = 1
+    write_ivarint(&mut coords, 0); // first y
+    write_ivarint(&mut coords, i64::MAX); // 1 + i64::MAX overflows
+    write_ivarint(&mut coords, 0);
+    let payload = malicious_payload(GT_LINESTRING, &coords);
+    assert!(matches!(
+        decode_geometry_payload(&payload),
+        Err(ArtifactError::Malformed(_))
+    ));
+}

@@ -37,12 +37,17 @@ pub struct FeatureGeom {
     pub geom: GeomKind,
 }
 
-const GT_POINT: u8 = 1;
-const GT_LINESTRING: u8 = 2;
-const GT_POLYGON: u8 = 3;
-const GT_MULTIPOINT: u8 = 4;
-const GT_MULTILINESTRING: u8 = 5;
-const GT_MULTIPOLYGON: u8 = 6;
+pub(crate) const GT_POINT: u8 = 1;
+pub(crate) const GT_LINESTRING: u8 = 2;
+pub(crate) const GT_POLYGON: u8 = 3;
+pub(crate) const GT_MULTIPOINT: u8 = 4;
+pub(crate) const GT_MULTILINESTRING: u8 = 5;
+pub(crate) const GT_MULTIPOLYGON: u8 = 6;
+
+/// hard limit on coordinates per ring or points per multipoint.
+pub(crate) const MAX_GEOM_COORDS: usize = 1_000_000;
+/// hard limit on rings / parts / polygons per geometry.
+pub(crate) const MAX_GEOM_PARTS: usize = 100_000;
 
 // quantization is mm-precision fixed point. i64 holds ±9.2e18 mm = ±9.2e15 m
 // of representable canonical-CRS extent; anything beyond is a coding bug or
@@ -92,6 +97,9 @@ fn read_uvarint_usize(buf: &[u8], pos: &mut usize) -> Result<usize, ArtifactErro
 
 fn read_ring(buf: &[u8], pos: &mut usize) -> Result<Vec<Coord>, ArtifactError> {
     let n = read_uvarint_usize(buf, pos)?;
+    if n > MAX_GEOM_COORDS {
+        return Err(ArtifactError::Malformed("ring coordinate count exceeds limit"));
+    }
     if n == 0 {
         return Ok(Vec::new());
     }
@@ -100,8 +108,14 @@ fn read_ring(buf: &[u8], pos: &mut usize) -> Result<Vec<Coord>, ArtifactError> {
     let mut py = read_ivarint(buf, pos)?;
     out.push((dequantize(px), dequantize(py)));
     for _ in 1..n {
-        px += read_ivarint(buf, pos)?;
-        py += read_ivarint(buf, pos)?;
+        let dx = read_ivarint(buf, pos)?;
+        let dy = read_ivarint(buf, pos)?;
+        px = px
+            .checked_add(dx)
+            .ok_or(ArtifactError::Malformed("coord delta overflow"))?;
+        py = py
+            .checked_add(dy)
+            .ok_or(ArtifactError::Malformed("coord delta overflow"))?;
         out.push((dequantize(px), dequantize(py)));
     }
     Ok(out)
@@ -156,6 +170,9 @@ fn read_geom(geom_type: u8, buf: &[u8], pos: &mut usize) -> Result<GeomKind, Art
         GT_LINESTRING => GeomKind::LineString(read_ring(buf, pos)?),
         GT_POLYGON => {
             let n = read_uvarint_usize(buf, pos)?;
+            if n > MAX_GEOM_PARTS {
+                return Err(ArtifactError::Malformed("polygon ring count exceeds limit"));
+            }
             let mut rings = Vec::with_capacity(n);
             for _ in 0..n {
                 rings.push(read_ring(buf, pos)?);
@@ -164,6 +181,9 @@ fn read_geom(geom_type: u8, buf: &[u8], pos: &mut usize) -> Result<GeomKind, Art
         }
         GT_MULTIPOINT => {
             let n = read_uvarint_usize(buf, pos)?;
+            if n > MAX_GEOM_COORDS {
+                return Err(ArtifactError::Malformed("multipoint count exceeds limit"));
+            }
             let mut pts = Vec::with_capacity(n);
             for _ in 0..n {
                 let x = read_ivarint(buf, pos)?;
@@ -174,6 +194,9 @@ fn read_geom(geom_type: u8, buf: &[u8], pos: &mut usize) -> Result<GeomKind, Art
         }
         GT_MULTILINESTRING => {
             let n = read_uvarint_usize(buf, pos)?;
+            if n > MAX_GEOM_PARTS {
+                return Err(ArtifactError::Malformed("multilinestring part count exceeds limit"));
+            }
             let mut parts = Vec::with_capacity(n);
             for _ in 0..n {
                 parts.push(read_ring(buf, pos)?);
@@ -182,9 +205,15 @@ fn read_geom(geom_type: u8, buf: &[u8], pos: &mut usize) -> Result<GeomKind, Art
         }
         GT_MULTIPOLYGON => {
             let n = read_uvarint_usize(buf, pos)?;
+            if n > MAX_GEOM_PARTS {
+                return Err(ArtifactError::Malformed("multipolygon count exceeds limit"));
+            }
             let mut polys = Vec::with_capacity(n);
             for _ in 0..n {
                 let m = read_uvarint_usize(buf, pos)?;
+                if m > MAX_GEOM_PARTS {
+                    return Err(ArtifactError::Malformed("multipolygon ring count exceeds limit"));
+                }
                 let mut rings = Vec::with_capacity(m);
                 for _ in 0..m {
                     rings.push(read_ring(buf, pos)?);
@@ -214,7 +243,7 @@ fn geom_type_byte(g: &GeomKind) -> u8 {
 /// Stride 33 is unaligned: the index is decoded by copying each field through
 /// `from_le_bytes`. Zero-copy cast to `&[FeatureEntry]` is NOT supported with
 /// the current stride. SPEC §9.3 must be amended in a future format-bump pass.
-const FEATURE_INDEX_ENTRY_LEN: usize = 8 + 4 * 4 + 1 + 4 + 4;
+pub(crate) const FEATURE_INDEX_ENTRY_LEN: usize = 8 + 4 * 4 + 1 + 4 + 4;
 
 /// encode features into the geometry-payload section bytes.
 ///
