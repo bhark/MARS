@@ -39,9 +39,32 @@ pub async fn run_source_cell(
     source: &Arc<dyn Source>,
     store: &Arc<dyn ObjectStore>,
 ) -> Result<SnapshotOutput, CompilerError> {
-    let mut out = SnapshotOutput::default();
+    let rows = fetch_source_cell(task, source).await?;
+    build_and_publish(task, dependents, rows, store).await
+}
+
+/// Fetch rows for one cell. Pure I/O leg of `run_source_cell` — split out so
+/// the executor can batch fetches across cells with a shared binding.
+pub async fn fetch_source_cell(
+    task: &Arc<SourceTask>,
+    source: &Arc<dyn Source>,
+) -> Result<Vec<RowBytes>, CompilerError> {
     let bbox = cell_bbox(task.origin, task.cell_size, &task.cell);
     let rows = source.fetch_cell(&task.binding, &task.cell, bbox, None).await?;
+    Ok(rows)
+}
+
+/// Build and publish the source + dependent-layer artifacts for one cell from
+/// pre-fetched rows. Empty `rows` short-circuits to an `empty_layer_cells`
+/// record per dependent.
+pub async fn build_and_publish(
+    task: &Arc<SourceTask>,
+    dependents: &[Arc<LayerTask>],
+    rows: Vec<RowBytes>,
+    store: &Arc<dyn ObjectStore>,
+) -> Result<SnapshotOutput, CompilerError> {
+    let mut out = SnapshotOutput::default();
+    let bbox = cell_bbox(task.origin, task.cell_size, &task.cell);
     if rows.is_empty() {
         for dep in dependents {
             out.empty_layer_cells.push(EmptyLayerCell {
