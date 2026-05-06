@@ -264,6 +264,7 @@ mod tests {
                 dsn: "memory://".into(),
                 native_crs: CrsCode::new("EPSG:25832"),
                 change_feed: None,
+            pool: Default::default(),
             },
             artifacts: Artifacts {
                 store: ArtifactStore {

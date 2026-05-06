@@ -13,9 +13,10 @@
 
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
-use deadpool_postgres::{Pool, Runtime};
+use deadpool_postgres::{Hook, HookError, Pool, Runtime};
 use mars_expr::Expr;
 use mars_source::{ChangeFeed, ChangeSubscription, RowBytes, Source, SourceBinding, SourceError};
 use mars_types::{Bbox, Cell};
@@ -39,6 +40,14 @@ pub struct PgConfig {
     pub publication: String,
     /// Logical replication slot name.
     pub slot: String,
+    /// Maximum pool size; falls back to deadpool defaults when `None`.
+    pub max_pool_size: Option<usize>,
+    /// Per-connection idle recycle timeout. Connections idle past this age are
+    /// dropped on next checkout.
+    pub recycle_timeout: Option<Duration>,
+    /// Per-statement timeout applied via `SET statement_timeout` on every
+    /// checkout. `None` leaves the server default in place.
+    pub statement_timeout: Option<Duration>,
 }
 
 impl std::fmt::Debug for PgConfig {
@@ -112,8 +121,9 @@ impl PgSource {
         let pg_cfg =
             tokio_postgres::Config::from_str(&cfg.dsn).map_err(|e| SourceError::Backend(format!("dsn: {e}")))?;
 
+        let mgr_cfg = deadpool_postgres::ManagerConfig::default();
         let mgr = if pg_cfg.get_ssl_mode() == tokio_postgres::config::SslMode::Disable {
-            deadpool_postgres::Manager::from_config(pg_cfg, NoTls, deadpool_postgres::ManagerConfig::default())
+            deadpool_postgres::Manager::from_config(pg_cfg, NoTls, mgr_cfg)
         } else {
             let _ = rustls::crypto::ring::default_provider().install_default();
             let mut roots = rustls::RootCertStore::empty();
@@ -124,11 +134,32 @@ impl PgSource {
                 .with_root_certificates(roots)
                 .with_no_client_auth();
             let tls = tokio_postgres_rustls::MakeRustlsConnect::new(tls_cfg);
-            deadpool_postgres::Manager::from_config(pg_cfg, tls, deadpool_postgres::ManagerConfig::default())
+            deadpool_postgres::Manager::from_config(pg_cfg, tls, mgr_cfg)
         };
 
-        let pool = Pool::builder(mgr)
-            .runtime(Runtime::Tokio1)
+        let mut builder = Pool::builder(mgr).runtime(Runtime::Tokio1);
+        if let Some(n) = cfg.max_pool_size {
+            builder = builder.max_size(n);
+        }
+        if let Some(d) = cfg.recycle_timeout {
+            builder = builder.recycle_timeout(Some(d));
+        }
+        if let Some(timeout) = cfg.statement_timeout {
+            // post_create hook fires once per fresh connection. set
+            // statement_timeout there so every checkout sees the bound.
+            let ms = timeout.as_millis() as u64;
+            let stmt = format!("SET statement_timeout = {ms}");
+            builder = builder.post_create(Hook::async_fn(move |client, _| {
+                let stmt = stmt.clone();
+                Box::pin(async move {
+                    client
+                        .batch_execute(&stmt)
+                        .await
+                        .map_err(|e| HookError::message(format!("statement_timeout: {e}")))
+                })
+            }));
+        }
+        let pool = builder
             .build()
             .map_err(|e| SourceError::Backend(format!("pool create: {e}")))?;
 

@@ -37,6 +37,7 @@ fn make_config() -> Config {
             dsn: "memory://".to_string(),
             native_crs: CrsCode::new("EPSG:25832"),
             change_feed: None,
+            pool: Default::default(),
         },
         artifacts: Artifacts {
             store: ArtifactStore {

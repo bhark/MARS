@@ -149,6 +149,26 @@ pub struct Source {
     /// Optional change-feed configuration.
     #[serde(default)]
     pub change_feed: Option<ChangeFeed>,
+    /// Connection-pool tuning. Defaults are conservative and adapter-specific.
+    #[serde(default)]
+    pub pool: SourcePool,
+}
+
+/// Connection-pool tuning surface for source adapters. All fields are optional;
+/// adapters fall back to library defaults when a value is not set.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SourcePool {
+    /// Maximum number of connections held by the pool.
+    #[serde(default)]
+    pub max_size: Option<usize>,
+    /// Recycle (idle) timeout in seconds; an idle connection past this age is
+    /// discarded on next checkout.
+    #[serde(default)]
+    pub recycle_timeout_secs: Option<u64>,
+    /// Per-statement timeout in milliseconds; applied via `SET statement_timeout`
+    /// on every checkout.
+    #[serde(default)]
+    pub statement_timeout_ms: Option<u64>,
 }
 
 /// Change-feed configuration. SPEC §8.2.

@@ -340,10 +340,14 @@ async fn build_source_with_topology(
         ));
     }
     let feed = cfg.source.change_feed.as_ref();
+    let pool = &cfg.source.pool;
     let pg_cfg = PgConfig {
         dsn: cfg.source.dsn.clone(),
         publication: feed.and_then(|f| f.publication.clone()).unwrap_or_default(),
         slot: feed.and_then(|f| f.slot.clone()).unwrap_or_default(),
+        max_pool_size: pool.max_size,
+        recycle_timeout: pool.recycle_timeout_secs.map(std::time::Duration::from_secs),
+        statement_timeout: pool.statement_timeout_ms.map(std::time::Duration::from_millis),
     };
     let src = PgSource::connect(pg_cfg).await.context("connect postgres")?;
     Ok(Arc::new(src.with_topology(topology)))

@@ -122,6 +122,7 @@ mod tests {
                     slot: Some("slot".into()),
                     poll_interval: None,
                 }),
+                pool: Default::default(),
             },
             artifacts: Artifacts {
                 store: ArtifactStore {
