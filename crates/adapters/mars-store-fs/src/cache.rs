@@ -370,14 +370,23 @@ impl FsCache {
             let mut state = lock_state(&self.state);
             state.insert(key.clone(), size)
         };
-        for victim in evicted {
-            let victim_path = validate_artifact_key(&self.root, &victim)?;
-            // best-effort eviction; missing file is fine.
-            if let Err(e) = std::fs::remove_file(&victim_path)
-                && e.kind() != std::io::ErrorKind::NotFound
-            {
-                tracing::warn!(path = %victim_path.display(), error = %e, "fs cache: evict failed");
-            }
+        if !evicted.is_empty() {
+            let root = self.root.clone();
+            tokio::task::spawn_blocking(move || {
+                for victim in evicted {
+                    let Ok(victim_path) = validate_artifact_key(&root, &victim) else {
+                        continue;
+                    };
+                    // best-effort eviction; missing file is fine.
+                    if let Err(e) = std::fs::remove_file(&victim_path)
+                        && e.kind() != std::io::ErrorKind::NotFound
+                    {
+                        tracing::warn!(path = %victim_path.display(), error = %e, "fs cache: evict failed");
+                    }
+                }
+            })
+            .await
+            .map_err(|e| StoreError::Backend(format!("evict join: {e}")))?;
         }
         Ok(bytes)
     }
