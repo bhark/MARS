@@ -46,20 +46,22 @@ impl Bbox {
     }
 }
 
-/// declares a transparent `String` newtype with the standard accessor surface
-/// (`new`, `as_str`), `Display`, `From<&str>`, and serde transparent ser/de.
-/// keeps the wire form a plain string while hiding the inner field.
+/// declares a transparent `Arc<str>` newtype with the standard accessor surface
+/// (`new`, `as_str`), `Display`, `AsRef<str>`, `Borrow<str>`, `From<&str>`, and
+/// serde transparent ser/de. clone is a refcount bump; hash/eq are content-based
+/// (delegate to `str`), so swapping with the previous `String` repr is invisible
+/// to `HashMap` consumers.
 #[macro_export]
 macro_rules! impl_string_newtype {
     ($(#[$meta:meta])* $vis:vis $name:ident) => {
         $(#[$meta])*
-        #[derive(Debug, Clone, PartialEq, Eq, Hash, ::serde::Serialize, ::serde::Deserialize)]
+        #[derive(Debug, Clone, PartialEq, Eq, Hash, ::serde::Serialize)]
         #[serde(transparent)]
-        $vis struct $name(String);
+        $vis struct $name(::std::sync::Arc<str>);
 
         impl $name {
             #[must_use]
-            pub fn new(s: impl Into<String>) -> Self {
+            pub fn new(s: impl Into<::std::sync::Arc<str>>) -> Self {
                 Self(s.into())
             }
 
@@ -75,6 +77,18 @@ macro_rules! impl_string_newtype {
             }
         }
 
+        impl ::core::convert::AsRef<str> for $name {
+            fn as_ref(&self) -> &str {
+                &self.0
+            }
+        }
+
+        impl ::core::borrow::Borrow<str> for $name {
+            fn borrow(&self) -> &str {
+                &self.0
+            }
+        }
+
         impl From<&str> for $name {
             fn from(s: &str) -> Self {
                 Self::new(s)
@@ -83,7 +97,21 @@ macro_rules! impl_string_newtype {
 
         impl From<String> for $name {
             fn from(s: String) -> Self {
-                Self::new(s)
+                // String -> Arc<str> goes via Box<str>; one alloc, no copy beyond it
+                Self(::std::sync::Arc::<str>::from(s))
+            }
+        }
+
+        // manual Deserialize: read a String, hand off to Arc<str>. avoids
+        // depending on serde's optional `rc` feature, whose semantics around
+        // shared deserialization are not what we want here.
+        impl<'de> ::serde::Deserialize<'de> for $name {
+            fn deserialize<D>(deserializer: D) -> ::core::result::Result<Self, D::Error>
+            where
+                D: ::serde::Deserializer<'de>,
+            {
+                let s = String::deserialize(deserializer)?;
+                Ok(Self(::std::sync::Arc::<str>::from(s)))
             }
         }
     };
