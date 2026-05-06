@@ -26,6 +26,8 @@ use mars_style::Stylesheet;
 use mars_types::Manifest;
 use tokio_util::sync::CancellationToken;
 
+mod composition;
+
 #[derive(Debug, Parser)]
 #[command(
     name = "mars",
@@ -241,7 +243,9 @@ async fn run_compiler_mode(config_path: &Path) -> Result<()> {
 }
 
 async fn run_compiler(cfg: Config) -> Result<()> {
-    let source = build_source(&cfg).await?;
+    composition::validate_change_feed_config(&cfg)?;
+    let topology = composition::build_replication_topology(&cfg)?;
+    let source = build_source_with_topology(&cfg, topology).await?;
     let (store, publisher) = build_store_and_publisher(&cfg)?;
     let metrics = mars_observability::Metrics::new().context("init metrics")?;
 
@@ -322,7 +326,10 @@ fn load_and_validate(path: &Path) -> Result<Config> {
     Ok(cfg)
 }
 
-async fn build_source(cfg: &Config) -> Result<Arc<PgSource>> {
+async fn build_source_with_topology(
+    cfg: &Config,
+    topology: mars_source_postgres::ReplicationTopology,
+) -> Result<Arc<PgSource>> {
     if cfg.source.kind != "postgis" {
         return Err(anyhow!(
             "source.type='{}' not supported in Phase 0; only 'postgis'",
@@ -335,7 +342,8 @@ async fn build_source(cfg: &Config) -> Result<Arc<PgSource>> {
         publication: feed.and_then(|f| f.publication.clone()).unwrap_or_default(),
         slot: feed.and_then(|f| f.slot.clone()).unwrap_or_default(),
     };
-    Ok(Arc::new(PgSource::connect(pg_cfg).await.context("connect postgres")?))
+    let src = PgSource::connect(pg_cfg).await.context("connect postgres")?;
+    Ok(Arc::new(src.with_topology(topology)))
 }
 
 fn build_store_and_publisher(cfg: &Config) -> Result<(Arc<dyn ObjectStore>, Arc<dyn ManifestStore>)> {

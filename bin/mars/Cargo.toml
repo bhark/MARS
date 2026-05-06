@@ -37,6 +37,7 @@ mars-artifact       = { workspace = true }
 mars-store          = { workspace = true }
 mars-style          = { workspace = true }
 mars-types          = { workspace = true }
+mars-grid           = { workspace = true }
 
 clap         = { workspace = true }
 tokio        = { workspace = true }
@@ -48,7 +49,6 @@ serde_json   = { workspace = true }
 futures-util = { workspace = true }
 
 [dev-dependencies]
-mars-grid           = { workspace = true }
 testcontainers = "0.27"
 tokio-postgres = { workspace = true }
 png = { workspace = true }
