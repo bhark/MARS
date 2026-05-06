@@ -2089,7 +2089,6 @@ version = "0.0.1"
 dependencies = [
  "async-trait",
  "bytes",
- "futures-core",
  "mars-expr",
  "mars-types",
  "thiserror 2.0.18",

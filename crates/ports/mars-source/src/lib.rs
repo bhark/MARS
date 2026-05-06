@@ -13,7 +13,6 @@ pub mod access;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures_core::stream::BoxStream;
 use mars_expr::Expr;
 use mars_types::{Bbox, Cell, CrsCode};
 
@@ -243,9 +242,8 @@ pub struct RowBytes {
 /// Phase-0 stub adapters that satisfy the port traits with `NotImplemented`.
 /// Lets bins and tests compose the surface without naming a real backend.
 pub mod stub {
-    use super::{ChangeBatch, ChangeFeed, RowBytes, Source, SourceBinding, SourceError};
+    use super::{ChangeFeed, ChangeSubscription, RowBytes, Source, SourceBinding, SourceError};
     use async_trait::async_trait;
-    use futures_core::stream::BoxStream;
     use mars_expr::Expr;
     use mars_types::{Bbox, Cell};
 
@@ -270,7 +268,7 @@ pub mod stub {
 
     #[async_trait]
     impl ChangeFeed for NotImplementedSource {
-        async fn subscribe(&self) -> Result<BoxStream<'static, Result<ChangeBatch, SourceError>>, SourceError> {
+        async fn subscribe(&self) -> Result<Box<dyn ChangeSubscription>, SourceError> {
             Err(SourceError::NotImplemented {
                 what: "mars-source::stub::NotImplementedSource::subscribe",
             })
@@ -278,17 +276,38 @@ pub mod stub {
     }
 }
 
-/// Subscription-side port: a stream of committed [`ChangeBatch`]es.
+/// Subscription-side port: a stream of committed [`ChangeBatch`]es with an
+/// ack-aware cursor.
 ///
-/// Each yielded batch represents one upstream commit; events within a batch
-/// are ordered, and the `source_version` cursor (when present) points at the
-/// position immediately after the batch.
+/// `subscribe` opens the subscription. The returned [`ChangeSubscription`] is
+/// drained by the compiler one batch at a time; the compiler MUST call
+/// [`ChangeSubscription::acknowledge`] only after a batch's effects have been
+/// durably committed to the manifest store. Non-acked batches must be
+/// re-delivered after a restart.
 #[async_trait]
 pub trait ChangeFeed: Send + Sync + 'static {
-    /// Subscribe to the change feed. The returned stream lives for the
-    /// lifetime of the compiler process; transient errors are reported
-    /// inline as `Result::Err`.
-    async fn subscribe(&self) -> Result<BoxStream<'static, Result<ChangeBatch, SourceError>>, SourceError>;
+    /// Open a fresh subscription. Each call returns an independent cursor
+    /// positioned at the last acknowledged source version (or earliest
+    /// available, on first connect).
+    async fn subscribe(&self) -> Result<Box<dyn ChangeSubscription>, SourceError>;
+}
+
+/// Owned, ack-aware subscription. Pulled by the compiler one batch at a time.
+///
+/// `acknowledge` MUST only be called once a batch's effects are durably
+/// recorded in the manifest store, so a crash between `next_batch` and
+/// `acknowledge` re-delivers the batch on reconnect.
+#[async_trait]
+pub trait ChangeSubscription: Send {
+    /// Pull the next committed batch. `None` indicates the feed closed
+    /// cleanly; transient errors surface as `Some(Err(_))` and the caller
+    /// decides whether to abort.
+    async fn next_batch(&mut self) -> Option<Result<ChangeBatch, SourceError>>;
+
+    /// Acknowledge that every batch up to and including `source_version` is
+    /// durably persisted downstream. Adapters with no notion of a cursor
+    /// (polling fallback) treat this as a no-op.
+    async fn acknowledge(&mut self, source_version: Option<&str>) -> Result<(), SourceError>;
 }
 
 /// Opaque guard returned by [`LeaderLock::try_acquire`]. Holding it keeps the

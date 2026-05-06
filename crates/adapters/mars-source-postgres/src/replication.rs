@@ -21,9 +21,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use futures_core::stream::BoxStream;
 use mars_grid::{BandConfig, cells_in_bbox};
-use mars_source::{ChangeBatch, SourceError};
+use mars_source::{ChangeSubscription, SourceError};
 use mars_types::Bbox;
 
 // dead_code allowed: these modules are fully tested via their own unit tests
@@ -85,14 +84,14 @@ impl ReplicationTopology {
     }
 }
 
-/// Glue: spawn the replication task and return the consumer-side stream.
+/// Glue: spawn the replication task and return the ack-aware subscription.
 ///
 /// transport returns `NotImplemented` today. when it gains a real impl, the
 /// shape here (bounded mpsc, cancellable spawn) does not change.
 pub(crate) async fn subscribe(
     cfg: Arc<crate::PgConfig>,
     topology: Arc<ReplicationTopology>,
-) -> Result<BoxStream<'static, Result<ChangeBatch, SourceError>>, SourceError> {
+) -> Result<Box<dyn ChangeSubscription>, SourceError> {
     transport::run(cfg, topology).await
 }
 

@@ -27,17 +27,16 @@
 
 use std::sync::Arc;
 
-use futures_core::stream::BoxStream;
-use mars_source::{ChangeBatch, SourceError};
+use mars_source::{ChangeSubscription, SourceError};
 
 use super::ReplicationTopology;
 use crate::PgConfig;
 
-/// Spawn the replication subscriber task and return the consumer stream.
+/// Spawn the replication subscriber task and return the ack-aware subscription.
 pub(crate) async fn run(
     _cfg: Arc<PgConfig>,
     _topology: Arc<ReplicationTopology>,
-) -> Result<BoxStream<'static, Result<ChangeBatch, SourceError>>, SourceError> {
+) -> Result<Box<dyn ChangeSubscription>, SourceError> {
     // Hard rule from the operator runbook: this stub is a typed
     // `NotImplemented`, never a panic. Wiring in the rest of the crate
     // (PgSource::subscribe, decoder, translator) is real and tested.

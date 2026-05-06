@@ -16,6 +16,5 @@ mars-types    = { workspace = true }
 mars-expr     = { workspace = true }
 async-trait   = { workspace = true }
 bytes         = { workspace = true }
-futures-core  = { workspace = true }
 thiserror     = { workspace = true }
 

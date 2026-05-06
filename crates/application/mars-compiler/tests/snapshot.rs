@@ -221,14 +221,17 @@ async fn snapshot_is_deterministic() {
 
     let (deps1, store1, _) = build_deps(make_rows());
     Compiler::new(deps1, cfg.clone())
-        .run(CancellationToken::new())
+        .run_snapshot_once(CancellationToken::new())
         .await
         .unwrap();
     let lyr1 = store1.list("lyr").await.unwrap();
     let src1 = store1.list("src").await.unwrap();
 
     let (deps2, store2, _) = build_deps(make_rows());
-    Compiler::new(deps2, cfg).run(CancellationToken::new()).await.unwrap();
+    Compiler::new(deps2, cfg)
+        .run_snapshot_once(CancellationToken::new())
+        .await
+        .unwrap();
     let lyr2 = store2.list("lyr").await.unwrap();
     let src2 = store2.list("src").await.unwrap();
 

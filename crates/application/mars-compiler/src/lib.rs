@@ -106,6 +106,10 @@ impl Compiler {
     /// exists, then consume committed change batches in `compiler.window`
     /// chunks, rebuilding only dirty source cells and republishing a merged
     /// manifest at version+1 per cycle. SPEC §8.3.
+    ///
+    /// Acknowledgement is tied to manifest durability: the subscription cursor
+    /// only advances after `publish` succeeds. Crashes between `next_batch`
+    /// and `acknowledge` re-deliver the window on reconnect.
     pub async fn run(&self, shutdown: CancellationToken) -> Result<(), CompilerError> {
         let _guard = self.acquire_leader().await?;
 
@@ -114,14 +118,9 @@ impl Compiler {
             None => self.snapshot_inner(shutdown.clone()).await?,
         };
 
-        let mut stream = match self.deps.change_feed.subscribe().await {
-            Ok(s) => s,
-            Err(mars_source::SourceError::NotImplemented { what }) => {
-                tracing::warn!(what, "compiler: change feed not implemented; idling after bootstrap");
-                return Ok(());
-            }
-            Err(e) => return Err(e.into()),
-        };
+        // a configured-but-unimplemented feed is a hard error in service mode;
+        // silently exiting would leave the manifest frozen forever.
+        let mut sub = self.deps.change_feed.subscribe().await?;
 
         let window = self.config.compiler.window_dur()?;
         let plan = plan::build_plan(&self.config)?;
@@ -136,7 +135,7 @@ impl Compiler {
                 tokio::select! {
                     _ = shutdown.cancelled() => return Ok(()),
                     _ = tokio::time::sleep_until(deadline) => break,
-                    next = stream.next() => match next {
+                    next = sub.next_batch() => match next {
                         Some(Ok(b)) => batches.push(b),
                         Some(Err(e)) => return Err(e.into()),
                         None => {
@@ -150,12 +149,19 @@ impl Compiler {
                 continue;
             }
 
+            let source_version = batches.iter().rev().find_map(|b| b.source_version.clone());
+
             let dirty = incremental::dirty_cells_for(&batches, &plan);
             if dirty.is_empty() {
+                // no manifest change, but the source cursor advanced; ack so
+                // the upstream slot does not retain logs we no longer need.
+                sub.acknowledge(source_version.as_deref()).await?;
                 continue;
             }
             let next_plan = incremental::filter_plan(&plan, &dirty);
             let rebuild_start = Instant::now();
+            // rebuild and publish before acking. on failure we return without
+            // calling acknowledge, so the next subscription replays the window.
             let rebuild = self.execute_plan(next_plan, shutdown.clone()).await?;
             self.deps.metrics.inc_compiler_change_events();
             self.deps.metrics.inc_compiler_dirty_cells(dirty.cells.len() as u64);
@@ -164,16 +170,16 @@ impl Compiler {
                 .observe_compiler_rebuild_duration(rebuild_start.elapsed());
 
             let next_version = prev.version + 1;
-            let source_version = batches.iter().rev().find_map(|b| b.source_version.clone());
             let merged = incremental::merge_manifest(
                 &prev,
                 next_version,
                 &self.config.service.name,
                 rebuild,
                 &dirty,
-                source_version,
+                source_version.clone(),
             );
             self.deps.manifest.publish(&merged).await?;
+            sub.acknowledge(source_version.as_deref()).await?;
             tracing::info!(
                 version = merged.version,
                 dirty_cells = dirty.cells.len(),

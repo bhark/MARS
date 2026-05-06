@@ -16,9 +16,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use deadpool_postgres::{Pool, Runtime};
-use futures_core::stream::BoxStream;
 use mars_expr::Expr;
-use mars_source::{ChangeBatch, ChangeFeed, RowBytes, Source, SourceBinding, SourceError};
+use mars_source::{ChangeFeed, ChangeSubscription, RowBytes, Source, SourceBinding, SourceError};
 use mars_types::{Bbox, Cell};
 use tokio_postgres::NoTls;
 
@@ -179,7 +178,7 @@ impl Source for PgSource {
 
 #[async_trait]
 impl ChangeFeed for PgSource {
-    async fn subscribe(&self) -> Result<BoxStream<'static, Result<ChangeBatch, SourceError>>, SourceError> {
+    async fn subscribe(&self) -> Result<Box<dyn ChangeSubscription>, SourceError> {
         let topology = self.topology.clone().ok_or_else(|| {
             SourceError::InvalidBinding("ReplicationTopology not wired; call PgSource::with_topology".into())
         })?;
