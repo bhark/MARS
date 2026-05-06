@@ -310,7 +310,9 @@ pub struct EmptyLayerCell {
 }
 
 fn default_manifest_format_version() -> u32 {
-    MANIFEST_FORMAT_VERSION
+    // legacy floor: pre-v2 manifests omitted the field. readers must
+    // still gate against MANIFEST_FORMAT_VERSION to detect upgrades.
+    1
 }
 
 fn default_manifest_created_at() -> SystemTime {
@@ -424,22 +426,24 @@ mod tests {
 
     #[test]
     fn manifest_back_compat_v1_without_empty_cells() {
-        // v1 on-disk manifest without empty_layer_cells must load with an empty vec.
+        // v1 on-disk manifest without empty_layer_cells must load with an empty vec
+        // and surface format_version=1 so readers can distinguish legacy payloads.
         let s = r#"{"version":7,"service":"x","source_artifacts":[],"layer_artifacts":[],"style_artifact":null}"#;
         let m: Manifest = serde_json::from_str(s).unwrap();
         assert_eq!(m.version, 7);
-        assert_eq!(m.format_version, MANIFEST_FORMAT_VERSION);
+        assert_eq!(m.format_version, 1);
         assert_eq!(m.created_at, SystemTime::UNIX_EPOCH);
         assert!(m.empty_layer_cells.is_empty());
     }
 
     #[test]
     fn manifest_back_compat_without_optional_fields() {
-        // legacy on-disk manifest without format_version / created_at must load.
+        // legacy on-disk manifest without format_version / created_at must load
+        // and report format_version=1 (the legacy floor), not the current value.
         let s = r#"{"version":7,"service":"x","source_artifacts":[],"layer_artifacts":[],"style_artifact":null}"#;
         let m: Manifest = serde_json::from_str(s).unwrap();
         assert_eq!(m.version, 7);
-        assert_eq!(m.format_version, MANIFEST_FORMAT_VERSION);
+        assert_eq!(m.format_version, 1);
         assert_eq!(m.created_at, SystemTime::UNIX_EPOCH);
     }
 
