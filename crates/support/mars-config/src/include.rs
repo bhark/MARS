@@ -1,4 +1,4 @@
-//! `!include` resolver over a parsed `serde_yml::Value` tree.
+//! `!include` resolver over a parsed `serde_yaml_ng::Value` tree.
 //!
 //! Strategy: parse a YAML document, then walk it. Whenever we see a tagged
 //! scalar with tag `!include`, read+parse the referenced file (recursively),
@@ -11,7 +11,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde_yml::Value;
+use serde_yaml_ng::Value;
 
 use crate::ConfigError;
 use crate::env_subst::substitute;
@@ -62,7 +62,7 @@ fn load_inner(path: &Path, root: &Path, stack: &mut HashSet<PathBuf>) -> Result<
         source: e,
     })?;
     let expanded = substitute(&raw)?;
-    let mut value: Value = serde_yml::from_str(&expanded).map_err(|e| ConfigError::Parse {
+    let mut value: Value = serde_yaml_ng::from_str(&expanded).map_err(|e| ConfigError::Parse {
         path: canon.display().to_string(),
         source: e,
     })?;
@@ -75,7 +75,7 @@ fn load_inner(path: &Path, root: &Path, stack: &mut HashSet<PathBuf>) -> Result<
 }
 
 fn resolve(value: &mut Value, base_dir: &Path, root: &Path, stack: &mut HashSet<PathBuf>) -> Result<(), ConfigError> {
-    // tagged scalars surface via Value::Tagged in serde_yml
+    // tagged scalars surface via Value::Tagged in serde_yaml_ng
     if let Value::Tagged(tagged) = value
         && tagged.tag == INCLUDE_TAG
     {

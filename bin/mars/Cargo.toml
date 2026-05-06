@@ -53,5 +53,5 @@ testcontainers = "0.27"
 tokio-postgres = { workspace = true }
 png = { workspace = true }
 tempfile = { workspace = true }
-serde_yml = { workspace = true }
+serde_yaml_ng = { workspace = true }
 rand = { workspace = true }

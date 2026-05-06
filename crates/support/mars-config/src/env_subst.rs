@@ -8,7 +8,7 @@
 //! (newlines, colon-space, space-hash, YAML tags, document separators).
 //! Quote balance is intentionally not enforced per-value: legitimate values
 //! like `a's` inside a double-quoted YAML scalar would otherwise be flagged
-//! as unbalanced. The full substituted document is re-parsed by serde_yml
+//! as unbalanced. The full substituted document is re-parsed by serde_yaml_ng
 //! downstream, which catches any structural corruption that survives the
 //! per-value gate.
 //!
@@ -137,7 +137,7 @@ fn validate_yaml_safe(value: &str) -> Result<(), &'static str> {
     }
     // quote balance is intentionally not enforced: a value like `a's` is
     // legitimate inside a double-quoted yaml scalar, and the downstream
-    // serde_yml parse catches any structural corruption that survives.
+    // serde_yaml_ng parse catches any structural corruption that survives.
     Ok(())
 }
 
@@ -244,7 +244,7 @@ mod tests {
         let result = substitute("key: \"${MARS_TEST_APOS:-a's}\"").unwrap();
         assert_eq!(result, "key: \"a's\"");
         // and the resulting yaml must parse cleanly downstream
-        let v: serde_yml::Value = serde_yml::from_str(&result).unwrap();
+        let v: serde_yaml_ng::Value = serde_yaml_ng::from_str(&result).unwrap();
         assert_eq!(v["key"].as_str(), Some("a's"));
     }
 

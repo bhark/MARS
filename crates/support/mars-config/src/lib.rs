@@ -8,7 +8,7 @@
 //! Pipeline (see [`load`]):
 //! 1. read file -> string
 //! 2. apply env substitution to the source string
-//! 3. parse to `serde_yml::Value`
+//! 3. parse to `serde_yaml_ng::Value`
 //! 4. resolve `!include` directives recursively (each included file goes
 //!    through steps 1-3 itself, with per-file cycle detection)
 //! 5. deserialise into the typed [`Config`]
@@ -45,9 +45,9 @@ pub enum ConfigError {
     Parse {
         /// file being parsed.
         path: String,
-        /// underlying serde_yml error.
+        /// underlying serde_yaml_ng error.
         #[source]
-        source: serde_yml::Error,
+        source: serde_yaml_ng::Error,
     },
     /// Required env var was unset and had no default.
     #[error("env var not set and no default: {0}")]
@@ -63,7 +63,7 @@ pub fn load(path: impl AsRef<Path>) -> Result<Config, ConfigError> {
     let path = path.as_ref();
     let root = config_dir(path);
     let value = include::load_with_includes(path, &root)?;
-    let config: Config = serde_yml::from_value(value).map_err(|e| ConfigError::Parse {
+    let config: Config = serde_yaml_ng::from_value(value).map_err(|e| ConfigError::Parse {
         path: path.display().to_string(),
         source: e,
     })?;
@@ -411,17 +411,17 @@ mod tests {
     fn compiler_parallel_cells_yaml_roundtrip() {
         // unset → None
         let yaml = "window: 5min\n";
-        let c: crate::model::Compiler = serde_yml::from_str(yaml).unwrap();
+        let c: crate::model::Compiler = serde_yaml_ng::from_str(yaml).unwrap();
         assert!(c.parallel_cells.is_none());
 
         // explicit positive value → Some(N)
         let yaml = "window: 5min\nparallel_cells: 8\n";
-        let c: crate::model::Compiler = serde_yml::from_str(yaml).unwrap();
+        let c: crate::model::Compiler = serde_yaml_ng::from_str(yaml).unwrap();
         assert_eq!(c.parallel_cells.map(NonZeroUsize::get), Some(8));
 
         // zero must be rejected at parse (NonZeroUsize)
         let yaml = "window: 5min\nparallel_cells: 0\n";
-        assert!(serde_yml::from_str::<crate::model::Compiler>(yaml).is_err());
+        assert!(serde_yaml_ng::from_str::<crate::model::Compiler>(yaml).is_err());
     }
 
     #[test]

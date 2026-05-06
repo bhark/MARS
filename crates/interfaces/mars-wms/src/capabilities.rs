@@ -254,7 +254,7 @@ layers:
     sources:
       - { from: t, geometry_column: g }
 "#;
-        serde_yml::from_str(yaml).unwrap()
+        serde_yaml_ng::from_str(yaml).unwrap()
     }
 
     #[test]
@@ -364,7 +364,7 @@ reprojection:
 layers:
   - { name: a, title: A, type: polygon, sources: [{ from: t, geometry_column: g }] }
 "#;
-        let cfg: Config = serde_yml::from_str(yaml).unwrap();
+        let cfg: Config = serde_yaml_ng::from_str(yaml).unwrap();
         let m = Manifest::new(1, cfg.service.name.clone(), vec![], vec![], None, vec![]);
         let xml = capabilities_xml(&cfg, &m).unwrap();
         assert!(xml.contains("<Format>image/png</Format>"));

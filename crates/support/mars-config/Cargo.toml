@@ -18,7 +18,7 @@ mars-expr   = { workspace = true }
 mars-proj   = { workspace = true }
 serde       = { workspace = true }
 thiserror   = { workspace = true }
-serde_yml = { workspace = true }
+serde_yaml_ng = { workspace = true }
 humantime   = "2"
 regex       = "1"
 

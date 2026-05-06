@@ -553,7 +553,7 @@ pub struct LayerLabel {
     pub text: String,
     /// Placement rules.
     #[serde(default)]
-    pub placement: Option<serde_yml::Value>,
+    pub placement: Option<serde_yaml_ng::Value>,
 }
 
 /// Style attachment for a label. Wire form mirrors [`ClassStyle`]:
