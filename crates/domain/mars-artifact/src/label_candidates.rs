@@ -57,6 +57,12 @@ const SHAPE_MASK: u8 = 0b11 << SHAPE_SHIFT;
 // adds 2. 15 is the cheapest legal entry, used to bound the count up front.
 const MIN_ENTRY_LEN: usize = 8 + 1 + 2 + 2 + 2;
 
+// hard limits on per-candidate sizes. wire encodes each as u16; cap matches the
+// representable range and keeps the decoder bounded. mirrors MAX_GEOM_COORDS in
+// spirit: encoder must reject input it cannot faithfully serialise.
+pub(crate) const MAX_LABEL_VERTS: usize = u16::MAX as usize;
+pub(crate) const MAX_LABEL_TEXT_BYTES: usize = u16::MAX as usize;
+
 /// encoder mirrors decoder: feature_id ascending (equal allowed for repeats).
 /// validates input rather than emit a blob the decoder will reject.
 pub fn encode_label_candidates(items: &[LabelCandidate]) -> Result<Bytes, ArtifactError> {
@@ -70,6 +76,14 @@ pub fn encode_label_candidates(items: &[LabelCandidate]) -> Result<Bytes, Artifa
             ));
         }
         prev = Some(c.feature_id);
+        if c.text.len() > MAX_LABEL_TEXT_BYTES {
+            return Err(ArtifactError::Malformed("label text exceeds max bytes"));
+        }
+        if let LabelShape::Polyline(verts) = &c.shape
+            && verts.len() > MAX_LABEL_VERTS
+        {
+            return Err(ArtifactError::Malformed("label polyline exceeds max vertices"));
+        }
     }
     let mut out = Vec::with_capacity(4 + items.len() * (MIN_ENTRY_LEN + 8));
     out.extend_from_slice(&(items.len() as u32).to_le_bytes());
@@ -93,7 +107,9 @@ pub fn encode_label_candidates(items: &[LabelCandidate]) -> Result<Bytes, Artifa
                 out.extend_from_slice(&y.to_le_bytes());
             }
             LabelShape::Polyline(verts) => {
-                out.extend_from_slice(&(verts.len() as u16).to_le_bytes());
+                let vc = u16::try_from(verts.len())
+                    .map_err(|_| ArtifactError::Malformed("label polyline exceeds max vertices"))?;
+                out.extend_from_slice(&vc.to_le_bytes());
                 for (x, y) in verts {
                     out.extend_from_slice(&x.to_le_bytes());
                     out.extend_from_slice(&y.to_le_bytes());
@@ -101,7 +117,9 @@ pub fn encode_label_candidates(items: &[LabelCandidate]) -> Result<Bytes, Artifa
             }
         }
         let bytes = c.text.as_bytes();
-        out.extend_from_slice(&(bytes.len() as u16).to_le_bytes());
+        let tlen = u16::try_from(bytes.len())
+            .map_err(|_| ArtifactError::Malformed("label text exceeds max bytes"))?;
+        out.extend_from_slice(&tlen.to_le_bytes());
         out.extend_from_slice(bytes);
     }
     Ok(Bytes::from(out))
@@ -301,6 +319,38 @@ mod tests {
         ];
         assert!(matches!(
             encode_label_candidates(&unsorted),
+            Err(ArtifactError::Malformed(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_oversized_text() {
+        let big = LabelCandidate {
+            feature_id: 1,
+            foreign_origin: false,
+            priority: 0,
+            style_ref_idx: 0,
+            shape: LabelShape::Point { x: 0.0, y: 0.0 },
+            text: "x".repeat(MAX_LABEL_TEXT_BYTES + 1),
+        };
+        assert!(matches!(
+            encode_label_candidates(&[big]),
+            Err(ArtifactError::Malformed(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_oversized_polyline() {
+        let big = LabelCandidate {
+            feature_id: 1,
+            foreign_origin: false,
+            priority: 0,
+            style_ref_idx: 0,
+            shape: LabelShape::Polyline(vec![(0.0, 0.0); MAX_LABEL_VERTS + 1]),
+            text: "a".into(),
+        };
+        assert!(matches!(
+            encode_label_candidates(&[big]),
             Err(ArtifactError::Malformed(_))
         ));
     }
