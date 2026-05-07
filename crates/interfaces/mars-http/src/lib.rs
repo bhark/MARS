@@ -766,7 +766,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let body = body_str(resp).await;
         assert!(body.contains(r#"interface="wms""#));
-        assert!(body.contains(r#"status="400""#));
+        assert!(body.contains(r#"status="4xx""#));
     }
 
     #[tokio::test]

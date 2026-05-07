@@ -243,7 +243,7 @@ pub struct Artifacts {
 }
 
 /// Long-term artifact store config.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ArtifactStore {
     /// Store kind (`s3`, `fs`, ...).
     #[serde(rename = "type")]
@@ -260,6 +260,11 @@ pub struct ArtifactStore {
     /// Filesystem path for `type: fs`.
     #[serde(default)]
     pub path: Option<String>,
+    /// Permit plaintext (non-TLS) `http://` endpoints for object stores. Off
+    /// by default; required to allow `http://` so a typo in production cannot
+    /// silently drop TLS. Useful for local minio/moto fixtures only.
+    #[serde(default)]
+    pub allow_http: bool,
 }
 
 /// Local artifact cache config.

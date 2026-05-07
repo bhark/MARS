@@ -600,6 +600,8 @@ mod tests {
                     bucket: None,
                     prefix: None,
                     path: Some("/tmp".into()),
+
+                    allow_http: false,
                 },
                 cache: ArtifactCache {
                     path: "/tmp".into(),
@@ -685,6 +687,8 @@ mod tests {
                     bucket: None,
                     prefix: None,
                     path: Some("/tmp".into()),
+
+                    allow_http: false,
                 },
                 cache: ArtifactCache {
                     path: "/tmp".into(),
@@ -796,6 +800,8 @@ mod tests {
                     bucket: None,
                     prefix: None,
                     path: Some("/tmp".into()),
+
+                    allow_http: false,
                 },
                 cache: ArtifactCache {
                     path: "/tmp".into(),

@@ -128,6 +128,8 @@ fn make_config() -> Config {
                 bucket: None,
                 prefix: None,
                 path: None,
+
+                allow_http: false,
             },
             cache: ArtifactCache {
                 path: "/tmp".to_string(),

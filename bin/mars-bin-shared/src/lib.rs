@@ -88,6 +88,17 @@ pub fn build_store_and_publisher(cfg: &Config) -> Result<(Arc<dyn ObjectStore>, 
             let region = std::env::var("AWS_REGION")
                 .or_else(|_| std::env::var("AWS_DEFAULT_REGION"))
                 .map_err(|_| anyhow!("AWS_REGION env required for type=s3"))?;
+            let endpoint_is_plaintext = cfg
+                .artifacts
+                .store
+                .endpoint
+                .as_deref()
+                .is_some_and(|e| e.starts_with("http://"));
+            if endpoint_is_plaintext && !cfg.artifacts.store.allow_http {
+                return Err(anyhow!(
+                    "artifacts.store.endpoint uses http://; set artifacts.store.allow_http=true to permit plaintext"
+                ));
+            }
             let s3 = S3Config {
                 endpoint: cfg.artifacts.store.endpoint.clone(),
                 region,
@@ -95,12 +106,7 @@ pub fn build_store_and_publisher(cfg: &Config) -> Result<(Arc<dyn ObjectStore>, 
                 prefix: cfg.artifacts.store.prefix.clone().unwrap_or_default(),
                 access_key_id: None,
                 secret_access_key: None,
-                allow_http: cfg
-                    .artifacts
-                    .store
-                    .endpoint
-                    .as_deref()
-                    .is_some_and(|e| e.starts_with("http://")),
+                allow_http: endpoint_is_plaintext,
                 allow_non_atomic_publish: false,
             };
             let store_inner = S3Store::from_config(&s3).context("open s3 store")?;
