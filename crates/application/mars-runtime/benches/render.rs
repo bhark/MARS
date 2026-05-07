@@ -31,9 +31,6 @@ use tokio::runtime::Builder;
 
 const COLLECTION: &str = "parcels";
 const BAND: &str = "hi";
-const FEATURES: u64 = 256;
-const RING_LEN: usize = 32;
-const LINE_LEN: usize = 32;
 
 // canonical CRS extent: a small region inside the EPSG:25832 zone (Denmark).
 // realistic coords keep proj_create_crs_to_crs / transform_bbox in their
@@ -50,11 +47,62 @@ enum GeomShape {
     LineString,
 }
 
+/// Bench layout knobs.
+///
+/// `cells_x` / `cells_y` shard a fixed canonical extent into a uniform grid;
+/// the band's `cell_size` shrinks with the grid so plan resolution still
+/// picks every cell. `features_per_cell` arranges features as a grid inside
+/// each cell, so payload density and feature size scale with `cell_size`.
 #[derive(Clone, Copy)]
 struct BuildOpts {
     geom: GeomShape,
     layers: usize,
+    cells_x: u32,
+    cells_y: u32,
+    features_per_cell: u64,
+    line_len: usize,
+    ring_len: usize,
     reproject_to: Option<&'static str>,
+}
+
+// `with_grid` and `with_vertex_count` ship in this commit but are first
+// consumed by the Phase 1 coverage cases added in the follow-up commit.
+#[allow(dead_code)]
+impl BuildOpts {
+    fn single_cell(geom: GeomShape, layers: usize) -> Self {
+        Self {
+            geom,
+            layers,
+            cells_x: 1,
+            cells_y: 1,
+            features_per_cell: 256,
+            line_len: 32,
+            ring_len: 32,
+            reproject_to: None,
+        }
+    }
+
+    fn with_reproject(mut self, target: &'static str) -> Self {
+        self.reproject_to = Some(target);
+        self
+    }
+
+    fn with_grid(mut self, cells_x: u32, cells_y: u32, features_per_cell: u64) -> Self {
+        self.cells_x = cells_x;
+        self.cells_y = cells_y;
+        self.features_per_cell = features_per_cell;
+        self
+    }
+
+    fn with_vertex_count(mut self, line_len: usize, ring_len: usize) -> Self {
+        self.line_len = line_len;
+        self.ring_len = ring_len;
+        self
+    }
+
+    fn total_features(&self) -> u64 {
+        self.features_per_cell * self.layers as u64 * u64::from(self.cells_x) * u64::from(self.cells_y)
+    }
 }
 
 #[derive(Default)]
@@ -79,20 +127,54 @@ impl Encoder for NoopEncoder {
     }
 }
 
-fn make_polygon(id: u64) -> FeatureGeom {
-    let cx = CANONICAL_MIN_X + 100.0 + (id as f64) * 5.0;
-    let cy = CANONICAL_MIN_Y + 100.0 + ((id % 16) as f64) * 5.0;
-    let mut ring = Vec::with_capacity(RING_LEN + 1);
-    for i in 0..RING_LEN {
-        let theta = (i as f64) * std::f64::consts::TAU / (RING_LEN as f64);
-        ring.push((cx + theta.cos() * 2.0, cy + theta.sin() * 2.0));
+/// Geometric description of one cell in the synthetic grid: integer cell
+/// indices for the `SourceRef` and the f64 origin/size for placing features
+/// inside the cell.
+#[derive(Clone, Copy)]
+struct CellGeom {
+    cx: i64,
+    cy: i64,
+    origin_x: f64,
+    origin_y: f64,
+    size: f64,
+}
+
+impl CellGeom {
+    fn bbox(&self) -> Bbox {
+        Bbox::new(
+            self.origin_x,
+            self.origin_y,
+            self.origin_x + self.size,
+            self.origin_y + self.size,
+        )
+    }
+}
+
+/// Square-ish grid columns, biased so `cols * rows >= count`.
+fn cell_grid_cols(count: u64) -> u64 {
+    (count as f64).sqrt().ceil() as u64
+}
+
+fn make_polygon(id: u64, cell: &CellGeom, count: u64, ring_len: usize) -> FeatureGeom {
+    let cols = cell_grid_cols(count).max(1);
+    let stride = cell.size / cols as f64;
+    let col = id % cols;
+    let row = id / cols;
+    let cx = cell.origin_x + (col as f64 + 0.5) * stride;
+    let cy = cell.origin_y + (row as f64 + 0.5) * stride;
+    let radius = stride * 0.3;
+
+    let mut ring = Vec::with_capacity(ring_len + 1);
+    for i in 0..ring_len {
+        let theta = (i as f64) * std::f64::consts::TAU / (ring_len as f64);
+        ring.push((cx + theta.cos() * radius, cy + theta.sin() * radius));
     }
     ring.push(ring[0]);
     let bbox = [
-        (cx - 2.0) as f32,
-        (cy - 2.0) as f32,
-        (cx + 2.0) as f32,
-        (cy + 2.0) as f32,
+        (cx - radius) as f32,
+        (cy - radius) as f32,
+        (cx + radius) as f32,
+        (cy + radius) as f32,
     ];
     FeatureGeom {
         id,
@@ -101,13 +183,25 @@ fn make_polygon(id: u64) -> FeatureGeom {
     }
 }
 
-fn make_linestring(id: u64) -> FeatureGeom {
-    let cx = CANONICAL_MIN_X + 100.0 + (id as f64) * 5.0;
-    let cy = CANONICAL_MIN_Y + 100.0 + ((id % 16) as f64) * 5.0;
-    let mut verts = Vec::with_capacity(LINE_LEN);
-    for i in 0..LINE_LEN {
+fn make_linestring(id: u64, cell: &CellGeom, count: u64, line_len: usize) -> FeatureGeom {
+    let cols = cell_grid_cols(count).max(1);
+    let stride = cell.size / cols as f64;
+    let col = id % cols;
+    let row = id / cols;
+    let cx = cell.origin_x + (col as f64 + 0.1) * stride;
+    let cy = cell.origin_y + (row as f64 + 0.5) * stride;
+    let span = stride * 0.8;
+    let dx_step = if line_len > 1 {
+        span / (line_len - 1) as f64
+    } else {
+        0.0
+    };
+    let amp = stride * 0.05;
+
+    let mut verts = Vec::with_capacity(line_len);
+    for i in 0..line_len {
         let t = i as f64;
-        verts.push((cx + t * 0.2, cy + (t * 0.4).sin() * 1.5));
+        verts.push((cx + t * dx_step, cy + (t * 0.4).sin() * amp));
     }
     let (mut lo_x, mut lo_y, mut hi_x, mut hi_y) = (f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
     for &(x, y) in &verts {
@@ -123,40 +217,41 @@ fn make_linestring(id: u64) -> FeatureGeom {
     }
 }
 
-fn build_source_bytes(geom: GeomShape) -> Bytes {
-    let features: Vec<FeatureGeom> = match geom {
-        GeomShape::Polygon => (0..FEATURES).map(make_polygon).collect(),
-        GeomShape::LineString => (0..FEATURES).map(make_linestring).collect(),
+fn build_source_bytes(opts: &BuildOpts, cell: &CellGeom) -> Bytes {
+    let count = opts.features_per_cell;
+    let features: Vec<FeatureGeom> = match opts.geom {
+        GeomShape::Polygon => (0..count)
+            .map(|id| make_polygon(id, cell, count, opts.ring_len))
+            .collect(),
+        GeomShape::LineString => (0..count)
+            .map(|id| make_linestring(id, cell, count, opts.line_len))
+            .collect(),
     };
     let mut w = ArtifactWriter::new(ArtifactKind::Source);
     w.add_geometry_payload(features)
-        .set_bbox(Bbox::new(
-            CANONICAL_MIN_X,
-            CANONICAL_MIN_Y,
-            CANONICAL_MAX_X,
-            CANONICAL_MAX_Y,
-        ))
-        .set_feature_count(FEATURES);
+        .set_bbox(cell.bbox())
+        .set_feature_count(count);
     w.finish().unwrap()
 }
 
-fn build_layer_bytes(style_ref: &str, source_hash: mars_types::ContentHash) -> Bytes {
-    let class_assignment: Vec<(u64, u16)> = (0..FEATURES).map(|i| (i, 0)).collect();
+fn build_layer_bytes(
+    opts: &BuildOpts,
+    style_ref: &str,
+    source_hash: mars_types::ContentHash,
+    cell: &CellGeom,
+) -> Bytes {
+    let count = opts.features_per_cell;
+    let class_assignment: Vec<(u64, u16)> = (0..count).map(|i| (i, 0)).collect();
     let mut w = ArtifactWriter::new(ArtifactKind::Layer);
     w.add_class_assignment(&class_assignment)
         .add_style_refs(&[style_ref.to_owned()])
-        .set_bbox(Bbox::new(
-            CANONICAL_MIN_X,
-            CANONICAL_MIN_Y,
-            CANONICAL_MAX_X,
-            CANONICAL_MAX_Y,
-        ))
-        .set_feature_count(FEATURES)
+        .set_bbox(cell.bbox())
+        .set_feature_count(count)
         .set_source_ref(SourceRef {
             collection: COLLECTION.to_owned(),
             band: BAND.to_owned(),
-            cell_x: 0,
-            cell_y: 0,
+            cell_x: cell.cx,
+            cell_y: cell.cy,
             content_hash: source_hash,
         });
     w.finish().unwrap()
@@ -174,61 +269,83 @@ async fn build_runtime(opts: BuildOpts) -> (Runtime, RenderPlan) {
     let store = Arc::new(InMemoryStore::new());
     let cache = Arc::new(InMemoryCache::new());
 
-    let cell = Cell {
-        band: ScaleBand::new(BAND),
-        x: 0,
-        y: 0,
-    };
-
-    let source_bytes = build_source_bytes(opts.geom);
-    let source_hash = compute_content_hash(&source_bytes);
-    let source_key_v = source_key(COLLECTION, &cell, &hex(&source_hash.0));
-    store.put(&source_key_v, source_bytes.clone()).await.unwrap();
+    // shrink the band's cell_size so the fixed canonical extent splits into
+    // exactly cells_x * cells_y cells. for a 1x1 grid this collapses back to
+    // the whole canonical extent.
+    let canonical_w = CANONICAL_MAX_X - CANONICAL_MIN_X;
+    let cells_n = opts.cells_x.max(opts.cells_y);
+    assert!(cells_n >= 1);
+    let cell_size = canonical_w / cells_n as f64;
 
     let layer_ids: Vec<LayerId> = (0..opts.layers).map(|i| LayerId::new(format!("layer_{i}"))).collect();
     let style_refs: Vec<String> = (0..opts.layers).map(|i| format!("style_{i}")).collect();
 
-    let mut layer_artifacts: Vec<ArtifactEntry> = Vec::with_capacity(opts.layers);
+    let mut layer_artifacts: Vec<ArtifactEntry> = Vec::new();
+    let mut source_artifacts: Vec<ArtifactEntry> = Vec::new();
     let mut layer_index = hashbrown::HashMap::new();
-    for (lid, sref) in layer_ids.iter().zip(style_refs.iter()) {
-        let bytes = build_layer_bytes(sref, source_hash);
-        let h = compute_content_hash(&bytes);
-        let key = layer_key(lid, &cell, &hex(&h.0));
-        store.put(&key, bytes.clone()).await.unwrap();
-        let entry = ArtifactEntry {
-            key,
-            hash: h,
-            size_bytes: bytes.len() as u64,
-        };
-        layer_index.insert(
-            LayerCellKey {
-                layer: lid.clone(),
+    let mut source_index = hashbrown::HashMap::new();
+
+    for cy in 0..opts.cells_y as i64 {
+        for cx in 0..opts.cells_x as i64 {
+            let geom = CellGeom {
+                cx,
+                cy,
+                origin_x: CANONICAL_MIN_X + (cx as f64) * cell_size,
+                origin_y: CANONICAL_MIN_Y + (cy as f64) * cell_size,
+                size: cell_size,
+            };
+
+            let source_bytes = build_source_bytes(&opts, &geom);
+            let source_hash = compute_content_hash(&source_bytes);
+            let cell = Cell {
                 band: ScaleBand::new(BAND),
-                x: 0,
-                y: 0,
-            },
-            LayerCellState::Present(entry.clone()),
-        );
-        layer_artifacts.push(entry);
+                x: cx,
+                y: cy,
+            };
+            let source_key_v = source_key(COLLECTION, &cell, &hex(&source_hash.0));
+            store.put(&source_key_v, source_bytes.clone()).await.unwrap();
+
+            let source_entry = ArtifactEntry {
+                key: source_key_v,
+                hash: source_hash,
+                size_bytes: source_bytes.len() as u64,
+            };
+            source_index.insert(
+                SourceCellKey {
+                    collection: Arc::<str>::from(COLLECTION),
+                    band: ScaleBand::new(BAND),
+                    x: cx,
+                    y: cy,
+                },
+                source_entry.clone(),
+            );
+            source_artifacts.push(source_entry);
+
+            for (lid, sref) in layer_ids.iter().zip(style_refs.iter()) {
+                let bytes = build_layer_bytes(&opts, sref, source_hash, &geom);
+                let h = compute_content_hash(&bytes);
+                let key = layer_key(lid, &cell, &hex(&h.0));
+                store.put(&key, bytes.clone()).await.unwrap();
+                let entry = ArtifactEntry {
+                    key,
+                    hash: h,
+                    size_bytes: bytes.len() as u64,
+                };
+                layer_index.insert(
+                    LayerCellKey {
+                        layer: lid.clone(),
+                        band: ScaleBand::new(BAND),
+                        x: cx,
+                        y: cy,
+                    },
+                    LayerCellState::Present(entry.clone()),
+                );
+                layer_artifacts.push(entry);
+            }
+        }
     }
 
-    let source_artifact = ArtifactEntry {
-        key: source_key_v,
-        hash: source_hash,
-        size_bytes: source_bytes.len() as u64,
-    };
-    let mut source_index = hashbrown::HashMap::new();
-    source_index.insert(
-        SourceCellKey {
-            collection: Arc::<str>::from(COLLECTION),
-            band: ScaleBand::new(BAND),
-            x: 0,
-            y: 0,
-        },
-        source_artifact.clone(),
-    );
-
-    let manifest = Manifest::new(1, "bench", vec![source_artifact], layer_artifacts, None, Vec::new());
+    let manifest = Manifest::new(1, "bench", source_artifacts, layer_artifacts, None, Vec::new());
 
     let mut stylesheet = Stylesheet::default();
     for sref in &style_refs {
@@ -253,7 +370,7 @@ async fn build_runtime(opts: BuildOpts) -> (Runtime, RenderPlan) {
             name: ScaleBand::new(BAND),
             max_denom: u32::MAX,
             origin: (CANONICAL_MIN_X, CANONICAL_MIN_Y),
-            cell_size: CANONICAL_MAX_X - CANONICAL_MIN_X,
+            cell_size,
         }],
         layer_order: layer_ids.clone(),
         stylesheet,
@@ -272,22 +389,31 @@ async fn build_runtime(opts: BuildOpts) -> (Runtime, RenderPlan) {
     };
     let runtime = Runtime::from_state(Arc::new(state), deps);
 
-    // keep the request bbox well inside the band's cell so the densified
-    // reproject roundtrip (request -> canonical, with edge bulge) cannot
-    // cross the cell boundary into an unmapped neighbour.
-    let canonical_bbox = Bbox::new(
-        CANONICAL_MIN_X + 2_000.0,
-        CANONICAL_MIN_Y + 2_000.0,
-        CANONICAL_MAX_X - 2_000.0,
-        CANONICAL_MAX_Y - 2_000.0,
-    );
+    // canonical bbox: 1x1 grids use an inset that keeps the reproject roundtrip
+    // bulge inside the single cell. multi-cell grids span the full materialised
+    // grid so plan::resolve picks every cell — reproject is not used in those
+    // cases, so the bulge concern doesn't apply.
+    let canonical_bbox = if opts.cells_x == 1 && opts.cells_y == 1 {
+        Bbox::new(
+            CANONICAL_MIN_X + 2_000.0,
+            CANONICAL_MIN_Y + 2_000.0,
+            CANONICAL_MAX_X - 2_000.0,
+            CANONICAL_MAX_Y - 2_000.0,
+        )
+    } else {
+        Bbox::new(
+            CANONICAL_MIN_X,
+            CANONICAL_MIN_Y,
+            CANONICAL_MIN_X + cell_size * opts.cells_x as f64,
+            CANONICAL_MIN_Y + cell_size * opts.cells_y as f64,
+        )
+    };
 
     let (plan_bbox, plan_crs) = match opts.reproject_to {
         None => (canonical_bbox, canonical_crs.clone()),
         Some(target) => {
-            // run a one-shot transform to get a bbox in the target CRS that
-            // covers the same canonical region — guarantees the plan picks the
-            // cell and exercises the reproject path.
+            // one-shot transform to a target-CRS bbox covering the same canonical
+            // region — guarantees the plan picks the cell and exercises reproject.
             let target_crs = CrsCode::new(target);
             let to_target = mars_proj::Transformer::new(&canonical_crs, &target_crs).unwrap();
             let bbox_target = to_target.transform_bbox(canonical_bbox).unwrap();
@@ -334,7 +460,7 @@ fn run_render_bench(c: &mut Criterion, group_name: &str, label: &str, opts: Buil
     stats.reset();
 
     let mut group = c.benchmark_group(group_name);
-    group.throughput(Throughput::Elements(FEATURES * opts.layers as u64));
+    group.throughput(Throughput::Elements(opts.total_features()));
     group.bench_with_input(
         BenchmarkId::from_parameter(label),
         &(runtime, plan),
@@ -459,21 +585,13 @@ fn bench_canonical(c: &mut Criterion) {
         c,
         "runtime_render",
         "canonical/polygon_256",
-        BuildOpts {
-            geom: GeomShape::Polygon,
-            layers: 1,
-            reproject_to: None,
-        },
+        BuildOpts::single_cell(GeomShape::Polygon, 1),
     );
     run_render_bench(
         c,
         "runtime_render",
         "canonical/linestring_256",
-        BuildOpts {
-            geom: GeomShape::LineString,
-            layers: 1,
-            reproject_to: None,
-        },
+        BuildOpts::single_cell(GeomShape::LineString, 1),
     );
 }
 
@@ -482,21 +600,13 @@ fn bench_reproject(c: &mut Criterion) {
         c,
         "runtime_render",
         "reproject_25832_to_3857/polygon_256",
-        BuildOpts {
-            geom: GeomShape::Polygon,
-            layers: 1,
-            reproject_to: Some("EPSG:3857"),
-        },
+        BuildOpts::single_cell(GeomShape::Polygon, 1).with_reproject("EPSG:3857"),
     );
     run_render_bench(
         c,
         "runtime_render",
         "reproject_25832_to_4326/polygon_256",
-        BuildOpts {
-            geom: GeomShape::Polygon,
-            layers: 1,
-            reproject_to: Some("EPSG:4326"),
-        },
+        BuildOpts::single_cell(GeomShape::Polygon, 1).with_reproject("EPSG:4326"),
     );
 }
 
@@ -505,11 +615,7 @@ fn bench_multi_layer(c: &mut Criterion) {
         c,
         "runtime_render",
         "canonical/polygon_256_x_3_layers",
-        BuildOpts {
-            geom: GeomShape::Polygon,
-            layers: 3,
-            reproject_to: None,
-        },
+        BuildOpts::single_cell(GeomShape::Polygon, 3),
     );
 }
 
