@@ -340,19 +340,30 @@ fn layer_artifact_with_source_ref() {
 }
 
 #[test]
-fn spatial_index_section_roundtrips_as_raw_bytes() {
-    // 0x07 is reserved for the packed Hilbert R-tree (Phase A). until the
-    // typed builder/reader land, the kind must at least round-trip through
-    // the generic add_section / section() path.
-    let payload = Bytes::from_static(&[0xDE, 0xAD, 0xBE, 0xEF]);
+fn spatial_index_typed_roundtrip_through_envelope() {
+    // build a small index, embed it in a source artifact via the typed
+    // writer helper, reopen, and exercise the query path.
+    let mut b = crate::SpatialIndexBuilder::new(crate::DEFAULT_NODE_SIZE).unwrap();
+    b.add(0, [0.0, 0.0, 1.0, 1.0])
+        .add(1, [10.0, 10.0, 11.0, 11.0])
+        .add(2, [20.0, 20.0, 21.0, 21.0]);
+    let payload = b.finish().unwrap();
+
     let mut w = ArtifactWriter::new(ArtifactKind::Source);
-    w.add_section(SectionKind::SpatialIndex, payload.clone())
-        .set_bbox(Bbox::new(0.0, 0.0, 1.0, 1.0))
+    w.add_spatial_index(payload.clone())
+        .set_bbox(Bbox::new(0.0, 0.0, 21.0, 21.0))
         .set_feature_count(0);
     let bytes = w.finish().unwrap();
+
     let r = ArtifactReader::open(bytes).unwrap();
     let back = r.section(SectionKind::SpatialIndex).unwrap();
     assert_eq!(back, payload);
+
+    let idx = crate::SpatialIndex::open(back).unwrap();
+    assert_eq!(idx.len(), 3);
+    let mut hits = Vec::new();
+    idx.query([9.5, 9.5, 11.5, 11.5], &mut hits);
+    assert_eq!(hits, vec![1]);
 }
 
 #[test]
@@ -682,4 +693,342 @@ fn geometry_rejects_delta_overflow() {
         decode_geometry_payload(&payload),
         Err(ArtifactError::Malformed(_))
     ));
+}
+
+// ---- spatial index ----------------------------------------------------------
+
+mod spatial_index_tests {
+    use super::*;
+    use crate::{DEFAULT_NODE_SIZE, SpatialIndex, SpatialIndexBuilder};
+
+    fn build(items: &[(u32, [f32; 4])], node_size: u16) -> Bytes {
+        let mut b = SpatialIndexBuilder::new(node_size).unwrap();
+        for &(idx, bb) in items {
+            b.add(idx, bb);
+        }
+        b.finish().unwrap()
+    }
+
+    fn brute_force(items: &[(u32, [f32; 4])], q: [f32; 4]) -> Vec<u32> {
+        let mut out = Vec::new();
+        for &(idx, bb) in items {
+            if bb[0] <= q[2] && bb[1] <= q[3] && bb[2] >= q[0] && bb[3] >= q[1] {
+                out.push(idx);
+            }
+        }
+        out.sort_unstable();
+        out
+    }
+
+    fn run_query(idx: &SpatialIndex, q: [f32; 4]) -> Vec<u32> {
+        let mut hits = Vec::new();
+        idx.query(q, &mut hits);
+        hits.sort_unstable();
+        hits
+    }
+
+    #[test]
+    fn empty_builds_and_queries() {
+        let bytes = build(&[], DEFAULT_NODE_SIZE);
+        let idx = SpatialIndex::open(bytes).unwrap();
+        assert!(idx.is_empty());
+        assert_eq!(idx.len(), 0);
+        let mut out = Vec::new();
+        idx.query([-1.0, -1.0, 1.0, 1.0], &mut out);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn single_item_roundtrips() {
+        let items = vec![(42, [0.0, 0.0, 1.0, 1.0])];
+        let idx = SpatialIndex::open(build(&items, DEFAULT_NODE_SIZE)).unwrap();
+        assert_eq!(idx.len(), 1);
+        assert_eq!(run_query(&idx, [0.5, 0.5, 0.5, 0.5]), vec![42]);
+        assert_eq!(run_query(&idx, [10.0, 10.0, 11.0, 11.0]), vec![]);
+    }
+
+    #[test]
+    fn disjoint_query_returns_nothing() {
+        let items: Vec<_> = (0..50)
+            .map(|i| (i as u32, [i as f32, 0.0, i as f32 + 0.5, 1.0]))
+            .collect();
+        let idx = SpatialIndex::open(build(&items, DEFAULT_NODE_SIZE)).unwrap();
+        assert_eq!(run_query(&idx, [-1000.0, -1000.0, -999.0, -999.0]), vec![]);
+    }
+
+    #[test]
+    fn degenerate_collinear_inputs_build() {
+        // all items share y; width > 0, height == 0
+        let items: Vec<_> = (0..32)
+            .map(|i| (i as u32, [i as f32, 0.0, i as f32 + 0.5, 0.0]))
+            .collect();
+        let idx = SpatialIndex::open(build(&items, DEFAULT_NODE_SIZE)).unwrap();
+        let q = [5.0, -1.0, 8.0, 1.0];
+        assert_eq!(run_query(&idx, q), brute_force(&items, q));
+    }
+
+    #[test]
+    fn degenerate_point_cloud_at_origin_builds() {
+        // all items are the same point: width == height == 0
+        let items: Vec<_> = (0..40).map(|i| (i as u32, [3.0, 4.0, 3.0, 4.0])).collect();
+        let idx = SpatialIndex::open(build(&items, DEFAULT_NODE_SIZE)).unwrap();
+        let q = [3.0, 4.0, 3.0, 4.0];
+        let mut hits = run_query(&idx, q);
+        hits.sort_unstable();
+        let mut want: Vec<u32> = (0..40).collect();
+        want.sort_unstable();
+        assert_eq!(hits, want);
+    }
+
+    #[test]
+    fn varies_node_size_yields_same_result() {
+        let items: Vec<_> = (0..200u32)
+            .map(|i| {
+                let x = (i % 20) as f32 * 5.0;
+                let y = (i / 20) as f32 * 5.0;
+                (i, [x, y, x + 1.0, y + 1.0])
+            })
+            .collect();
+        let q = [10.0, 10.0, 30.0, 30.0];
+        let want = brute_force(&items, q);
+        for ns in [2u16, 4, 8, 16, 32, 64] {
+            let idx = SpatialIndex::open(build(&items, ns)).unwrap();
+            assert_eq!(run_query(&idx, q), want, "node_size {ns}");
+        }
+    }
+
+    #[test]
+    fn build_is_deterministic_for_same_input() {
+        let items: Vec<_> = (0..100u32)
+            .map(|i| {
+                let x = ((i * 31) % 97) as f32;
+                let y = ((i * 17) % 53) as f32;
+                (i, [x, y, x + 0.5, y + 0.5])
+            })
+            .collect();
+        let a = build(&items, DEFAULT_NODE_SIZE);
+        let b = build(&items, DEFAULT_NODE_SIZE);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn query_visit_matches_query() {
+        let items: Vec<_> = (0..100u32)
+            .map(|i| (i, [i as f32, 0.0, i as f32 + 1.0, 1.0]))
+            .collect();
+        let idx = SpatialIndex::open(build(&items, DEFAULT_NODE_SIZE)).unwrap();
+        let q = [10.0, -1.0, 25.0, 2.0];
+        let mut a: Vec<u32> = Vec::new();
+        idx.query(q, &mut a);
+        let mut b: Vec<u32> = Vec::new();
+        idx.query_visit(q, |i| b.push(i));
+        a.sort_unstable();
+        b.sort_unstable();
+        assert_eq!(a, b);
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        #[test]
+        fn query_matches_brute_force(
+            items in prop::collection::vec(
+                ((-1000.0f32..1000.0), (-1000.0f32..1000.0), (0.0f32..50.0), (0.0f32..50.0)),
+                0..200
+            ),
+            q in (
+                (-1500.0f32..1500.0), (-1500.0f32..1500.0),
+                (0.0f32..200.0), (0.0f32..200.0),
+            ),
+        ) {
+            let items: Vec<(u32, [f32; 4])> = items
+                .into_iter()
+                .enumerate()
+                .map(|(i, (x, y, w, h))| (i as u32, [x, y, x + w, y + h]))
+                .collect();
+            let qbb = [q.0, q.1, q.0 + q.2, q.1 + q.3];
+
+            let bytes = build(&items, DEFAULT_NODE_SIZE);
+            let idx = SpatialIndex::open(bytes).unwrap();
+            let got = run_query(&idx, qbb);
+            let want = brute_force(&items, qbb);
+            prop_assert_eq!(got, want);
+        }
+
+        #[test]
+        fn determinism_proptest(
+            items in prop::collection::vec(
+                ((-100.0f32..100.0), (-100.0f32..100.0)),
+                0..64
+            ),
+        ) {
+            let items: Vec<(u32, [f32; 4])> = items
+                .into_iter()
+                .enumerate()
+                .map(|(i, (x, y))| (i as u32, [x, y, x + 0.5, y + 0.5]))
+                .collect();
+            let a = build(&items, DEFAULT_NODE_SIZE);
+            let b = build(&items, DEFAULT_NODE_SIZE);
+            prop_assert_eq!(a, b);
+        }
+
+        #[test]
+        fn node_size_invariant(
+            items in prop::collection::vec(
+                ((-50.0f32..50.0), (-50.0f32..50.0)),
+                4..80
+            ),
+            qx in (-60.0f32..60.0),
+            qy in (-60.0f32..60.0),
+            qw in (0.0f32..40.0),
+            qh in (0.0f32..40.0),
+        ) {
+            let items: Vec<(u32, [f32; 4])> = items
+                .into_iter()
+                .enumerate()
+                .map(|(i, (x, y))| (i as u32, [x, y, x + 0.5, y + 0.5]))
+                .collect();
+            let q = [qx, qy, qx + qw, qy + qh];
+            let mut prev: Option<Vec<u32>> = None;
+            for ns in [2u16, 4, 8, 16, 32] {
+                let idx = SpatialIndex::open(build(&items, ns)).unwrap();
+                let got = run_query(&idx, q);
+                if let Some(p) = &prev {
+                    prop_assert_eq!(p, &got);
+                }
+                prev = Some(got);
+            }
+        }
+    }
+
+    // ---- malformed-input rejection. all paths must Err, never panic. ---------
+
+    fn good_bytes() -> Vec<u8> {
+        let items: Vec<_> = (0..64u32)
+            .map(|i| (i, [i as f32, 0.0, i as f32 + 1.0, 1.0]))
+            .collect();
+        build(&items, 4).to_vec()
+    }
+
+    #[test]
+    fn rejects_truncated_header() {
+        let good = good_bytes();
+        for cut in 0..36 {
+            let r = SpatialIndex::open(Bytes::copy_from_slice(&good[..cut]));
+            assert!(r.is_err(), "expected error at cut {cut}");
+        }
+    }
+
+    #[test]
+    fn rejects_bad_magic() {
+        let mut g = good_bytes();
+        g[0] = b'X';
+        let r = SpatialIndex::open(Bytes::from(g));
+        assert!(matches!(r, Err(ArtifactError::Malformed(_))));
+    }
+
+    #[test]
+    fn rejects_unsupported_version() {
+        let mut g = good_bytes();
+        g[4] = 9;
+        let r = SpatialIndex::open(Bytes::from(g));
+        assert!(matches!(r, Err(ArtifactError::Malformed(_))));
+    }
+
+    #[test]
+    fn rejects_nonzero_flags() {
+        let mut g = good_bytes();
+        g[5] = 1;
+        let r = SpatialIndex::open(Bytes::from(g));
+        assert!(matches!(r, Err(ArtifactError::Malformed(_))));
+    }
+
+    #[test]
+    fn rejects_node_size_below_two_at_open() {
+        // build a valid index, then poke node_size=1 in the header.
+        let mut g = good_bytes();
+        g[6] = 1;
+        g[7] = 0;
+        let r = SpatialIndex::open(Bytes::from(g));
+        assert!(matches!(r, Err(ArtifactError::Malformed(_))));
+    }
+
+    #[test]
+    fn builder_rejects_node_size_below_two() {
+        let r = SpatialIndexBuilder::new(0);
+        assert!(matches!(r, Err(ArtifactError::InvalidWriterState(_))));
+        let r = SpatialIndexBuilder::new(1);
+        assert!(matches!(r, Err(ArtifactError::InvalidWriterState(_))));
+    }
+
+    #[test]
+    fn builder_rejects_non_finite_bbox() {
+        let mut b = SpatialIndexBuilder::new(DEFAULT_NODE_SIZE).unwrap();
+        b.add(0, [0.0, 0.0, 1.0, 1.0]).add(1, [f32::NAN, 0.0, 1.0, 1.0]);
+        assert!(matches!(b.finish(), Err(ArtifactError::Malformed(_))));
+
+        let mut b = SpatialIndexBuilder::new(DEFAULT_NODE_SIZE).unwrap();
+        b.add(0, [f32::INFINITY, 0.0, 1.0, 1.0]);
+        assert!(matches!(b.finish(), Err(ArtifactError::Malformed(_))));
+    }
+
+    #[test]
+    fn rejects_nodes_region_truncation() {
+        let g = good_bytes();
+        // drop tail bytes one node-stride at a time; reader must not panic.
+        for cut in 1..40 {
+            let n = g.len() - cut;
+            let r = SpatialIndex::open(Bytes::copy_from_slice(&g[..n]));
+            assert!(r.is_err(), "expected error at tail-cut {cut}");
+        }
+    }
+
+    #[test]
+    fn rejects_nonmonotonic_level_offsets() {
+        let mut g = good_bytes();
+        // header is 36 bytes; level_offsets follow. write a deliberately
+        // non-monotonic pair: level_starts[0] = 999_999, level_starts[1] = 0.
+        g[36..40].copy_from_slice(&999_999u32.to_le_bytes());
+        g[40..44].copy_from_slice(&0u32.to_le_bytes());
+        let r = SpatialIndex::open(Bytes::from(g));
+        assert!(matches!(r, Err(ArtifactError::Malformed(_))));
+    }
+
+    #[test]
+    fn rejects_first_level_offset_nonzero() {
+        let mut g = good_bytes();
+        g[36..40].copy_from_slice(&20u32.to_le_bytes());
+        let r = SpatialIndex::open(Bytes::from(g));
+        assert!(matches!(r, Err(ArtifactError::Malformed(_))));
+    }
+
+    #[test]
+    fn rejects_sentinel_mismatch_with_num_nodes() {
+        // poke num_nodes way larger than reality; sentinel becomes inconsistent.
+        let mut g = good_bytes();
+        g[12..16].copy_from_slice(&999_999u32.to_le_bytes());
+        let r = SpatialIndex::open(Bytes::from(g));
+        assert!(matches!(
+            r,
+            Err(ArtifactError::Malformed(_)) | Err(ArtifactError::Truncated)
+        ));
+    }
+
+    #[test]
+    fn rejects_zero_levels_with_items() {
+        let mut g = good_bytes();
+        g[16..20].copy_from_slice(&0u32.to_le_bytes());
+        let r = SpatialIndex::open(Bytes::from(g));
+        assert!(matches!(r, Err(ArtifactError::Malformed(_))));
+    }
+
+    #[test]
+    fn empty_index_rejects_nonzero_sentinel() {
+        let bytes = build(&[], DEFAULT_NODE_SIZE).to_vec();
+        // tamper sentinel at offset 36..40
+        let mut g = bytes;
+        g[36..40].copy_from_slice(&7u32.to_le_bytes());
+        let r = SpatialIndex::open(Bytes::from(g));
+        assert!(matches!(r, Err(ArtifactError::Malformed(_))));
+    }
 }
