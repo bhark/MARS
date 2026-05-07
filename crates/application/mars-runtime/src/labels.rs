@@ -16,7 +16,6 @@ use std::time::Instant;
 
 use mars_artifact::{ArtifactReader, LabelShape, SectionKind, decode_label_candidates, decode_style_refs};
 use mars_observability::Metrics;
-use mars_proj::Transformer;
 use mars_render_port::DrawOp;
 use mars_style::{LabelStyle, Stylesheet};
 use mars_text::Fonts;
@@ -24,7 +23,7 @@ use mars_types::{Bbox, LayerId};
 use rstar::{AABB, RTree};
 
 use crate::RuntimeError;
-use crate::draw::Viewport;
+use crate::draw::{ReprojectPair, Viewport};
 
 /// per-request inputs for the collision pass.
 pub(crate) struct LabelInputs<'a> {
@@ -32,7 +31,7 @@ pub(crate) struct LabelInputs<'a> {
     pub stylesheet: &'a Stylesheet,
     pub viewport: Viewport,
     pub canonical_bbox: Bbox,
-    pub reproject: Option<&'a Transformer>,
+    pub reproject: ReprojectPair<'a>,
     pub fonts: &'a Fonts,
     pub metrics: &'a Metrics,
 }
@@ -113,6 +112,14 @@ fn prepare_layer(
         return Ok(None);
     }
 
+    // resolve the per-thread cached transformer once per layer; same shape as
+    // emit_layer_cell so the !Send PJ stays bound to the calling thread.
+    let transformer = match input.reproject {
+        Some((from, to)) => Some(mars_proj::cached_transformer(from, to)?),
+        None => None,
+    };
+    let reproject = transformer.as_deref();
+
     // resolve label styles by ref index once per layer; the per-candidate loop
     // becomes a Vec index instead of a BTreeMap-by-String probe.
     let resolved_styles: Vec<Option<Arc<LabelStyle>>> = style_refs
@@ -147,7 +154,7 @@ fn prepare_layer(
             continue;
         }
 
-        let (rx, ry) = match input.reproject {
+        let (rx, ry) = match reproject {
             Some(t) => t.transform_point(world_x as f64, world_y as f64)?,
             None => (world_x as f64, world_y as f64),
         };

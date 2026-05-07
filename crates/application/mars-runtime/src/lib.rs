@@ -471,11 +471,6 @@ impl Runtime {
             let cpu_phase = move || -> Result<Vec<u8>, RuntimeError> {
                 let _entered = blocking_span.enter();
                 let _permit = permit;
-                let forward = if needs_reproject {
-                    Some(mars_proj::cached_transformer(&canonical_crs, &request_crs)?)
-                } else {
-                    None
-                };
                 let reproject_pair: draw::ReprojectPair<'_> =
                     needs_reproject.then_some((&canonical_crs, &request_crs));
                 let mut ops = Vec::new();
@@ -530,7 +525,7 @@ impl Runtime {
                             stylesheet: &stylesheet_state.stylesheet,
                             viewport,
                             canonical_bbox,
-                            reproject: forward.as_deref(),
+                            reproject: reproject_pair,
                             fonts: &fonts,
                             metrics: &metrics,
                         },
