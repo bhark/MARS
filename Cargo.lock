@@ -2422,6 +2422,7 @@ dependencies = [
  "mars-text",
  "mars-types",
  "parking_lot",
+ "rayon",
  "rstar",
  "thiserror 2.0.18",
  "tokio",

@@ -111,6 +111,7 @@ rustybuzz           = "0.20"
 fontdb              = { version = "0.23", default-features = false }
 tiny-skia           = "0.12"
 rstar               = "0.12"
+rayon               = "1.12"
 
 [workspace.lints.rust]
 unsafe_code              = "deny"
