@@ -26,6 +26,7 @@ use mars_types::{ArtifactEntry, ArtifactKey, Bbox, CrsCode, ImageFormat, LayerId
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
+use tracing::Instrument;
 
 pub use plan::denom_from_plan;
 pub use state::RuntimeState;
@@ -208,187 +209,238 @@ impl Runtime {
             });
         }
 
-        // reproject the request bbox into canonical CRS for cell selection.
-        // forward (canonical -> request) transformer is built later inside
-        // spawn_blocking — Transformer is !Send and must live on one thread.
-        // Both legs go through the per-thread cache so a busy worker amortises
-        // proj_create_crs_to_crs + proj_normalize_for_visualization across
-        // requests.
-        let needs_reproject = plan.crs != state.canonical_crs;
-        // both legs of reprojection go through the per-thread proj cache so a
-        // busy worker amortises proj_create_crs_to_crs + normalize across
-        // requests.
-        let canonical_bbox = if needs_reproject {
-            mars_proj::cached_transformer(&plan.crs, &state.canonical_crs)?.transform_bbox(plan.bbox)?
-        } else {
-            plan.bbox
-        };
+        // request-level span carrying counters as fields. child phase spans
+        // (fetch.*, cpu.*) nest under it via `.instrument(request_span)` and
+        // the in-spawn_blocking `.enter()` below. fields stay low-cardinality:
+        // never include layer ids or other free-form strings.
+        let request_span = tracing::info_span!(
+            "runtime.render",
+            layers = plan.layers.len(),
+            cells = tracing::field::Empty,
+            fetched_layer_artifacts = tracing::field::Empty,
+            unique_source_artifacts = tracing::field::Empty,
+            draw_ops = tracing::field::Empty,
+            labels = tracing::field::Empty,
+        );
+        let blocking_span = request_span.clone();
 
-        let tasks = plan::resolve(plan, &state, canonical_bbox)?;
-        let viewport = draw::Viewport {
-            bbox: plan.bbox,
-            width: plan.width,
-            height: plan.height,
-        };
-
-        // acquire the render permit *before* issuing any fetches. fetch I/O
-        // pulls bytes through the cache budget; without backpressure on the
-        // fetch path a burst of concurrent requests would each pull their full
-        // working set into the cache before the semaphore admits any of them
-        // to render, blowing past the configured cache size.
-        // safe: pixels <= pixel_budget (validated above), and pixel_budget fits u32.
-        #[allow(clippy::cast_possible_truncation)]
-        let permits = pixels as u32;
-        let permit = self.render_sem.clone().acquire_many_owned(permits).await.map_err(|_| {
-            RuntimeError::Render(mars_render_port::RenderError::Backend("render semaphore closed".into()))
-        })?;
-
-        // collect fetched artifacts under async; geometry + render run sync.
-        // ordered `buffered` (not `buffer_unordered`) is required: tasks are
-        // emitted in layer/cell z-order by `plan::resolve`, and the draw loop
-        // below consumes them in vec order. completion-order delivery would
-        // let a top-layer cell that finishes early sit beneath a later-finishing
-        // bottom-layer cell, producing non-deterministic output.
-        let cache = self.deps.cache.clone();
-        let store = self.deps.store.clone();
-        let layer_with_refs: Vec<(LayerId, ArtifactReader, SourceKey)> = stream::iter(tasks.into_iter().map(|task| {
-            let state = state.clone();
-            let cache = cache.clone();
-            let store = store.clone();
-            async move {
-                let layer_art =
-                    match fetch::fetch_layer(&state, cache.as_ref(), store.as_ref(), &task.layer, &task.cell).await? {
-                        Some(reader) => reader,
-                        None => return Ok(None),
-                    };
-                let source_ref = layer_art.source_ref().cloned().ok_or_else(|| {
-                    RuntimeError::Config(mars_config::ConfigError::Invalid(format!(
-                        "layer artifact '{}' is missing source_ref footer",
-                        task.layer
-                    )))
-                })?;
-                let key = SourceKey {
-                    collection: source_ref.collection,
-                    band: source_ref.band,
-                    x: source_ref.cell_x,
-                    y: source_ref.cell_y,
-                };
-                Ok::<_, RuntimeError>(Some((task.layer, layer_art, key)))
-            }
-        }))
-        .buffered(8)
-        .try_collect::<Vec<_>>()
-        .await?
-        .into_iter()
-        .flatten()
-        .collect();
-
-        // dedupe source fetches: a single render often binds the same source
-        // cell from several layers; opening the artifact twice would re-parse
-        // the footer for no gain.
-        let mut unique_keys: Vec<SourceKey> = Vec::new();
-        let mut seen: HashSet<SourceKey> = HashSet::new();
-        for (_, _, k) in &layer_with_refs {
-            if seen.insert(k.clone()) {
-                unique_keys.push(k.clone());
-            }
-        }
-        let source_readers: Vec<(SourceKey, ArtifactReader)> = stream::iter(unique_keys.into_iter().map(|k| {
-            let state = state.clone();
-            let cache = cache.clone();
-            let store = store.clone();
-            async move {
-                let cell = mars_types::Cell {
-                    band: mars_types::ScaleBand::new(k.band.clone()),
-                    x: k.x,
-                    y: k.y,
-                };
-                let reader = fetch::fetch_source(&state, cache.as_ref(), store.as_ref(), &k.collection, &cell).await?;
-                Ok::<_, RuntimeError>((k, reader))
-            }
-        }))
-        .buffer_unordered(8)
-        .try_collect::<Vec<_>>()
-        .await?;
-        let source_by_key: HashMap<SourceKey, ArtifactReader> = source_readers.into_iter().collect();
-
-        let fetched: Vec<(LayerId, ArtifactReader, ArtifactReader)> = layer_with_refs
-            .into_iter()
-            .map(|(layer, layer_art, key)| {
-                source_by_key
-                    .get(&key)
-                    .cloned()
-                    .map(|source_art| (layer, source_art, layer_art))
-                    .ok_or_else(|| {
-                        RuntimeError::Render(mars_render_port::RenderError::Backend(
-                            "internal: source artifact fetch table missing a key".into(),
-                        ))
-                    })
-            })
-            .collect::<Result<_, RuntimeError>>()?;
-
-        let canvas = Canvas {
-            width: plan.width,
-            height: plan.height,
-            background: None,
-        };
-        let renderer = self.deps.renderer.clone();
-        let encoder = self.deps.encoder.clone();
-        let format = plan.format;
-        let canonical_crs = state.canonical_crs.clone();
-        let request_crs = plan.crs.clone();
-        let stylesheet_state = state.clone();
-        let fonts = self.deps.fonts.clone();
-        let metrics = self.deps.metrics.clone();
-        let bytes = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, RuntimeError> {
-            let _permit = permit;
-            // build the forward transformer through the per-thread cache so
-            // back-to-back requests on the same blocking worker reuse it.
-            let forward = if needs_reproject {
-                Some(mars_proj::cached_transformer(&canonical_crs, &request_crs)?)
+        async move {
+            // reproject the request bbox into canonical CRS for cell selection.
+            // forward (canonical -> request) transformer is built later inside
+            // spawn_blocking — Transformer is !Send and must live on one thread.
+            // Both legs go through the per-thread cache so a busy worker amortises
+            // proj_create_crs_to_crs + proj_normalize_for_visualization across
+            // requests.
+            let needs_reproject = plan.crs != state.canonical_crs;
+            let canonical_bbox = if needs_reproject {
+                mars_proj::cached_transformer(&plan.crs, &state.canonical_crs)?.transform_bbox(plan.bbox)?
             } else {
-                None
+                plan.bbox
             };
-            let mut ops = Vec::new();
-            for (_, source_art, layer_art) in &fetched {
-                draw::emit_layer_cell(
-                    source_art,
-                    layer_art,
-                    &stylesheet_state.stylesheet,
-                    viewport,
-                    canonical_bbox,
-                    forward.as_deref(),
-                    &mut ops,
-                )?;
-            }
-            // collect (layer, layer_art) pairs for the label pass. one rtree
-            // is shared across all layers so labels collide globally.
-            let label_layers: Vec<(LayerId, ArtifactReader)> = fetched
-                .iter()
-                .map(|(layer, _, layer_art)| (layer.clone(), layer_art.clone()))
+
+            let tasks = plan::resolve(plan, &state, canonical_bbox)?;
+            tracing::Span::current().record("cells", tasks.len() as u64);
+            let viewport = draw::Viewport {
+                bbox: plan.bbox,
+                width: plan.width,
+                height: plan.height,
+            };
+
+            // acquire the render permit *before* issuing any fetches. fetch I/O
+            // pulls bytes through the cache budget; without backpressure on the
+            // fetch path a burst of concurrent requests would each pull their full
+            // working set into the cache before the semaphore admits any of them
+            // to render, blowing past the configured cache size.
+            // safe: pixels <= pixel_budget (validated above), and pixel_budget fits u32.
+            #[allow(clippy::cast_possible_truncation)]
+            let permits = pixels as u32;
+            let permit = self.render_sem.clone().acquire_many_owned(permits).await.map_err(|_| {
+                RuntimeError::Render(mars_render_port::RenderError::Backend("render semaphore closed".into()))
+            })?;
+
+            // collect fetched artifacts under async; geometry + render run sync.
+            // ordered `buffered` (not `buffer_unordered`) is required: tasks are
+            // emitted in layer/cell z-order by `plan::resolve`, and the draw loop
+            // below consumes them in vec order. completion-order delivery would
+            // let a top-layer cell that finishes early sit beneath a later-finishing
+            // bottom-layer cell, producing non-deterministic output.
+            let cache = self.deps.cache.clone();
+            let store = self.deps.store.clone();
+            let layer_with_refs: Vec<(LayerId, ArtifactReader, SourceKey)> =
+                stream::iter(tasks.into_iter().map(|task| {
+                    let state = state.clone();
+                    let cache = cache.clone();
+                    let store = store.clone();
+                    async move {
+                        let layer_art = match fetch::fetch_layer(
+                            &state,
+                            cache.as_ref(),
+                            store.as_ref(),
+                            &task.layer,
+                            &task.cell,
+                        )
+                        .await?
+                        {
+                            Some(reader) => reader,
+                            None => return Ok(None),
+                        };
+                        let source_ref = layer_art.source_ref().cloned().ok_or_else(|| {
+                            RuntimeError::Config(mars_config::ConfigError::Invalid(format!(
+                                "layer artifact '{}' is missing source_ref footer",
+                                task.layer
+                            )))
+                        })?;
+                        let key = SourceKey {
+                            collection: source_ref.collection,
+                            band: source_ref.band,
+                            x: source_ref.cell_x,
+                            y: source_ref.cell_y,
+                        };
+                        Ok::<_, RuntimeError>(Some((task.layer, layer_art, key)))
+                    }
+                }))
+                .buffered(8)
+                .try_collect::<Vec<_>>()
+                .instrument(tracing::info_span!("fetch.layer_artifacts"))
+                .await?
+                .into_iter()
+                .flatten()
                 .collect();
-            labels::collide_and_emit(
-                &labels::LabelInputs {
-                    layers: &label_layers,
-                    stylesheet: &stylesheet_state.stylesheet,
-                    viewport,
-                    canonical_bbox,
-                    reproject: forward.as_deref(),
-                    fonts: &fonts,
-                    metrics: &metrics,
-                },
-                &mut ops,
-            )?;
-            let pixmap = renderer.render(canvas, &ops)?;
-            Ok(encoder.encode(&pixmap, format)?)
-        })
+            tracing::Span::current().record("fetched_layer_artifacts", layer_with_refs.len() as u64);
+
+            // dedupe source fetches: a single render often binds the same source
+            // cell from several layers; opening the artifact twice would re-parse
+            // the footer for no gain.
+            let mut unique_keys: Vec<SourceKey> = Vec::new();
+            let mut seen: HashSet<SourceKey> = HashSet::new();
+            for (_, _, k) in &layer_with_refs {
+                if seen.insert(k.clone()) {
+                    unique_keys.push(k.clone());
+                }
+            }
+            tracing::Span::current().record("unique_source_artifacts", unique_keys.len() as u64);
+            let source_readers: Vec<(SourceKey, ArtifactReader)> = stream::iter(unique_keys.into_iter().map(|k| {
+                let state = state.clone();
+                let cache = cache.clone();
+                let store = store.clone();
+                async move {
+                    let cell = mars_types::Cell {
+                        band: mars_types::ScaleBand::new(k.band.clone()),
+                        x: k.x,
+                        y: k.y,
+                    };
+                    let reader = fetch::fetch_source(&state, cache.as_ref(), store.as_ref(), &k.collection, &cell).await?;
+                    Ok::<_, RuntimeError>((k, reader))
+                }
+            }))
+            .buffer_unordered(8)
+            .try_collect::<Vec<_>>()
+            .instrument(tracing::info_span!("fetch.source_artifacts"))
+            .await?;
+            let source_by_key: HashMap<SourceKey, ArtifactReader> = source_readers.into_iter().collect();
+
+            let fetched: Vec<(LayerId, ArtifactReader, ArtifactReader)> = layer_with_refs
+                .into_iter()
+                .map(|(layer, layer_art, key)| {
+                    source_by_key
+                        .get(&key)
+                        .cloned()
+                        .map(|source_art| (layer, source_art, layer_art))
+                        .ok_or_else(|| {
+                            RuntimeError::Render(mars_render_port::RenderError::Backend(
+                                "internal: source artifact fetch table missing a key".into(),
+                            ))
+                        })
+                })
+                .collect::<Result<_, RuntimeError>>()?;
+
+            let canvas = Canvas {
+                width: plan.width,
+                height: plan.height,
+                background: None,
+            };
+            let renderer = self.deps.renderer.clone();
+            let encoder = self.deps.encoder.clone();
+            let format = plan.format;
+            let canonical_crs = state.canonical_crs.clone();
+            let request_crs = plan.crs.clone();
+            let stylesheet_state = state.clone();
+            let fonts = self.deps.fonts.clone();
+            let metrics = self.deps.metrics.clone();
+            let bytes = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, RuntimeError> {
+                // re-enter the request span on the blocking worker so child
+                // phase spans nest under it; spawn_blocking detaches the
+                // tracing context that `.instrument` set up on the async side.
+                let _entered = blocking_span.enter();
+                let _permit = permit;
+                // build the forward transformer through the per-thread cache so
+                // back-to-back requests on the same blocking worker reuse it.
+                let forward = if needs_reproject {
+                    Some(mars_proj::cached_transformer(&canonical_crs, &request_crs)?)
+                } else {
+                    None
+                };
+                let mut ops = Vec::new();
+                {
+                    let _emit = tracing::info_span!("cpu.emit").entered();
+                    for (_, source_art, layer_art) in &fetched {
+                        draw::emit_layer_cell(
+                            source_art,
+                            layer_art,
+                            &stylesheet_state.stylesheet,
+                            viewport,
+                            canonical_bbox,
+                            forward.as_deref(),
+                            &mut ops,
+                        )?;
+                    }
+                }
+                let geom_ops = ops.len();
+                blocking_span.record("draw_ops", geom_ops as u64);
+
+                // collect (layer, layer_art) pairs for the label pass. one rtree
+                // is shared across all layers so labels collide globally.
+                let label_layers: Vec<(LayerId, ArtifactReader)> = fetched
+                    .iter()
+                    .map(|(layer, _, layer_art)| (layer.clone(), layer_art.clone()))
+                    .collect();
+                {
+                    let _labels = tracing::info_span!("cpu.labels").entered();
+                    labels::collide_and_emit(
+                        &labels::LabelInputs {
+                            layers: &label_layers,
+                            stylesheet: &stylesheet_state.stylesheet,
+                            viewport,
+                            canonical_bbox,
+                            reproject: forward.as_deref(),
+                            fonts: &fonts,
+                            metrics: &metrics,
+                        },
+                        &mut ops,
+                    )?;
+                }
+                blocking_span.record("labels", (ops.len() - geom_ops) as u64);
+
+                let pixmap = {
+                    let _raster = tracing::info_span!("cpu.raster").entered();
+                    renderer.render(canvas, &ops)?
+                };
+                let bytes = {
+                    let _encode = tracing::info_span!("cpu.encode").entered();
+                    encoder.encode(&pixmap, format)?
+                };
+                Ok(bytes)
+            })
+            .await
+            .map_err(|e| {
+                RuntimeError::Render(mars_render_port::RenderError::Backend(format!(
+                    "render task panicked: {e}"
+                )))
+            })??;
+            Ok(bytes)
+        }
+        .instrument(request_span)
         .await
-        .map_err(|e| {
-            RuntimeError::Render(mars_render_port::RenderError::Backend(format!(
-                "render task panicked: {e}"
-            )))
-        })??;
-        Ok(bytes)
     }
 }
 
