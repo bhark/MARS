@@ -84,7 +84,7 @@ source:
 artifacts:
   store: { type: fs, path: /tmp/s }
   cache: { path: /tmp/c, max_size: 1MiB }
-scales: { bands: [{ name: hi, max_denom: 1 }] }
+scales: { bands: [{ name: hi, max_denom_exclusive: 1 }] }
 cells: { grid: regular, origin: [0, 0], size_per_band: { hi: 1m } }
 interfaces: {}
 "#;
@@ -112,7 +112,7 @@ source:
 artifacts:
   store: { type: fs, path: /tmp/s }
   cache: { path: /tmp/c, max_size: 1MiB }
-scales: { bands: [{ name: hi, max_denom: 1 }] }
+scales: { bands: [{ name: hi, max_denom_exclusive: 1 }] }
 cells: { grid: regular, origin: [0, 0], size_per_band: { hi: 1m } }
 interfaces: {}
 "#;
@@ -141,7 +141,7 @@ source:
 artifacts:
   store: { type: fs, path: /tmp/s }
   cache: { path: /tmp/c, max_size: 1MiB }
-scales: { bands: [{ name: hi, max_denom: 1 }] }
+scales: { bands: [{ name: hi, max_denom_exclusive: 1 }] }
 cells: { grid: regular, origin: [0, 0], size_per_band: { hi: 1m } }
 interfaces: {}
 "#;
@@ -163,7 +163,7 @@ source:
 artifacts:
   store: { type: fs, path: /tmp/s }
   cache: { path: /tmp/c, max_size: 1MiB }
-scales: { bands: [{ name: hi, max_denom: 1 }] }
+scales: { bands: [{ name: hi, max_denom_exclusive: 1 }] }
 cells: { grid: regular, origin: [0, 0], size_per_band: { hi: 1m } }
 interfaces: {}
 layers: !include layers.yaml
@@ -193,7 +193,7 @@ source: { type: postgis, dsn: x, native_crs: EPSG:25832 }
 artifacts:
   store: { type: fs, path: /tmp/s }
   cache: { path: /tmp/c, max_size: 1MiB }
-scales: { bands: [{ name: hi, max_denom: 1 }] }
+scales: { bands: [{ name: hi, max_denom_exclusive: 1 }] }
 cells: { grid: regular, origin: [0, 0], size_per_band: { hi: 1m } }
 interfaces: {}
 layers: !include /etc/passwd
@@ -216,7 +216,7 @@ source: { type: postgis, dsn: x, native_crs: EPSG:25832 }
 artifacts:
   store: { type: fs, path: /tmp/s }
   cache: { path: /tmp/c, max_size: 1MiB }
-scales: { bands: [{ name: hi, max_denom: 1 }] }
+scales: { bands: [{ name: hi, max_denom_exclusive: 1 }] }
 cells: { grid: regular, origin: [0, 0], size_per_band: { hi: 1m } }
 interfaces: {}
 layers: !include b.yaml

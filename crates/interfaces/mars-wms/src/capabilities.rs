@@ -224,7 +224,7 @@ artifacts:
   store: { type: fs, path: /tmp }
   cache: { path: /tmp/c, max_size: 1GiB }
 scales:
-  bands: [{ name: hi, max_denom: 25000 }]
+  bands: [{ name: hi, max_denom_exclusive: 25000 }]
 cells:
   grid: regular
   origin: [0, 0]
@@ -335,7 +335,7 @@ artifacts:
   store: { type: fs, path: /tmp }
   cache: { path: /tmp/c, max_size: 1GiB }
 scales:
-  bands: [{ name: hi, max_denom: 25000 }]
+  bands: [{ name: hi, max_denom_exclusive: 25000 }]
 cells:
   grid: regular
   origin: [0, 0]

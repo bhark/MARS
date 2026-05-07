@@ -277,7 +277,7 @@ artifacts:
 
 scales:
   bands:
-    - {{ name: hi, max_denom: 50000 }}
+    - {{ name: hi, max_denom_exclusive: 50000 }}
 
 cells:
   grid: regular

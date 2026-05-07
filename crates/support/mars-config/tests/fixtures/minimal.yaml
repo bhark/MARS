@@ -24,7 +24,7 @@ artifacts:
 
 scales:
   bands:
-    - { name: hi,  max_denom: 25000 }
+    - { name: hi,  max_denom_exclusive: 25000 }
 
 cells:
   grid: regular

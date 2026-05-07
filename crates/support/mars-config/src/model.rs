@@ -308,7 +308,9 @@ pub struct Scales {
 pub struct Band {
     /// Band name (referenced from `cells.size_per_band`).
     pub name: String,
-    /// Maximum scale denominator covered by this band.
+    /// Exclusive upper bound on the scale denominator covered by this band:
+    /// the threshold itself falls into the next band.
+    #[serde(rename = "max_denom_exclusive")]
     pub max_denom: u64,
 }
 
