@@ -17,7 +17,14 @@ pub(crate) enum WkbBboxError {
     UnsupportedType(u32),
     #[error("empty geometry")]
     Empty,
+    #[error("WKB nesting too deep")]
+    TooDeep,
 }
+
+// well-formed WKB nests Multi -> {Point,LineString,Polygon}, depth <= 2.
+// cap generously while still bounding the call stack against malformed
+// inputs that try to recurse arbitrarily.
+const MAX_WKB_DEPTH: u32 = 8;
 
 const WKB_POINT: u32 = 1;
 const WKB_LINESTRING: u32 = 2;
@@ -35,7 +42,7 @@ const EWKB_M_FLAG: u32 = 0x4000_0000;
 pub(crate) fn bbox_of(wkb: &[u8]) -> Result<Bbox, WkbBboxError> {
     let mut acc = BboxAcc::new();
     let mut cur = Cursor::new(wkb);
-    walk(&mut cur, &mut acc)?;
+    walk(&mut cur, &mut acc, 0)?;
     acc.finish()
 }
 
@@ -114,7 +121,10 @@ impl<'a> Cursor<'a> {
     }
 }
 
-fn walk(c: &mut Cursor<'_>, acc: &mut BboxAcc) -> Result<(), WkbBboxError> {
+fn walk(c: &mut Cursor<'_>, acc: &mut BboxAcc, depth: u32) -> Result<(), WkbBboxError> {
+    if depth > MAX_WKB_DEPTH {
+        return Err(WkbBboxError::TooDeep);
+    }
     let endian = c.u8()?;
     let le = match endian {
         1 => true,
@@ -146,7 +156,7 @@ fn walk(c: &mut Cursor<'_>, acc: &mut BboxAcc) -> Result<(), WkbBboxError> {
         WKB_MULTIPOINT | WKB_MULTILINESTRING | WKB_MULTIPOLYGON => {
             let n = c.u32(le)? as usize;
             for _ in 0..n {
-                walk(c, acc)?;
+                walk(c, acc, depth + 1)?;
             }
         }
         other => return Err(WkbBboxError::UnsupportedType(other)),
