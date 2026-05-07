@@ -118,23 +118,30 @@ impl ChangeSubscription for PgOutputSubscription {
             .map_err(|_| SourceError::Backend("ack: replication worker has exited".into()))?;
         Ok(())
     }
+
+    async fn shutdown(&mut self) -> Result<(), SourceError> {
+        // cancel triggers a graceful CopyDone inside the pgwire client's stop()
+        // call; awaiting the worker guarantees the final feedback message is
+        // on the wire before we return.
+        self.cancel.cancel();
+        if let Some(handle) = self.join.take()
+            && let Err(e) = handle.await
+            && !e.is_cancelled()
+        {
+            return Err(SourceError::Backend(format!("replication worker join: {e}")));
+        }
+        Ok(())
+    }
 }
 
 impl Drop for PgOutputSubscription {
     fn drop(&mut self) {
+        // fallback for callers that did not invoke `shutdown` first: cancel and
+        // abort. ack durability is only guaranteed on the explicit shutdown
+        // path; aborting here may drop an in-flight feedback message.
         self.cancel.cancel();
-        // detach the worker; `cancel` triggers a graceful CopyDone inside the
-        // pgwire client's stop() call. abort would slam the socket shut and
-        // potentially lose an in-flight feedback message.
         if let Some(handle) = self.join.take() {
-            match tokio::runtime::Handle::try_current() {
-                Ok(rt) => {
-                    rt.spawn(async move {
-                        let _ = handle.await;
-                    });
-                }
-                Err(_) => handle.abort(),
-            }
+            handle.abort();
         }
     }
 }

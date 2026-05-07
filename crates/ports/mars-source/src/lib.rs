@@ -304,6 +304,15 @@ pub trait ChangeSubscription: Send {
     /// durably persisted downstream. Adapters with no notion of a cursor
     /// (polling fallback) treat this as a no-op.
     async fn acknowledge(&mut self, source_version: Option<&str>) -> Result<(), SourceError>;
+
+    /// Gracefully tear down the subscription, awaiting any background worker
+    /// so that a final feedback ack is on the wire before the call returns.
+    /// Callers must invoke this on every shutdown path; `Drop` is a fallback
+    /// that may abort in-flight work without waiting. Default impl is a no-op
+    /// for adapters with no detached workers.
+    async fn shutdown(&mut self) -> Result<(), SourceError> {
+        Ok(())
+    }
 }
 
 /// Opaque guard returned by [`LeaderLock::try_acquire`]. Holding it keeps the

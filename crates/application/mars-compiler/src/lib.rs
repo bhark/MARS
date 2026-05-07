@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use futures_util::stream::{self, StreamExt};
 use mars_config::Config;
 use mars_observability::Metrics;
-use mars_source::{ChangeFeed, LeaderLock, LeaderLockGuard, Source, SourceBinding};
+use mars_source::{ChangeFeed, ChangeSubscription, LeaderLock, LeaderLockGuard, Source, SourceBinding};
 use mars_store::{ManifestStore, ObjectStore, StoreError};
 use mars_types::{Bbox, Manifest};
 use tokio_util::sync::CancellationToken;
@@ -130,7 +130,7 @@ impl Compiler {
     pub async fn run(&self, shutdown: CancellationToken) -> Result<(), CompilerError> {
         let _guard = self.acquire_leader().await?;
 
-        let mut prev = match self.deps.manifest.current().await? {
+        let prev = match self.deps.manifest.current().await? {
             Some(m) => m,
             None => self.snapshot_inner(shutdown.clone()).await?,
         };
@@ -142,12 +142,29 @@ impl Compiler {
         let window = self.config.compiler.window_dur()?;
         let plan = plan::build_plan(&self.config)?;
 
+        let result = self.run_loop(&mut *sub, &shutdown, &window, &plan, prev).await;
+        // shutdown the subscription before returning so the final ack reaches
+        // the source. Drop is a best-effort fallback that may abort.
+        if let Err(e) = sub.shutdown().await {
+            tracing::warn!(error = %e, "compiler: subscription shutdown failed");
+        }
+        result
+    }
+
+    async fn run_loop(
+        &self,
+        sub: &mut dyn ChangeSubscription,
+        shutdown: &CancellationToken,
+        window: &std::time::Duration,
+        plan: &plan::Plan,
+        mut prev: mars_types::Manifest,
+    ) -> Result<(), CompilerError> {
         loop {
             if shutdown.is_cancelled() {
                 return Ok(());
             }
             let mut batches: Vec<mars_source::ChangeBatch> = Vec::new();
-            let deadline = tokio::time::Instant::now() + window;
+            let deadline = tokio::time::Instant::now() + *window;
             loop {
                 tokio::select! {
                     _ = shutdown.cancelled() => return Ok(()),
@@ -168,8 +185,8 @@ impl Compiler {
 
             let source_version = batches.iter().rev().find_map(|b| b.source_version.clone());
 
-            let dirty = incremental::dirty_cells_for(&batches, &plan);
-            let next_plan = incremental::filter_plan(&plan, &dirty);
+            let dirty = incremental::dirty_cells_for(&batches, plan);
+            let next_plan = incremental::filter_plan(plan, &dirty);
             if next_plan.sources.is_empty() {
                 // window had no events touching the configured plan; advance
                 // the cursor so the upstream slot does not retain logs but
@@ -196,7 +213,7 @@ impl Compiler {
                 &dirty,
                 source_version,
             );
-            publish_with_retry(self.deps.manifest.as_ref(), &merged, &self.deps.metrics, &shutdown).await?;
+            publish_with_retry(self.deps.manifest.as_ref(), &merged, &self.deps.metrics, shutdown).await?;
             sub.acknowledge(merged.source_version.as_deref()).await?;
             // window_lag tracks how stale the published manifest is relative to
             // the window boundary: time from when the window closed to when we
