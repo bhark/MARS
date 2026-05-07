@@ -22,7 +22,7 @@ fn store_with(prefix: &str, backend: Arc<InMemory>) -> S3Store {
 }
 
 fn manifest(version: u64) -> Manifest {
-    Manifest::new(version, "test".to_owned(), vec![], vec![], None, vec![])
+    Manifest::empty(version, "test".to_owned())
 }
 
 #[tokio::test]
@@ -116,6 +116,83 @@ async fn manifest_publish_and_current() {
     pub_.publish(&manifest(2)).await.unwrap();
     let m = pub_.current().await.unwrap().unwrap();
     assert_eq!(m.version, 2);
+}
+
+/// helper for the version-rejection tests: write `manifests/v{n}.json` and
+/// `manifests/current` directly through the store, sidestepping the
+/// publisher (which only emits the current `MANIFEST_FORMAT_VERSION`).
+async fn write_legacy_manifest(s: &S3Store, version: u64, body: &str) {
+    s.put(
+        &ArtifactKey::new(format!("manifests/v{version}.json")),
+        Bytes::from(body.to_owned()),
+    )
+    .await
+    .unwrap();
+    s.put(
+        &ArtifactKey::new("manifests/current"),
+        Bytes::from(format!("v{version}")),
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn current_rejects_v1_manifest() {
+    let backend = Arc::new(InMemory::new());
+    let s = store_with("", backend);
+    write_legacy_manifest(
+        &s,
+        1,
+        r#"{"format_version":1,"version":1,"service":"svc","source_artifacts":[],"layer_artifacts":[],"style_artifact":null}"#,
+    )
+    .await;
+
+    let pub_ = S3Publisher::from_store(&s);
+    let err = pub_.current().await.unwrap_err();
+    assert!(
+        matches!(err, StoreError::UnsupportedManifestVersion { found: 1, supported: 3 }),
+        "expected UnsupportedManifestVersion {{ found: 1, supported: 3 }}, got {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn current_rejects_v2_manifest() {
+    let backend = Arc::new(InMemory::new());
+    let s = store_with("", backend);
+    write_legacy_manifest(
+        &s,
+        2,
+        r#"{"format_version":2,"version":2,"service":"svc","created_at":{"secs_since_epoch":0,"nanos_since_epoch":0},"source_artifacts":[],"layer_artifacts":[],"style_artifact":null,"empty_layer_cells":[],"source_version":null}"#,
+    )
+    .await;
+
+    let pub_ = S3Publisher::from_store(&s);
+    let err = pub_.current().await.unwrap_err();
+    assert!(
+        matches!(err, StoreError::UnsupportedManifestVersion { found: 2, supported: 3 }),
+        "expected UnsupportedManifestVersion {{ found: 2, supported: 3 }}, got {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn current_rejects_future_manifest_version() {
+    let backend = Arc::new(InMemory::new());
+    let s = store_with("", backend);
+    // forwards-incompatibility: a v4 body must also be rejected, not silently
+    // accepted as "newer therefore probably ok".
+    write_legacy_manifest(
+        &s,
+        1,
+        r#"{"format_version":4,"version":1,"service":"svc","created_at":{"secs_since_epoch":0,"nanos_since_epoch":0},"bindings":[],"pages":[],"class_sidecars":[],"label_sidecars":[],"style_artifact":null,"source_version":null,"epoch":0}"#,
+    )
+    .await;
+
+    let pub_ = S3Publisher::from_store(&s);
+    let err = pub_.current().await.unwrap_err();
+    assert!(
+        matches!(err, StoreError::UnsupportedManifestVersion { found: 4, supported: 3 }),
+        "expected UnsupportedManifestVersion {{ found: 4, supported: 3 }}, got {err:?}"
+    );
 }
 
 // wrapper that rejects conditional put with NotSupported
