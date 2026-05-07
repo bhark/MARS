@@ -387,7 +387,12 @@ async fn run_chunk(
 
     let mut out = snapshot::SnapshotOutput::default();
     for ((task, deps), (cell, rows)) in units.into_iter().zip(fetched) {
-        debug_assert_eq!(task.cell, cell, "fetch_cells must preserve input order");
+        if task.cell != cell {
+            return Err(CompilerError::Source(mars_source::SourceError::Backend(format!(
+                "fetch_cells returned cell {cell:?} for task {:?}; order not preserved",
+                task.cell,
+            ))));
+        }
         let result = snapshot::build_and_publish(&task, &deps, rows, store).await?;
         out.extend(result);
     }
