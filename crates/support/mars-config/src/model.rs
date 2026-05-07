@@ -128,6 +128,42 @@ pub struct Render {
     /// unit-suffixed byte literal (`256MiB`).
     #[serde(default = "default_decoded_geometry_cache")]
     pub decoded_geometry_cache: String,
+    /// Parallel geometry emit. Splits the per-cell `cpu.emit` loop across
+    /// rayon's global pool; each worker resolves its own thread-local PROJ
+    /// transformer cache. Toggleable for safe rollback.
+    #[serde(default)]
+    pub parallel_emit: ParallelEmit,
+}
+
+/// Configuration for the parallel geometry-emit pass.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct ParallelEmit {
+    /// Enable parallel dispatch. When `false`, emit runs serially on the
+    /// calling worker (the pre-Phase-2 path).
+    #[serde(default = "default_parallel_emit_enabled")]
+    pub enabled: bool,
+    /// Minimum chunk size handed to each rayon worker. Below this threshold
+    /// rayon coalesces work to keep dispatch overhead off the tiny-payload
+    /// hot path.
+    #[serde(default = "default_parallel_emit_chunk_size")]
+    pub chunk_size: usize,
+}
+
+impl Default for ParallelEmit {
+    fn default() -> Self {
+        Self {
+            enabled: default_parallel_emit_enabled(),
+            chunk_size: default_parallel_emit_chunk_size(),
+        }
+    }
+}
+
+fn default_parallel_emit_enabled() -> bool {
+    true
+}
+
+fn default_parallel_emit_chunk_size() -> usize {
+    8
 }
 
 impl Default for Render {
@@ -137,6 +173,7 @@ impl Default for Render {
             pixel_budget: default_pixel_budget(),
             png_compression: PngCompression::default(),
             decoded_geometry_cache: default_decoded_geometry_cache(),
+            parallel_emit: ParallelEmit::default(),
         }
     }
 }
