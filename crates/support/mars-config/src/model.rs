@@ -305,12 +305,20 @@ pub struct ArtifactCache {
     /// and verifies each artifact only once per process via BLAKE3. Cuts
     /// hot-path cost on hits at the price of skipping bit-rot detection
     /// after the first verification.
-    #[serde(default)]
+    ///
+    /// Default: true. Cache writes are atomic and content-addressed, so a
+    /// per-hit rehash is safety theatre against bit-rot. Operators concerned
+    /// about silent disk corruption can flip this off.
+    #[serde(default = "default_trust_path_hash")]
     pub trust_path_hash: bool,
 }
 
 fn default_eviction() -> String {
     "lru".to_string()
+}
+
+fn default_trust_path_hash() -> bool {
+    true
 }
 
 impl ArtifactCache {
