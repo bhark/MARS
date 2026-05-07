@@ -108,9 +108,12 @@ fn floor_to_i64(v: f64) -> Result<i64, GridError> {
         return Err(GridError::NonFiniteBbox);
     }
     let f = v.floor();
-    // i64 covers ±2^63; f64 representable integers go up to 2^53 exactly,
-    // beyond that the floor is meaningless for cell indexing anyway.
-    if f < i64::MIN as f64 || f > i64::MAX as f64 {
+    // f64 represents integers exactly only up to 2^53; beyond that the floor
+    // is meaningless for cell indexing. naive bounds (`f > i64::MAX as f64`)
+    // also leak through because `i64::MAX as f64` rounds *up* to 2^63 and
+    // back-casts saturate. cap at the safe-integer range explicitly.
+    const SAFE_INT_F64: f64 = (1u64 << 53) as f64;
+    if f.abs() > SAFE_INT_F64 {
         return Err(GridError::CellCountOverflow);
     }
     Ok(f as i64)
