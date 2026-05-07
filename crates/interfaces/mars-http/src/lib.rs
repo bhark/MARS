@@ -48,10 +48,12 @@ pub struct ServerConfig {
     pub listen: SocketAddr,
 }
 
-/// Capabilities document with a precomputed strong ETag.
+/// Capabilities document with a precomputed strong ETag. `body` is held as
+/// `Bytes` so the per-request response can clone a refcount instead of the
+/// underlying buffer on every GetCapabilities hit.
 #[derive(Debug)]
 pub struct CapabilitiesDoc {
-    pub body: String,
+    pub body: bytes::Bytes,
     pub etag: String,
 }
 
@@ -59,7 +61,10 @@ impl CapabilitiesDoc {
     #[must_use]
     pub fn new(body: String) -> Self {
         let etag = etag_for(body.as_bytes());
-        Self { body, etag }
+        Self {
+            body: bytes::Bytes::from(body),
+            etag,
+        }
     }
 }
 

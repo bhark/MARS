@@ -2194,6 +2194,7 @@ dependencies = [
  "arc-swap",
  "axum",
  "blake3",
+ "bytes",
  "mars-grid",
  "mars-observability",
  "mars-proj",
