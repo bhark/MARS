@@ -122,6 +122,12 @@ pub struct Render {
     /// `png` crate default if exact byte parity with older renders is needed.
     #[serde(default)]
     pub png_compression: PngCompression,
+    /// Bytes-bounded LRU of decoded source-artifact geometry (SPEC §10.4).
+    /// Hits skip the LEB128 varint walk for hot source artifacts, which on
+    /// PostGIS-class workloads dominates per-render CPU. Expressed as a
+    /// unit-suffixed byte literal (`256MiB`).
+    #[serde(default = "default_decoded_geometry_cache")]
+    pub decoded_geometry_cache: String,
 }
 
 impl Default for Render {
@@ -130,6 +136,7 @@ impl Default for Render {
             jpeg_quality: default_jpeg_quality(),
             pixel_budget: default_pixel_budget(),
             png_compression: PngCompression::default(),
+            decoded_geometry_cache: default_decoded_geometry_cache(),
         }
     }
 }
@@ -141,6 +148,12 @@ impl Render {
         let pixels = bytes / 4;
         Ok(u32::try_from(pixels).unwrap_or(u32::MAX))
     }
+
+    /// Resolve `decoded_geometry_cache` to a byte budget. Saturates at usize::MAX.
+    pub fn decoded_geometry_cache_bytes(&self) -> Result<usize, ConfigError> {
+        let bytes = units::parse_bytes(&self.decoded_geometry_cache)?;
+        Ok(usize::try_from(bytes).unwrap_or(usize::MAX))
+    }
 }
 
 fn default_jpeg_quality() -> u8 {
@@ -149,6 +162,10 @@ fn default_jpeg_quality() -> u8 {
 
 fn default_pixel_budget() -> String {
     "512MiB".to_owned()
+}
+
+fn default_decoded_geometry_cache() -> String {
+    "256MiB".to_owned()
 }
 
 /// Service identity. SPEC §5.2.
