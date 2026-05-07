@@ -198,6 +198,12 @@ impl Compiler {
             );
             publish_with_retry(self.deps.manifest.as_ref(), &merged, &self.deps.metrics, &shutdown).await?;
             sub.acknowledge(merged.source_version.as_deref()).await?;
+            // window_lag tracks how stale the published manifest is relative to
+            // the window boundary: time from when the window closed to when we
+            // finished publishing. exceeds the window size when the rebuild +
+            // publish takes longer than the window itself.
+            let lag = tokio::time::Instant::now().saturating_duration_since(deadline);
+            self.deps.metrics.set_compiler_window_lag(lag);
             tracing::info!(
                 version = merged.version,
                 dirty_cells = dirty.cells.len(),
