@@ -186,8 +186,11 @@ pub(crate) fn build_query(
 }
 
 fn decode_row(row: &tokio_postgres::Row, binding: &SourceBinding) -> Result<RowBytes, SourceError> {
-    // col 0 = id, col 1 = wkb geom, col 2.. = attrs in binding order
-    let id_signed: i64 = read_int(row, 0)?;
+    // col 0 = id, col 1 = wkb geom, col 2.. = attrs in binding order. NULL ids
+    // would silently coerce to 0 in some pg type paths; reject them up front so
+    // a row with no id can never collide with a real feature_id of zero.
+    let id_signed: i64 = read_int(row, 0)?
+        .ok_or_else(|| SourceError::Backend("feature id column is NULL".into()))?;
     if id_signed < 0 {
         return Err(SourceError::Backend(format!(
             "negative feature id rejected: {id_signed}"
@@ -215,20 +218,22 @@ fn decode_row(row: &tokio_postgres::Row, binding: &SourceBinding) -> Result<RowB
     })
 }
 
-/// read a signed integer id column accepting INT2/INT4/INT8.
-fn read_int(row: &tokio_postgres::Row, idx: usize) -> Result<i64, SourceError> {
+/// read a signed integer id column accepting INT2/INT4/INT8. returns Ok(None)
+/// when the column is SQL NULL so the caller can decide whether NULL is valid;
+/// for feature ids it is not.
+fn read_int(row: &tokio_postgres::Row, idx: usize) -> Result<Option<i64>, SourceError> {
     let col_ty = row.columns()[idx].type_();
     let v = match *col_ty {
-        Type::INT2 => i64::from(
-            row.try_get::<_, i16>(idx)
-                .map_err(|e| SourceError::Backend(format!("decode i2: {e}")))?,
-        ),
-        Type::INT4 => i64::from(
-            row.try_get::<_, i32>(idx)
-                .map_err(|e| SourceError::Backend(format!("decode i4: {e}")))?,
-        ),
+        Type::INT2 => row
+            .try_get::<_, Option<i16>>(idx)
+            .map_err(|e| SourceError::Backend(format!("decode i2: {e}")))?
+            .map(i64::from),
+        Type::INT4 => row
+            .try_get::<_, Option<i32>>(idx)
+            .map_err(|e| SourceError::Backend(format!("decode i4: {e}")))?
+            .map(i64::from),
         Type::INT8 => row
-            .try_get::<_, i64>(idx)
+            .try_get::<_, Option<i64>>(idx)
             .map_err(|e| SourceError::Backend(format!("decode i8: {e}")))?,
         ref other => {
             return Err(SourceError::Backend(format!(
