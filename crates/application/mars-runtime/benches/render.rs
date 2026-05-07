@@ -398,11 +398,15 @@ async fn build_runtime(opts: BuildOpts) -> (Runtime, RenderPlan) {
             CANONICAL_MAX_Y - 2_000.0,
         )
     } else {
+        // inset by an epsilon to side-step the cells_in_bbox closed-interval
+        // edge case: a bbox aligned exactly to a cell boundary picks an extra
+        // row/column and silently inflates the cell count we're benching.
+        let eps = cell_size * 1e-6;
         Bbox::new(
-            CANONICAL_MIN_X,
-            CANONICAL_MIN_Y,
-            CANONICAL_MIN_X + cell_size * opts.cells_x as f64,
-            CANONICAL_MIN_Y + cell_size * opts.cells_y as f64,
+            CANONICAL_MIN_X + eps,
+            CANONICAL_MIN_Y + eps,
+            CANONICAL_MIN_X + cell_size * opts.cells_x as f64 - eps,
+            CANONICAL_MIN_Y + cell_size * opts.cells_y as f64 - eps,
         )
     };
 
