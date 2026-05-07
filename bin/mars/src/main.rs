@@ -33,6 +33,10 @@ mod composition;
     version,
     about = "MARS - Map Artifact Rendering Service",
     long_about = None,
+    // top-level args (--mode, --config) are mutually exclusive with the
+    // tooling subcommands. clap enforces this at parse time so renames or
+    // new subcommands can't drift away from the constraint.
+    args_conflicts_with_subcommands = true,
 )]
 struct Cli {
     /// Service operation mode. Required for service operation; mutually
@@ -104,10 +108,9 @@ fn observability_prefs(cli: &Cli) -> (bool, Option<String>) {
 }
 
 async fn async_main(cli: Cli) -> Result<()> {
+    // clap's `conflicts_with` on `mode` rules out the (Some, Some) case at
+    // parse time; only one branch can populate.
     match (cli.mode, cli.tool) {
-        (Some(_), Some(_)) => Err(anyhow!(
-            "mars: --mode and a subcommand are mutually exclusive; provide exactly one"
-        )),
         (None, None) => Err(anyhow!(
             "mars: provide --mode <runtime|compiler|all-in-one> or one of: validate, inspect"
         )),
@@ -125,6 +128,7 @@ async fn async_main(cli: Cli) -> Result<()> {
         }
         (None, Some(Tool::Validate { path })) => tool_validate(&path).await,
         (None, Some(Tool::Inspect { path })) => tool_inspect(&path).await,
+        (Some(_), Some(_)) => unreachable!("clap conflicts_with rules this out at parse time"),
     }
 }
 
