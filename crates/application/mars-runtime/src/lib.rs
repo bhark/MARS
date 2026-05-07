@@ -420,14 +420,18 @@ impl Runtime {
             let stylesheet_state = state.clone();
             let fonts = self.deps.fonts.clone();
             let metrics = self.deps.metrics.clone();
-            let bytes = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, RuntimeError> {
-                // re-enter the request span on the blocking worker so child
-                // phase spans nest under it; spawn_blocking detaches the
-                // tracing context that `.instrument` set up on the async side.
+            // run the CPU phase on the current worker via block_in_place rather
+            // than dispatching to the blocking pool. spawn_blocking adds a
+            // 30-80 µs hop into a different thread on every request and shares
+            // its pool with i/o blocking calls; block_in_place keeps the work
+            // on the current worker, lets the scheduler steal cooperatively,
+            // and reuses the per-thread proj transformer cache that's already
+            // alive on this worker. block_in_place panics on the
+            // `current_thread` flavor so we fall back to spawn_blocking there;
+            // production always runs multi-thread.
+            let cpu_phase = move || -> Result<Vec<u8>, RuntimeError> {
                 let _entered = blocking_span.enter();
                 let _permit = permit;
-                // build the forward transformer through the per-thread cache so
-                // back-to-back requests on the same blocking worker reuse it.
                 let forward = if needs_reproject {
                     Some(mars_proj::cached_transformer(&canonical_crs, &request_crs)?)
                 } else {
@@ -489,13 +493,17 @@ impl Runtime {
                     encoder.encode(&pixmap, format)?
                 };
                 Ok(bytes)
-            })
-            .await
-            .map_err(|e| {
-                RuntimeError::Render(mars_render_port::RenderError::Backend(format!(
-                    "render task panicked: {e}"
-                )))
-            })??;
+            };
+            let bytes = match tokio::runtime::Handle::current().runtime_flavor() {
+                tokio::runtime::RuntimeFlavor::MultiThread => tokio::task::block_in_place(cpu_phase)?,
+                _ => tokio::task::spawn_blocking(cpu_phase)
+                    .await
+                    .map_err(|e| {
+                        RuntimeError::Render(mars_render_port::RenderError::Backend(format!(
+                            "render task panicked: {e}"
+                        )))
+                    })??,
+            };
             Ok(bytes)
         }
         .instrument(request_span)
