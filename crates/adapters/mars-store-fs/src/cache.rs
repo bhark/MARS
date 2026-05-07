@@ -307,11 +307,25 @@ impl LocalCache for FsCache {
             };
 
             if let Some(bytes) = local {
-                let mut state = self.state.lock();
-                state.touch(key.clone());
-                drop(state);
+                // a previous leader's atomic_write may have completed after the
+                // future was cancelled, in which case state.insert never ran
+                // and the lru is unaware of this file. fold it in now so the
+                // size budget reflects what's actually on disk; otherwise the
+                // touch silently no-ops and disk usage drifts above the cap.
+                let evicted = {
+                    let mut state = self.state.lock();
+                    if state.lru.contains_key(key) {
+                        state.touch(key.clone());
+                        Vec::new()
+                    } else {
+                        state.insert(key.clone(), bytes.len() as u64)
+                    }
+                };
                 if self.trust_path_hash && !already_verified {
                     self.verified.lock().insert(key.clone());
+                }
+                if !evicted.is_empty() {
+                    self.evict_files(evicted).await?;
                 }
                 return Ok(bytes);
             }
@@ -377,24 +391,27 @@ impl FsCache {
             }
         }
         if !evicted.is_empty() {
-            let root = self.root.clone();
-            tokio::task::spawn_blocking(move || {
-                for victim in evicted {
-                    let Ok(victim_path) = validate_artifact_key(&root, &victim) else {
-                        continue;
-                    };
-                    // best-effort eviction; missing file is fine.
-                    if let Err(e) = std::fs::remove_file(&victim_path)
-                        && e.kind() != std::io::ErrorKind::NotFound
-                    {
-                        tracing::warn!(path = %victim_path.display(), error = %e, "fs cache: evict failed");
-                    }
-                }
-            })
-            .await
-            .map_err(|e| StoreError::Backend(format!("evict join: {e}")))?;
+            self.evict_files(evicted).await?;
         }
         Ok(bytes)
+    }
+
+    async fn evict_files(&self, evicted: Vec<ArtifactKey>) -> Result<(), StoreError> {
+        let root = self.root.clone();
+        tokio::task::spawn_blocking(move || {
+            for victim in evicted {
+                let Ok(victim_path) = validate_artifact_key(&root, &victim) else {
+                    continue;
+                };
+                if let Err(e) = std::fs::remove_file(&victim_path)
+                    && e.kind() != std::io::ErrorKind::NotFound
+                {
+                    tracing::warn!(path = %victim_path.display(), error = %e, "fs cache: evict failed");
+                }
+            }
+        })
+        .await
+        .map_err(|e| StoreError::Backend(format!("evict join: {e}")))
     }
 }
 
