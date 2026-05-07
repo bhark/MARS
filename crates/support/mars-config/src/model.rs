@@ -87,6 +87,25 @@ fn default_compiler_window() -> String {
     "5min".to_owned()
 }
 
+/// PNG deflate level. Mirrors `png::Compression` so the adapter can map it
+/// without depending on this crate. `Fast` is the right default for ephemeral
+/// tile output: ~5-10x quicker than `Balanced` for ~10-15% larger payloads.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum PngCompression {
+    /// No compression. Largest files, fastest encode.
+    None,
+    /// Lightest compression (≈ deflate level 1 via fdeflate's fast path).
+    Fastest,
+    /// Solid speed/ratio tradeoff suited to ephemeral tile responses.
+    #[default]
+    Fast,
+    /// Default of the `png` crate (≈ deflate level 6).
+    Balanced,
+    /// Smallest output, slowest encode.
+    High,
+}
+
 /// Renderer / encoder configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Render {
@@ -99,6 +118,10 @@ pub struct Render {
     /// `width * height` permits for its lifetime.
     #[serde(default = "default_pixel_budget")]
     pub pixel_budget: String,
+    /// PNG deflate level. Defaults to `fast`; `balanced` matches the upstream
+    /// `png` crate default if exact byte parity with older renders is needed.
+    #[serde(default)]
+    pub png_compression: PngCompression,
 }
 
 impl Default for Render {
@@ -106,6 +129,7 @@ impl Default for Render {
         Self {
             jpeg_quality: default_jpeg_quality(),
             pixel_budget: default_pixel_budget(),
+            png_compression: PngCompression::default(),
         }
     }
 }

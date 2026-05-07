@@ -464,6 +464,32 @@ mod tests {
     }
 
     #[test]
+    fn render_png_compression_yaml_roundtrip() {
+        use crate::model::{PngCompression, Render};
+        // unset → default (Fast)
+        let yaml = "jpeg_quality: 85\npixel_budget: 256MiB\n";
+        let r: Render = serde_yaml_ng::from_str(yaml).unwrap();
+        assert_eq!(r.png_compression, PngCompression::Fast);
+
+        // each variant deserialises from its lowercase wire form
+        for (s, expected) in [
+            ("none", PngCompression::None),
+            ("fastest", PngCompression::Fastest),
+            ("fast", PngCompression::Fast),
+            ("balanced", PngCompression::Balanced),
+            ("high", PngCompression::High),
+        ] {
+            let yaml = format!("jpeg_quality: 85\npixel_budget: 256MiB\npng_compression: {s}\n");
+            let r: Render = serde_yaml_ng::from_str(&yaml).unwrap();
+            assert_eq!(r.png_compression, expected, "variant {s}");
+        }
+
+        // unknown variant must be rejected
+        let yaml = "jpeg_quality: 85\npixel_budget: 256MiB\npng_compression: crunchy\n";
+        assert!(serde_yaml_ng::from_str::<Render>(yaml).is_err());
+    }
+
+    #[test]
     fn rejects_placement_geom_mismatch() {
         use crate::model::{LabelStyleAttach, LayerLabel};
         let mut cfg = minimal_config();

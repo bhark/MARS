@@ -17,8 +17,8 @@ use clap::{Parser, Subcommand, ValueEnum};
 use futures_util::StreamExt;
 use mars_bin_shared::{build_pg_source, build_store_and_publisher, build_stylesheet, load_fonts};
 use mars_compiler::{Compiler, Deps as CompilerDeps};
-use mars_config::{Config, config_dir};
-use mars_render::{TinySkiaEncoder, TinySkiaRenderer};
+use mars_config::{Config, PngCompression as ConfigPngCompression, config_dir};
+use mars_render::{PngCompression as RenderPngCompression, TinySkiaEncoder, TinySkiaRenderer};
 use mars_runtime::{Deps as RuntimeDeps, Runtime, RuntimeState, run_manifest_reload_loop};
 use mars_store::{LocalCache, ManifestStore};
 use mars_store_fs::FsCache;
@@ -195,7 +195,10 @@ async fn run_runtime(cfg: Arc<Config>, shutdown: CancellationToken) -> Result<()
             store,
             cache,
             renderer: Arc::new(TinySkiaRenderer::new(fonts.clone())),
-            encoder: Arc::new(TinySkiaEncoder::new(cfg.render.jpeg_quality)),
+            encoder: Arc::new(TinySkiaEncoder::new(
+                cfg.render.jpeg_quality,
+                map_png_compression(cfg.render.png_compression),
+            )),
             metrics: metrics.clone(),
             fonts,
         },
@@ -462,6 +465,16 @@ fn empty_manifest(cfg: &Config) -> Manifest {
 }
 
 const DEFAULT_LISTEN_ADDR: &str = "0.0.0.0:8080";
+
+fn map_png_compression(c: ConfigPngCompression) -> RenderPngCompression {
+    match c {
+        ConfigPngCompression::None => RenderPngCompression::None,
+        ConfigPngCompression::Fastest => RenderPngCompression::Fastest,
+        ConfigPngCompression::Fast => RenderPngCompression::Fast,
+        ConfigPngCompression::Balanced => RenderPngCompression::Balanced,
+        ConfigPngCompression::High => RenderPngCompression::High,
+    }
+}
 
 fn resolve_listen(cfg: &Config) -> Result<SocketAddr> {
     let raw = cfg

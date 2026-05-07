@@ -157,7 +157,7 @@ fn make_pixmap(w: u32, h: u32) -> Pixmap {
 }
 
 fn bench_encode(c: &mut Criterion) {
-    let encoder = TinySkiaEncoder::new(80);
+    let encoder = TinySkiaEncoder::new(80, mars_render::PngCompression::Fast);
 
     let mut group = c.benchmark_group("render_encode");
     for (label, w, h) in [("256x256", 256u32, 256u32), ("1024x1024", 1024, 1024)] {

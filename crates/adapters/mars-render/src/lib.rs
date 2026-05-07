@@ -57,34 +57,71 @@ impl Renderer for TinySkiaRenderer {
     }
 }
 
+/// PNG deflate level used by [`TinySkiaEncoder`]. Variants intentionally
+/// mirror `png::Compression` so a config layer (e.g. `mars-config`) can carry
+/// the same enum shape without depending on the `png` crate.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PngCompression {
+    /// No compression. Largest files, fastest encode.
+    None,
+    /// Lightest compression (≈ deflate level 1 via fdeflate's fast path).
+    Fastest,
+    /// Solid speed/ratio tradeoff suited to ephemeral tile responses.
+    #[default]
+    Fast,
+    /// Default of the `png` crate (≈ deflate level 6).
+    Balanced,
+    /// Smallest output, slowest encode.
+    High,
+}
+
+impl PngCompression {
+    pub(crate) fn to_png(self) -> png::Compression {
+        match self {
+            Self::None => png::Compression::NoCompression,
+            Self::Fastest => png::Compression::Fastest,
+            Self::Fast => png::Compression::Fast,
+            Self::Balanced => png::Compression::Balanced,
+            Self::High => png::Compression::High,
+        }
+    }
+}
+
 /// PNG and JPEG encoder. Lives next to the rasteriser so the in-process
 /// pipeline does not pay an extra copy crossing crate boundaries.
 ///
-/// JPEG quality is captured at construction so it does not have to leak into
-/// the [`Encoder::encode`] trait signature.
+/// JPEG quality and PNG deflate level are captured at construction so they
+/// don't have to leak into the [`Encoder::encode`] trait signature.
 #[derive(Debug, Clone, Copy)]
 pub struct TinySkiaEncoder {
     jpeg_quality: u8,
+    png_compression: PngCompression,
 }
 
 impl TinySkiaEncoder {
-    /// Construct with a configured jpeg quality (1-100).
+    /// Construct with configured jpeg quality (1-100) and PNG deflate level.
     #[must_use]
-    pub fn new(jpeg_quality: u8) -> Self {
-        Self { jpeg_quality }
+    pub fn new(jpeg_quality: u8, png_compression: PngCompression) -> Self {
+        Self {
+            jpeg_quality,
+            png_compression,
+        }
     }
 }
 
 impl Default for TinySkiaEncoder {
     fn default() -> Self {
-        Self { jpeg_quality: 85 }
+        Self {
+            jpeg_quality: 85,
+            png_compression: PngCompression::default(),
+        }
     }
 }
 
 impl Encoder for TinySkiaEncoder {
     fn encode(&self, pixmap: &Pixmap, format: ImageFormat) -> Result<Vec<u8>, EncodeError> {
         match format {
-            ImageFormat::Png => encode::encode_png(pixmap),
+            ImageFormat::Png => encode::encode_png(pixmap, self.png_compression),
             ImageFormat::Jpeg => encode::encode_jpeg(pixmap, self.jpeg_quality),
         }
     }
@@ -316,6 +353,47 @@ mod tests {
         // sanity-check colour is roughly red after lossy round-trip.
         let (r, g, b) = (pixels[0], pixels[1], pixels[2]);
         assert!(r > 200 && g < 60 && b < 60, "expected red-ish, got ({r},{g},{b})");
+    }
+
+    #[test]
+    fn png_compression_levels_decode_to_identical_pixels() {
+        let canvas = Canvas {
+            width: 32,
+            height: 32,
+            background: Some(white()),
+        };
+        let ops = vec![DrawOp::Path {
+            path: square(16.0, 16.0, 8.0),
+            style: Arc::new(Style {
+                fill: Some(red()),
+                ..Default::default()
+            }),
+        }];
+        let pm = TinySkiaRenderer::new(std::sync::Arc::new(mars_text::Fonts::with_default()))
+            .render(canvas, &ops)
+            .unwrap();
+        let levels = [
+            PngCompression::None,
+            PngCompression::Fastest,
+            PngCompression::Fast,
+            PngCompression::Balanced,
+            PngCompression::High,
+        ];
+        let decoded: Vec<_> = levels
+            .iter()
+            .map(|&c| {
+                let enc = TinySkiaEncoder::new(85, c);
+                let bytes = enc.encode(&pm, ImageFormat::Png).unwrap();
+                decode(&bytes)
+            })
+            .collect();
+        // every level must round-trip to the same pixel buffer; encoded bytes
+        // legitimately differ.
+        let (w0, h0, ref rgba0) = decoded[0];
+        for (i, (w, h, rgba)) in decoded.iter().enumerate().skip(1) {
+            assert_eq!((*w, *h), (w0, h0), "level {i} dimension mismatch");
+            assert_eq!(rgba, rgba0, "level {i} pixel mismatch");
+        }
     }
 
     #[test]

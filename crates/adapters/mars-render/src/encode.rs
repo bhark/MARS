@@ -5,17 +5,19 @@ use std::cell::RefCell;
 use jpeg_encoder::{ColorType as JpegColorType, Encoder as JpegEnc};
 use mars_render_port::{EncodeError, Pixmap};
 
+use crate::PngCompression;
+
 thread_local! {
     static SCRATCH: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
 }
 
-pub(crate) fn encode_png(pm: &Pixmap) -> Result<Vec<u8>, EncodeError> {
+pub(crate) fn encode_png(pm: &Pixmap, compression: PngCompression) -> Result<Vec<u8>, EncodeError> {
     let mut out = Vec::with_capacity(pm.premultiplied_rgba.len() / 2);
     {
         let mut enc = png::Encoder::new(&mut out, pm.width, pm.height);
         enc.set_color(png::ColorType::Rgba);
         enc.set_depth(png::BitDepth::Eight);
-        enc.set_compression(png::Compression::Balanced);
+        enc.set_compression(compression.to_png());
         let mut writer = enc
             .write_header()
             .map_err(|e| EncodeError::Backend(format!("png header: {e}")))?;
