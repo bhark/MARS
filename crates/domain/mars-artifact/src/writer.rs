@@ -155,10 +155,7 @@ impl ArtifactWriter {
         // a geometry section without a known feature_count would silently lie
         // in the footer (zero features, body has them). require it explicitly
         // when geometry is present and could not be derived from staged input.
-        let has_geometry = self
-            .sections
-            .iter()
-            .any(|(k, _)| *k == SectionKind::GeometryPayload);
+        let has_geometry = self.sections.iter().any(|(k, _)| *k == SectionKind::GeometryPayload);
         let feature_count = match self.feature_count {
             Some(n) => n,
             None if has_geometry => {

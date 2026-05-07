@@ -189,8 +189,7 @@ fn decode_row(row: &tokio_postgres::Row, binding: &SourceBinding) -> Result<RowB
     // col 0 = id, col 1 = wkb geom, col 2.. = attrs in binding order. NULL ids
     // would silently coerce to 0 in some pg type paths; reject them up front so
     // a row with no id can never collide with a real feature_id of zero.
-    let id_signed: i64 = read_int(row, 0)?
-        .ok_or_else(|| SourceError::Backend("feature id column is NULL".into()))?;
+    let id_signed: i64 = read_int(row, 0)?.ok_or_else(|| SourceError::Backend("feature id column is NULL".into()))?;
     if id_signed < 0 {
         return Err(SourceError::Backend(format!(
             "negative feature id rejected: {id_signed}"

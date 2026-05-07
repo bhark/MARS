@@ -457,8 +457,7 @@ fn writer_derives_feature_count_from_staged_payload() {
         },
     ];
     let mut w = ArtifactWriter::new(ArtifactKind::Source);
-    w.add_geometry_payload(features)
-        .set_bbox(Bbox::new(0.0, 0.0, 1.0, 1.0));
+    w.add_geometry_payload(features).set_bbox(Bbox::new(0.0, 0.0, 1.0, 1.0));
     let bytes = w.finish().unwrap();
     let reader = ArtifactReader::open(bytes).unwrap();
     assert_eq!(reader.feature_count(), 2);

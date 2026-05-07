@@ -117,8 +117,7 @@ pub fn encode_label_candidates(items: &[LabelCandidate]) -> Result<Bytes, Artifa
             }
         }
         let bytes = c.text.as_bytes();
-        let tlen = u16::try_from(bytes.len())
-            .map_err(|_| ArtifactError::Malformed("label text exceeds max bytes"))?;
+        let tlen = u16::try_from(bytes.len()).map_err(|_| ArtifactError::Malformed("label text exceeds max bytes"))?;
         out.extend_from_slice(&tlen.to_le_bytes());
         out.extend_from_slice(bytes);
     }

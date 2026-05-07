@@ -154,7 +154,9 @@ impl S3Publisher {
 
     async fn fetch_manifest_body(&self, pointer: &str) -> Result<Manifest, StoreError> {
         if let Err(e) = mars_types::validate_manifest_pointer(pointer) {
-            return Err(StoreError::Backend(format!("malformed manifest pointer {pointer:?}: {e}")));
+            return Err(StoreError::Backend(format!(
+                "malformed manifest pointer {pointer:?}: {e}"
+            )));
         }
         let path = join_prefix(&self.prefix, &format!("{MANIFEST_DIR}/{pointer}.json"));
         let bytes = retry_transient(|| async {

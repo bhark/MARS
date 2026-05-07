@@ -92,7 +92,9 @@ impl FsPublisher {
             Err(e) => return Err(StoreError::Backend(format!("read current: {e}"))),
         };
         if let Err(e) = mars_types::validate_manifest_pointer(&pointer) {
-            return Err(StoreError::Backend(format!("malformed manifest pointer {pointer:?}: {e}")));
+            return Err(StoreError::Backend(format!(
+                "malformed manifest pointer {pointer:?}: {e}"
+            )));
         }
 
         let body_path = root.join(MANIFEST_DIR).join(format!("{pointer}.json"));
