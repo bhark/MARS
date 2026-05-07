@@ -2570,8 +2570,10 @@ dependencies = [
 name = "mars-wmts"
 version = "0.0.1"
 dependencies = [
+ "mars-config",
  "mars-runtime",
  "mars-types",
+ "percent-encoding",
  "thiserror 2.0.18",
 ]
 

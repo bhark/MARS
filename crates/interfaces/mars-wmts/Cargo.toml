@@ -14,4 +14,6 @@ workspace = true
 [dependencies]
 mars-types    = { workspace = true }
 mars-runtime  = { workspace = true }
+mars-config   = { workspace = true }
 thiserror     = { workspace = true }
+percent-encoding = "2"
