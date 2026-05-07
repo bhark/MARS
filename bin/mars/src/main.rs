@@ -185,6 +185,7 @@ async fn run_runtime(cfg: Arc<Config>, shutdown: CancellationToken) -> Result<()
 
     let listen = resolve_listen(&cfg)?;
     let wms_cfg = mars_wms::WmsConfig::from_config(&cfg);
+    let wmts_cfg = mars_wmts::WmtsConfig::from_config(&cfg);
     let metrics = mars_observability::Metrics::new().context("init metrics")?;
     let pixel_budget = cfg
         .render
@@ -264,6 +265,7 @@ async fn run_runtime(cfg: Arc<Config>, shutdown: CancellationToken) -> Result<()
         runtime,
         caps_handle,
         wms_cfg,
+        wmts_cfg,
         metrics,
         shutdown.clone(),
     )

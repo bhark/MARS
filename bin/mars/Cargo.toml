@@ -32,6 +32,7 @@ mars-runtime        = { workspace = true }
 mars-compiler       = { workspace = true }
 mars-http           = { workspace = true }
 mars-wms            = { workspace = true }
+mars-wmts           = { workspace = true }
 mars-store-fs       = { workspace = true }
 mars-source-postgres = { workspace = true }
 mars-render         = { workspace = true }

@@ -2178,6 +2178,7 @@ dependencies = [
  "mars-store-fs",
  "mars-types",
  "mars-wms",
+ "mars-wmts",
  "png",
  "rand 0.8.6",
  "serde",
@@ -2331,6 +2332,7 @@ dependencies = [
  "axum",
  "blake3",
  "bytes",
+ "mars-config",
  "mars-grid",
  "mars-observability",
  "mars-proj",
@@ -2339,6 +2341,7 @@ dependencies = [
  "mars-store",
  "mars-types",
  "mars-wms",
+ "mars-wmts",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
@@ -2574,6 +2577,7 @@ dependencies = [
  "mars-runtime",
  "mars-types",
  "percent-encoding",
+ "quick-xml 0.39.3",
  "thiserror 2.0.18",
 ]
 

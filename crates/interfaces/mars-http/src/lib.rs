@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! /wms        WMS 1.3.0
-//! /wmts       reserved (501 until Phase 1 tile-cache lands)
+//! /wmts       WMTS 1.0.0 (GetTile; GetCapabilities lands with slice 3)
 //! /healthz    liveness
 //! /readyz     readiness (gated on a usable manifest)
 //! /metrics    Prometheus scrape
@@ -28,6 +28,7 @@ use mars_grid::GridError;
 use mars_observability::Metrics;
 use mars_runtime::{RenderPlan, Runtime, RuntimeError};
 use mars_wms::{WmsConfig, WmsError, WmsRequest};
+use mars_wmts::{WmtsConfig, WmtsError, WmtsRequest};
 use tokio_util::sync::CancellationToken;
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
@@ -89,22 +90,30 @@ struct AppState {
     runtime: Arc<Runtime>,
     capabilities: CapabilitiesHandle,
     wms_cfg: Arc<WmsConfig>,
+    wmts_cfg: Arc<WmtsConfig>,
     metrics: Metrics,
     request_counter: Arc<AtomicU64>,
 }
 
 /// Build the router. Exposed for in-process testing via `tower::ServiceExt`.
-pub fn router(runtime: Arc<Runtime>, capabilities: CapabilitiesHandle, wms_cfg: WmsConfig, metrics: Metrics) -> Router {
+pub fn router(
+    runtime: Arc<Runtime>,
+    capabilities: CapabilitiesHandle,
+    wms_cfg: WmsConfig,
+    wmts_cfg: WmtsConfig,
+    metrics: Metrics,
+) -> Router {
     let state = AppState {
         runtime,
         capabilities,
         wms_cfg: Arc::new(wms_cfg),
+        wmts_cfg: Arc::new(wmts_cfg),
         metrics,
         request_counter: Arc::new(AtomicU64::new(0)),
     };
     Router::new()
         .route("/wms", get(handle_wms))
-        .route("/wmts", get(handle_wmts_not_implemented))
+        .route("/wmts", get(handle_wmts))
         .route("/healthz", get(|| async { (StatusCode::OK, "ok") }))
         .route("/readyz", get(handle_ready))
         .route("/metrics", get(handle_metrics))
@@ -124,10 +133,11 @@ pub async fn serve(
     runtime: Arc<Runtime>,
     capabilities: CapabilitiesHandle,
     wms_cfg: WmsConfig,
+    wmts_cfg: WmtsConfig,
     metrics: Metrics,
     shutdown: CancellationToken,
 ) -> Result<(), HttpError> {
-    let app = router(runtime, capabilities, wms_cfg, metrics);
+    let app = router(runtime, capabilities, wms_cfg, wmts_cfg, metrics);
     let listener = tokio::net::TcpListener::bind(cfg.listen)
         .await
         .map_err(|e| HttpError::Listen(format!("bind {}: {e}", cfg.listen)))?;
@@ -221,25 +231,47 @@ async fn handle_wms(State(state): State<AppState>, headers: HeaderMap, raw_query
     .await
 }
 
-/// /wmts is reserved for the WMTS interface that lands with the tile cache.
-/// Until then, return a clean 501 with an OGC 07-057-shaped ExceptionReport
-/// so probing clients get a typed answer rather than a 404 — and don't get a
-/// WMS-shaped exception, which a strict client would reject.
-async fn handle_wmts_not_implemented() -> Response {
-    let body = concat!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>",
-        "<ExceptionReport xmlns=\"http://www.opengis.net/ows/1.1\" version=\"1.1.0\">",
-        "<Exception exceptionCode=\"OperationNotSupported\">",
-        "<ExceptionText>WMTS is not yet implemented</ExceptionText>",
-        "</Exception>",
-        "</ExceptionReport>",
-    );
-    let mut resp = (StatusCode::NOT_IMPLEMENTED, body).into_response();
-    resp.headers_mut().insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static("text/xml; charset=utf-8"),
-    );
-    resp
+async fn handle_wmts(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    raw_query: axum::extract::RawQuery,
+) -> Response {
+    let req_id = request_id(&state, &headers);
+    let span = tracing::info_span!("wmts", req_id = %req_id);
+
+    async move {
+        let raw = raw_query.0.unwrap_or_default();
+
+        let parsed = match mars_wmts::parse_request(&raw, &state.wmts_cfg) {
+            Ok(r) => r,
+            Err(e) => return wmts_error_response(e),
+        };
+
+        match parsed {
+            // capabilities lands with WMTS slice 3; return a typed 501 so probing
+            // clients receive a structured answer rather than the 200/empty body
+            // axum would default to.
+            WmtsRequest::GetCapabilities => wmts_exception_response(EdgeException {
+                status: StatusCode::NOT_IMPLEMENTED,
+                code: Some("OperationNotSupported"),
+                locator: None,
+                message: "WMTS GetCapabilities is not yet implemented".into(),
+            }),
+            WmtsRequest::GetTile(plan) => {
+                let mime = plan.format.mime();
+                match state.runtime.render(&plan).await {
+                    Ok(bytes) => {
+                        let mut h = HeaderMap::new();
+                        h.insert(header::CONTENT_TYPE, HeaderValue::from_static(mime));
+                        (StatusCode::OK, h, bytes).into_response()
+                    }
+                    Err(e) => wmts_runtime_error_response(e, &plan),
+                }
+            }
+        }
+    }
+    .instrument(span)
+    .await
 }
 
 async fn handle_ready(State(state): State<AppState>) -> Response {
@@ -286,13 +318,21 @@ fn request_id(state: &AppState, headers: &HeaderMap) -> String {
     format!("req-{n}")
 }
 
-struct WmsException {
+/// Service-agnostic exception payload. The same fields drive both the WMS
+/// `ServiceExceptionReport` and the OWS `ExceptionReport` envelopes; only the
+/// XML wrapping differs.
+///
+/// `code` is optional for WMS (omitted attribute) but required by OWS, where
+/// `None` is rendered as `"NoApplicableCode"` per OWS Annex A.
+struct EdgeException {
     status: StatusCode,
     code: Option<&'static str>,
+    /// OWS `locator` attribute. Ignored by the WMS emitter.
+    locator: Option<&'static str>,
     message: String,
 }
 
-fn wms_exception_response(exc: WmsException) -> Response {
+fn wms_exception_response(exc: EdgeException) -> Response {
     let xml = mars_wms::service_exception_report(exc.code, &exc.message);
     let mut resp = (exc.status, xml).into_response();
     resp.headers_mut().insert(
@@ -304,19 +344,22 @@ fn wms_exception_response(exc: WmsException) -> Response {
 
 fn wms_error_response(e: WmsError) -> Response {
     let exc = match e {
-        WmsError::MissingParam(name) => WmsException {
+        WmsError::MissingParam(name) => EdgeException {
             status: StatusCode::BAD_REQUEST,
             code: Some("MissingParameterValue"),
+            locator: Some(name),
             message: format!("Missing required parameter: {name}"),
         },
-        WmsError::InvalidParam { name, reason } => WmsException {
+        WmsError::InvalidParam { name, reason } => EdgeException {
             status: StatusCode::BAD_REQUEST,
             code: Some("InvalidParameterValue"),
+            locator: Some(name),
             message: format!("Invalid parameter '{name}': {reason}"),
         },
-        WmsError::NotImplemented { what } => WmsException {
+        WmsError::NotImplemented { what } => EdgeException {
             status: StatusCode::NOT_IMPLEMENTED,
             code: Some("OperationNotSupported"),
+            locator: None,
             message: format!("Operation not supported: {what}"),
         },
     };
@@ -324,11 +367,55 @@ fn wms_error_response(e: WmsError) -> Response {
 }
 
 fn runtime_error_response(e: RuntimeError, plan: &RenderPlan) -> Response {
-    let cell = match &e {
+    log_render_failure(&e, plan);
+    wms_exception_response(map_runtime_error(&e))
+}
+
+fn wmts_exception_response(exc: EdgeException) -> Response {
+    let xml = mars_wmts::ows_exception_report(exc.code.unwrap_or("NoApplicableCode"), exc.locator, &exc.message);
+    let mut resp = (exc.status, xml).into_response();
+    resp.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/xml; charset=utf-8"),
+    );
+    resp
+}
+
+fn wmts_error_response(e: WmtsError) -> Response {
+    let exc = match e {
+        WmtsError::MissingParam(name) => EdgeException {
+            status: StatusCode::BAD_REQUEST,
+            code: Some("MissingParameterValue"),
+            locator: Some(name),
+            message: format!("Missing required parameter: {name}"),
+        },
+        WmtsError::InvalidParam { name, reason } => EdgeException {
+            status: StatusCode::BAD_REQUEST,
+            code: Some("InvalidParameterValue"),
+            locator: Some(name),
+            message: format!("Invalid parameter '{name}': {reason}"),
+        },
+        WmtsError::NotImplemented { what } => EdgeException {
+            status: StatusCode::NOT_IMPLEMENTED,
+            code: Some("OperationNotSupported"),
+            locator: None,
+            message: format!("Operation not supported: {what}"),
+        },
+    };
+    wmts_exception_response(exc)
+}
+
+fn wmts_runtime_error_response(e: RuntimeError, plan: &RenderPlan) -> Response {
+    log_render_failure(&e, plan);
+    wmts_exception_response(map_runtime_error(&e))
+}
+
+fn log_render_failure(e: &RuntimeError, plan: &RenderPlan) {
+    let cell = match e {
         RuntimeError::SourceMissing { cell, .. } => Some(*cell),
         _ => None,
     };
-    match &e {
+    match e {
         RuntimeError::NotReady => {
             tracing::warn!(error = %e, layers = ?plan.layers, bbox = ?plan.bbox, cell = ?cell, "render failed")
         }
@@ -336,66 +423,70 @@ fn runtime_error_response(e: RuntimeError, plan: &RenderPlan) -> Response {
             tracing::error!(error = %e, layers = ?plan.layers, bbox = ?plan.bbox, cell = ?cell, "render failed")
         }
     }
-    wms_exception_response(map_runtime_error(&e))
 }
 
-fn map_runtime_error(e: &RuntimeError) -> WmsException {
+fn map_runtime_error(e: &RuntimeError) -> EdgeException {
     match e {
-        RuntimeError::NotReady => WmsException {
+        RuntimeError::NotReady => EdgeException {
             status: StatusCode::SERVICE_UNAVAILABLE,
             code: None,
+            locator: None,
             message: "Service temporarily unavailable".into(),
         },
         RuntimeError::Proj(proj_err) => match proj_err {
-            mars_proj::ProjError::UnknownCrs(name) => WmsException {
+            mars_proj::ProjError::UnknownCrs(name) => EdgeException {
                 status: StatusCode::BAD_REQUEST,
                 code: Some("InvalidCRS"),
+                locator: Some("CRS"),
                 message: format!("CRS '{name}' is not supported"),
             },
-            _ => WmsException {
+            _ => EdgeException {
                 status: StatusCode::BAD_REQUEST,
                 code: Some("InvalidCRS"),
+                locator: Some("CRS"),
                 message: "Coordinate transformation failed".into(),
             },
         },
-        RuntimeError::NotImplemented { what } => WmsException {
+        RuntimeError::NotImplemented { what } => EdgeException {
             status: StatusCode::NOT_IMPLEMENTED,
             code: Some("OperationNotSupported"),
+            locator: None,
             message: format!("Operation not supported: {what}"),
         },
-        RuntimeError::LayerNotDefined { layer } => WmsException {
+        RuntimeError::LayerNotDefined { layer } => EdgeException {
             status: StatusCode::BAD_REQUEST,
             code: Some("LayerNotDefined"),
+            locator: Some("LAYERS"),
             message: format!("Layer '{layer}' is not defined"),
         },
         RuntimeError::Grid(grid_err) => match grid_err {
-            GridError::TooManyCells { requested, limit } => WmsException {
+            GridError::TooManyCells { requested, limit } => EdgeException {
                 status: StatusCode::BAD_REQUEST,
                 code: Some("InvalidParameterValue"),
+                locator: Some("BBOX"),
                 message: format!("Request covers too many cells ({requested} > {limit})"),
             },
-            GridError::NoBandForScale(denom) => WmsException {
+            GridError::NoBandForScale(denom) => EdgeException {
                 status: StatusCode::BAD_REQUEST,
                 code: Some("InvalidParameterValue"),
+                locator: Some("BBOX"),
                 message: format!("Scale {denom} is not supported"),
             },
-            _ => WmsException {
-                status: StatusCode::INTERNAL_SERVER_ERROR,
-                code: None,
-                message: "Internal server error".into(),
-            },
+            _ => internal_error(),
         },
-        RuntimeError::PixelBudgetExceeded { requested, budget } => WmsException {
+        RuntimeError::PixelBudgetExceeded { requested, budget } => EdgeException {
             status: StatusCode::BAD_REQUEST,
             code: Some("InvalidParameterValue"),
+            locator: None,
             message: format!("Request requires {requested} pixels but server budget is {budget}"),
         },
         // SPEC §8.5: a source artifact missing from the manifest is a broken
         // manifest; surface as 404 so clients can distinguish "no data" from
         // "we broke". layer-level misses are soft-skipped upstream.
-        RuntimeError::SourceMissing { .. } => WmsException {
+        RuntimeError::SourceMissing { .. } => EdgeException {
             status: StatusCode::NOT_FOUND,
             code: Some("LayerNotQueryable"),
+            locator: None,
             message: "No data available for the requested area".into(),
         },
         RuntimeError::BadKey { .. }
@@ -403,11 +494,16 @@ fn map_runtime_error(e: &RuntimeError) -> WmsException {
         | RuntimeError::Store(_)
         | RuntimeError::Render(_)
         | RuntimeError::Encode(_)
-        | RuntimeError::Artifact(_) => WmsException {
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-            code: None,
-            message: "Internal server error".into(),
-        },
+        | RuntimeError::Artifact(_) => internal_error(),
+    }
+}
+
+fn internal_error() -> EdgeException {
+    EdgeException {
+        status: StatusCode::INTERNAL_SERVER_ERROR,
+        code: None,
+        locator: None,
+        message: "Internal server error".into(),
     }
 }
 
@@ -459,21 +555,48 @@ mod tests {
     }
 
     fn empty_router() -> Router {
-        let cfg = WmsConfig {
+        let metrics = Metrics::new().unwrap();
+        router(
+            empty_runtime(&metrics),
+            capabilities_handle("<caps/>".into()),
+            test_wms_cfg(),
+            test_wmts_cfg(),
+            metrics,
+        )
+    }
+
+    fn test_wms_cfg() -> WmsConfig {
+        WmsConfig {
             allowlist_crs: vec![CrsCode::new("EPSG:25832")],
             formats: vec![ImageFormat::Png],
             max_image_dimension: 8192,
             max_pixels: 16_000_000,
             max_layers: 100,
             max_bbox_coord: 1e9,
-        };
-        let metrics = Metrics::new().unwrap();
-        router(
-            empty_runtime(&metrics),
-            capabilities_handle("<caps/>".into()),
-            cfg,
-            metrics,
-        )
+        }
+    }
+
+    fn test_wmts_cfg() -> WmtsConfig {
+        use mars_config::{TileMatrixLevel, TileMatrixSet};
+        let mut sets = std::collections::BTreeMap::new();
+        sets.insert(
+            "dk_25832".to_owned(),
+            TileMatrixSet {
+                crs: CrsCode::new("EPSG:25832"),
+                top_left: [0.0, 1024.0],
+                tile_size: [16, 16],
+                // sd chosen so pixel_size_units = 1.0; 16-tile spans 16 units.
+                levels: vec![TileMatrixLevel {
+                    id: 0,
+                    scale_denominator: 1.0 / 0.000_28,
+                }],
+            },
+        );
+        WmtsConfig {
+            tile_matrix_sets: sets,
+            formats: vec![ImageFormat::Png],
+            max_bbox_coord: 1e9,
+        }
     }
 
     fn ready_state() -> RuntimeState {
@@ -505,18 +628,115 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn wmts_returns_501_with_ows_exception_report() {
+    async fn wmts_no_request_param_is_400() {
+        // a bare /wmts hit with no `request=` is a missing-parameter error,
+        // returned as an OWS ExceptionReport (not a WMS ServiceExceptionReport).
         let app = empty_router();
         let resp = app
             .oneshot(Request::builder().uri("/wmts").body(Body::empty()).unwrap())
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         let body = body_str(resp).await;
-        // OGC 07-057 (WMTS) reuses the OWS ExceptionReport schema, not WMS.
         assert!(body.contains("ExceptionReport"));
         assert!(!body.contains("ServiceExceptionReport"));
-        assert!(body.contains("OperationNotSupported"));
+        assert!(body.contains(r#"exceptionCode="MissingParameterValue""#));
+    }
+
+    #[tokio::test]
+    async fn wmts_get_capabilities_501() {
+        // GetCapabilities lands with WMTS slice 3; until then it returns a
+        // typed 501 OWS exception so probing clients receive a structured
+        // response instead of a 200/empty body.
+        let app = empty_router();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/wmts?service=WMTS&version=1.0.0&request=GetCapabilities")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_IMPLEMENTED);
+        let body = body_str(resp).await;
+        assert!(body.contains("ExceptionReport"));
+        assert!(body.contains(r#"exceptionCode="OperationNotSupported""#));
+    }
+
+    #[tokio::test]
+    async fn wmts_get_tile_503_without_manifest() {
+        // a syntactically valid GetTile parses cleanly; the runtime then
+        // responds 503 because no manifest is loaded.
+        let app = empty_router();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(
+                        "/wmts?service=WMTS&version=1.0.0&request=GetTile&layer=a&style=&\
+                         format=image/png&tilematrixset=dk_25832&tilematrix=0&tilecol=0&tilerow=0",
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = body_str(resp).await;
+        assert!(body.contains("ExceptionReport"));
+        assert!(!body.contains("ServiceExceptionReport"));
+    }
+
+    #[tokio::test]
+    async fn wmts_get_tile_renders_through_runtime() {
+        // happy path through the existing render pipeline: a layer with a
+        // valid band binding renders an empty PNG (NoopRenderer + NoopEncoder).
+        let metrics = Metrics::new().unwrap();
+        let runtime = empty_runtime(&metrics);
+        runtime.swap_state(Arc::new(ready_state_with_band()));
+        let app = router(
+            runtime,
+            capabilities_handle("<caps/>".into()),
+            test_wms_cfg(),
+            test_wmts_cfg(),
+            metrics,
+        );
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(
+                        "/wmts?service=WMTS&version=1.0.0&request=GetTile&layer=a&style=&\
+                         format=image/png&tilematrixset=dk_25832&tilematrix=0&tilecol=0&tilerow=0",
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let ct = resp.headers().get(header::CONTENT_TYPE).cloned().unwrap();
+        assert_eq!(ct.to_str().unwrap(), "image/png");
+    }
+
+    #[tokio::test]
+    async fn wmts_invalid_tms_is_400_with_locator() {
+        let app = empty_router();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(
+                        "/wmts?request=GetTile&layer=a&format=image/png&tilematrixset=nope&\
+                         tilematrix=0&tilecol=0&tilerow=0",
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = body_str(resp).await;
+        assert!(body.contains(r#"exceptionCode="InvalidParameterValue""#));
+        assert!(body.contains(r#"locator="tilematrixset""#));
     }
 
     #[tokio::test]
@@ -533,15 +753,13 @@ mod tests {
     async fn readyz_200_after_swap_state() {
         let metrics = Metrics::new().unwrap();
         let runtime = empty_runtime(&metrics);
-        let cfg = WmsConfig {
-            allowlist_crs: vec![CrsCode::new("EPSG:25832")],
-            formats: vec![ImageFormat::Png],
-            max_image_dimension: 8192,
-            max_pixels: 16_000_000,
-            max_layers: 100,
-            max_bbox_coord: 1e9,
-        };
-        let app = router(runtime.clone(), capabilities_handle("<caps/>".into()), cfg, metrics);
+        let app = router(
+            runtime.clone(),
+            capabilities_handle("<caps/>".into()),
+            test_wms_cfg(),
+            test_wmts_cfg(),
+            metrics,
+        );
         runtime.swap_state(Arc::new(ready_state()));
 
         let resp = app
@@ -602,15 +820,13 @@ mod tests {
     async fn wms_capabilities_reflects_swap() {
         let metrics = Metrics::new().unwrap();
         let caps = capabilities_handle("<caps>v1</caps>".into());
-        let cfg = WmsConfig {
-            allowlist_crs: vec![CrsCode::new("EPSG:25832")],
-            formats: vec![ImageFormat::Png],
-            max_image_dimension: 8192,
-            max_pixels: 16_000_000,
-            max_layers: 100,
-            max_bbox_coord: 1e9,
-        };
-        let app = router(empty_runtime(&metrics), caps.clone(), cfg, metrics);
+        let app = router(
+            empty_runtime(&metrics),
+            caps.clone(),
+            test_wms_cfg(),
+            test_wmts_cfg(),
+            metrics,
+        );
         caps.store(Arc::new(CapabilitiesDoc::new("<caps>v2</caps>".to_owned())));
         let resp = app
             .oneshot(
@@ -689,15 +905,13 @@ mod tests {
         let mut state = ready_state_with_band();
         state.layer_order = vec![mars_types::LayerId::new("b")];
         runtime.swap_state(Arc::new(state));
-        let cfg = WmsConfig {
-            allowlist_crs: vec![CrsCode::new("EPSG:25832")],
-            formats: vec![ImageFormat::Png],
-            max_image_dimension: 8192,
-            max_pixels: 16_000_000,
-            max_layers: 100,
-            max_bbox_coord: 1e9,
-        };
-        let app = router(runtime, capabilities_handle("<caps/>".into()), cfg, metrics);
+        let app = router(
+            runtime,
+            capabilities_handle("<caps/>".into()),
+            test_wms_cfg(),
+            test_wmts_cfg(),
+            metrics,
+        );
         let resp = app
             .oneshot(
                 Request::builder()
@@ -721,15 +935,13 @@ mod tests {
         let metrics = Metrics::new().unwrap();
         let runtime = empty_runtime(&metrics);
         runtime.swap_state(Arc::new(ready_state_with_band()));
-        let cfg = WmsConfig {
-            allowlist_crs: vec![CrsCode::new("EPSG:25832")],
-            formats: vec![ImageFormat::Png],
-            max_image_dimension: 8192,
-            max_pixels: 16_000_000,
-            max_layers: 100,
-            max_bbox_coord: 1e9,
-        };
-        let app = router(runtime, capabilities_handle("<caps/>".into()), cfg, metrics);
+        let app = router(
+            runtime,
+            capabilities_handle("<caps/>".into()),
+            test_wms_cfg(),
+            test_wmts_cfg(),
+            metrics,
+        );
         let resp = app
             .oneshot(
                 Request::builder()
