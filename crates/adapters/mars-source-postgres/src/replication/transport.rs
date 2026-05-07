@@ -110,8 +110,12 @@ impl ChangeSubscription for PgOutputSubscription {
             return Ok(());
         };
         let lsn = Lsn::from_str(s).map_err(|e| SourceError::Backend(format!("ack: invalid LSN {s:?}: {e}")))?;
-        // monotonic; watch::send always succeeds while a receiver lives.
-        let _ = self.applied_tx.send(lsn.as_u64());
+        // watch::send fails only when no receiver remains - i.e. the worker has
+        // exited. silently dropping that ack would leave the caller believing
+        // the LSN is durable while the slot stays pinned at the old position.
+        self.applied_tx
+            .send(lsn.as_u64())
+            .map_err(|_| SourceError::Backend("ack: replication worker has exited".into()))?;
         Ok(())
     }
 }
