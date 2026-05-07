@@ -194,7 +194,7 @@ async fn run_runtime(cfg: Arc<Config>, shutdown: CancellationToken) -> Result<()
         .render
         .decoded_geometry_cache_bytes()
         .context("resolve render.decoded_geometry_cache")?;
-    let runtime = Arc::new(Runtime::with_caches(
+    let runtime = Arc::new(Runtime::with_full_config(
         RuntimeDeps {
             store,
             cache,
@@ -208,6 +208,7 @@ async fn run_runtime(cfg: Arc<Config>, shutdown: CancellationToken) -> Result<()
         },
         pixel_budget,
         Arc::new(DecodedGeometryCache::new(decoded_cache_bytes)),
+        cfg.render.parallel_emit,
         None,
     ));
 
