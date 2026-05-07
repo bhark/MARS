@@ -1,10 +1,58 @@
 //! Grid math: cell coordinates, scale-band selection, tile-matrix-set algorithms.
 //!
 //! Pure functions called from both compiler and runtime. No I/O.
+//!
+//! Post-LAZARUS Phase B, `Cell` and `BandName` here are the WMTS-TMS-side
+//! concepts. They are intentionally separate from the substrate (which is
+//! page-keyed, not cell-keyed) and from `mars-config::ScaleBand` (the
+//! binding-configuration concept). Application code that bridges TMS and
+//! config converts between them at the seam.
 
 #![forbid(unsafe_code)]
 
-use mars_types::{Bbox, Cell, ScaleBand};
+use std::sync::Arc;
+
+use mars_types::Bbox;
+
+/// Identifier for a TMS scale band (e.g. `"ultra"`, `"hi"`, `"med"`). Local
+/// to grid math; not the same type as `mars-config::ScaleBand`, even though
+/// both wrap a string.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct BandName(Arc<str>);
+
+impl BandName {
+    #[must_use]
+    pub fn new(s: impl Into<Arc<str>>) -> Self {
+        Self(s.into())
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl core::fmt::Display for BandName {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl From<&str> for BandName {
+    fn from(s: &str) -> Self {
+        Self::new(s)
+    }
+}
+
+/// A TMS cell, addressed by `(band, x, y)` in canonical CRS. Distinct from
+/// any substrate concept; `cells_in_bbox` produces these for tile-matrix-set
+/// enumeration, not for substrate addressing.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Cell {
+    pub band: BandName,
+    pub x: i64,
+    pub y: i64,
+}
 
 /// Errors that grid math can return when fed bad input.
 #[derive(Debug, thiserror::Error)]
@@ -27,7 +75,7 @@ pub enum GridError {
 /// origin and cell size in canonical CRS units.
 #[derive(Debug, Clone)]
 pub struct BandConfig {
-    pub name: ScaleBand,
+    pub name: BandName,
     pub max_denom: u32,
     pub origin: (f64, f64),
     pub cell_size: f64,
@@ -127,13 +175,13 @@ mod tests {
     fn bands() -> Vec<BandConfig> {
         vec![
             BandConfig {
-                name: ScaleBand::new("ultra"),
+                name: BandName::new("ultra"),
                 max_denom: 4_000,
                 origin: (0.0, 0.0),
                 cell_size: 1024.0,
             },
             BandConfig {
-                name: ScaleBand::new("hi"),
+                name: BandName::new("hi"),
                 max_denom: 25_000,
                 origin: (0.0, 0.0),
                 cell_size: 4096.0,
