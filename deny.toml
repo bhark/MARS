@@ -9,7 +9,12 @@ feature-depth = 1
 
 [advisories]
 version = 2
-ignore  = []
+# vulnerabilities always error by design; explicit yanked/unmaintained denials
+# stop a known-bad release (and its dependents) from sneaking through CI as a
+# warning under the v2 defaults.
+yanked       = "deny"
+unmaintained = "all"
+ignore       = []
 
 [licenses]
 version = 2
