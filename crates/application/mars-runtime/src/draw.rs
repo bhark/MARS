@@ -5,17 +5,18 @@
 use std::sync::Arc;
 
 use mars_artifact::{ArtifactReader, GeomType, SectionKind, decode_class_assignment, decode_style_refs};
-use mars_proj::Transformer;
 use mars_render_port::{DrawOp, Path, Subpath};
 use mars_style::{Style, Stylesheet};
-use mars_types::Bbox;
+use mars_types::{Bbox, CrsCode};
 
 use crate::RuntimeError;
 use crate::decoded::DecodedSourceGeometry;
 
-/// optional canonical-to-request reprojector applied to vertices before pixel
-/// projection. `None` means the request is already in canonical CRS.
-pub(crate) type Reproject<'a> = Option<&'a Transformer>;
+/// optional canonical-to-request reprojection, expressed as a `(from, to)` CRS
+/// pair. `Send + Sync` so the emit phase can be parallelised; the actual
+/// `Transformer` is resolved per-thread via `mars_proj::cached_transformer`,
+/// which keeps the !Send PJ context bound to its construction thread.
+pub(crate) type ReprojectPair<'a> = Option<(&'a CrsCode, &'a CrsCode)>;
 
 /// request-space → pixel linear transform for a viewport.
 ///
@@ -56,15 +57,17 @@ pub(crate) fn bbox_intersects(feat: [f32; 4], vp: Bbox) -> bool {
 ///
 /// `canonical_bbox` is the request bbox expressed in the canonical CRS, used
 /// to cull feature bboxes (which are stored in canonical coords). `reproject`,
-/// when present, transforms vertices from canonical CRS into the viewport's
-/// request CRS before pixel mapping.
+/// when present, names the canonical->request CRS pair; the per-thread
+/// transformer cache resolves it to a `Transformer` for the duration of this
+/// call. The function is therefore `Send`-safe per invocation, which the
+/// rayon emit pass relies on.
 pub(crate) fn emit_layer_cell(
     decoded_source: &DecodedSourceGeometry,
     layer: &ArtifactReader,
     stylesheet: &Stylesheet,
     viewport: Viewport,
     canonical_bbox: Bbox,
-    reproject: Reproject<'_>,
+    reproject: ReprojectPair<'_>,
     out: &mut Vec<DrawOp>,
 ) -> Result<(), RuntimeError> {
     if viewport.bbox.width() == 0.0 || viewport.bbox.height() == 0.0 {
@@ -73,6 +76,14 @@ pub(crate) fn emit_layer_cell(
         // directly.
         return Ok(());
     }
+
+    // resolve the per-thread cached transformer once; the Rc keeps it alive
+    // for the duration of this call without crossing thread boundaries.
+    let transformer = match reproject {
+        Some((from, to)) => Some(mars_proj::cached_transformer(from, to)?),
+        None => None,
+    };
+    let reproject = transformer.as_deref();
 
     let class_section = layer.section(SectionKind::ClassAssignment)?;
     let class_assignment = decode_class_assignment(&class_section)?;

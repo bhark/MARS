@@ -476,6 +476,8 @@ impl Runtime {
                 } else {
                     None
                 };
+                let reproject_pair: draw::ReprojectPair<'_> =
+                    needs_reproject.then_some((&canonical_crs, &request_crs));
                 let mut ops = Vec::new();
                 // resolve each unique source artifact into a decoded geometry once
                 // per render, going through the bytes-bounded LRU. on a hit, the
@@ -506,7 +508,7 @@ impl Runtime {
                             &stylesheet_state.stylesheet,
                             viewport,
                             canonical_bbox,
-                            forward.as_deref(),
+                            reproject_pair,
                             &mut ops,
                         )?;
                     }
