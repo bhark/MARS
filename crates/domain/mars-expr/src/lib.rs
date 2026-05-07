@@ -333,8 +333,22 @@ mod tests {
     }
 
     #[test]
-    fn eval_three_valued_eq_null() {
-        let e = parse("a = NULL").unwrap();
+    fn parser_rejects_eq_null() {
+        // `= NULL` / `!= NULL` are never-true in SQL; the parser steers users
+        // to IS NULL / IS NOT NULL instead.
+        assert!(matches!(parse("a = NULL"), Err(ExprError::Parse(_))));
+        assert!(matches!(parse("a != NULL"), Err(ExprError::Parse(_))));
+    }
+
+    #[test]
+    fn eval_three_valued_with_null_attr() {
+        // building Cmp(Eq, ident, Null) directly bypasses the parser; eval
+        // still returns NULL per three-valued logic.
+        let e = Expr::Cmp {
+            op: CmpOp::Eq,
+            lhs: Box::new(Expr::Ident("a".into())),
+            rhs: Box::new(Expr::Literal(Literal::Null)),
+        };
         let r = eval(&e, &attrs(&[("a", Literal::Int(1))])).unwrap();
         assert!(matches!(r, Literal::Null));
     }
@@ -539,11 +553,21 @@ mod proptests {
     fn arb_predicate() -> impl Strategy<Value = Expr> {
         prop_oneof![
             arb_primary(),
-            (arb_cmp_op(), arb_primary(), arb_primary()).prop_map(|(op, l, r)| Expr::Cmp {
-                op,
-                lhs: Box::new(l),
-                rhs: Box::new(r),
-            }),
+            (arb_cmp_op(), arb_primary(), arb_primary())
+                // parser rejects = NULL / != NULL; filter so generated ASTs
+                // round-trip through Display->parse without tripping that.
+                .prop_filter("eq/ne with NULL operand is rejected by parser", |(op, l, r)| {
+                    if !matches!(op, CmpOp::Eq | CmpOp::Ne) {
+                        return true;
+                    }
+                    !matches!(l, Expr::Literal(Literal::Null))
+                        && !matches!(r, Expr::Literal(Literal::Null))
+                })
+                .prop_map(|(op, l, r)| Expr::Cmp {
+                    op,
+                    lhs: Box::new(l),
+                    rhs: Box::new(r),
+                }),
             (arb_primary(), prop::collection::vec(arb_literal(), 0..4)).prop_map(|(lhs, list)| Expr::In {
                 lhs: Box::new(lhs),
                 list

@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 743a49c12a9e8cde6b65d440db67efa915fe172687b31a9878a1d9e83e1b7dd7 # shrinks to e = Logic { op: Or, args: [Literal(Null), Cmp { op: Eq, lhs: Literal(Null), rhs: Literal(Null) }] }

@@ -170,6 +170,17 @@ fn parse_err(pos: usize, msg: &str) -> ExprError {
     ExprError::Parse(format!("at position {pos}: {msg}"))
 }
 
+/// `=`/`!=` against `NULL` is silently always-NULL in SQL — never matches.
+/// reject at parse time and steer authors to `IS NULL` / `IS NOT NULL`.
+fn reject_null_compare(lhs: &Expr, rhs: &Expr, op: &str) -> Result<(), ExprError> {
+    if matches!(lhs, Expr::Literal(Literal::Null)) || matches!(rhs, Expr::Literal(Literal::Null)) {
+        return Err(ExprError::Parse(format!(
+            "{op} NULL never matches in SQL; use IS NULL / IS NOT NULL"
+        )));
+    }
+    Ok(())
+}
+
 fn read_string(bytes: &[u8], start: usize) -> Result<(String, usize), ExprError> {
     // walk by char_indices on the post-quote slice so multi-byte utf-8 (e.g.
     // danish 'ø' in 'Foreløbig') is preserved instead of being byte-as-char'd.
@@ -378,6 +389,7 @@ impl Parser {
             Some(Tok::Eq) => {
                 self.bump();
                 let rhs = self.parse_primary()?;
+                reject_null_compare(&lhs, &rhs, "=")?;
                 Ok(Expr::Cmp {
                     op: CmpOp::Eq,
                     lhs: Box::new(lhs),
@@ -387,6 +399,7 @@ impl Parser {
             Some(Tok::Ne) => {
                 self.bump();
                 let rhs = self.parse_primary()?;
+                reject_null_compare(&lhs, &rhs, "!=")?;
                 Ok(Expr::Cmp {
                     op: CmpOp::Ne,
                     lhs: Box::new(lhs),

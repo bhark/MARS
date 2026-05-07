@@ -220,10 +220,11 @@ mod tests {
 
     #[test]
     fn null_literal_not_parameterised() {
-        let e = parse("a = NULL").unwrap();
+        // NULL appears via IN list; eq/ne against NULL is rejected at parse.
+        let e = parse("a IN (NULL, 1)").unwrap();
         let b = binding(&["a"], "gid");
         let (sql, params) = lower_to_sql(&e, &b, 1).unwrap();
-        assert_eq!(sql, "\"a\" = NULL");
-        assert!(params.is_empty());
+        assert_eq!(sql, "\"a\" IN (NULL, $1)");
+        assert_eq!(params.len(), 1);
     }
 }
