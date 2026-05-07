@@ -237,6 +237,18 @@ impl Runtime {
             height: plan.height,
         };
 
+        // acquire the render permit *before* issuing any fetches. fetch I/O
+        // pulls bytes through the cache budget; without backpressure on the
+        // fetch path a burst of concurrent requests would each pull their full
+        // working set into the cache before the semaphore admits any of them
+        // to render, blowing past the configured cache size.
+        // safe: pixels <= pixel_budget (validated above), and pixel_budget fits u32.
+        #[allow(clippy::cast_possible_truncation)]
+        let permits = pixels as u32;
+        let permit = self.render_sem.clone().acquire_many_owned(permits).await.map_err(|_| {
+            RuntimeError::Render(mars_render_port::RenderError::Backend("render semaphore closed".into()))
+        })?;
+
         // collect fetched artifacts under async; geometry + render run sync.
         // ordered `buffered` (not `buffer_unordered`) is required: tasks are
         // emitted in layer/cell z-order by `plan::resolve`, and the draw loop
@@ -329,12 +341,6 @@ impl Runtime {
         let renderer = self.deps.renderer.clone();
         let encoder = self.deps.encoder.clone();
         let format = plan.format;
-        // safe: pixels <= pixel_budget (validated above), and pixel_budget fits u32.
-        #[allow(clippy::cast_possible_truncation)]
-        let permits = pixels as u32;
-        let permit = self.render_sem.clone().acquire_many_owned(permits).await.map_err(|_| {
-            RuntimeError::Render(mars_render_port::RenderError::Backend("render semaphore closed".into()))
-        })?;
         let canonical_crs = state.canonical_crs.clone();
         let request_crs = plan.crs.clone();
         let stylesheet_state = state.clone();
