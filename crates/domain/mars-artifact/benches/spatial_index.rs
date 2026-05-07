@@ -123,6 +123,69 @@ fn bench_brute_force_baseline(c: &mut Criterion) {
     group.finish();
 }
 
+/// the actual baseline the substrate pivot replaces: iterate the legacy
+/// 33-byte-stride GeometryIndex and bbox-filter inline. This is what the
+/// runtime today walks for every per-cell viewport intersection, and it is
+/// the comparator the lazarus phase a gate names.
+fn bench_legacy_geometry_index_walk(c: &mut Criterion) {
+    let mut group = c.benchmark_group("spatial_index_legacy_geometry_index_walk");
+    let n = SMALL;
+    let ring_len = 16;
+    let features: Vec<FeatureGeom> = (0..n)
+        .map(|k| {
+            let side = (n as f64).sqrt().ceil();
+            let i = (k as f64) % side;
+            let j = (k as f64) / side;
+            let cx = i * f64::from(SPACING);
+            let cy = j * f64::from(SPACING);
+            let mut ring = Vec::with_capacity(ring_len + 1);
+            for v in 0..ring_len {
+                let theta = (v as f64) * std::f64::consts::TAU / (ring_len as f64);
+                ring.push((cx + theta.cos() * 0.5, cy + theta.sin() * 0.5));
+            }
+            ring.push(ring[0]);
+            FeatureGeom {
+                id: k as u64,
+                bbox: [
+                    (cx - 0.5) as f32,
+                    (cy - 0.5) as f32,
+                    (cx + 0.5) as f32,
+                    (cy + 0.5) as f32,
+                ],
+                geom: GeomKind::Polygon(vec![ring]),
+            }
+        })
+        .collect();
+    let payload = encode_geometry_payload(&features).unwrap();
+
+    for &target in &[10usize, 100, 1000, 10_000] {
+        let q = query_for_hits(n, target);
+        let actual = {
+            let it = iter_feature_index(&payload).unwrap();
+            it.filter_map(Result::ok)
+                .filter(|e| e.bbox[0] <= q[2] && e.bbox[1] <= q[3] && e.bbox[2] >= q[0] && e.bbox[3] >= q[1])
+                .count()
+        };
+        group.throughput(Throughput::Elements(actual as u64));
+        let label = format!("n_{n}_sel_{target}_actual_{actual}");
+        group.bench_function(label, |b| {
+            let mut out = Vec::with_capacity(actual + 16);
+            b.iter(|| {
+                out.clear();
+                let q = black_box(q);
+                let it = iter_feature_index(&payload).unwrap();
+                for e in it.flatten() {
+                    if e.bbox[0] <= q[2] && e.bbox[1] <= q[3] && e.bbox[2] >= q[0] && e.bbox[3] >= q[1] {
+                        out.push(e.id as u32);
+                    }
+                }
+                black_box(&out);
+            });
+        });
+    }
+    group.finish();
+}
+
 fn bench_query_dilated_bbox(c: &mut Criterion) {
     // pathology: one elongated feature inflating its leaf's parent bbox 10x.
     // worst case for prune efficiency; correctness is unaffected.
@@ -245,6 +308,7 @@ criterion_group!(
     bench_build,
     bench_query,
     bench_brute_force_baseline,
+    bench_legacy_geometry_index_walk,
     bench_query_dilated_bbox,
     bench_feature_prep_combined,
 );
