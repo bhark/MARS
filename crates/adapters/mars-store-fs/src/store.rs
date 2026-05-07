@@ -117,19 +117,26 @@ impl ObjectStore for FsStore {
     }
 }
 
-fn walk(dir: &Path, root: &Path, out: &mut Vec<String>) -> Result<(), StoreError> {
-    let entries =
-        std::fs::read_dir(dir).map_err(|e| StoreError::Backend(format!("read_dir {}: {e}", dir.display())))?;
-    for ent in entries {
-        let ent = ent.map_err(|e| StoreError::Backend(format!("readdir: {e}")))?;
-        let ft = ent
-            .file_type()
-            .map_err(|e| StoreError::Backend(format!("file_type: {e}")))?;
-        let p = ent.path();
-        if ft.is_dir() {
-            walk(&p, root, out)?;
-        } else if ft.is_file() {
-            // skip stale temp files
+fn walk(start: &Path, root: &Path, out: &mut Vec<String>) -> Result<(), StoreError> {
+    // explicit stack mirrors the cache scanner; recursion would let a deep
+    // (or symlink-cycled) tree blow the call stack.
+    let mut stack: Vec<PathBuf> = vec![start.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries =
+            std::fs::read_dir(&dir).map_err(|e| StoreError::Backend(format!("read_dir {}: {e}", dir.display())))?;
+        for ent in entries {
+            let ent = ent.map_err(|e| StoreError::Backend(format!("readdir: {e}")))?;
+            let ft = ent
+                .file_type()
+                .map_err(|e| StoreError::Backend(format!("file_type: {e}")))?;
+            let p = ent.path();
+            if ft.is_dir() {
+                stack.push(p);
+                continue;
+            }
+            if !ft.is_file() {
+                continue;
+            }
             if let Some(name) = p.file_name().and_then(|s| s.to_str())
                 && name.contains(".tmp.")
             {
