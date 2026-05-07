@@ -33,6 +33,7 @@ mod hash;
 mod label_candidates;
 mod reader;
 mod section;
+mod spatial_index;
 mod style_refs;
 mod varint;
 mod writer;
@@ -47,6 +48,7 @@ pub use geometry::{
 pub use hash::compute_content_hash;
 pub use label_candidates::{LabelCandidate, LabelShape, decode_label_candidates, encode_label_candidates};
 pub use reader::ArtifactReader;
+pub use spatial_index::{DEFAULT_NODE_SIZE, SpatialIndex, SpatialIndexBuilder};
 pub use style_refs::{decode_style_refs, encode_style_refs};
 pub use writer::{ArtifactWriter, SourceRef};
 
@@ -85,6 +87,7 @@ pub enum SectionKind {
     LabelCandidates = 0x04,
     ClassAssignment = 0x05,
     StyleRefs = 0x06,
+    SpatialIndex = 0x07,
 }
 
 /// artifact role at the container level. mirrors the planus enum but lives in

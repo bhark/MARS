@@ -81,6 +81,11 @@ impl ArtifactWriter {
         self.add_section(SectionKind::StyleRefs, bytes)
     }
 
+    /// attaches a pre-built packed hilbert r-tree (see `SpatialIndexBuilder`).
+    pub fn add_spatial_index(&mut self, payload: Bytes) -> &mut Self {
+        self.add_section(SectionKind::SpatialIndex, payload)
+    }
+
     pub fn set_bbox(&mut self, bbox: Bbox) -> &mut Self {
         self.bbox = Some(bbox);
         self

@@ -340,6 +340,22 @@ fn layer_artifact_with_source_ref() {
 }
 
 #[test]
+fn spatial_index_section_roundtrips_as_raw_bytes() {
+    // 0x07 is reserved for the packed Hilbert R-tree (Phase A). until the
+    // typed builder/reader land, the kind must at least round-trip through
+    // the generic add_section / section() path.
+    let payload = Bytes::from_static(&[0xDE, 0xAD, 0xBE, 0xEF]);
+    let mut w = ArtifactWriter::new(ArtifactKind::Source);
+    w.add_section(SectionKind::SpatialIndex, payload.clone())
+        .set_bbox(Bbox::new(0.0, 0.0, 1.0, 1.0))
+        .set_feature_count(0);
+    let bytes = w.finish().unwrap();
+    let r = ArtifactReader::open(bytes).unwrap();
+    let back = r.section(SectionKind::SpatialIndex).unwrap();
+    assert_eq!(back, payload);
+}
+
+#[test]
 fn rejects_truncated_at_every_boundary() {
     let bytes = build_simple_artifact();
     // header truncations
