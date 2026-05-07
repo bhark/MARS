@@ -106,13 +106,40 @@ pub fn is_projected(code: &CrsCode) -> Result<bool, ProjError> {
         unsafe {
             let pj = proj_sys::proj_create(ctx_ptr, definition.as_ptr());
             if pj.is_null() {
-                return Err(ProjError::UnknownCrs(code.to_string()));
+                return Err(ProjError::UnknownCrs(format!(
+                    "{code}: {}",
+                    proj_ctx_error(ctx_ptr)
+                )));
             }
             let ty = proj_sys::proj_get_type(pj);
             proj_sys::proj_destroy(pj);
             Ok(ty == proj_sys::PJ_TYPE_PJ_TYPE_PROJECTED_CRS)
         }
     })
+}
+
+/// Read the last error registered on `ctx_ptr` as a human-readable string.
+/// PROJ overwrites errno per-call on the same thread, so this must be called
+/// immediately after the failing API.
+///
+/// # Safety
+///
+/// `ctx_ptr` must be a valid `PJ_CONTEXT*` (the thread-local context here is).
+unsafe fn proj_ctx_error(ctx_ptr: *mut proj_sys::PJ_CONTEXT) -> String {
+    unsafe {
+        let errno = proj_sys::proj_context_errno(ctx_ptr);
+        if errno == 0 {
+            return "unknown".to_string();
+        }
+        let msg_ptr = proj_sys::proj_context_errno_string(ctx_ptr, errno);
+        if msg_ptr.is_null() {
+            return format!("errno {errno}");
+        }
+        match std::ffi::CStr::from_ptr(msg_ptr).to_str() {
+            Ok(s) => s.to_string(),
+            Err(_) => format!("errno {errno}"),
+        }
+    }
 }
 
 /// Construction-time options for `Transformer`.
@@ -214,13 +241,17 @@ impl Transformer {
                 let raw =
                     proj_sys::proj_create_crs_to_crs(ctx_ptr, from_c.as_ptr(), to_c.as_ptr(), std::ptr::null_mut());
                 if raw.is_null() {
-                    return Err(ProjError::UnknownCrs(format!("{from} -> {to}")));
+                    return Err(ProjError::UnknownCrs(format!(
+                        "{from} -> {to}: {}",
+                        proj_ctx_error(ctx_ptr)
+                    )));
                 }
                 let normalized = proj_sys::proj_normalize_for_visualization(ctx_ptr, raw);
                 proj_sys::proj_destroy(raw);
                 if normalized.is_null() {
                     return Err(ProjError::Transform(format!(
-                        "proj_normalize_for_visualization failed for {from} -> {to}"
+                        "proj_normalize_for_visualization failed for {from} -> {to}: {}",
+                        proj_ctx_error(ctx_ptr)
                     )));
                 }
                 Ok(Self {
