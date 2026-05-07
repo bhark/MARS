@@ -14,7 +14,10 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 mod eval;
+pub mod interpolate;
 mod parser;
+
+pub use interpolate::{Segment, Template, eval_template, parse_template};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ExprError {

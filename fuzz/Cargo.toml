@@ -30,3 +30,10 @@ path              = "fuzz_targets/fuzz_target_expr_parser.rs"
 test              = false
 doc               = false
 bench             = false
+
+[[bin]]
+name              = "fuzz_target_text_template"
+path              = "fuzz_targets/fuzz_target_text_template.rs"
+test              = false
+doc               = false
+bench             = false
