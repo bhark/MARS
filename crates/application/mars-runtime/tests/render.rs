@@ -614,6 +614,19 @@ async fn deterministic_repeat() {
     assert_eq!(a, b, "draw op sequence must be deterministic");
 }
 
+#[tokio::test]
+async fn decoded_cache_populated_after_render() {
+    // first render decodes the source artifact and inserts it into the
+    // bytes-bounded cache; the cache size must be non-zero afterwards.
+    let fx = build_fixture().await;
+    assert_eq!(fx.runtime.decoded_cache_bytes(), 0, "cache empty before any render");
+    let _ = fx.runtime.render(&plan_for(&fx)).await.unwrap();
+    assert!(
+        fx.runtime.decoded_cache_bytes() > 0,
+        "cache should retain decoded geometry after a render"
+    );
+}
+
 // -- empty-marker tests --
 
 fn state_with_empty_marker() -> RuntimeState {

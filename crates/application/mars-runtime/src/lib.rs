@@ -3,12 +3,15 @@
 
 #![forbid(unsafe_code)]
 
+mod decoded;
 mod draw;
 mod fetch;
 pub mod key;
 mod labels;
 mod plan;
 pub mod state;
+
+pub use decoded::DecodedGeometryCache;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -22,7 +25,9 @@ use mars_render_port::{Canvas, Encoder, Renderer};
 use mars_store::{LocalCache, ManifestStore, ObjectStore, StoreError};
 use mars_style::Stylesheet;
 pub use mars_text::Fonts;
-use mars_types::{ArtifactEntry, ArtifactKey, Bbox, CrsCode, ImageFormat, LayerId};
+use mars_types::{ArtifactEntry, ArtifactKey, Bbox, ContentHash, CrsCode, ImageFormat, LayerId};
+
+use crate::decoded::{DecodedSourceGeometry, decode_source_geometry};
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
@@ -126,7 +131,14 @@ pub struct Runtime {
     /// pixel budget the semaphore was sized with. used to fail fast on
     /// requests that could never fit, instead of blocking forever.
     pixel_budget: u32,
+    /// bytes-bounded LRU of decoded source-artifact geometry, keyed by content
+    /// hash. amortises the LEB128 varint walk across renders that touch the
+    /// same source artifact.
+    decoded_cache: Arc<DecodedGeometryCache>,
 }
+
+/// default decoded-geometry cache size when constructed without an explicit one.
+const DEFAULT_DECODED_CACHE_BYTES: usize = 256 * 1024 * 1024;
 
 impl Runtime {
     /// Compose a runtime without an active manifest snapshot.
@@ -145,12 +157,30 @@ impl Runtime {
     /// Used by the bin to thread the configured budget through.
     #[must_use]
     pub fn with_pixel_budget(deps: Deps, pixel_budget: u32, state: Option<Arc<RuntimeState>>) -> Self {
+        Self::with_caches(
+            deps,
+            pixel_budget,
+            Arc::new(DecodedGeometryCache::new(DEFAULT_DECODED_CACHE_BYTES)),
+            state,
+        )
+    }
+
+    /// Compose a runtime with the full set of tunable caches. The bin uses this
+    /// to thread the configured decoded-geometry cache size through.
+    #[must_use]
+    pub fn with_caches(
+        deps: Deps,
+        pixel_budget: u32,
+        decoded_cache: Arc<DecodedGeometryCache>,
+        state: Option<Arc<RuntimeState>>,
+    ) -> Self {
         Self {
             state: state.map_or_else(ArcSwapOption::empty, |s| ArcSwapOption::from(Some(s))),
             deps,
             last_reject_reason: ArcSwapOption::empty(),
             render_sem: Arc::new(Semaphore::new(pixel_budget as usize)),
             pixel_budget,
+            decoded_cache,
         }
     }
 
@@ -159,6 +189,14 @@ impl Runtime {
     #[must_use]
     pub fn last_reject_reason(&self) -> Option<Arc<String>> {
         self.last_reject_reason.load_full()
+    }
+
+    /// Bytes currently retained by the decoded-geometry cache. Operational
+    /// signal for the debug endpoint and a hook for tests to assert cache
+    /// behaviour.
+    #[must_use]
+    pub fn decoded_cache_bytes(&self) -> usize {
+        self.decoded_cache.current_bytes()
     }
 
     fn record_reject(&self, reason: String) {
@@ -269,10 +307,10 @@ impl Runtime {
             // single-cell single-layer fast path: most tile responses hit this.
             // skip the futures pipeline + dedup HashMap when the plan has one
             // task; preserves z-order trivially since there's only one cell.
-            let fetched: Vec<(LayerId, ArtifactReader, ArtifactReader)> = if let [_] = tasks.as_slice() {
+            let fetched: Vec<(LayerId, ArtifactReader, ContentHash, ArtifactReader)> = if let [_] = tasks.as_slice() {
                 // safe: just matched a 1-element slice above.
                 let task = tasks.into_iter().next().unwrap_or_else(|| unreachable!("len == 1"));
-                let layer_with_ref: Option<(LayerId, ArtifactReader, SourceKey)> = async {
+                let layer_with_ref: Option<(LayerId, ArtifactReader, SourceKey, ContentHash)> = async {
                     let layer_art =
                         match fetch::fetch_layer(&state, cache.as_ref(), store.as_ref(), &task.layer, &task.cell)
                             .await?
@@ -286,20 +324,21 @@ impl Runtime {
                             task.layer
                         )))
                     })?;
+                    let source_hash = source_ref.content_hash;
                     let key = SourceKey {
                         collection: source_ref.collection,
                         band: source_ref.band,
                         x: source_ref.cell_x,
                         y: source_ref.cell_y,
                     };
-                    Ok(Some((task.layer, layer_art, key)))
+                    Ok(Some((task.layer, layer_art, key, source_hash)))
                 }
                 .instrument(tracing::info_span!("fetch.layer_artifacts"))
                 .await?;
                 tracing::Span::current().record("fetched_layer_artifacts", layer_with_ref.is_some() as u64);
                 match layer_with_ref {
                     None => Vec::new(),
-                    Some((layer, layer_art, key)) => {
+                    Some((layer, layer_art, key, source_hash)) => {
                         tracing::Span::current().record("unique_source_artifacts", 1u64);
                         let cell = mars_types::Cell {
                             band: mars_types::ScaleBand::new(key.band.clone()),
@@ -311,11 +350,11 @@ impl Runtime {
                         }
                         .instrument(tracing::info_span!("fetch.source_artifacts"))
                         .await?;
-                        vec![(layer, source_art, layer_art)]
+                        vec![(layer, source_art, source_hash, layer_art)]
                     }
                 }
             } else {
-                let layer_with_refs: Vec<(LayerId, ArtifactReader, SourceKey)> =
+                let layer_with_refs: Vec<(LayerId, ArtifactReader, SourceKey, ContentHash)> =
                     stream::iter(tasks.into_iter().map(|task| {
                         let state = state.clone();
                         let cache = cache.clone();
@@ -339,13 +378,14 @@ impl Runtime {
                                     task.layer
                                 )))
                             })?;
+                            let source_hash = source_ref.content_hash;
                             let key = SourceKey {
                                 collection: source_ref.collection,
                                 band: source_ref.band,
                                 x: source_ref.cell_x,
                                 y: source_ref.cell_y,
                             };
-                            Ok::<_, RuntimeError>(Some((task.layer, layer_art, key)))
+                            Ok::<_, RuntimeError>(Some((task.layer, layer_art, key, source_hash)))
                         }
                     }))
                     .buffered(8)
@@ -362,7 +402,7 @@ impl Runtime {
                 // would re-parse the footer for no gain.
                 let mut unique_keys: Vec<SourceKey> = Vec::new();
                 let mut seen: HashSet<SourceKey> = HashSet::new();
-                for (_, _, k) in &layer_with_refs {
+                for (_, _, k, _) in &layer_with_refs {
                     if seen.insert(k.clone()) {
                         unique_keys.push(k.clone());
                     }
@@ -391,11 +431,11 @@ impl Runtime {
 
                 layer_with_refs
                     .into_iter()
-                    .map(|(layer, layer_art, key)| {
+                    .map(|(layer, layer_art, key, source_hash)| {
                         source_by_key
                             .get(&key)
                             .cloned()
-                            .map(|source_art| (layer, source_art, layer_art))
+                            .map(|source_art| (layer, source_art, source_hash, layer_art))
                             .ok_or_else(|| {
                                 RuntimeError::Render(mars_render_port::RenderError::Backend(
                                     "internal: source artifact fetch table missing a key".into(),
@@ -418,6 +458,7 @@ impl Runtime {
             let stylesheet_state = state.clone();
             let fonts = self.deps.fonts.clone();
             let metrics = self.deps.metrics.clone();
+            let decoded_cache = self.decoded_cache.clone();
             // run the CPU phase on the current worker via block_in_place rather
             // than dispatching to the blocking pool. spawn_blocking adds a
             // 30-80 µs hop into a different thread on every request and shares
@@ -436,11 +477,31 @@ impl Runtime {
                     None
                 };
                 let mut ops = Vec::new();
+                // resolve each unique source artifact into a decoded geometry once
+                // per render, going through the bytes-bounded LRU. on a hit, the
+                // varint walk is amortised across renders that touch the same
+                // source artifact (typical WMTS workloads).
+                let mut decoded_per_render: HashMap<ContentHash, Arc<DecodedSourceGeometry>> = HashMap::new();
                 {
                     let _emit = tracing::info_span!("cpu.emit").entered();
-                    for (_, source_art, layer_art) in &fetched {
+                    for (_, source_art, source_hash, layer_art) in &fetched {
+                        let decoded = if let Some(d) = decoded_per_render.get(source_hash) {
+                            d.clone()
+                        } else {
+                            let d = match decoded_cache.get(source_hash) {
+                                Some(d) => d,
+                                None => {
+                                    let _decode_span = tracing::debug_span!("cpu.emit.decode_source").entered();
+                                    let arc = Arc::new(decode_source_geometry(source_art)?);
+                                    decoded_cache.insert(*source_hash, arc.clone());
+                                    arc
+                                }
+                            };
+                            decoded_per_render.insert(*source_hash, d.clone());
+                            d
+                        };
                         draw::emit_layer_cell(
-                            source_art,
+                            decoded.as_ref(),
                             layer_art,
                             &stylesheet_state.stylesheet,
                             viewport,
@@ -457,7 +518,7 @@ impl Runtime {
                 // is shared across all layers so labels collide globally.
                 let label_layers: Vec<(LayerId, ArtifactReader)> = fetched
                     .iter()
-                    .map(|(layer, _, layer_art)| (layer.clone(), layer_art.clone()))
+                    .map(|(layer, _, _, layer_art)| (layer.clone(), layer_art.clone()))
                     .collect();
                 {
                     let _labels = tracing::info_span!("cpu.labels").entered();

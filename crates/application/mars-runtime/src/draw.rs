@@ -1,18 +1,17 @@
-//! per-cell draw-op emission: decode source + layer artifacts, merge-walk by
-//! feature_id, viewport bbox filter, world→pixel transform, push DrawOp::Path.
+//! per-cell draw-op emission: walk decoded source geometry + layer-side
+//! class/style refs, merge-walk by feature_id, viewport bbox filter,
+//! world→pixel transform, push DrawOp::Path.
 
 use std::sync::Arc;
 
-use mars_artifact::{
-    ArtifactReader, GeomType, GeomVisitor, SectionKind, decode_class_assignment, decode_style_refs, iter_feature_index,
-    visit_one_geom,
-};
+use mars_artifact::{ArtifactReader, GeomType, SectionKind, decode_class_assignment, decode_style_refs};
 use mars_proj::Transformer;
 use mars_render_port::{DrawOp, Path, Subpath};
 use mars_style::{Style, Stylesheet};
 use mars_types::Bbox;
 
 use crate::RuntimeError;
+use crate::decoded::DecodedSourceGeometry;
 
 /// optional canonical-to-request reprojector applied to vertices before pixel
 /// projection. `None` means the request is already in canonical CRS.
@@ -52,14 +51,15 @@ pub(crate) fn bbox_intersects(feat: [f32; 4], vp: Bbox) -> bool {
     !(fx1 < vp.min_x || fx0 > vp.max_x || fy1 < vp.min_y || fy0 > vp.max_y)
 }
 
-/// emit draw ops for one (source artifact, layer artifact) pair into `out`.
+/// emit draw ops for one (decoded source geometry, layer artifact) pair
+/// into `out`.
 ///
-/// `canonical_bbox` is the request bbox expressed in the canonical CRS,
-/// used to cull feature bboxes (which are stored in canonical coords).
-/// `reproject`, when present, transforms vertices from canonical CRS into
-/// the viewport's request CRS before pixel mapping.
+/// `canonical_bbox` is the request bbox expressed in the canonical CRS, used
+/// to cull feature bboxes (which are stored in canonical coords). `reproject`,
+/// when present, transforms vertices from canonical CRS into the viewport's
+/// request CRS before pixel mapping.
 pub(crate) fn emit_layer_cell(
-    source: &ArtifactReader,
+    decoded_source: &DecodedSourceGeometry,
     layer: &ArtifactReader,
     stylesheet: &Stylesheet,
     viewport: Viewport,
@@ -73,7 +73,6 @@ pub(crate) fn emit_layer_cell(
         // directly.
         return Ok(());
     }
-    let geom_section = source.section(SectionKind::GeometryPayload)?;
 
     let class_section = layer.section(SectionKind::ClassAssignment)?;
     let class_assignment = decode_class_assignment(&class_section)?;
@@ -90,31 +89,27 @@ pub(crate) fn emit_layer_cell(
         .map(|name| stylesheet.geometry.get(name).cloned())
         .collect();
 
-    // shared scratch buffers, reused across features. f64_scratch carries
-    // ring coords through the reproject FFI; subpaths is the per-feature
-    // accumulator drained into a DrawOp.
+    // scratch reused across features. f64_scratch carries ring coords through
+    // the reproject FFI when needed; subpaths is the per-feature accumulator
+    // drained into a DrawOp.
     let mut f64_scratch: Vec<[f64; 2]> = Vec::new();
     let mut subpaths: Vec<Subpath> = Vec::new();
 
-    // walk the geometry index merge-style against class_assignment (both sorted
-    // by id ASC). only decode coords for features that survive both the class
-    // join and the canonical-bbox cull. on viewports that intersect ≪ 100% of
-    // a cell this skips the bulk of varint decoding.
-    let iter = iter_feature_index(&geom_section)?;
-    let coord_area = iter.coord_area();
+    // merge-walk decoded.features against class_assignment (both sorted by id
+    // ASC). features are pre-decoded, so the loop is bbox-cull + project +
+    // emit; no varint walk per render.
     let mut ai = 0usize;
-    for entry in iter {
-        let entry = entry?;
-        while ai < class_assignment.len() && class_assignment[ai].0 < entry.id {
+    for feat in &decoded_source.features {
+        while ai < class_assignment.len() && class_assignment[ai].0 < feat.id {
             ai += 1;
         }
-        if ai >= class_assignment.len() || class_assignment[ai].0 != entry.id {
+        if ai >= class_assignment.len() || class_assignment[ai].0 != feat.id {
             continue;
         }
         let class_index = class_assignment[ai].1 as usize;
         ai += 1;
 
-        if !bbox_intersects(entry.bbox, canonical_bbox) {
+        if !bbox_intersects(feat.bbox, canonical_bbox) {
             continue;
         }
 
@@ -137,26 +132,55 @@ pub(crate) fn emit_layer_cell(
             }
         };
 
-        let kind = entry.geom_kind()?;
-        let close_rings = matches!(kind, GeomType::Polygon | GeomType::MultiPolygon);
+        let standalone = matches!(feat.geom_type, GeomType::Point | GeomType::MultiPoint);
+        let close_rings = matches!(feat.geom_type, GeomType::Polygon | GeomType::MultiPolygon);
 
         subpaths.clear();
-        {
-            let mut visitor = RenderVisitor {
-                vp: viewport,
-                reproject,
-                f64_scratch: &mut f64_scratch,
-                subpaths: &mut subpaths,
-                close_rings,
-                style_has_fill: style.fill.is_some(),
-                in_ring: false,
-                error: None,
-            };
-            visit_one_geom(coord_area, &entry, &mut visitor)?;
-            if let Some(e) = visitor.error.take() {
-                return Err(e);
+        if standalone {
+            // Point / MultiPoint: emit one 1px square per vertex iff style has fill.
+            if style.fill.is_none() {
+                continue;
+            }
+            for ring in &feat.rings {
+                let Some(&[x, y]) = ring.first() else {
+                    continue;
+                };
+                let (rx, ry) = match reproject {
+                    Some(t) => t.transform_point(x, y)?,
+                    None => (x, y),
+                };
+                let (px, py) = viewport.project(rx, ry);
+                subpaths.push(Subpath {
+                    points: vec![(px, py), (px + 1.0, py), (px + 1.0, py + 1.0), (px, py + 1.0), (px, py)],
+                    closed: true,
+                });
+            }
+        } else {
+            for ring in &feat.rings {
+                if ring.is_empty() {
+                    continue;
+                }
+                if let Some(t) = reproject {
+                    f64_scratch.clear();
+                    f64_scratch.extend_from_slice(ring);
+                    t.transform_points(&mut f64_scratch)?;
+                    let mut points: Vec<(f32, f32)> = Vec::with_capacity(f64_scratch.len() + usize::from(close_rings));
+                    for &[x, y] in f64_scratch.iter() {
+                        points.push(viewport.project(x, y));
+                    }
+                    push_ring_subpath(&mut subpaths, points, close_rings);
+                } else {
+                    // canonical-CRS == request-CRS: skip the scratch copy and
+                    // project the cached coords straight into pixel space.
+                    let mut points: Vec<(f32, f32)> = Vec::with_capacity(ring.len() + usize::from(close_rings));
+                    for &[x, y] in ring {
+                        points.push(viewport.project(x, y));
+                    }
+                    push_ring_subpath(&mut subpaths, points, close_rings);
+                }
             }
         }
+
         if subpaths.is_empty() {
             continue;
         }
@@ -170,97 +194,15 @@ pub(crate) fn emit_layer_cell(
     Ok(())
 }
 
-/// Streaming visitor that converts decoded ring coords into pixel-space
-/// `Subpath`s. Per ring it fills `f64_scratch`, runs the optional canonical →
-/// request transform once, then projects to f32 pixel space into a fresh
-/// `Vec<(f32, f32)>` (the renderer ABI requires owned points). Standalone
-/// points (Point / MultiPoint) become 1px squares iff the style has a fill.
-struct RenderVisitor<'a, 'b> {
-    vp: Viewport,
-    reproject: Reproject<'a>,
-    /// shared across rings and features: cleared on each `begin_ring`, holds
-    /// (x, y) pairs in canonical CRS until `end_ring` reprojects + projects.
-    f64_scratch: &'b mut Vec<[f64; 2]>,
-    subpaths: &'b mut Vec<Subpath>,
-    close_rings: bool,
-    style_has_fill: bool,
-    in_ring: bool,
-    /// Capture reproject errors encountered during traversal — `GeomVisitor`
-    /// methods are infallible, so emit_layer_cell drains this after the call.
-    error: Option<RuntimeError>,
-}
-
-impl GeomVisitor for RenderVisitor<'_, '_> {
-    #[inline]
-    fn point(&mut self, x: f64, y: f64) {
-        if self.in_ring {
-            // hot path: per-coord error check would gate every vertex of every
-            // ring. point() can't fail in-ring (no reproject, no allocation
-            // beyond Vec::push), so the gate moves to begin_ring/end_ring.
-            self.f64_scratch.push([x, y]);
-            return;
-        }
-        if self.error.is_some() {
-            return;
-        }
-        // Point / MultiPoint: standalone vertex. emit 1px square if fill set.
-        if !self.style_has_fill {
-            return;
-        }
-        let (rx, ry) = match reproject_point(x, y, self.reproject) {
-            Ok(v) => v,
-            Err(e) => {
-                self.error = Some(e);
-                return;
-            }
-        };
-        let (px, py) = self.vp.project(rx, ry);
-        self.subpaths.push(Subpath {
-            points: vec![(px, py), (px + 1.0, py), (px + 1.0, py + 1.0), (px, py + 1.0), (px, py)],
-            closed: true,
-        });
-    }
-
-    fn begin_ring(&mut self) {
-        self.f64_scratch.clear();
-        self.in_ring = true;
-    }
-
-    fn end_ring(&mut self) {
-        self.in_ring = false;
-        if self.error.is_some() || self.f64_scratch.is_empty() {
-            return;
-        }
-        if let Some(t) = self.reproject
-            && let Err(e) = t.transform_points(self.f64_scratch)
-        {
-            self.error = Some(e.into());
-            return;
-        }
-        let n = self.f64_scratch.len();
-        let mut points: Vec<(f32, f32)> = Vec::with_capacity(n + usize::from(self.close_rings));
-        for &[x, y] in self.f64_scratch.iter() {
-            points.push(self.vp.project(x, y));
-        }
-        if self.close_rings && points.len() >= 2 && points[0] != points[points.len() - 1] {
-            points.push(points[0]);
-        }
-        self.subpaths.push(Subpath {
-            points,
-            closed: self.close_rings,
-        });
-    }
-
-    fn begin_part(&mut self) {}
-    fn end_part(&mut self) {}
-}
-
 #[inline]
-fn reproject_point(x: f64, y: f64, reproject: Reproject<'_>) -> Result<(f64, f64), RuntimeError> {
-    match reproject {
-        Some(t) => Ok(t.transform_point(x, y)?),
-        None => Ok((x, y)),
+fn push_ring_subpath(out: &mut Vec<Subpath>, mut points: Vec<(f32, f32)>, close_rings: bool) {
+    if close_rings && points.len() >= 2 && points[0] != points[points.len() - 1] {
+        points.push(points[0]);
     }
+    out.push(Subpath {
+        points,
+        closed: close_rings,
+    });
 }
 
 #[cfg(test)]
@@ -273,6 +215,7 @@ mod tests {
     use mars_types::Bbox;
 
     use super::*;
+    use crate::decoded::decode_source_geometry;
 
     fn viewport(bbox: Bbox, width: u32, height: u32) -> Viewport {
         Viewport { bbox, width, height }
@@ -305,13 +248,14 @@ mod tests {
         assert!(!bbox_intersects([-1.0, 0.0, -0.1, 10.0], vp));
     }
 
-    fn build_source(features: Vec<FeatureGeom>) -> ArtifactReader {
+    fn build_source(features: Vec<FeatureGeom>) -> DecodedSourceGeometry {
         let mut w = ArtifactWriter::new(ArtifactKind::Source);
         let n = features.len() as u64;
         w.add_geometry_payload(features)
             .set_bbox(Bbox::new(0.0, 0.0, 10.0, 10.0))
             .set_feature_count(n);
-        ArtifactReader::open(w.finish().unwrap()).unwrap()
+        let reader = ArtifactReader::open(w.finish().unwrap()).unwrap();
+        decode_source_geometry(&reader).unwrap()
     }
 
     fn build_layer(class_assignment: &[(u64, u16)], style_refs: &[String]) -> ArtifactReader {
