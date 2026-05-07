@@ -11,10 +11,11 @@
 
 use std::collections::BTreeMap;
 
-use mars_config::{ClassStyle, Config, Layer, ScaleWindow, SourceBinding as CfgBinding};
-use mars_expr::ExprError;
+use mars_config::{ClassStyle, Config, LabelStyleAttach, Layer, ScaleWindow, SourceBinding as CfgBinding};
+use mars_expr::{ExprError, Template};
 use mars_grid::{BandConfig, GridError, cells_in_bbox};
 use mars_source::{SourceBinding, SourceCollectionId, SourceError};
+use mars_style::{LayerGeomKind, Placement, default_placement};
 use mars_types::{Bbox, Cell, CrsCode, LayerId, ScaleBand};
 
 use crate::class::CompiledClass;
@@ -46,6 +47,10 @@ pub struct SourceTask {
     pub binding: SourceBinding,
     pub cell_size: f64,
     pub origin: (f64, f64),
+    /// True if any dependent layer carries a `label:` block. Read by
+    /// `incremental::dirty_cells_for` to widen the dirty set so a boundary
+    /// edit's labels in neighbour cells get picked up. SPEC §14.2.
+    pub has_label_bleed: bool,
 }
 
 impl SourceTask {
@@ -64,6 +69,27 @@ pub struct LayerTask {
     pub cell: Cell,
     pub source: usize,
     pub classes: Vec<CompiledClass>,
+    /// Geometry kind of the layer; needed to pick the default placement and to
+    /// drive the candidate-emission per-shape branch.
+    pub geom_kind: Option<LayerGeomKind>,
+    /// Compiled label spec; `None` when the layer has no `label:` block.
+    pub label: Option<CompiledLabelSpec>,
+}
+
+/// Compiled form of a layer's `label:` declaration. Text template is parsed,
+/// placement is resolved (defaults applied), and the style key is captured so
+/// the snapshot pass can append it to `style_refs` in the layer artifact.
+#[derive(Debug, Clone)]
+pub struct CompiledLabelSpec {
+    pub text: Template,
+    pub placement: Placement,
+    /// Stable id of the [`mars_style::LabelStyle`] in the runtime stylesheet.
+    /// Mirrors `CompiledClass::style_id`: `<layer>::label` for inline styles.
+    pub style_id: String,
+    /// Priority copied from the resolved label style when known. Compile-time
+    /// snapshot of `LabelStyle::priority` clamped to `u16` so it fits the
+    /// artifact wire field; the runtime collision pass uses this directly.
+    pub priority: u16,
 }
 
 /// Full snapshot build plan: deduplicated source tasks + dependent layer tasks.
@@ -121,6 +147,9 @@ pub fn build_plan(cfg: &Config) -> Result<Plan, PlanError> {
 
     for layer in &cfg.layers {
         let classes = compile_classes(layer)?;
+        let geom_kind = LayerGeomKind::parse(layer.kind.as_str());
+        let label = compile_label(layer, geom_kind)?;
+        let has_label = label.is_some();
         for binding in &layer.sources {
             for (band_name, &cell_size) in &cell_sizes {
                 let band = band_index
@@ -161,6 +190,9 @@ pub fn build_plan(cfg: &Config) -> Result<Plan, PlanError> {
                     let source_idx = match source_index.get(&key) {
                         Some(&idx) => {
                             merge_source_binding(&mut plan.sources[idx].binding, &port_binding)?;
+                            if has_label {
+                                plan.sources[idx].has_label_bleed = true;
+                            }
                             idx
                         }
                         None => {
@@ -171,6 +203,7 @@ pub fn build_plan(cfg: &Config) -> Result<Plan, PlanError> {
                                 binding: port_binding.clone(),
                                 cell_size,
                                 origin,
+                                has_label_bleed: has_label,
                             });
                             source_index.insert(key, idx);
                             idx
@@ -182,6 +215,8 @@ pub fn build_plan(cfg: &Config) -> Result<Plan, PlanError> {
                         cell,
                         source: source_idx,
                         classes: classes.clone(),
+                        geom_kind,
+                        label: label.clone(),
                     });
                 }
             }
@@ -239,6 +274,36 @@ pub(crate) fn window_intersects(window: &Option<ScaleWindow>, band_min: u64, ban
         return false;
     }
     true
+}
+
+pub(crate) fn compile_label(
+    layer: &Layer,
+    geom_kind: Option<LayerGeomKind>,
+) -> Result<Option<CompiledLabelSpec>, PlanError> {
+    let Some(spec) = &layer.label else {
+        return Ok(None);
+    };
+    let text = mars_expr::parse_template(&spec.text)
+        .map_err(|e| PlanError::Invalid(format!("layer {} label text: {e}", layer.name)))?;
+    let placement = spec.placement.clone().unwrap_or_else(|| {
+        // unknown geom kinds default to point placement; validate() rejects
+        // explicit kind mismatches earlier so the unknown branch is degenerate.
+        default_placement(geom_kind.unwrap_or(LayerGeomKind::Point))
+    });
+    let (style_id, priority) = match &spec.style {
+        LabelStyleAttach::Ref { name } => (name.clone(), 0),
+        LabelStyleAttach::Inline(s) => (format!("{}::label", layer.name), clamp_priority(s.priority)),
+    };
+    Ok(Some(CompiledLabelSpec {
+        text,
+        placement,
+        style_id,
+        priority,
+    }))
+}
+
+fn clamp_priority(p: i32) -> u16 {
+    p.clamp(0, i32::from(u16::MAX)) as u16
 }
 
 pub(crate) fn compile_classes(layer: &Layer) -> Result<Vec<CompiledClass>, PlanError> {

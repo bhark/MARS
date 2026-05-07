@@ -2069,6 +2069,7 @@ dependencies = [
  "mars-observability",
  "mars-source",
  "mars-store",
+ "mars-style",
  "mars-types",
  "thiserror 2.0.18",
  "tokio",

@@ -49,6 +49,8 @@ pub mod metrics {
     pub const COMPILER_REBUILD_DURATION: &str = "mars_compiler_rebuild_duration_seconds";
     pub const COMPILER_WINDOW_LAG: &str = "mars_compiler_window_lag_seconds";
     pub const COMPILER_PUBLISH_RETRIES: &str = "mars_compiler_publish_retries_total";
+    pub const COMPILER_LABEL_CANDIDATES: &str = "mars_compiler_label_candidates_total";
+    pub const COMPILER_LABEL_CANDIDATES_FOREIGN: &str = "mars_compiler_label_candidates_foreign_total";
     pub const CAPABILITIES_REBUILD_FAILURES: &str = "mars_capabilities_rebuild_failures_total";
     pub const MANIFEST_VERSION: &str = "mars_manifest_version";
     pub const MANIFEST_REJECT_TOTAL: &str = "mars_manifest_reject_total";

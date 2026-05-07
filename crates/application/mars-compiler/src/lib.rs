@@ -18,6 +18,7 @@ use tokio_util::sync::CancellationToken;
 
 pub mod class;
 pub mod incremental;
+pub mod labels;
 pub mod plan;
 pub mod snapshot;
 pub mod wkb;
@@ -458,6 +459,7 @@ mod tests {
             binding,
             cell_size: 256.0,
             origin: (0.0, 0.0),
+            has_label_bleed: false,
         };
         (Arc::new(task), Vec::new())
     }

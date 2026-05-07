@@ -18,6 +18,7 @@ mars-expr          = { workspace = true }
 mars-artifact      = { workspace = true }
 mars-source        = { workspace = true }
 mars-store         = { workspace = true }
+mars-style         = { workspace = true }
 mars-config        = { workspace = true }
 mars-observability = { workspace = true }
 tokio              = { workspace = true }

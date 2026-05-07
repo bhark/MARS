@@ -223,6 +223,7 @@ mod tests {
             .unwrap(),
             cell_size: 4096.0,
             origin: (0.0, 0.0),
+            has_label_bleed: false,
         }
     }
 
@@ -233,6 +234,8 @@ mod tests {
             cell: cell(band_s, x, y),
             source: src,
             classes: Vec::<CompiledClass>::new(),
+            geom_kind: None,
+            label: None,
         }
     }
 

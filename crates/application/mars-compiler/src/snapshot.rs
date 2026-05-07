@@ -168,14 +168,29 @@ fn build_layer_artifact(
             assignments.push((row.feature_id, idx));
         }
     }
-    let style_refs: Vec<String> = task
+    let mut style_refs: Vec<String> = task
         .classes
         .iter()
         .map(|c: &CompiledClass| c.style_id.clone())
         .collect();
 
+    let label_candidates = if let Some(label) = task.label.as_ref() {
+        let style_ref_idx = u16::try_from(style_refs.len()).map_err(|_| {
+            crate::plan::PlanError::Invalid(format!("layer {} has too many style refs to fit a label", task.layer))
+        })?;
+        style_refs.push(label.style_id.clone());
+        // expected_srid validation is owned by the source build; the
+        // candidate-emission decoder reads the same WKB and can be lenient.
+        crate::labels::emit_candidates(rows, label, style_ref_idx, None, None)?
+    } else {
+        Vec::new()
+    };
+
     let mut writer = ArtifactWriter::new(ArtifactKind::Layer);
     writer.add_class_assignment(&assignments);
+    if !label_candidates.is_empty() {
+        writer.add_label_candidates(&label_candidates);
+    }
     writer.add_style_refs(&style_refs);
     writer.set_bbox(bbox);
     writer.set_feature_count(assignments.len() as u64);
