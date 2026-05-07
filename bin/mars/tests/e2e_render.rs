@@ -99,15 +99,16 @@ async fn end_to_end_compile_and_render() -> Result<()> {
         .map_err(|e| anyhow::anyhow!("runtime state: {e}"))?;
     let store = Arc::new(FsStore::new(store_dir.path()).context("open store")?);
     let cache = Arc::new(FsCache::new(cache_dir.path(), u64::MAX).context("open cache")?);
+    let fonts = Arc::new(mars_runtime::Fonts::with_default());
     let runtime = Runtime::from_state(
         Arc::new(state),
         RuntimeDeps {
             store,
             cache,
-            renderer: Arc::new(TinySkiaRenderer),
+            renderer: Arc::new(TinySkiaRenderer::new(fonts.clone())),
             encoder: Arc::new(TinySkiaEncoder::default()),
             metrics: mars_observability::Metrics::new().expect("metrics"),
-            fonts: std::sync::Arc::new(mars_runtime::Fonts::with_default()),
+            fonts,
         },
     );
 
@@ -234,7 +235,6 @@ async fn run_compile(cfg: &Config) -> Result<()> {
             store,
             manifest: publisher,
             metrics: mars_observability::Metrics::new().unwrap(),
-            fonts: std::sync::Arc::new(mars_runtime::Fonts::with_default()),
         },
         cfg.clone(),
     );

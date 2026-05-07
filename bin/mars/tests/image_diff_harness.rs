@@ -93,6 +93,21 @@ fn cases() -> Vec<Case> {
             tolerance: 2,
             max_diff_ratio: 0.005,
         },
+        // labelled cell — same plan as parcels-cell-0-0 but the renderer
+        // composites text on top. the budget is loosened to absorb glyph AA.
+        Case {
+            name: "parcels-cell-0-0-with-labels",
+            plan: RenderPlan {
+                layers: vec![LayerId::new("parcels")],
+                bbox: Bbox::new(0.0, 0.0, 1023.0, 1023.0),
+                width: 512,
+                height: 512,
+                crs: CrsCode::new("EPSG:25832"),
+                format: ImageFormat::Png,
+            },
+            tolerance: 8,
+            max_diff_ratio: 0.02,
+        },
     ]
 }
 
@@ -155,15 +170,16 @@ async fn demo_mini_matrix() -> Result<()> {
         .map_err(|e| anyhow::anyhow!("runtime state: {e}"))?;
     let store = Arc::new(FsStore::new(store_dir.path()).context("open store")?);
     let cache = Arc::new(FsCache::new(cache_dir.path(), u64::MAX).context("open cache")?);
+    let fonts = Arc::new(mars_runtime::Fonts::with_default());
     let runtime = Runtime::from_state(
         Arc::new(state),
         RuntimeDeps {
             store,
             cache,
-            renderer: Arc::new(TinySkiaRenderer),
+            renderer: Arc::new(TinySkiaRenderer::new(fonts.clone())),
             encoder: Arc::new(TinySkiaEncoder::default()),
             metrics: mars_observability::Metrics::new().expect("metrics"),
-            fonts: std::sync::Arc::new(mars_runtime::Fonts::with_default()),
+            fonts,
         },
     );
 
@@ -273,7 +289,6 @@ async fn run_compile(cfg: &Config) -> Result<()> {
             store,
             manifest: publisher,
             metrics: mars_observability::Metrics::new().unwrap(),
-            fonts: std::sync::Arc::new(mars_runtime::Fonts::with_default()),
         },
         cfg.clone(),
     );
@@ -289,6 +304,8 @@ fn build_stylesheet(cfg: &Config) -> Stylesheet {
     for (name, entry) in &cfg.styles {
         if let Some(s) = entry.as_geometry() {
             ss.geometry.insert(name.clone(), Arc::new(s.clone()));
+        } else if let Some(l) = entry.as_label() {
+            ss.labels.insert(name.clone(), l.clone());
         }
     }
     for layer in &cfg.layers {
@@ -297,6 +314,11 @@ fn build_stylesheet(cfg: &Config) -> Stylesheet {
                 ss.geometry
                     .insert(format!("{}::{}", layer.name, class.name), Arc::new(s.clone()));
             }
+        }
+        if let Some(label) = &layer.label
+            && let mars_config::LabelStyleAttach::Inline(l) = &label.style
+        {
+            ss.labels.insert(format!("{}::label", layer.name), l.clone());
         }
     }
     ss

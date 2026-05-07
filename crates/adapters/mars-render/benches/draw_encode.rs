@@ -84,7 +84,7 @@ fn line_ops(n: usize) -> Vec<DrawOp> {
 }
 
 fn bench_draw_polygons(c: &mut Criterion) {
-    let renderer = TinySkiaRenderer;
+    let renderer = TinySkiaRenderer::new(std::sync::Arc::new(mars_text::Fonts::with_default()));
     let canvas = Canvas {
         width: CANVAS_W,
         height: CANVAS_H,
@@ -106,7 +106,7 @@ fn bench_draw_polygons(c: &mut Criterion) {
 }
 
 fn bench_draw_lines(c: &mut Criterion) {
-    let renderer = TinySkiaRenderer;
+    let renderer = TinySkiaRenderer::new(std::sync::Arc::new(mars_text::Fonts::with_default()));
     let canvas = Canvas {
         width: CANVAS_W,
         height: CANVAS_H,

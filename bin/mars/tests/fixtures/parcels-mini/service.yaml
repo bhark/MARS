@@ -60,6 +60,14 @@ styles:
     fill: "#268bd2"
     stroke: "#073642"
     stroke_width: 1.0
+  cls_label:
+    type: label
+    font_family: "DejaVu Sans"
+    font_size: 14
+    fill: "#000000"
+    halo: { color: "#ffffff", width: 1.5 }
+    priority: 100
+    min_distance: 4
 
 layers:
   - name: parcels
@@ -70,7 +78,7 @@ layers:
         from: mars_diff.parcels
         geometry_column: geom
         id_column: gid
-        attributes: [kind]
+        attributes: [kind, name]
     classes:
       - name: park
         title: "Park"
@@ -84,6 +92,9 @@ layers:
         title: "Water"
         when: "kind = 'water'"
         style: { type: ref, name: cls_water }
+    label:
+      style: { type: ref, name: cls_label }
+      text: "{name}"
 
 observability:
   log_level: warn

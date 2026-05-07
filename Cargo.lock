@@ -2219,6 +2219,7 @@ dependencies = [
  "jpeg-encoder",
  "mars-render-port",
  "mars-style",
+ "mars-text",
  "png",
  "tiny-skia",
  "tracing",

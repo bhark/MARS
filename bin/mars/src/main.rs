@@ -171,7 +171,7 @@ async fn run_runtime(cfg: Arc<Config>, shutdown: CancellationToken) -> Result<()
         RuntimeDeps {
             store,
             cache,
-            renderer: Arc::new(TinySkiaRenderer),
+            renderer: Arc::new(TinySkiaRenderer::new(fonts.clone())),
             encoder: Arc::new(TinySkiaEncoder::new(cfg.render.jpeg_quality)),
             metrics: metrics.clone(),
             fonts,
@@ -426,6 +426,13 @@ fn build_stylesheet(cfg: &Config) -> Stylesheet {
                 let key = format!("{}::{}", layer.name, class.name);
                 ss.geometry.insert(key, Arc::new(s.clone()));
             }
+        }
+        // inline label styles land under `<layer>::label` mirroring the
+        // compiler's CompiledLabelSpec::style_id convention.
+        if let Some(label) = &layer.label
+            && let mars_config::LabelStyleAttach::Inline(l) = &label.style
+        {
+            ss.labels.insert(format!("{}::label", layer.name), l.clone());
         }
     }
     ss

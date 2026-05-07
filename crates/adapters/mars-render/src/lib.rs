@@ -1,16 +1,31 @@
 //! CPU rasteriser. SPEC §11.2 - tiny-skia rasterisation, PNG and JPEG encoding.
-//! Label rendering deferred to a later phase.
 
 #![forbid(unsafe_code)]
 
 mod encode;
 mod raster;
 
+use std::sync::Arc;
+
 use mars_render_port::{Canvas, DrawOp, EncodeError, Encoder, ImageFormat, Pixmap, RenderError, Renderer};
+use mars_text::Fonts;
 use tiny_skia::Pixmap as SkPixmap;
 
-#[derive(Debug, Default)]
-pub struct TinySkiaRenderer;
+/// CPU rasteriser. Stamps geometry via tiny-skia and shapes / rasterises
+/// label runs via [`mars_text`]. The font registry is shared with the
+/// runtime collision pass so both agree on glyph metrics.
+#[derive(Debug)]
+pub struct TinySkiaRenderer {
+    fonts: Arc<Fonts>,
+}
+
+impl TinySkiaRenderer {
+    /// Construct with the supplied font registry.
+    #[must_use]
+    pub fn new(fonts: Arc<Fonts>) -> Self {
+        Self { fonts }
+    }
+}
 
 impl Renderer for TinySkiaRenderer {
     fn render(&self, canvas: Canvas, ops: &[DrawOp]) -> Result<Pixmap, RenderError> {
@@ -25,15 +40,11 @@ impl Renderer for TinySkiaRenderer {
             raster::fill_background(&mut pm, bg);
         }
 
-        let mut warned_label = false;
         for op in ops {
             match op {
                 DrawOp::Path { path, style } => raster::draw_path(&mut pm, path, style),
-                DrawOp::Label { .. } => {
-                    if !warned_label {
-                        tracing::warn!("phase-2: label rendering deferred");
-                        warned_label = true;
-                    }
+                DrawOp::Label { anchor, text, style } => {
+                    raster::draw_label(&mut pm, *anchor, text, style, &self.fonts)?;
                 }
             }
         }
@@ -120,7 +131,7 @@ mod tests {
     }
 
     fn render_png(canvas: Canvas, ops: &[DrawOp]) -> Vec<u8> {
-        let pm = TinySkiaRenderer.render(canvas, ops).unwrap();
+        let pm = TinySkiaRenderer::new(std::sync::Arc::new(mars_text::Fonts::with_default())).render(canvas, ops).unwrap();
         TinySkiaEncoder::default().encode(&pm, ImageFormat::Png).unwrap()
     }
 
@@ -277,7 +288,7 @@ mod tests {
                 min_distance: 0.0,
             }),
         }];
-        let pm = TinySkiaRenderer.render(canvas, &ops);
+        let pm = TinySkiaRenderer::new(std::sync::Arc::new(mars_text::Fonts::with_default())).render(canvas, &ops);
         assert!(pm.is_ok(), "label op should be skipped, not error: {pm:?}");
     }
 
@@ -288,7 +299,7 @@ mod tests {
             height: 16,
             background: Some(red()),
         };
-        let pm = TinySkiaRenderer.render(canvas, &[]).unwrap();
+        let pm = TinySkiaRenderer::new(std::sync::Arc::new(mars_text::Fonts::with_default())).render(canvas, &[]).unwrap();
         let bytes = TinySkiaEncoder::default().encode(&pm, ImageFormat::Jpeg).unwrap();
         assert!(bytes.starts_with(&[0xFF, 0xD8]), "jpeg SOI marker");
 
@@ -310,7 +321,7 @@ mod tests {
             height: 8,
             background: None,
         };
-        let pm = TinySkiaRenderer.render(canvas, &[]).unwrap();
+        let pm = TinySkiaRenderer::new(std::sync::Arc::new(mars_text::Fonts::with_default())).render(canvas, &[]).unwrap();
         let bytes = TinySkiaEncoder::default().encode(&pm, ImageFormat::Jpeg).unwrap();
         let mut dec = jpeg_decoder::Decoder::new(std::io::Cursor::new(&bytes));
         let pixels = dec.decode().unwrap();
