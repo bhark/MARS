@@ -422,7 +422,13 @@ impl Runtime {
                     renderer.render(canvas, &ops)?
                 };
                 let bytes = {
-                    let _encode = tracing::info_span!("cpu.encode").entered();
+                    // low-cardinality format tag so PNG vs JPEG cost is
+                    // distinguishable in flamegraphs and trace exporters.
+                    let format_tag = match format {
+                        ImageFormat::Png => "png",
+                        ImageFormat::Jpeg => "jpeg",
+                    };
+                    let _encode = tracing::info_span!("cpu.encode", format = format_tag).entered();
                     encoder.encode(&pixmap, format)?
                 };
                 Ok(bytes)
