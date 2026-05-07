@@ -2065,6 +2065,7 @@ dependencies = [
  "blake3",
  "bytes",
  "criterion",
+ "mars-expr",
  "mars-types",
  "planus",
  "planus-codegen",

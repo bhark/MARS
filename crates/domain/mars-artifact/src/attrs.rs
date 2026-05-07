@@ -20,22 +20,12 @@
 
 use bytes::Bytes;
 
-/// on-disk attribute value vocabulary for the phase-0 codec. mirrors what
-/// adapters and the expression layer already speak; conversions live at the
-/// boundary (e.g. `From<mars_source::AttrValue>`).
-#[derive(Debug, Clone, PartialEq)]
-pub enum AttrValue {
-    /// SQL NULL.
-    Null,
-    /// Boolean.
-    Bool(bool),
-    /// 64-bit signed integer.
-    Int(i64),
-    /// 64-bit float.
-    Float(f64),
-    /// UTF-8 string.
-    String(String),
-}
+/// on-disk attribute value vocabulary for the phase-0 codec. uses
+/// [`mars_expr::Literal`] directly so the artifact codec, the expression
+/// layer, and adapter conversions all speak the same shape — there used to
+/// be a parallel `AttrValue` enum here that drifted (no `serde` derive) and
+/// duplicated the same five variants.
+pub use mars_expr::Literal as AttrValue;
 
 /// Maximum encoded size of a single row's attribute block.
 pub const MAX_ROW_BYTES: usize = 64 * 1024;
