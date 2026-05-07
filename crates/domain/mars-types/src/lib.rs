@@ -183,6 +183,124 @@ impl_string_newtype!(
     pub SourceCollectionId
 );
 
+impl_string_newtype!(
+    /// stable identifier for a source binding (a `(table_or_view,
+    /// geometry_column, attribute_set, native_crs)` tuple declared in config).
+    /// appears in object-store keys, so segments must be path-safe; use
+    /// [`BindingId::try_new`] at trust boundaries.
+    pub BindingId
+);
+
+impl BindingId {
+    /// validating constructor. rejects empty, oversized, slash-bearing, null-
+    /// bearing, `.` and `..` ids before they can land in an object key.
+    pub fn try_new(s: impl Into<::std::sync::Arc<str>>) -> Result<Self, BindingIdError> {
+        let id = Self(s.into());
+        if !is_safe_segment(id.as_str()) {
+            return Err(BindingIdError::Malformed {
+                id: id.as_str().to_owned(),
+            });
+        }
+        Ok(id)
+    }
+}
+
+/// Reasons a `BindingId` fails validation at the trust boundary.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum BindingIdError {
+    #[error("malformed binding id '{id}'")]
+    Malformed { id: String },
+}
+
+/// Identifier of a single page within a `(binding, level)` slice. wider than
+/// strictly needed (page counts top out around the low thousands) so that the
+/// 16-char lower-hex form serialised into object keys is comfortably stable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct PageId(pub u64);
+
+impl PageId {
+    #[must_use]
+    pub const fn new(id: u64) -> Self {
+        Self(id)
+    }
+
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+impl core::fmt::Display for PageId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        // 16-hex chars, lower case. matches the `p{page_hex}` segment in keys.
+        write!(f, "{:016x}", self.0)
+    }
+}
+
+/// Decimation level of a binding's page artifacts. 0 = native fidelity;
+/// higher numbers = coarser. u8 dwarfs the handful of levels actually used,
+/// but keeps the on-disk representation stable next to other page metadata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct DecimationLevel(pub u8);
+
+impl DecimationLevel {
+    #[must_use]
+    pub const fn new(level: u8) -> Self {
+        Self(level)
+    }
+
+    #[must_use]
+    pub const fn get(self) -> u8 {
+        self.0
+    }
+}
+
+impl core::fmt::Display for DecimationLevel {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// Hilbert curve key over a binding's `combined_bbox` extent (32-bit per axis,
+/// packed into a u64). defines the spatial sort order of pages within a
+/// `(binding, level)` slice; range tables on `LevelMetadata` store inclusive
+/// `(lo, hi)` pairs of these for binary-search lookup at render time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct HilbertKey(pub u64);
+
+impl HilbertKey {
+    #[must_use]
+    pub const fn new(key: u64) -> Self {
+        Self(key)
+    }
+
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+
+    /// smallest key on the curve. useful as a sentinel in range comparisons.
+    #[must_use]
+    pub const fn min() -> Self {
+        Self(u64::MIN)
+    }
+
+    /// largest key on the curve. useful as a sentinel in range comparisons.
+    #[must_use]
+    pub const fn max() -> Self {
+        Self(u64::MAX)
+    }
+}
+
+impl core::fmt::Display for HilbertKey {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{:016x}", self.0)
+    }
+}
+
 /// a spatial partition cell, addressed by `(band, x, y)` in canonical CRS.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Cell {
@@ -617,5 +735,74 @@ mod tests {
         assert_eq!(s.len(), 64);
         assert!(s.chars().all(|c| c.is_ascii_hexdigit()));
         assert_eq!(s, h.to_hex());
+    }
+
+    #[test]
+    fn binding_id_try_new_accepts_safe_segments() {
+        assert!(BindingId::try_new("buildings").is_ok());
+        assert!(BindingId::try_new("parcels-2024").is_ok());
+        assert!(BindingId::try_new("plots_v3").is_ok());
+    }
+
+    #[test]
+    fn binding_id_try_new_rejects_unsafe() {
+        assert!(BindingId::try_new("").is_err(), "empty");
+        assert!(BindingId::try_new("foo/bar").is_err(), "slash");
+        assert!(BindingId::try_new("a\0b").is_err(), "null");
+        assert!(BindingId::try_new("..").is_err(), "dotdot");
+        assert!(BindingId::try_new(".").is_err(), "dot");
+        let big = "x".repeat(129);
+        assert!(BindingId::try_new(big).is_err(), "too long");
+    }
+
+    #[test]
+    fn binding_id_serde_is_transparent() {
+        let id = BindingId::try_new("buildings").unwrap();
+        let s = serde_json::to_string(&id).unwrap();
+        assert_eq!(s, "\"buildings\"");
+        let back: BindingId = serde_json::from_str(&s).unwrap();
+        assert_eq!(back, id);
+    }
+
+    #[test]
+    fn page_id_display_is_zero_padded_hex() {
+        assert_eq!(PageId::new(0).to_string(), "0000000000000000");
+        assert_eq!(PageId::new(0xdead_beef).to_string(), "00000000deadbeef");
+        assert_eq!(PageId::new(u64::MAX).to_string(), "ffffffffffffffff");
+    }
+
+    #[test]
+    fn page_id_serde_is_transparent() {
+        let p = PageId::new(42);
+        let s = serde_json::to_string(&p).unwrap();
+        assert_eq!(s, "42");
+        let back: PageId = serde_json::from_str(&s).unwrap();
+        assert_eq!(back, p);
+    }
+
+    #[test]
+    fn decimation_level_ordering() {
+        assert!(DecimationLevel::new(0) < DecimationLevel::new(1));
+        assert!(DecimationLevel::new(4) > DecimationLevel::new(2));
+        assert_eq!(DecimationLevel::new(3).get(), 3);
+        assert_eq!(DecimationLevel::new(7).to_string(), "7");
+    }
+
+    #[test]
+    fn hilbert_key_ordering_and_bounds() {
+        assert!(HilbertKey::min() < HilbertKey::max());
+        assert_eq!(HilbertKey::min().get(), 0);
+        assert_eq!(HilbertKey::max().get(), u64::MAX);
+        let k = HilbertKey::new(0xcafe_babe);
+        assert_eq!(k.to_string(), "00000000cafebabe");
+    }
+
+    #[test]
+    fn hilbert_key_serde_is_transparent() {
+        let k = HilbertKey::new(1234);
+        let s = serde_json::to_string(&k).unwrap();
+        assert_eq!(s, "1234");
+        let back: HilbertKey = serde_json::from_str(&s).unwrap();
+        assert_eq!(back, k);
     }
 }
