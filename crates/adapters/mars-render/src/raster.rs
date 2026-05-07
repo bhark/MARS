@@ -138,6 +138,14 @@ pub(crate) fn draw_label(
     Ok(())
 }
 
+/// `(x * y + 127) / 255` approximated as `(x*y + 0x80 + ((x*y) >> 8)) >> 8`,
+/// the standard integer-/255 trick. error <= 1 LSB across the whole 0..=255
+/// range; well inside font AA tolerance.
+#[inline]
+fn div255(v: u32) -> u32 {
+    (v + 0x80 + (v >> 8)) >> 8
+}
+
 fn composite_mask(pm: &mut Pixmap, mask: &GlyphMask, anchor: (f32, f32), colour: Colour, offset: (f32, f32)) {
     if mask.width == 0 || mask.height == 0 {
         return;
@@ -146,43 +154,47 @@ fn composite_mask(pm: &mut Pixmap, mask: &GlyphMask, anchor: (f32, f32), colour:
     let pm_h = pm.height() as i32;
     let dst_x0 = (anchor.0 + mask.origin_x as f32 + offset.0).round() as i32;
     let dst_y0 = (anchor.1 + mask.origin_y as f32 + offset.1).round() as i32;
-    let data = pm.data_mut();
     let mw = mask.width as i32;
     let mh = mask.height as i32;
-    let sr = colour.r;
-    let sg = colour.g;
-    let sb = colour.b;
-    let sa = colour.a;
-    for my in 0..mh {
-        let dy = dst_y0 + my;
-        if dy < 0 || dy >= pm_h {
-            continue;
-        }
-        for mx in 0..mw {
-            let dx = dst_x0 + mx;
-            if dx < 0 || dx >= pm_w {
-                continue;
-            }
-            let cov = mask.coverage[(my as u32 * mask.width + mx as u32) as usize];
+
+    // clip the dst rect once instead of branching per-pixel.
+    let mx_lo = (-dst_x0).max(0).min(mw);
+    let mx_hi = (pm_w - dst_x0).max(0).min(mw);
+    let my_lo = (-dst_y0).max(0).min(mh);
+    let my_hi = (pm_h - dst_y0).max(0).min(mh);
+    if mx_lo >= mx_hi || my_lo >= my_hi {
+        return;
+    }
+
+    let data = pm.data_mut();
+    let sr = u32::from(colour.r);
+    let sg = u32::from(colour.g);
+    let sb = u32::from(colour.b);
+    let sa = u32::from(colour.a);
+    let mask_w = mask.width as usize;
+
+    for my in my_lo..my_hi {
+        let dy = (dst_y0 + my) as usize;
+        let row_dst = dy * pm_w as usize * 4;
+        let row_mask = my as usize * mask_w;
+        for mx in mx_lo..mx_hi {
+            let cov = mask.coverage[row_mask + mx as usize];
             if cov == 0 {
                 continue;
             }
-            // src alpha = colour.a * coverage / 255
-            let a_src = (u16::from(sa) * u16::from(cov) / 255) as u8;
+            let a_src = div255(sa * u32::from(cov));
             if a_src == 0 {
                 continue;
             }
-            let idx = ((dy * pm_w + dx) * 4) as usize;
-            // premultiplied source RGBA
-            let pr = (u16::from(sr) * u16::from(a_src) / 255) as u8;
-            let pg = (u16::from(sg) * u16::from(a_src) / 255) as u8;
-            let pb = (u16::from(sb) * u16::from(a_src) / 255) as u8;
-            // premultiplied "over" composite onto existing pixel
+            let idx = row_dst + (dst_x0 + mx) as usize * 4;
+            let pr = div255(sr * a_src) as u8;
+            let pg = div255(sg * a_src) as u8;
+            let pb = div255(sb * a_src) as u8;
             let inv = 255 - a_src;
-            data[idx] = pr.saturating_add((u16::from(data[idx]) * u16::from(inv) / 255) as u8);
-            data[idx + 1] = pg.saturating_add((u16::from(data[idx + 1]) * u16::from(inv) / 255) as u8);
-            data[idx + 2] = pb.saturating_add((u16::from(data[idx + 2]) * u16::from(inv) / 255) as u8);
-            data[idx + 3] = a_src.saturating_add((u16::from(data[idx + 3]) * u16::from(inv) / 255) as u8);
+            data[idx] = pr.saturating_add(div255(u32::from(data[idx]) * inv) as u8);
+            data[idx + 1] = pg.saturating_add(div255(u32::from(data[idx + 1]) * inv) as u8);
+            data[idx + 2] = pb.saturating_add(div255(u32::from(data[idx + 2]) * inv) as u8);
+            data[idx + 3] = (a_src as u8).saturating_add(div255(u32::from(data[idx + 3]) * inv) as u8);
         }
     }
 }
