@@ -17,9 +17,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use deadpool_postgres::{Hook, HookError, Pool, Runtime};
-use mars_expr::Expr;
-use mars_source::{ChangeFeed, ChangeSubscription, RowBytes, Source, SourceBinding, SourceError};
-use mars_types::{Bbox, Cell};
+use mars_source::{ChangeFeed, ChangeSubscription, Source, SourceError};
 use tokio_postgres::NoTls;
 
 mod fetch;
@@ -221,28 +219,10 @@ impl PgSource {
     }
 }
 
-#[async_trait]
-impl Source for PgSource {
-    async fn fetch_cell(
-        &self,
-        binding: &SourceBinding,
-        _cell: &Cell,
-        bbox: Bbox,
-        filter: Option<&Expr>,
-    ) -> Result<Vec<RowBytes>, SourceError> {
-        fetch::fetch_cell(&self.pool, binding, bbox, filter).await
-    }
-
-    async fn fetch_cells(
-        &self,
-        binding: &SourceBinding,
-        cells: &[(Cell, Bbox)],
-        filter: Option<&Expr>,
-    ) -> Result<Vec<(Cell, Vec<RowBytes>)>, SourceError> {
-        let concurrency = self.cfg.fetch_concurrency.unwrap_or(fetch::DEFAULT_FETCH_CONCURRENCY);
-        fetch::fetch_cells(&self.pool, binding, cells, filter, concurrency).await
-    }
-}
+// LAZARUS Phase B: cell-keyed fetch_cell/fetch_cells were retired with the
+// v3 substrate cut. Phase C reintroduces a page-keyed surface
+// (fetch_full_table_streaming + fetch_by_feature_ids) on the trait.
+impl Source for PgSource {}
 
 #[async_trait]
 impl ChangeFeed for PgSource {
@@ -270,122 +250,6 @@ pub enum SqlParam {
     Text(String),
 }
 
-#[cfg(all(test, feature = "e2e"))]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-mod e2e_tests {
-    use super::*;
-    use bytes::Bytes;
-    use mars_source::SourceCollectionId;
-    use mars_types::{CrsCode, ScaleBand};
-    use rand::distributions::{Alphanumeric, DistString};
-    use testcontainers::{
-        GenericImage, ImageExt,
-        core::{IntoContainerPort, WaitFor},
-        runners::AsyncRunner,
-    };
-
-    #[tokio::test]
-    async fn fetch_cell_returns_five_rows() {
-        let _ = Bytes::new(); // ensure bytes is used in this cfg
-
-        let password = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
-        let container = GenericImage::new("postgis/postgis", "16-3.4")
-            .with_exposed_port(5432.tcp())
-            .with_wait_for(WaitFor::message_on_stderr(
-                "database system is ready to accept connections",
-            ))
-            .with_env_var("POSTGRES_PASSWORD", &password)
-            .with_env_var("POSTGRES_USER", "mars")
-            .with_env_var("POSTGRES_DB", "mars")
-            .start()
-            .await
-            .expect("docker available");
-
-        let port = container.get_host_port_ipv4(5432).await.unwrap();
-        let dsn = format!("host=127.0.0.1 port={port} user=mars password={password} dbname=mars");
-
-        // setup table
-        let setup = PgConfig {
-            dsn: dsn.clone(),
-            publication: String::new(),
-            slot: String::new(),
-            ..Default::default()
-        };
-        let src = PgSource::connect(setup).await.unwrap();
-        let client = src.pool.get().await.unwrap();
-        client
-            .batch_execute(
-                "CREATE EXTENSION IF NOT EXISTS postgis;
-                 CREATE TABLE t (
-                    gid INT4 PRIMARY KEY,
-                    name TEXT,
-                    kind INT4,
-                    geom geometry(Polygon, 25832)
-                 );
-                 INSERT INTO t VALUES
-                    (1, 'a', 10, ST_GeomFromText('POLYGON((0 0,10 0,10 10,0 10,0 0))', 25832)),
-                    (2, 'b', 20, ST_GeomFromText('POLYGON((20 0,30 0,30 10,20 10,20 0))', 25832)),
-                    (3, 'c', 30, ST_GeomFromText('POLYGON((40 0,50 0,50 10,40 10,40 0))', 25832)),
-                    (4, 'd', 40, ST_GeomFromText('POLYGON((60 0,70 0,70 10,60 10,60 0))', 25832)),
-                    (5, 'e', 50, ST_GeomFromText('POLYGON((80 0,90 0,90 10,80 10,80 0))', 25832));",
-            )
-            .await
-            .unwrap();
-        drop(client);
-
-        let binding = SourceBinding::new(
-            SourceCollectionId::new("c"),
-            "public",
-            "t",
-            "geom",
-            "gid",
-            vec!["name".into(), "kind".into()],
-            CrsCode::new("EPSG:25832"),
-        )
-        .unwrap();
-        let cell = Cell {
-            band: ScaleBand::new("hi"),
-            x: 0,
-            y: 0,
-        };
-        let bbox = Bbox::new(-1.0, -1.0, 1000.0, 1000.0);
-
-        let rows = src.fetch_cell(&binding, &cell, bbox, None).await.unwrap();
-        assert_eq!(rows.len(), 5);
-        for row in &rows {
-            assert!(!row.geometry.is_empty());
-            assert_eq!(row.attributes.len(), 2);
-            assert_eq!(row.attributes[0].0, "name");
-            assert_eq!(row.attributes[1].0, "kind");
-        }
-
-        // pipelined fetch_cells over three disjoint bboxes; row sets must match
-        // serial fetch_cell calls and routing must pair each output with its
-        // input cell.
-        let band = ScaleBand::new("hi");
-        let mk_cell = |x| Cell {
-            band: band.clone(),
-            x,
-            y: 0,
-        };
-        let cells = vec![
-            (mk_cell(0), Bbox::new(-1.0, -1.0, 15.0, 20.0)),
-            (mk_cell(1), Bbox::new(35.0, -1.0, 55.0, 20.0)),
-            (mk_cell(2), Bbox::new(75.0, -1.0, 95.0, 20.0)),
-        ];
-
-        let batched = src.fetch_cells(&binding, &cells, None).await.unwrap();
-        assert_eq!(batched.len(), 3);
-
-        for ((in_cell, bbox), (out_cell, rows)) in cells.iter().zip(&batched) {
-            assert_eq!(in_cell, out_cell);
-            let serial = src.fetch_cell(&binding, in_cell, *bbox, None).await.unwrap();
-            assert_eq!(rows.len(), serial.len());
-            let mut got: Vec<u64> = rows.iter().map(|r| r.feature_id).collect();
-            let mut want: Vec<u64> = serial.iter().map(|r| r.feature_id).collect();
-            got.sort_unstable();
-            want.sort_unstable();
-            assert_eq!(got, want);
-        }
-    }
-}
+// phase-c: cell-keyed e2e tests retired with the v3 substrate cut. Phase D
+// reintroduces page-keyed e2e coverage in `crates/bin/mars` under the
+// `e2e` feature.

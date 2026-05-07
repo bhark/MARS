@@ -1,118 +1,21 @@
-//! Per-call SQL builder for `Source::fetch_cell`.
+//! Per-call SQL builder.
+//!
+//! Phase B note: cell-keyed `fetch_cell` / `fetch_cells` were retired with
+//! the v3 substrate cut. Phase C reintroduces page-keyed entry points
+//! (`fetch_full_table_streaming` for bootstrap, `fetch_by_feature_ids` for
+//! incremental rebuild) on top of the same SQL builder + row decoder.
+
+#![allow(dead_code)]
 
 use bytes::Bytes;
-use deadpool_postgres::Pool;
-use futures_util::stream::{self, StreamExt, TryStreamExt};
 use mars_expr::Expr;
 use mars_source::{AttrValue, RowBytes, SourceBinding, SourceError};
-use mars_types::{Bbox, Cell};
+use mars_types::Bbox;
 use tokio_postgres::types::{ToSql, Type};
 
 use crate::SqlParam;
 use crate::lower::lower_to_sql;
 use crate::quote::quote_ident;
-
-/// Build the fetch query, run it, and decode rows.
-pub(crate) async fn fetch_cell(
-    pool: &Pool,
-    binding: &SourceBinding,
-    bbox: Bbox,
-    filter: Option<&Expr>,
-) -> Result<Vec<RowBytes>, SourceError> {
-    let srid = parse_srid(binding.crs.as_str())?;
-    let (sql, params) = build_query(binding, bbox, srid, filter)?;
-    let client = pool.get().await.map_err(|e| SourceError::backend("pool", e))?;
-    // per-connection statement cache: within a snapshot the SQL shape is
-    // fixed per (binding, filter), so the second cell onward reuses the
-    // server-side prepared statement.
-    let stmt = client
-        .prepare_cached(&sql)
-        .await
-        .map_err(|e| SourceError::backend("prepare", e))?;
-
-    let pg_params: Vec<&(dyn ToSql + Sync)> = params.iter().map(|p| p as &(dyn ToSql + Sync)).collect();
-    let rows = client
-        .query(&stmt, &pg_params)
-        .await
-        .map_err(|e| SourceError::backend("query", e))?;
-
-    let mut out = Vec::with_capacity(rows.len());
-    for row in rows {
-        out.push(decode_row(&row, binding)?);
-    }
-    Ok(out)
-}
-
-/// default in-flight query bound for `fetch_cells`. small enough to keep
-/// per-connection memory bounded under bbox bursts; large enough to overlap
-/// a handful of round trips on cold queries.
-pub(crate) const DEFAULT_FETCH_CONCURRENCY: usize = 8;
-
-/// Pipelined batch variant: fetch every `(cell, bbox)` pair through one pool
-/// connection and one prepared statement, fanning out the executes with a
-/// bounded number of in-flight queries. tokio-postgres queues them on the
-/// same wire so the server runs them serialised but RTT amortises within the
-/// configured window. callers must pass `concurrency >= 1`.
-pub(crate) async fn fetch_cells(
-    pool: &Pool,
-    binding: &SourceBinding,
-    cells: &[(Cell, Bbox)],
-    filter: Option<&Expr>,
-    concurrency: usize,
-) -> Result<Vec<(Cell, Vec<RowBytes>)>, SourceError> {
-    if cells.is_empty() {
-        return Ok(Vec::new());
-    }
-    let srid = parse_srid(binding.crs.as_str())?;
-
-    // SQL shape is identical across cells (placeholders, not literals); build
-    // once. Per-cell params still vary by bbox.
-    let mut all_params: Vec<Vec<SqlParam>> = Vec::with_capacity(cells.len());
-    let (sql, first_params) = build_query(binding, cells[0].1, srid, filter)?;
-    all_params.push(first_params);
-    for (_, bbox) in &cells[1..] {
-        let (_, params) = build_query(binding, *bbox, srid, filter)?;
-        all_params.push(params);
-    }
-
-    let client = pool.get().await.map_err(|e| SourceError::backend("pool", e))?;
-    let stmt = client
-        .prepare_cached(&sql)
-        .await
-        .map_err(|e| SourceError::backend("prepare", e))?;
-
-    // materialise per-cell `&dyn ToSql` slices first so each future holds a
-    // borrow into a stable `Vec<&dyn ToSql>` for its lifetime.
-    let pg_params: Vec<Vec<&(dyn ToSql + Sync)>> = all_params
-        .iter()
-        .map(|p| p.iter().map(|x| x as &(dyn ToSql + Sync)).collect())
-        .collect();
-
-    let n = concurrency.max(1);
-    let client = &client;
-    let stmt = &stmt;
-    let pg_params = &pg_params;
-    let results: Vec<_> = stream::iter(0..pg_params.len())
-        .map(|i| async move {
-            client
-                .query(stmt, pg_params[i].as_slice())
-                .await
-                .map_err(|e| SourceError::backend("query", e))
-        })
-        .buffered(n)
-        .try_collect()
-        .await?;
-
-    let mut out = Vec::with_capacity(cells.len());
-    for ((cell, _), rows) in cells.iter().zip(results) {
-        let mut decoded = Vec::with_capacity(rows.len());
-        for row in rows {
-            decoded.push(decode_row(&row, binding)?);
-        }
-        out.push((cell.clone(), decoded));
-    }
-    Ok(out)
-}
 
 /// SRID extraction: only EPSG codes are supported in v1.
 fn parse_srid(crs: &str) -> Result<i32, SourceError> {

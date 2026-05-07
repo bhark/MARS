@@ -6,7 +6,7 @@ use mars_source::{ChangeEvent, SourceError};
 
 use super::pgoutput::{ColumnData, DeletePayload, Message, Relation, Tuple, UpdatePayload};
 use super::wkb_bbox::bbox_of;
-use super::{CachedRelation, RelationCache, ReplicationTopology, cells_for_bbox};
+use super::{CachedRelation, RelationCache, ReplicationTopology};
 
 /// Zero or more consumer-visible events from a single pgoutput message.
 /// row events return one; multi-relation truncate returns one per known
@@ -70,7 +70,7 @@ fn insert_event(
     oid: u32,
     tuple: &Tuple<'_>,
     cache: &RelationCache,
-    topology: &ReplicationTopology,
+    _topology: &ReplicationTopology,
 ) -> Result<Translated, SourceError> {
     let Some(entry) = cache.get(oid) else {
         // pgoutput guarantees Relation precedes the first row event for the
@@ -80,12 +80,12 @@ fn insert_event(
             format!("insert for unknown relation oid {oid}"),
         ));
     };
+    // phase-c: bbox extraction stays as the seam where HilbertKey will be
+    // derived from the new-row geometry envelope.
     let geom = extract_geom_bytes(tuple, entry.geometry_col_idx)?;
-    let bbox = bbox_of(&geom).map_err(|e| SourceError::backend("wkb", e))?;
-    let cells = cells_for_bbox(bbox, &topology.bands, topology.max_cells_per_row)?;
+    let _bbox = bbox_of(&geom).map_err(|e| SourceError::backend("wkb", e))?;
     Ok(Translated(vec![ChangeEvent::Insert {
         collection: entry.topology.collection.clone(),
-        cells,
     }]))
 }
 
@@ -93,7 +93,7 @@ fn update_event(
     oid: u32,
     payload: UpdatePayload<'_>,
     cache: &RelationCache,
-    topology: &ReplicationTopology,
+    _topology: &ReplicationTopology,
 ) -> Result<Translated, SourceError> {
     let Some(entry) = cache.get(oid) else {
         return Err(SourceError::backend_msg(
@@ -103,36 +103,18 @@ fn update_event(
     };
 
     // SPEC §8.2.1: bound tables MUST carry REPLICA IDENTITY FULL so the
-    // OLD geometry is present on every UPDATE/DELETE. without it,
-    // deletes-of-moved-geometry leak old cells.
+    // OLD geometry is present on every UPDATE/DELETE. phase-c uses both
+    // old and new bboxes to derive Hilbert keys covering the dirty pages.
     let Some(old) = payload.full_old.as_ref() else {
         return Err(missing_full_old_error(entry, "update"));
     };
-
-    let mut cells: Vec<mars_types::Cell> = Vec::new();
-    let mut seen: std::collections::HashSet<(String, i64, i64)> = std::collections::HashSet::new();
-
     let old_geom = extract_geom_bytes(old, entry.geometry_col_idx)?;
-    let old_bbox = bbox_of(&old_geom).map_err(|e| SourceError::backend("wkb (old)", e))?;
-    for c in cells_for_bbox(old_bbox, &topology.bands, topology.max_cells_per_row)? {
-        let k = (c.band.as_str().to_string(), c.x, c.y);
-        if seen.insert(k) {
-            cells.push(c);
-        }
-    }
-
+    let _old_bbox = bbox_of(&old_geom).map_err(|e| SourceError::backend("wkb (old)", e))?;
     let new_geom = extract_geom_bytes(&payload.new, entry.geometry_col_idx)?;
-    let new_bbox = bbox_of(&new_geom).map_err(|e| SourceError::backend("wkb (new)", e))?;
-    for c in cells_for_bbox(new_bbox, &topology.bands, topology.max_cells_per_row)? {
-        let k = (c.band.as_str().to_string(), c.x, c.y);
-        if seen.insert(k) {
-            cells.push(c);
-        }
-    }
+    let _new_bbox = bbox_of(&new_geom).map_err(|e| SourceError::backend("wkb (new)", e))?;
 
     Ok(Translated(vec![ChangeEvent::Update {
         collection: entry.topology.collection.clone(),
-        cells,
     }]))
 }
 
@@ -161,7 +143,7 @@ fn delete_event(
     oid: u32,
     payload: DeletePayload<'_>,
     cache: &RelationCache,
-    topology: &ReplicationTopology,
+    _topology: &ReplicationTopology,
 ) -> Result<Translated, SourceError> {
     let Some(entry) = cache.get(oid) else {
         return Err(SourceError::backend_msg(
@@ -174,11 +156,9 @@ fn delete_event(
         DeletePayload::KeyOnly(_) => return Err(missing_full_old_error(entry, "delete")),
     };
     let geom = extract_geom_bytes(tuple, entry.geometry_col_idx)?;
-    let bbox = bbox_of(&geom).map_err(|e| SourceError::backend("wkb", e))?;
-    let cells = cells_for_bbox(bbox, &topology.bands, topology.max_cells_per_row)?;
+    let _bbox = bbox_of(&geom).map_err(|e| SourceError::backend("wkb", e))?;
     Ok(Translated(vec![ChangeEvent::Delete {
         collection: entry.topology.collection.clone(),
-        cells,
     }]))
 }
 
@@ -252,8 +232,7 @@ fn nibble(c: u8) -> Result<u8, SourceError> {
 mod tests {
     use super::*;
     use crate::replication::{CollectionTopology, ReplicationTopology};
-    use mars_grid::BandConfig;
-    use mars_types::ScaleBand;
+    use mars_grid::{BandConfig, BandName};
 
     fn point_le(x: f64, y: f64) -> Vec<u8> {
         let mut v = vec![1u8];
@@ -280,7 +259,7 @@ mod tests {
                 },
             ],
             bands: vec![BandConfig {
-                name: ScaleBand::new("hi"),
+                name: BandName::new("hi"),
                 max_denom: 25_000,
                 origin: (0.0, 0.0),
                 cell_size: 1024.0,
@@ -335,7 +314,9 @@ mod tests {
     #[test]
     fn insert_decodes_text_mode_hex_geometry() {
         // text-mode pgoutput delivers PostGIS geometry as ASCII hex of the
-        // EWKB bytes. translate must round-trip through hex decoding.
+        // EWKB bytes. translate must round-trip through hex decoding to
+        // surface the geometry envelope (phase-c will derive HilbertKey
+        // from this same bbox path).
         let mut cache = RelationCache::default();
         let t = topo();
         let _ = translate(Message::Relation(relation_msg()), &mut cache, &t).unwrap();
@@ -356,14 +337,11 @@ mod tests {
             &t,
         )
         .unwrap();
-        match one_event(res) {
-            ChangeEvent::Insert { cells, .. } => assert_eq!(cells.len(), 1),
-            other => panic!("expected Insert, got {other:?}"),
-        }
+        assert!(matches!(one_event(res), ChangeEvent::Insert { .. }));
     }
 
     #[test]
-    fn insert_emits_event_with_cells() {
+    fn insert_emits_event_for_known_collection() {
         let mut cache = RelationCache::default();
         let t = topo();
         let _ = translate(Message::Relation(relation_msg()), &mut cache, &t).unwrap();
@@ -381,22 +359,18 @@ mod tests {
         )
         .unwrap();
         match one_event(res) {
-            ChangeEvent::Insert { collection, cells } => {
-                assert_eq!(collection.as_str(), "roads");
-                assert_eq!(cells.len(), 1);
-                assert_eq!(cells[0].band.as_str(), "hi");
-            }
+            ChangeEvent::Insert { collection } => assert_eq!(collection.as_str(), "roads"),
             other => panic!("expected Insert event, got {other:?}"),
         }
     }
 
     #[test]
-    fn update_unions_old_and_new_cells() {
+    fn update_extracts_old_and_new_geometry() {
         let mut cache = RelationCache::default();
         let t = topo();
         let _ = translate(Message::Relation(relation_msg()), &mut cache, &t).unwrap();
-        let old_geom = point_le(50.0, 50.0); // (0,0) cell
-        let new_geom = point_le(2000.0, 2000.0); // (1,1) cell
+        let old_geom = point_le(50.0, 50.0);
+        let new_geom = point_le(2000.0, 2000.0);
         let payload = UpdatePayload {
             key_old: None,
             full_old: Some(Tuple {
@@ -415,10 +389,7 @@ mod tests {
             &t,
         )
         .unwrap();
-        match one_event(res) {
-            ChangeEvent::Update { cells, .. } => assert_eq!(cells.len(), 2),
-            other => panic!("expected Update, got {other:?}"),
-        }
+        assert!(matches!(one_event(res), ChangeEvent::Update { .. }));
     }
 
     #[test]

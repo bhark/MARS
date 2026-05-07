@@ -19,9 +19,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use mars_grid::{BandConfig, cells_in_bbox};
+use mars_grid::BandConfig;
 use mars_source::{ChangeSubscription, SourceError};
-use mars_types::Bbox;
 
 pub(crate) mod pgoutput;
 pub(crate) mod translate;
@@ -83,26 +82,9 @@ pub(crate) async fn subscribe(
     transport::run(cfg, topology).await
 }
 
-/// Compute the union of cells touched by `bbox` across every configured band.
-/// Used by both Insert/Update/Delete event lowering.
-pub(crate) fn cells_for_bbox(
-    bbox: Bbox,
-    bands: &[BandConfig],
-    max_per_band: usize,
-) -> Result<Vec<mars_types::Cell>, SourceError> {
-    let mut out: Vec<mars_types::Cell> = Vec::new();
-    let mut seen: std::collections::HashSet<(String, i64, i64)> = std::collections::HashSet::new();
-    for band in bands {
-        let cells = cells_in_bbox(bbox, band, max_per_band).map_err(|e| SourceError::backend("cells_in_bbox", e))?;
-        for cell in cells {
-            let key = (cell.band.as_str().to_string(), cell.x, cell.y);
-            if seen.insert(key) {
-                out.push(cell);
-            }
-        }
-    }
-    Ok(out)
-}
+// phase-c: cells_for_bbox retired with the v3 substrate cut. the change-feed
+// translator now surfaces the row's bbox/centroid in the ChangeEvent payload,
+// from which the compiler derives the affected HilbertKey directly.
 
 /// Cache mapping pgoutput relation oid to the `CollectionTopology` plus
 /// the index of the geometry column inside the relation's column list. The
@@ -137,37 +119,6 @@ impl RelationCache {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
-    use mars_types::ScaleBand;
-
-    fn band(name: &str, max_denom: u32, cell: f64) -> BandConfig {
-        BandConfig {
-            name: ScaleBand::new(name),
-            max_denom,
-            origin: (0.0, 0.0),
-            cell_size: cell,
-        }
-    }
-
-    #[test]
-    fn cells_for_bbox_unions_across_bands() {
-        let bands = vec![band("hi", 25_000, 1024.0), band("med", 100_000, 4096.0)];
-        let bbox = Bbox::new(0.0, 0.0, 100.0, 100.0);
-        let cells = cells_for_bbox(bbox, &bands, 1_000).unwrap();
-        // small bbox: one cell per band
-        assert_eq!(cells.len(), 2);
-        let band_names: std::collections::HashSet<_> = cells.iter().map(|c| c.band.as_str().to_string()).collect();
-        assert!(band_names.contains("hi"));
-        assert!(band_names.contains("med"));
-    }
-
-    #[test]
-    fn cells_for_bbox_dedups_within_band() {
-        // single band, single cell - should appear once even after the dedup pass
-        let bands = vec![band("hi", 25_000, 1024.0)];
-        let bbox = Bbox::new(50.0, 50.0, 60.0, 60.0);
-        let cells = cells_for_bbox(bbox, &bands, 100).unwrap();
-        assert_eq!(cells.len(), 1);
-    }
 
     #[test]
     fn topology_lookup() {
@@ -184,4 +135,6 @@ mod tests {
         assert!(t.find("public", "roads_t").is_some());
         assert!(t.find("public", "buildings").is_none());
     }
+
+    // phase-c: cells_for_bbox tests retired with the v3 substrate cut.
 }

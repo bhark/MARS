@@ -1,10 +1,15 @@
 //! Port traits for source databases and change feeds.
 //!
 //! `Source` is the read interface used by the compiler to materialise
-//! geometries and attributes for a `(source_collection, scale_band, cell)`.
-//! `ChangeFeed` is the subscription interface that produces dirty-cell
+//! geometries and attributes per page (page-keyed, LAZARUS Phase C+).
+//! `ChangeFeed` is the subscription interface that produces dirty-page
 //! events (SPEC §8.2). Both are runtime-agnostic - concrete adapters live
 //! in `crates/adapters/mars-source-*`.
+//!
+//! Phase B note: the cell-keyed surface is retired with the v3 substrate
+//! cut; Phase C reintroduces page-keyed `fetch_full_table_streaming` and
+//! `fetch_by_feature_ids` plus a `ChangeEvent` payload that carries the
+//! geometry envelope so the compiler can derive Hilbert keys directly.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
@@ -13,9 +18,8 @@ pub mod access;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use mars_expr::Expr;
+use mars_types::CrsCode;
 pub use mars_types::SourceCollectionId;
-use mars_types::{Bbox, Cell, CrsCode};
 
 pub use access::RowAttrs;
 
@@ -87,30 +91,30 @@ impl SourceError {
 
 /// One change-feed event, lowered from a postgres logical-decoding message
 /// or a polling diff.
+///
+/// Phase B carries only the collection identity; Phase C adds the per-event
+/// geometry envelope (raw WKB + bbox/centroid for old/new rows under
+/// `REPLICA IDENTITY FULL`) so the compiler can derive each row's Hilbert
+/// key without round-tripping through a cell grid.
 #[derive(Debug, Clone)]
 pub enum ChangeEvent {
-    /// A row was inserted; new geometry occupies the listed cells.
+    /// A row was inserted.
     Insert {
         /// Logical name of the source table / collection.
         collection: SourceCollectionId,
-        /// Cells touched by the new geometry.
-        cells: Vec<Cell>,
     },
-    /// A row was updated; cells = touched-by-old ∪ touched-by-new.
+    /// A row was updated.
     Update {
         /// Logical name of the source table / collection.
         collection: SourceCollectionId,
-        /// Cells touched by the old or new geometry.
-        cells: Vec<Cell>,
     },
-    /// A row was deleted; cells = touched-by-old.
+    /// A row was deleted.
     Delete {
         /// Logical name of the source table / collection.
         collection: SourceCollectionId,
-        /// Cells touched by the old geometry.
-        cells: Vec<Cell>,
     },
-    /// The whole collection was truncated; every cell is dirty.
+    /// The whole collection was truncated; the binding goes through a
+    /// bootstrap-equivalent rebuild.
     Truncate {
         /// Logical name of the source table / collection.
         collection: SourceCollectionId,
@@ -219,45 +223,14 @@ pub enum AttrValue {
     String(String),
 }
 
-/// Read-side port: query geometry and attributes for a cell.
+/// Read-side port. Phase B is a marker bound only — the cell-keyed
+/// `fetch_cell` / `fetch_cells` were retired with the v3 substrate cut.
+/// Phase C reintroduces page-keyed accessors:
+/// - `fetch_full_table_streaming(table)` for bootstrap, and
+/// - `fetch_by_feature_ids(table, ids)` for incremental page rebuilds
+///   (PK-indexed, `WHERE id = ANY($1)`).
 #[async_trait]
-pub trait Source: Send + Sync + 'static {
-    /// Materialise rows whose geometry intersects `cell`, optionally filtered
-    /// by a `mars-expr` AST. The binding describes table mapping and
-    /// attribute projection; `RowBytes.attributes` is returned in the same
-    /// order as `binding.attributes`.
-    ///
-    /// `bbox` is the canonical-CRS extent of `cell`, precomputed by the
-    /// caller (the compiler knows the band's cell-size and origin; the
-    /// adapter does not need to). Adapters use it for the spatial predicate.
-    async fn fetch_cell(
-        &self,
-        binding: &SourceBinding,
-        cell: &Cell,
-        bbox: Bbox,
-        filter: Option<&Expr>,
-    ) -> Result<Vec<RowBytes>, SourceError>;
-
-    /// Materialise rows for a batch of `(cell, bbox)` pairs sharing one
-    /// binding and filter. Adapters that can pipeline (e.g. postgres) override
-    /// this to amortise per-call overhead; the default fans out to
-    /// `fetch_cell`. The returned vec is ordered to mirror the input slice;
-    /// each result carries its `Cell` back so the caller can route rows
-    /// without relying on order.
-    async fn fetch_cells(
-        &self,
-        binding: &SourceBinding,
-        cells: &[(Cell, Bbox)],
-        filter: Option<&Expr>,
-    ) -> Result<Vec<(Cell, Vec<RowBytes>)>, SourceError> {
-        let mut out = Vec::with_capacity(cells.len());
-        for (cell, bbox) in cells {
-            let rows = self.fetch_cell(binding, cell, *bbox, filter).await?;
-            out.push((cell.clone(), rows));
-        }
-        Ok(out)
-    }
-}
+pub trait Source: Send + Sync + 'static {}
 
 /// Per-row record returned by `Source`. Geometry is opaque adapter-native
 /// bytes (typically WKB); attributes are decoded into `(name, AttrValue)`
@@ -275,29 +248,14 @@ pub struct RowBytes {
 /// Phase-0 stub adapters that satisfy the port traits with `NotImplemented`.
 /// Lets bins and tests compose the surface without naming a real backend.
 pub mod stub {
-    use super::{ChangeFeed, ChangeSubscription, RowBytes, Source, SourceBinding, SourceError};
+    use super::{ChangeFeed, ChangeSubscription, Source, SourceError};
     use async_trait::async_trait;
-    use mars_expr::Expr;
-    use mars_types::{Bbox, Cell};
 
     /// `Source` + `ChangeFeed` impl that always returns `NotImplemented`.
     #[derive(Debug, Default)]
     pub struct NotImplementedSource;
 
-    #[async_trait]
-    impl Source for NotImplementedSource {
-        async fn fetch_cell(
-            &self,
-            _binding: &SourceBinding,
-            _cell: &Cell,
-            _bbox: Bbox,
-            _filter: Option<&Expr>,
-        ) -> Result<Vec<RowBytes>, SourceError> {
-            Err(SourceError::NotImplemented {
-                what: "mars-source::stub::NotImplementedSource::fetch_cell",
-            })
-        }
-    }
+    impl Source for NotImplementedSource {}
 
     #[async_trait]
     impl ChangeFeed for NotImplementedSource {
@@ -423,84 +381,5 @@ mod tests {
         assert!(matches!(r, Err(SourceError::InvalidBinding(_))));
     }
 
-    // fake source counting fetch_cell invocations; verifies the default
-    // fetch_cells impl fans out one call per (cell, bbox) pair and preserves
-    // routing of rows back to their cell.
-    struct CountingSource {
-        counter: std::sync::atomic::AtomicUsize,
-    }
-
-    #[async_trait]
-    impl Source for CountingSource {
-        async fn fetch_cell(
-            &self,
-            _binding: &SourceBinding,
-            cell: &Cell,
-            _bbox: Bbox,
-            _filter: Option<&Expr>,
-        ) -> Result<Vec<RowBytes>, SourceError> {
-            self.counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            Ok(vec![RowBytes {
-                feature_id: cell.x as u64 * 1000 + cell.y as u64,
-                geometry: bytes::Bytes::new(),
-                attributes: Vec::new(),
-            }])
-        }
-    }
-
-    fn binding_for_test() -> SourceBinding {
-        SourceBinding::new(
-            SourceCollectionId::new("c"),
-            "s",
-            "t",
-            "g",
-            "id",
-            vec![],
-            CrsCode::new("EPSG:4326"),
-        )
-        .unwrap()
-    }
-
-    #[tokio::test]
-    async fn default_fetch_cells_fans_out_to_fetch_cell() {
-        let src = CountingSource {
-            counter: std::sync::atomic::AtomicUsize::new(0),
-        };
-        let band = mars_types::ScaleBand::new("hi");
-        let bbox = Bbox::new(0.0, 0.0, 1.0, 1.0);
-        let cells = vec![
-            (
-                Cell {
-                    band: band.clone(),
-                    x: 1,
-                    y: 2,
-                },
-                bbox,
-            ),
-            (
-                Cell {
-                    band: band.clone(),
-                    x: 3,
-                    y: 4,
-                },
-                bbox,
-            ),
-            (
-                Cell {
-                    band: band.clone(),
-                    x: 5,
-                    y: 6,
-                },
-                bbox,
-            ),
-        ];
-        let out = src.fetch_cells(&binding_for_test(), &cells, None).await.unwrap();
-        assert_eq!(out.len(), 3);
-        assert_eq!(src.counter.load(std::sync::atomic::Ordering::Relaxed), 3);
-        for ((in_cell, _), (out_cell, rows)) in cells.iter().zip(&out) {
-            assert_eq!(in_cell, out_cell);
-            assert_eq!(rows.len(), 1);
-            assert_eq!(rows[0].feature_id, in_cell.x as u64 * 1000 + in_cell.y as u64);
-        }
-    }
+    // phase-c will reintroduce page-keyed Source surface and its tests.
 }
