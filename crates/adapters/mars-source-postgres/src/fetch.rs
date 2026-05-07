@@ -21,23 +21,20 @@ pub(crate) async fn fetch_cell(
 ) -> Result<Vec<RowBytes>, SourceError> {
     let srid = parse_srid(binding.crs.as_str())?;
     let (sql, params) = build_query(binding, bbox, srid, filter)?;
-    let client = pool
-        .get()
-        .await
-        .map_err(|e| SourceError::Backend(format!("pool: {e}")))?;
+    let client = pool.get().await.map_err(|e| SourceError::backend("pool", e))?;
     // per-connection statement cache: within a snapshot the SQL shape is
     // fixed per (binding, filter), so the second cell onward reuses the
     // server-side prepared statement.
     let stmt = client
         .prepare_cached(&sql)
         .await
-        .map_err(|e| SourceError::Backend(format!("prepare: {}", fmt_pg_err(&e))))?;
+        .map_err(|e| SourceError::backend("prepare", e))?;
 
     let pg_params: Vec<&(dyn ToSql + Sync)> = params.iter().map(|p| p as &(dyn ToSql + Sync)).collect();
     let rows = client
         .query(&stmt, &pg_params)
         .await
-        .map_err(|e| SourceError::Backend(format!("query: {}", fmt_pg_err(&e))))?;
+        .map_err(|e| SourceError::backend("query", e))?;
 
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
@@ -78,14 +75,11 @@ pub(crate) async fn fetch_cells(
         all_params.push(params);
     }
 
-    let client = pool
-        .get()
-        .await
-        .map_err(|e| SourceError::Backend(format!("pool: {e}")))?;
+    let client = pool.get().await.map_err(|e| SourceError::backend("pool", e))?;
     let stmt = client
         .prepare_cached(&sql)
         .await
-        .map_err(|e| SourceError::Backend(format!("prepare: {}", fmt_pg_err(&e))))?;
+        .map_err(|e| SourceError::backend("prepare", e))?;
 
     // materialise per-cell `&dyn ToSql` slices first so each future holds a
     // borrow into a stable `Vec<&dyn ToSql>` for its lifetime.
@@ -103,7 +97,7 @@ pub(crate) async fn fetch_cells(
             client
                 .query(stmt, pg_params[i].as_slice())
                 .await
-                .map_err(|e| SourceError::Backend(format!("query: {}", fmt_pg_err(&e))))
+                .map_err(|e| SourceError::backend("query", e))
         })
         .buffered(n)
         .try_collect()
@@ -120,24 +114,13 @@ pub(crate) async fn fetch_cells(
     Ok(out)
 }
 
-/// format a tokio-postgres error so DbError severity / SQLSTATE / message
-/// surface in the resulting String. without this, all such errors collapse
-/// to "db error" since SourceError::Backend stores a String and severs the
-/// source chain.
-fn fmt_pg_err(e: &tokio_postgres::Error) -> String {
-    match e.as_db_error() {
-        Some(db) => format!("{}: {} (SQLSTATE {})", db.severity(), db.message(), db.code().code()),
-        None => e.to_string(),
-    }
-}
-
 /// SRID extraction: only EPSG codes are supported in v1.
 fn parse_srid(crs: &str) -> Result<i32, SourceError> {
     let rest = crs
         .strip_prefix("EPSG:")
-        .ok_or_else(|| SourceError::Backend(format!("unsupported CRS: {crs}")))?;
+        .ok_or_else(|| SourceError::backend_msg("parse_srid", format!("unsupported CRS: {crs}")))?;
     rest.parse::<i32>()
-        .map_err(|_| SourceError::Backend(format!("unsupported CRS: {crs}")))
+        .map_err(|_| SourceError::backend_msg("parse_srid", format!("unsupported CRS: {crs}")))
 }
 
 /// Compose `SELECT id, ST_AsBinary(geom), attrs... FROM s.t WHERE ST_Intersects(...) [AND filter]`.
@@ -189,18 +172,20 @@ fn decode_row(row: &tokio_postgres::Row, binding: &SourceBinding) -> Result<RowB
     // col 0 = id, col 1 = wkb geom, col 2.. = attrs in binding order. NULL ids
     // would silently coerce to 0 in some pg type paths; reject them up front so
     // a row with no id can never collide with a real feature_id of zero.
-    let id_signed: i64 = read_int(row, 0)?.ok_or_else(|| SourceError::Backend("feature id column is NULL".into()))?;
+    let id_signed: i64 =
+        read_int(row, 0)?.ok_or_else(|| SourceError::backend_msg("decode_row", "feature id column is NULL"))?;
     if id_signed < 0 {
-        return Err(SourceError::Backend(format!(
-            "negative feature id rejected: {id_signed}"
-        )));
+        return Err(SourceError::backend_msg(
+            "decode_row",
+            format!("negative feature id rejected: {id_signed}"),
+        ));
     }
     #[allow(clippy::cast_sign_loss)]
     let feature_id = id_signed as u64;
 
     let wkb: Vec<u8> = row
         .try_get::<_, Vec<u8>>(1)
-        .map_err(|e| SourceError::Backend(format!("decode geom: {e}")))?;
+        .map_err(|e| SourceError::backend("decode_geom", e))?;
     let geometry = Bytes::from(wkb);
 
     let mut attributes = Vec::with_capacity(binding.attributes.len());
@@ -225,19 +210,20 @@ fn read_int(row: &tokio_postgres::Row, idx: usize) -> Result<Option<i64>, Source
     let v = match *col_ty {
         Type::INT2 => row
             .try_get::<_, Option<i16>>(idx)
-            .map_err(|e| SourceError::Backend(format!("decode i2: {e}")))?
+            .map_err(|e| SourceError::backend("decode_i2", e))?
             .map(i64::from),
         Type::INT4 => row
             .try_get::<_, Option<i32>>(idx)
-            .map_err(|e| SourceError::Backend(format!("decode i4: {e}")))?
+            .map_err(|e| SourceError::backend("decode_i4", e))?
             .map(i64::from),
         Type::INT8 => row
             .try_get::<_, Option<i64>>(idx)
-            .map_err(|e| SourceError::Backend(format!("decode i8: {e}")))?,
+            .map_err(|e| SourceError::backend("decode_i8", e))?,
         ref other => {
-            return Err(SourceError::Backend(format!(
-                "unsupported pg type for id column: {other}"
-            )));
+            return Err(SourceError::backend_msg(
+                "decode_row",
+                format!("unsupported pg type for id column: {other}"),
+            ));
         }
     };
     Ok(v)
@@ -275,14 +261,17 @@ fn decode_attr(row: &tokio_postgres::Row, idx: usize) -> Result<AttrValue, Sourc
             .map_err(map_decode_err("text"))?
             .map_or(AttrValue::Null, AttrValue::String),
         ref other => {
-            return Err(SourceError::Backend(format!("unsupported pg type: {other}")));
+            return Err(SourceError::backend_msg(
+                "decode_attr",
+                format!("unsupported pg type: {other}"),
+            ));
         }
     };
     Ok(v)
 }
 
 fn map_decode_err(label: &'static str) -> impl Fn(tokio_postgres::Error) -> SourceError {
-    move |e| SourceError::Backend(format!("decode {label}: {e}"))
+    move |e| SourceError::backend(label, e)
 }
 
 // `SqlParam` -> `ToSql` so it can drive both `client.query` and unit tests.

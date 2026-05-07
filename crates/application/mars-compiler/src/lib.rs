@@ -401,20 +401,19 @@ async fn run_chunk(
 
     let fetched = source.fetch_cells(&binding, &cells, None).await?;
     if fetched.len() != units.len() {
-        return Err(CompilerError::Source(mars_source::SourceError::Backend(format!(
-            "fetch_cells returned {} results for {} cells",
-            fetched.len(),
-            units.len(),
-        ))));
+        return Err(CompilerError::Source(mars_source::SourceError::backend_msg(
+            "fetch_cells",
+            format!("returned {} results for {} cells", fetched.len(), units.len(),),
+        )));
     }
 
     let mut out = snapshot::SnapshotOutput::default();
     for ((task, deps), (cell, rows)) in units.into_iter().zip(fetched) {
         if task.cell != cell {
-            return Err(CompilerError::Source(mars_source::SourceError::Backend(format!(
-                "fetch_cells returned cell {cell:?} for task {:?}; order not preserved",
-                task.cell,
-            ))));
+            return Err(CompilerError::Source(mars_source::SourceError::backend_msg(
+                "fetch_cells",
+                format!("returned cell {cell:?} for task {:?}; order not preserved", task.cell,),
+            )));
         }
         let result = snapshot::build_and_publish(&task, &deps, rows, store).await?;
         out.extend(result);

@@ -28,9 +28,18 @@ pub enum SourceError {
         /// Human-readable name of the unimplemented operation.
         what: &'static str,
     },
-    /// Connectivity, transport, or driver error.
-    #[error("backend error: {0}")]
-    Backend(String),
+    /// Connectivity, transport, or driver error. `what` is a stable short
+    /// label callers can match on; `source` carries the original adapter
+    /// error chain so `anyhow`'s `{:#}` walks SQLSTATE / severity / cause
+    /// without forcing a port-level dependency on a specific driver.
+    #[error("backend: {what}")]
+    Backend {
+        /// Stable short label for what was being attempted.
+        what: &'static str,
+        /// Original error chain.
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
     /// The change feed slot was lost or fell too far behind. Recovery is via
     /// snapshot compile (SPEC §8.2.3).
     #[error("change feed gone; full snapshot required")]
@@ -46,6 +55,34 @@ pub enum SourceError {
         /// Identifier that was not present in the allowlist.
         name: String,
     },
+}
+
+/// String-only error usable as a `Backend.source` chain when the originating
+/// site has no real `Error` to wrap (invariant violations, missing config
+/// fields). Kept private; callers go through [`SourceError::backend_msg`].
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+struct BackendMessage(String);
+
+impl SourceError {
+    /// Build a `Backend` error wrapping an existing error chain. `what` is a
+    /// stable short label for the operation; `source` carries the original
+    /// driver / adapter error so the chain survives.
+    pub fn backend(what: &'static str, source: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Self::Backend {
+            what,
+            source: Box::new(source),
+        }
+    }
+
+    /// Build a `Backend` error from a static label and a free-form message
+    /// for sites that have no inner error to wrap (invariant violations etc.).
+    pub fn backend_msg(what: &'static str, msg: impl Into<String>) -> Self {
+        Self::Backend {
+            what,
+            source: Box::new(BackendMessage(msg.into())),
+        }
+    }
 }
 
 /// One change-feed event, lowered from a postgres logical-decoding message

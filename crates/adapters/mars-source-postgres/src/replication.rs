@@ -93,8 +93,7 @@ pub(crate) fn cells_for_bbox(
     let mut out: Vec<mars_types::Cell> = Vec::new();
     let mut seen: std::collections::HashSet<(String, i64, i64)> = std::collections::HashSet::new();
     for band in bands {
-        let cells =
-            cells_in_bbox(bbox, band, max_per_band).map_err(|e| SourceError::Backend(format!("cells_in_bbox: {e}")))?;
+        let cells = cells_in_bbox(bbox, band, max_per_band).map_err(|e| SourceError::backend("cells_in_bbox", e))?;
         for cell in cells {
             let key = (cell.band.as_str().to_string(), cell.x, cell.y);
             if seen.insert(key) {

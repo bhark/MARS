@@ -217,7 +217,8 @@ async fn delete_without_full_identity_is_a_hard_error() {
     let res = tokio::time::timeout(Duration::from_secs(15), sub.next_batch()).await;
     let next = res.expect("timeout").expect("feed closed");
     match next {
-        Err(SourceError::Backend(msg)) => {
+        Err(SourceError::Backend { source, .. }) => {
+            let msg = source.to_string();
             assert!(msg.contains("REPLICA IDENTITY FULL"), "msg = {msg}");
         }
         other => panic!("expected Backend error, got {other:?}"),

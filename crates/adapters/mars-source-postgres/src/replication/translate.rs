@@ -75,12 +75,13 @@ fn insert_event(
     let Some(entry) = cache.get(oid) else {
         // pgoutput guarantees Relation precedes the first row event for the
         // same oid; an unknown oid is a stream-state error, not a stale cache.
-        return Err(SourceError::Backend(format!(
-            "pgoutput: insert for unknown relation oid {oid}"
-        )));
+        return Err(SourceError::backend_msg(
+            "pgoutput",
+            format!("insert for unknown relation oid {oid}"),
+        ));
     };
     let geom = extract_geom_bytes(tuple, entry.geometry_col_idx)?;
-    let bbox = bbox_of(&geom).map_err(|e| SourceError::Backend(format!("wkb: {e}")))?;
+    let bbox = bbox_of(&geom).map_err(|e| SourceError::backend("wkb", e))?;
     let cells = cells_for_bbox(bbox, &topology.bands, topology.max_cells_per_row)?;
     Ok(Translated(vec![ChangeEvent::Insert {
         collection: entry.topology.collection.clone(),
@@ -95,9 +96,10 @@ fn update_event(
     topology: &ReplicationTopology,
 ) -> Result<Translated, SourceError> {
     let Some(entry) = cache.get(oid) else {
-        return Err(SourceError::Backend(format!(
-            "pgoutput: update for unknown relation oid {oid}"
-        )));
+        return Err(SourceError::backend_msg(
+            "pgoutput",
+            format!("update for unknown relation oid {oid}"),
+        ));
     };
 
     // SPEC §8.2.1: bound tables MUST carry REPLICA IDENTITY FULL so the
@@ -111,7 +113,7 @@ fn update_event(
     let mut seen: std::collections::HashSet<(String, i64, i64)> = std::collections::HashSet::new();
 
     let old_geom = extract_geom_bytes(old, entry.geometry_col_idx)?;
-    let old_bbox = bbox_of(&old_geom).map_err(|e| SourceError::Backend(format!("wkb (old): {e}")))?;
+    let old_bbox = bbox_of(&old_geom).map_err(|e| SourceError::backend("wkb (old)", e))?;
     for c in cells_for_bbox(old_bbox, &topology.bands, topology.max_cells_per_row)? {
         let k = (c.band.as_str().to_string(), c.x, c.y);
         if seen.insert(k) {
@@ -120,7 +122,7 @@ fn update_event(
     }
 
     let new_geom = extract_geom_bytes(&payload.new, entry.geometry_col_idx)?;
-    let new_bbox = bbox_of(&new_geom).map_err(|e| SourceError::Backend(format!("wkb (new): {e}")))?;
+    let new_bbox = bbox_of(&new_geom).map_err(|e| SourceError::backend("wkb (new)", e))?;
     for c in cells_for_bbox(new_bbox, &topology.bands, topology.max_cells_per_row)? {
         let k = (c.band.as_str().to_string(), c.x, c.y);
         if seen.insert(k) {
@@ -140,14 +142,18 @@ fn missing_full_old_error(entry: &CachedRelation, op: &str) -> SourceError {
     if entry.replica_identity == b'f' {
         // pgoutput claims FULL but no O tuple arrived: defensive — should
         // not happen unless the upstream behaviour changes mid-stream.
-        SourceError::Backend(format!(
-            "pgoutput: {op} on {schema}.{table} declares REPLICA IDENTITY FULL but old tuple is missing"
-        ))
+        SourceError::backend_msg(
+            "pgoutput",
+            format!("{op} on {schema}.{table} declares REPLICA IDENTITY FULL but old tuple is missing"),
+        )
     } else {
-        SourceError::Backend(format!(
-            "pgoutput: {op} on {schema}.{table} requires REPLICA IDENTITY FULL (got identity {:?})",
-            entry.replica_identity as char
-        ))
+        SourceError::backend_msg(
+            "pgoutput",
+            format!(
+                "{op} on {schema}.{table} requires REPLICA IDENTITY FULL (got identity {:?})",
+                entry.replica_identity as char
+            ),
+        )
     }
 }
 
@@ -158,16 +164,17 @@ fn delete_event(
     topology: &ReplicationTopology,
 ) -> Result<Translated, SourceError> {
     let Some(entry) = cache.get(oid) else {
-        return Err(SourceError::Backend(format!(
-            "pgoutput: delete for unknown relation oid {oid}"
-        )));
+        return Err(SourceError::backend_msg(
+            "pgoutput",
+            format!("delete for unknown relation oid {oid}"),
+        ));
     };
     let tuple = match &payload {
         DeletePayload::Full(t) => t,
         DeletePayload::KeyOnly(_) => return Err(missing_full_old_error(entry, "delete")),
     };
     let geom = extract_geom_bytes(tuple, entry.geometry_col_idx)?;
-    let bbox = bbox_of(&geom).map_err(|e| SourceError::Backend(format!("wkb: {e}")))?;
+    let bbox = bbox_of(&geom).map_err(|e| SourceError::backend("wkb", e))?;
     let cells = cells_for_bbox(bbox, &topology.bands, topology.max_cells_per_row)?;
     Ok(Translated(vec![ChangeEvent::Delete {
         collection: entry.topology.collection.clone(),
@@ -200,13 +207,14 @@ fn extract_geom_bytes<'a>(tuple: &'a Tuple<'a>, idx: usize) -> Result<Cow<'a, [u
     let col = tuple
         .columns
         .get(idx)
-        .ok_or_else(|| SourceError::Backend(format!("pgoutput: geom col index {idx} out of range")))?;
+        .ok_or_else(|| SourceError::backend_msg("pgoutput", format!("geom col index {idx} out of range")))?;
     match col {
         ColumnData::Binary(b) => Ok(Cow::Borrowed(b)),
         ColumnData::Text(b) => decode_geom_hex(b).map(Cow::Owned),
-        ColumnData::Null => Err(SourceError::Backend("pgoutput: geometry is NULL".into())),
-        ColumnData::Unchanged => Err(SourceError::Backend(
-            "pgoutput: geometry column is TOAST-unchanged in OLD tuple (REPLICA IDENTITY FULL?)".into(),
+        ColumnData::Null => Err(SourceError::backend_msg("pgoutput", "geometry is NULL")),
+        ColumnData::Unchanged => Err(SourceError::backend_msg(
+            "pgoutput",
+            "geometry column is TOAST-unchanged in OLD tuple (REPLICA IDENTITY FULL?)",
         )),
     }
 }
@@ -215,10 +223,10 @@ fn extract_geom_bytes<'a>(tuple: &'a Tuple<'a>, idx: usize) -> Result<Cow<'a, [u
 /// into raw bytes ready for the WKB bbox extractor.
 fn decode_geom_hex(s: &[u8]) -> Result<Vec<u8>, SourceError> {
     if !s.len().is_multiple_of(2) {
-        return Err(SourceError::Backend(format!(
-            "pgoutput: geometry hex has odd length {}",
-            s.len()
-        )));
+        return Err(SourceError::backend_msg(
+            "pgoutput",
+            format!("geometry hex has odd length {}", s.len()),
+        ));
     }
     let mut out = Vec::with_capacity(s.len() / 2);
     for pair in s.chunks_exact(2) {
@@ -232,10 +240,10 @@ fn nibble(c: u8) -> Result<u8, SourceError> {
         b'0'..=b'9' => Ok(c - b'0'),
         b'a'..=b'f' => Ok(c - b'a' + 10),
         b'A'..=b'F' => Ok(c - b'A' + 10),
-        _ => Err(SourceError::Backend(format!(
-            "pgoutput: invalid hex digit {:?} in geometry text",
-            c as char
-        ))),
+        _ => Err(SourceError::backend_msg(
+            "pgoutput",
+            format!("invalid hex digit {:?} in geometry text", c as char),
+        )),
     }
 }
 
@@ -441,7 +449,8 @@ mod tests {
             &t,
         );
         match err {
-            Err(SourceError::Backend(msg)) => {
+            Err(SourceError::Backend { source, .. }) => {
+                let msg = source.to_string();
                 assert!(msg.contains("REPLICA IDENTITY FULL"), "msg = {msg}");
                 assert!(msg.contains("public.roads_t"), "msg = {msg}");
             }
@@ -471,7 +480,7 @@ mod tests {
             &mut cache,
             &t,
         );
-        assert!(matches!(err, Err(SourceError::Backend(_))));
+        assert!(matches!(err, Err(SourceError::Backend { .. })));
     }
 
     #[test]
@@ -504,7 +513,7 @@ mod tests {
             &mut cache,
             &t,
         );
-        assert!(matches!(err, Err(SourceError::Backend(_))));
+        assert!(matches!(err, Err(SourceError::Backend { .. })));
     }
 
     #[test]

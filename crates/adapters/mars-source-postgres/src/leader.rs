@@ -52,11 +52,7 @@ impl Drop for PgLeaderLockGuard {
 #[async_trait]
 impl LeaderLock for PgSource {
     async fn try_acquire(&self, key: i64) -> Result<Option<Box<dyn LeaderLockGuard>>, SourceError> {
-        let obj = self
-            .pool()
-            .get()
-            .await
-            .map_err(|e| SourceError::Backend(format!("pool: {e}")))?;
+        let obj = self.pool().get().await.map_err(|e| SourceError::backend("pool", e))?;
         // detach from the pool: a session-scoped lock survives only on this
         // exact connection, so it must not be returned to the pool while held.
         let client: ClientWrapper = Object::take(obj);
@@ -64,10 +60,10 @@ impl LeaderLock for PgSource {
         let row = client
             .query_one("SELECT pg_try_advisory_lock($1)", &[&key])
             .await
-            .map_err(|e| SourceError::Backend(format!("pg_try_advisory_lock: {e}")))?;
+            .map_err(|e| SourceError::backend("pg_try_advisory_lock", e))?;
         let acquired: bool = row
             .try_get(0)
-            .map_err(|e| SourceError::Backend(format!("pg_try_advisory_lock decode: {e}")))?;
+            .map_err(|e| SourceError::backend("pg_try_advisory_lock decode", e))?;
 
         if acquired {
             Ok(Some(Box::new(PgLeaderLockGuard {

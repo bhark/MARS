@@ -128,8 +128,7 @@ impl PgSource {
     /// Connect (open the pool) using the supplied DSN. Does not establish
     /// any connection up front; the first `fetch_cell` call will.
     pub async fn connect(cfg: PgConfig) -> Result<Self, SourceError> {
-        let pg_cfg =
-            tokio_postgres::Config::from_str(&cfg.dsn).map_err(|e| SourceError::Backend(format!("dsn: {e}")))?;
+        let pg_cfg = tokio_postgres::Config::from_str(&cfg.dsn).map_err(|e| SourceError::backend("dsn", e))?;
 
         let mgr_cfg = deadpool_postgres::ManagerConfig::default();
         let mgr = if pg_cfg.get_ssl_mode() == tokio_postgres::config::SslMode::Disable {
@@ -151,8 +150,9 @@ impl PgSource {
                 );
             }
             if load.certs.is_empty() {
-                return Err(SourceError::Backend(
-                    "no native trust roots available; refusing to connect with empty trust store".into(),
+                return Err(SourceError::backend_msg(
+                    "tls",
+                    "no native trust roots available; refusing to connect with empty trust store",
                 ));
             }
             let mut roots = rustls::RootCertStore::empty();
@@ -188,9 +188,7 @@ impl PgSource {
                 })
             }));
         }
-        let pool = builder
-            .build()
-            .map_err(|e| SourceError::Backend(format!("pool create: {e}")))?;
+        let pool = builder.build().map_err(|e| SourceError::backend("pool create", e))?;
 
         Ok(Self {
             pool,

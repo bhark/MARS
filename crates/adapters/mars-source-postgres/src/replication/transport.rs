@@ -71,10 +71,10 @@ pub(crate) async fn run(
 ) -> Result<Box<dyn ChangeSubscription>, SourceError> {
     let repl_cfg = build_replication_config(&cfg)?;
     let client = ReplicationClient::connect(repl_cfg).await.map_err(|e| {
-        SourceError::Backend(format!(
-            "replication connect: {e} (slot={}, publication={})",
-            cfg.slot, cfg.publication
-        ))
+        SourceError::backend_msg(
+            "replication connect",
+            format!("{e} (slot={}, publication={})", cfg.slot, cfg.publication),
+        )
     })?;
 
     let (batch_tx, batch_rx) = mpsc::channel::<Result<ChangeBatch, SourceError>>(BATCH_CHANNEL_CAPACITY);
@@ -116,13 +116,13 @@ impl ChangeSubscription for PgOutputSubscription {
         let Some(s) = source_version else {
             return Ok(());
         };
-        let lsn = Lsn::from_str(s).map_err(|e| SourceError::Backend(format!("ack: invalid LSN {s:?}: {e}")))?;
+        let lsn = Lsn::from_str(s).map_err(|e| SourceError::backend_msg("ack", format!("invalid LSN {s:?}: {e}")))?;
         // watch::send fails only when no receiver remains - i.e. the worker has
         // exited. silently dropping that ack would leave the caller believing
         // the LSN is durable while the slot stays pinned at the old position.
         self.applied_tx
             .send(lsn.as_u64())
-            .map_err(|_| SourceError::Backend("ack: replication worker has exited".into()))?;
+            .map_err(|_| SourceError::backend_msg("ack", "replication worker has exited"))?;
         Ok(())
     }
 
@@ -135,7 +135,7 @@ impl ChangeSubscription for PgOutputSubscription {
             && let Err(e) = handle.await
             && !e.is_cancelled()
         {
-            return Err(SourceError::Backend(format!("replication worker join: {e}")));
+            return Err(SourceError::backend_msg("replication worker join", e.to_string()));
         }
         Ok(())
     }
@@ -193,7 +193,7 @@ impl Worker {
                     Err(e) => {
                         let _ = self
                             .batch_tx
-                            .send(Err(SourceError::Backend(format!("replication: {e}"))))
+                            .send(Err(SourceError::backend_msg("replication", e.to_string())))
                             .await;
                         break;
                     }
@@ -243,10 +243,10 @@ impl Worker {
                         );
                         let _ = self
                             .batch_tx
-                            .send(Err(SourceError::Backend(format!(
-                                "batch send stalled past {:?}; consumer not draining",
-                                self.batch_send_timeout
-                            ))))
+                            .send(Err(SourceError::backend_msg(
+                                "batch send stalled",
+                                format!("past {:?}; consumer not draining", self.batch_send_timeout),
+                            )))
                             .await;
                         Err(())
                     }
@@ -258,7 +258,7 @@ impl Worker {
                     Err(e) => {
                         let _ = self
                             .batch_tx
-                            .send(Err(SourceError::Backend(format!("pgoutput decode: {e}"))))
+                            .send(Err(SourceError::backend_msg("pgoutput decode", e.to_string())))
                             .await;
                         return Err(());
                     }
@@ -287,11 +287,11 @@ impl Worker {
 /// mode is the libpq subset (Disable/Prefer/Require). VerifyCa/VerifyFull
 /// are not expressible via libpq DSN today.
 fn build_replication_config(cfg: &PgConfig) -> Result<ReplicationConfig, SourceError> {
-    let pg_cfg = tokio_postgres::Config::from_str(&cfg.dsn).map_err(|e| SourceError::Backend(format!("dsn: {e}")))?;
+    let pg_cfg = tokio_postgres::Config::from_str(&cfg.dsn).map_err(|e| SourceError::backend("dsn", e))?;
 
     let user = pg_cfg
         .get_user()
-        .ok_or_else(|| SourceError::Backend("dsn: missing user".into()))?
+        .ok_or_else(|| SourceError::backend_msg("dsn", "missing user"))?
         .to_string();
     let password = pg_cfg
         .get_password()
@@ -299,7 +299,7 @@ fn build_replication_config(cfg: &PgConfig) -> Result<ReplicationConfig, SourceE
         .unwrap_or_default();
     let database = pg_cfg
         .get_dbname()
-        .ok_or_else(|| SourceError::Backend("dsn: missing dbname".into()))?
+        .ok_or_else(|| SourceError::backend_msg("dsn", "missing dbname"))?
         .to_string();
 
     let host = pg_cfg
@@ -310,7 +310,7 @@ fn build_replication_config(cfg: &PgConfig) -> Result<ReplicationConfig, SourceE
             #[cfg(unix)]
             tokio_postgres::config::Host::Unix(p) => p.to_str().map(|s| s.to_string()),
         })
-        .ok_or_else(|| SourceError::Backend("dsn: no usable host".into()))?;
+        .ok_or_else(|| SourceError::backend_msg("dsn", "no usable host"))?;
     let port = pg_cfg.get_ports().first().copied().unwrap_or(5432);
 
     let tls = match pg_cfg.get_ssl_mode() {
@@ -330,9 +330,10 @@ fn build_replication_config(cfg: &PgConfig) -> Result<ReplicationConfig, SourceE
         // DSN today. anything stronger means the SslMode enum grew a new
         // variant we should explicitly map rather than silently downgrade.
         other => {
-            return Err(SourceError::Backend(format!(
-                "dsn: unsupported sslmode for replication: {other:?}"
-            )));
+            return Err(SourceError::backend_msg(
+                "dsn",
+                format!("unsupported sslmode for replication: {other:?}"),
+            ));
         }
     };
 
@@ -398,7 +399,10 @@ mod tests {
     fn build_config_rejects_missing_user() {
         let err = build_replication_config(&cfg("postgres://h/d")).unwrap_err();
         match err {
-            SourceError::Backend(m) => assert!(m.contains("user"), "msg = {m}"),
+            SourceError::Backend { source, .. } => {
+                let m = source.to_string();
+                assert!(m.contains("user"), "msg = {m}");
+            }
             other => panic!("expected Backend, got {other:?}"),
         }
     }
@@ -407,7 +411,10 @@ mod tests {
     fn build_config_rejects_missing_dbname() {
         let err = build_replication_config(&cfg("postgres://u:p@h/")).unwrap_err();
         match err {
-            SourceError::Backend(m) => assert!(m.contains("dbname"), "msg = {m}"),
+            SourceError::Backend { source, .. } => {
+                let m = source.to_string();
+                assert!(m.contains("dbname"), "msg = {m}");
+            }
             other => panic!("expected Backend, got {other:?}"),
         }
     }
