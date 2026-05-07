@@ -17,7 +17,7 @@ use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::util::SubscriberInitExt as _;
 use tracing_subscriber::{EnvFilter, Layer};
 
-use crate::emitter::Skeleton;
+use crate::emitter::{LayerSkeleton, Skeleton};
 use crate::scanner::{Token, block_range, is_block_opener, scan};
 
 #[derive(Debug, Parser)]
@@ -180,12 +180,35 @@ fn walk(tokens: &[Token], skel: &mut Skeleton) {
 
 fn handle_layer(body: &[Token], layer_line: usize, skel: &mut Skeleton) {
     let mut name: Option<String> = None;
+    let mut min_scale_denom: Option<u64> = None;
+    let mut max_scale_denom: Option<u64> = None;
     let mut i = 0;
     while i < body.len() {
         let t = &body[i];
         let kw = t.keyword.to_ascii_uppercase();
         if kw == "NAME" && name.is_none() {
             name = t.args.first().cloned();
+            i += 1;
+            continue;
+        }
+        // mapfile semantics: a feature is drawn iff
+        //   MINSCALEDENOM <= denom < MAXSCALEDENOM
+        // — `min` inclusive, `max` exclusive — which matches mars-config's
+        // ScaleWindow contract directly.
+        if (kw == "MINSCALEDENOM" || kw == "MAXSCALEDENOM")
+            && let Some(arg) = t.args.first()
+        {
+            match arg.parse::<f64>() {
+                Ok(v) if v.is_finite() && v >= 0.0 => {
+                    let n = v as u64;
+                    if kw == "MINSCALEDENOM" {
+                        min_scale_denom = Some(n);
+                    } else {
+                        max_scale_denom = Some(n);
+                    }
+                }
+                _ => warn!(line = t.line, keyword = %kw, value = %arg, "could not parse scale denom"),
+            }
             i += 1;
             continue;
         }
@@ -209,7 +232,11 @@ fn handle_layer(body: &[Token], layer_line: usize, skel: &mut Skeleton) {
         layer = %resolved,
         "phase-0: layer translation is a scaffold (name only); hand-tune required"
     );
-    skel.layers.push(resolved);
+    skel.layers.push(LayerSkeleton {
+        name: resolved,
+        min_scale_denom,
+        max_scale_denom,
+    });
 }
 
 #[cfg(test)]
@@ -235,7 +262,64 @@ END
         let skel = translate(src);
         assert_eq!(skel.service_name.as_deref(), Some("demo"));
         assert_eq!(skel.service_title.as_deref(), Some("Demo Service"));
-        assert_eq!(skel.layers, vec!["roads".to_string(), "buildings".to_string()]);
+        let names: Vec<&str> = skel.layers.iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(names, vec!["roads", "buildings"]);
+    }
+
+    #[test]
+    fn translate_extracts_min_and_max_scale_denom() {
+        let src = r#"
+MAP
+  NAME "x"
+  LAYER
+    NAME "bygning"
+    MINSCALEDENOM 1000
+    MAXSCALEDENOM 25000
+  END
+END
+"#;
+        let skel = translate(src);
+        assert_eq!(skel.layers.len(), 1);
+        assert_eq!(skel.layers[0].name, "bygning");
+        assert_eq!(skel.layers[0].min_scale_denom, Some(1000));
+        assert_eq!(skel.layers[0].max_scale_denom, Some(25000));
+    }
+
+    #[test]
+    fn translate_handles_missing_scale_denom_bounds() {
+        let src = r#"
+MAP
+  NAME "x"
+  LAYER
+    NAME "only_max"
+    MAXSCALEDENOM 50000
+  END
+  LAYER
+    NAME "neither"
+  END
+END
+"#;
+        let skel = translate(src);
+        assert_eq!(skel.layers.len(), 2);
+        assert_eq!(skel.layers[0].max_scale_denom, Some(50000));
+        assert_eq!(skel.layers[0].min_scale_denom, None);
+        assert_eq!(skel.layers[1].max_scale_denom, None);
+        assert_eq!(skel.layers[1].min_scale_denom, None);
+    }
+
+    #[test]
+    fn emitter_renders_scale_window_when_present() {
+        let mut skel = Skeleton::default();
+        skel.service_name = Some("x".into());
+        skel.layers.push(LayerSkeleton {
+            name: "bygning".into(),
+            min_scale_denom: Some(1000),
+            max_scale_denom: Some(25000),
+        });
+        let yaml = emitter::render(&skel);
+        assert!(yaml.contains("scale:"), "yaml = {yaml}");
+        assert!(yaml.contains("      min: 1000"), "yaml = {yaml}");
+        assert!(yaml.contains("      max: 25000"), "yaml = {yaml}");
     }
 
     #[test]
@@ -254,7 +338,8 @@ END
 "#;
         let skel = translate(src);
         assert_eq!(skel.service_name.as_deref(), Some("x"));
-        assert_eq!(skel.layers, vec!["l1".to_string()]);
+        assert_eq!(skel.layers.len(), 1);
+        assert_eq!(skel.layers[0].name, "l1");
     }
 
     #[test]
@@ -269,6 +354,7 @@ end
 "#;
         let skel = translate(src);
         assert_eq!(skel.service_name.as_deref(), Some("abc"));
-        assert_eq!(skel.layers, vec!["only".to_string()]);
+        assert_eq!(skel.layers.len(), 1);
+        assert_eq!(skel.layers[0].name, "only");
     }
 }

@@ -9,7 +9,16 @@ use std::fmt::Write as _;
 pub(crate) struct Skeleton {
     pub(crate) service_name: Option<String>,
     pub(crate) service_title: Option<String>,
-    pub(crate) layers: Vec<String>,
+    pub(crate) layers: Vec<LayerSkeleton>,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct LayerSkeleton {
+    pub(crate) name: String,
+    /// inclusive lower bound on scale denom (mapfile MINSCALEDENOM).
+    pub(crate) min_scale_denom: Option<u64>,
+    /// exclusive upper bound on scale denom (mapfile MAXSCALEDENOM).
+    pub(crate) max_scale_denom: Option<u64>,
 }
 
 /// quote a YAML string using simple double-quoting; escapes `"` and `\`.
@@ -46,12 +55,21 @@ pub(crate) fn render(skel: &Skeleton) -> String {
     if skel.layers.is_empty() {
         out.push_str("  []\n");
     } else {
-        for name in &skel.layers {
-            let _ = writeln!(out, "  - name: {}", yaml_quote(name));
+        for layer in &skel.layers {
+            let _ = writeln!(out, "  - name: {}", yaml_quote(&layer.name));
+            if layer.min_scale_denom.is_some() || layer.max_scale_denom.is_some() {
+                out.push_str("    scale:\n");
+                if let Some(v) = layer.min_scale_denom {
+                    let _ = writeln!(out, "      min: {v}");
+                }
+                if let Some(v) = layer.max_scale_denom {
+                    let _ = writeln!(out, "      max: {v}");
+                }
+            }
             let _ = writeln!(
                 out,
                 "    # TODO: layer {} — translate type, sources, classes from mapfile",
-                name
+                layer.name
             );
         }
     }
