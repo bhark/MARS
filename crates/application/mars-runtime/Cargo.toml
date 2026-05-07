@@ -34,9 +34,10 @@ futures-util       = { workspace = true }
 hashbrown          = { workspace = true }
 
 [dev-dependencies]
-mars-store = { workspace = true, features = ["test-utils"] }
-tokio      = { workspace = true, features = ["macros", "rt-multi-thread"] }
-criterion  = { workspace = true }
+mars-store         = { workspace = true, features = ["test-utils"] }
+tokio              = { workspace = true, features = ["macros", "rt-multi-thread"] }
+criterion          = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [[bench]]
 name    = "render"

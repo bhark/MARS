@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use std::hint::black_box;
+use std::time::Instant;
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use mars_artifact::{ArtifactKind, ArtifactWriter, FeatureGeom, GeomKind, SourceRef, compute_content_hash};
@@ -320,6 +321,18 @@ fn run_render_bench(c: &mut Criterion, group_name: &str, label: &str, opts: Buil
         rt.block_on(runtime.render(&plan)).unwrap();
     }
 
+    // phase-share probe: one capture render outside the criterion measurement
+    // loop. the global tracing layer is only armed for this single render so
+    // the criterion samples below don't pay the layer's bookkeeping cost.
+    let stats = phases::install();
+    stats.activate();
+    let t0 = Instant::now();
+    let _ = rt.block_on(runtime.render(&plan)).unwrap();
+    let total = t0.elapsed();
+    stats.deactivate();
+    phases::print_table(label, total, &stats.snapshot());
+    stats.reset();
+
     let mut group = c.benchmark_group(group_name);
     group.throughput(Throughput::Elements(FEATURES * opts.layers as u64));
     group.bench_with_input(
@@ -333,6 +346,117 @@ fn run_render_bench(c: &mut Criterion, group_name: &str, label: &str, opts: Buil
         },
     );
     group.finish();
+}
+
+/// Per-phase timing capture for the bench. A custom tracing layer accumulates
+/// span busy time keyed by name; the bench harness arms it for one capture
+/// render per case and prints the breakdown to stderr. Spans inside
+/// spawn_blocking reach the layer because we install it as the **global**
+/// default subscriber — `set_default` is thread-local and would not see the
+/// blocking pool.
+mod phases {
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex, OnceLock};
+    use std::time::{Duration, Instant};
+
+    use tracing::{Subscriber, span};
+    use tracing_subscriber::layer::{Context, Layer};
+    use tracing_subscriber::prelude::*;
+    use tracing_subscriber::registry::{LookupSpan, Registry};
+
+    #[derive(Default)]
+    pub(super) struct Stats {
+        active: AtomicBool,
+        starts: Mutex<HashMap<span::Id, Instant>>,
+        totals: Mutex<HashMap<&'static str, (u64, Duration)>>,
+    }
+
+    impl Stats {
+        pub(super) fn activate(&self) {
+            self.active.store(true, Ordering::Relaxed);
+        }
+        pub(super) fn deactivate(&self) {
+            self.active.store(false, Ordering::Relaxed);
+        }
+        pub(super) fn reset(&self) {
+            self.starts.lock().unwrap().clear();
+            self.totals.lock().unwrap().clear();
+        }
+        pub(super) fn snapshot(&self) -> Vec<(&'static str, Duration)> {
+            self.totals
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|(k, (_, d))| (*k, *d))
+                .collect()
+        }
+    }
+
+    struct PhaseLayer(Arc<Stats>);
+
+    impl<S> Layer<S> for PhaseLayer
+    where
+        S: Subscriber + for<'a> LookupSpan<'a>,
+    {
+        fn on_enter(&self, id: &span::Id, _ctx: Context<'_, S>) {
+            if !self.0.active.load(Ordering::Relaxed) {
+                return;
+            }
+            self.0.starts.lock().unwrap().insert(id.clone(), Instant::now());
+        }
+        fn on_exit(&self, id: &span::Id, ctx: Context<'_, S>) {
+            if !self.0.active.load(Ordering::Relaxed) {
+                return;
+            }
+            let Some(start) = self.0.starts.lock().unwrap().remove(id) else {
+                return;
+            };
+            let elapsed = start.elapsed();
+            let name = ctx.span(id).map(|s| s.metadata().name()).unwrap_or("?");
+            let mut totals = self.0.totals.lock().unwrap();
+            let entry = totals.entry(name).or_insert((0, Duration::ZERO));
+            entry.0 += 1;
+            entry.1 += elapsed;
+        }
+    }
+
+    static STATS: OnceLock<Arc<Stats>> = OnceLock::new();
+
+    pub(super) fn install() -> Arc<Stats> {
+        STATS
+            .get_or_init(|| {
+                let stats = Arc::new(Stats::default());
+                let subscriber = Registry::default().with(PhaseLayer(stats.clone()));
+                let _ = tracing::subscriber::set_global_default(subscriber);
+                stats
+            })
+            .clone()
+    }
+
+    pub(super) fn print_table(label: &str, total: Duration, snap: &[(&'static str, Duration)]) {
+        // canonical order so the table reads top-down through the pipeline.
+        let order = [
+            "runtime.render",
+            "fetch.layer_artifacts",
+            "fetch.source_artifacts",
+            "cpu.emit",
+            "cpu.labels",
+            "cpu.raster",
+            "cpu.encode",
+        ];
+        eprintln!("== phase shares: {label} (wall {total:?}) ==");
+        for name in order {
+            if let Some((_, dur)) = snap.iter().find(|(n, _)| *n == name) {
+                let share = if total.is_zero() {
+                    0.0
+                } else {
+                    dur.as_secs_f64() / total.as_secs_f64() * 100.0
+                };
+                eprintln!("  {name:<28} {dur:>10.2?} ({share:>5.1}%)");
+            }
+        }
+    }
 }
 
 fn bench_canonical(c: &mut Criterion) {
