@@ -136,20 +136,40 @@ fn install_signal_handler() -> CancellationToken {
     let token = CancellationToken::new();
     let watcher = token.clone();
     tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_err() {
-            tracing::warn!("ctrl_c handler unavailable; signal-based shutdown disabled");
+        if let Err(e) = wait_for_termination().await {
+            tracing::warn!(error = %e, "signal handler unavailable; signal-based shutdown disabled");
             return;
         }
         tracing::info!("signal received; initiating graceful shutdown");
         watcher.cancel();
         // second signal escalates: force exit so a stuck task can't trap the
         // operator. exit code 130 = killed by SIGINT.
-        if tokio::signal::ctrl_c().await.is_ok() {
+        if wait_for_termination().await.is_ok() {
             tracing::warn!("second signal received; forcing exit");
             std::process::exit(130);
         }
     });
     token
+}
+
+/// Resolve when either SIGINT (ctrl_c) or SIGTERM is received. Production
+/// orchestrators (k8s, systemd) send SIGTERM at pod stop; without this the
+/// graceful drain never runs and the kernel kills the process at the grace
+/// deadline.
+async fn wait_for_termination() -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        let mut term = signal(SignalKind::terminate())?;
+        tokio::select! {
+            res = tokio::signal::ctrl_c() => res,
+            _ = term.recv() => Ok(()),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c().await
+    }
 }
 
 // ---------- runtime mode ----------
