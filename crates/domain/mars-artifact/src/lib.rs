@@ -30,6 +30,7 @@ pub mod attrs;
 mod class_assignment;
 mod geometry;
 mod hash;
+mod label_candidates;
 mod reader;
 mod section;
 mod style_refs;
@@ -44,6 +45,7 @@ pub use geometry::{
     iter_feature_index, visit_one_geom,
 };
 pub use hash::compute_content_hash;
+pub use label_candidates::{LabelCandidate, LabelShape, decode_label_candidates, encode_label_candidates};
 pub use reader::ArtifactReader;
 pub use style_refs::{decode_style_refs, encode_style_refs};
 pub use writer::{ArtifactWriter, SourceRef};

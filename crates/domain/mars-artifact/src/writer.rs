@@ -7,6 +7,7 @@ use crate::{
     ArtifactError, ArtifactKind, FORMAT_VERSION, MAGIC, SectionKind, class_assignment,
     generated::mars::artifact as fb,
     geometry::{self, FeatureGeom},
+    label_candidates::{self, LabelCandidate},
     section::SectionHeader,
     style_refs,
 };
@@ -61,6 +62,11 @@ impl ArtifactWriter {
     pub fn add_class_assignment(&mut self, items: &[(u64, u16)]) -> &mut Self {
         let bytes = class_assignment::encode_class_assignment(items);
         self.add_section(SectionKind::ClassAssignment, bytes)
+    }
+
+    pub fn add_label_candidates(&mut self, items: &[LabelCandidate]) -> &mut Self {
+        let bytes = label_candidates::encode_label_candidates(items);
+        self.add_section(SectionKind::LabelCandidates, bytes)
     }
 
     pub fn add_style_refs(&mut self, refs: &[String]) -> &mut Self {
