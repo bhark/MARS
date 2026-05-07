@@ -31,13 +31,13 @@ pub(crate) async fn fetch_cell(
     let stmt = client
         .prepare_cached(&sql)
         .await
-        .map_err(|e| SourceError::Backend(format!("prepare: {e}")))?;
+        .map_err(|e| SourceError::Backend(format!("prepare: {}", fmt_pg_err(&e))))?;
 
     let pg_params: Vec<&(dyn ToSql + Sync)> = params.iter().map(|p| p as &(dyn ToSql + Sync)).collect();
     let rows = client
         .query(&stmt, &pg_params)
         .await
-        .map_err(|e| SourceError::Backend(format!("query: {e}")))?;
+        .map_err(|e| SourceError::Backend(format!("query: {}", fmt_pg_err(&e))))?;
 
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
@@ -78,7 +78,7 @@ pub(crate) async fn fetch_cells(
     let stmt = client
         .prepare_cached(&sql)
         .await
-        .map_err(|e| SourceError::Backend(format!("prepare: {e}")))?;
+        .map_err(|e| SourceError::Backend(format!("prepare: {}", fmt_pg_err(&e))))?;
 
     // materialise per-cell `&dyn ToSql` slices first so each future holds a
     // borrow into a stable `Vec<&dyn ToSql>` for its lifetime.
@@ -90,7 +90,7 @@ pub(crate) async fn fetch_cells(
     let futs = pg_params.iter().map(|params| client.query(&stmt, params.as_slice()));
     let results = try_join_all(futs)
         .await
-        .map_err(|e| SourceError::Backend(format!("query: {e}")))?;
+        .map_err(|e| SourceError::Backend(format!("query: {}", fmt_pg_err(&e))))?;
 
     let mut out = Vec::with_capacity(cells.len());
     for ((cell, _), rows) in cells.iter().zip(results) {
@@ -101,6 +101,17 @@ pub(crate) async fn fetch_cells(
         out.push((cell.clone(), decoded));
     }
     Ok(out)
+}
+
+/// format a tokio-postgres error so DbError severity / SQLSTATE / message
+/// surface in the resulting String. without this, all such errors collapse
+/// to "db error" since SourceError::Backend stores a String and severs the
+/// source chain.
+fn fmt_pg_err(e: &tokio_postgres::Error) -> String {
+    match e.as_db_error() {
+        Some(db) => format!("{}: {} (SQLSTATE {})", db.severity(), db.message(), db.code().code()),
+        None => e.to_string(),
+    }
 }
 
 /// SRID extraction: only EPSG codes are supported in v1.

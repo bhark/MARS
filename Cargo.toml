@@ -26,6 +26,9 @@ members = [
     "bin/mars-import-mapfile",
     "bin/mars-compile",
     "bin/mars-bin-shared",
+    # local-only mapserver parity capture tool used during
+    # initial development; you saw nothing
+    "bin/mars-diff-capture",
 ]
 
 # fuzz crate excluded from workspace builds: it requires nightly + libfuzzer
