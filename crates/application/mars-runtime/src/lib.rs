@@ -73,12 +73,6 @@ pub enum RuntimeError {
     Proj(#[from] mars_proj::ProjError),
     #[error("layer '{layer}' is not defined")]
     LayerNotDefined { layer: String },
-    #[error("manifest entry missing for layer '{layer}' band '{band}' cell {cell:?}")]
-    ManifestEntryMissing {
-        layer: String,
-        band: String,
-        cell: (i64, i64),
-    },
     #[error("source artifact missing for collection '{collection}' band '{band}' cell {cell:?}")]
     SourceMissing {
         collection: String,

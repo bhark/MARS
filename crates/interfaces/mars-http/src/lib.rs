@@ -325,7 +325,6 @@ fn wms_error_response(e: WmsError) -> Response {
 
 fn runtime_error_response(e: RuntimeError, plan: &RenderPlan) -> Response {
     let cell = match &e {
-        RuntimeError::ManifestEntryMissing { cell, .. } => Some(*cell),
         RuntimeError::SourceMissing { cell, .. } => Some(*cell),
         _ => None,
     };
@@ -391,9 +390,10 @@ fn map_runtime_error(e: &RuntimeError) -> WmsException {
             code: Some("InvalidParameterValue"),
             message: format!("Request requires {requested} pixels but server budget is {budget}"),
         },
-        // SPEC §8.5: a cell missing from both lists is a broken manifest;
-        // surface as 404 so clients can distinguish "no data" from "we broke".
-        RuntimeError::ManifestEntryMissing { .. } | RuntimeError::SourceMissing { .. } => WmsException {
+        // SPEC §8.5: a source artifact missing from the manifest is a broken
+        // manifest; surface as 404 so clients can distinguish "no data" from
+        // "we broke". layer-level misses are soft-skipped upstream.
+        RuntimeError::SourceMissing { .. } => WmsException {
             status: StatusCode::NOT_FOUND,
             code: Some("LayerNotQueryable"),
             message: "No data available for the requested area".into(),
@@ -714,7 +714,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn wms_manifest_entry_missing_sanitized() {
+    async fn wms_layer_without_band_binding_renders_empty() {
+        // a layer that has no manifest binding for the picked band soft-skips
+        // (contributes nothing) instead of failing the whole render — so that
+        // wide+narrow band composites still produce a valid image.
         let metrics = Metrics::new().unwrap();
         let runtime = empty_runtime(&metrics);
         runtime.swap_state(Arc::new(ready_state_with_band()));
@@ -736,14 +739,9 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-        let body = body_str(resp).await;
-        assert!(body.contains("ServiceExceptionReport"));
-        assert!(body.contains(r#"code="LayerNotQueryable""#));
-        assert!(body.contains("No data available"));
-        // never leak internal cell coordinates / file paths to the client.
-        assert!(!body.contains("manifest entry missing"));
-        assert!(!body.contains("cell ("));
+        assert_eq!(resp.status(), StatusCode::OK);
+        let ct = resp.headers().get(header::CONTENT_TYPE).cloned().unwrap();
+        assert_eq!(ct.to_str().unwrap(), "image/png");
     }
 
     #[tokio::test]

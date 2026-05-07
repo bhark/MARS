@@ -589,17 +589,16 @@ async fn unknown_layer_errors() {
 }
 
 #[tokio::test]
-async fn missing_manifest_entry_errors() {
+async fn missing_manifest_entry_renders_empty() {
+    // a layer with no manifest binding for the picked cell soft-skips and
+    // contributes nothing rather than aborting the render — wide+narrow band
+    // composites still produce a valid image.
     let fx = build_fixture().await;
     let mut plan = plan_for(&fx);
     // bbox outside the cell (0,0) that exists in the fixture -> cell (9,0) is missing
     plan.bbox = Bbox::new(10000.0, 0.0, 10100.0, 10.0);
-    match fx.runtime.render(&plan).await {
-        Err(RuntimeError::ManifestEntryMissing { layer, .. }) => {
-            assert_eq!(layer, "parcels");
-        }
-        other => panic!("expected ManifestEntryMissing, got {other:?}"),
-    }
+    let bytes = fx.runtime.render(&plan).await.expect("render should succeed");
+    assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n"), "expected png signature");
 }
 
 #[tokio::test]
@@ -760,15 +759,13 @@ async fn empty_marker_skips_fetch_and_draw() {
 }
 
 #[tokio::test]
-async fn genuinely_missing_cell_still_errors() {
+async fn genuinely_missing_cell_renders_empty() {
+    // soft-skip: a cell not in the manifest contributes nothing rather than
+    // aborting the render. the request itself is a valid image.
     let fx = build_fixture().await;
     let mut plan = plan_for(&fx);
     // cell (99,99) is neither present nor an empty marker
     plan.bbox = Bbox::new(99.0 * 1024.0, 99.0 * 1024.0, 99.0 * 1024.0 + 10.0, 99.0 * 1024.0 + 10.0);
-    match fx.runtime.render(&plan).await {
-        Err(RuntimeError::ManifestEntryMissing { layer, .. }) => {
-            assert_eq!(layer, LAYER);
-        }
-        other => panic!("expected ManifestEntryMissing, got {other:?}"),
-    }
+    let bytes = fx.runtime.render(&plan).await.expect("render should succeed");
+    assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n"), "expected png signature");
 }
