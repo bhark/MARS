@@ -18,7 +18,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::rc::Rc;
-use std::sync::Mutex;
 
 use mars_types::{Bbox, CrsCode};
 use proj_sys::{PJ, PJ_CONTEXT};
@@ -158,13 +157,13 @@ impl Default for TransformerOptions {
 ///
 /// The underlying `*mut PJ` is bound to the thread-local `PJ_CONTEXT` that was
 /// active at construction time. PROJ docs are explicit that a PJ must only be
-/// used with its construction context, so transforms are serialised through a
-/// `Mutex` for v1. Render workers are tile-parallel above this layer, so
-/// per-Transformer contention is acceptable; a per-thread pool can land later
-/// if profiling justifies it.
+/// used with its construction context, so the type is statically `!Send` and
+/// `!Sync` (compile-time-guarded below); a `RefCell` is enough to gate the
+/// `&mut PJ` access required by the C API without paying for a `Mutex` whose
+/// guard would never contend.
 #[derive(Debug)]
 pub struct Transformer {
-    inner: Mutex<TransformerInner>,
+    inner: RefCell<TransformerInner>,
     densify_segments: usize,
 }
 
@@ -202,7 +201,8 @@ impl Drop for TransformerInner {
     fn drop(&mut self) {
         if !self.pj.is_null() {
             // SAFETY: pj was created by proj_create_crs_to_crs (or normalize) and
-            // is not used after this point; Mutex guarantees no concurrent use.
+            // is not used after this point; the !Send / !Sync invariant on
+            // Transformer guarantees no concurrent use.
             unsafe { proj_sys::proj_destroy(self.pj) };
         }
     }
@@ -252,7 +252,7 @@ impl Transformer {
                     )));
                 }
                 Ok(Self {
-                    inner: Mutex::new(TransformerInner { pj: normalized }),
+                    inner: RefCell::new(TransformerInner { pj: normalized }),
                     densify_segments: opts.densify_segments,
                 })
             }
@@ -261,34 +261,25 @@ impl Transformer {
 
     /// Forward-transform a single point.
     pub fn transform_point(&self, x: f64, y: f64) -> Result<(f64, f64), ProjError> {
-        let guard = self
-            .inner
-            .lock()
-            .map_err(|_| ProjError::Transform("transformer mutex poisoned".into()))?;
+        let guard = self.inner.borrow();
         transform_one(guard.pj, x, y)
     }
 
     /// Forward-transform a bounding box, densifying each edge before computing
     /// the axis-aligned bounding box of the transformed samples.
     pub fn transform_bbox(&self, bbox: Bbox) -> Result<Bbox, ProjError> {
-        let guard = self
-            .inner
-            .lock()
-            .map_err(|_| ProjError::Transform("transformer mutex poisoned".into()))?;
+        let guard = self.inner.borrow();
         densified_bbox(guard.pj, bbox, self.densify_segments)
     }
 
     /// Forward-transform an in-place array of `[x, y]` pairs in a single FFI
-    /// call. For a 1000-vertex ring this collapses 1000 lock-acquire+FFI hops
-    /// into one, which is where most of the per-feature reproject cost lives.
+    /// call. For a 1000-vertex ring this collapses 1000 FFI hops into one,
+    /// which is where most of the per-feature reproject cost lives.
     pub fn transform_points(&self, points: &mut [[f64; 2]]) -> Result<(), ProjError> {
         if points.is_empty() {
             return Ok(());
         }
-        let guard = self
-            .inner
-            .lock()
-            .map_err(|_| ProjError::Transform("transformer mutex poisoned".into()))?;
+        let guard = self.inner.borrow();
         let n = points.len();
         // [f64; 2] has well-defined layout: sizeof == 2*sizeof::<f64>(), no padding.
         let stride = std::mem::size_of::<[f64; 2]>();
