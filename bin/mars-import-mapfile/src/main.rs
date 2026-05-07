@@ -309,13 +309,15 @@ END
 
     #[test]
     fn emitter_renders_scale_window_when_present() {
-        let mut skel = Skeleton::default();
-        skel.service_name = Some("x".into());
-        skel.layers.push(LayerSkeleton {
-            name: "bygning".into(),
-            min_scale_denom: Some(1000),
-            max_scale_denom: Some(25000),
-        });
+        let skel = Skeleton {
+            service_name: Some("x".into()),
+            layers: vec![LayerSkeleton {
+                name: "bygning".into(),
+                min_scale_denom: Some(1000),
+                max_scale_denom: Some(25000),
+            }],
+            ..Default::default()
+        };
         let yaml = emitter::render(&skel);
         assert!(yaml.contains("scale:"), "yaml = {yaml}");
         assert!(yaml.contains("      min: 1000"), "yaml = {yaml}");
