@@ -14,7 +14,7 @@ use futures_util::stream;
 use mars_store::{ManifestStore, StoreError};
 use mars_types::{MANIFEST_FORMAT_VERSION, Manifest};
 
-use crate::store::atomic_write;
+use crate::store::{CreateNewOutcome, atomic_create_new, atomic_write};
 
 const MANIFEST_DIR: &str = "manifests";
 const CURRENT_FILE: &str = "current";
@@ -112,7 +112,17 @@ impl ManifestStore for FsPublisher {
         tokio::task::spawn_blocking(move || -> Result<u64, StoreError> {
             std::fs::create_dir_all(&dir).map_err(|e| StoreError::Backend(format!("mkdir manifests: {e}")))?;
             let body_path = dir.join(format!("v{n}.json"));
-            atomic_write(&body_path, &body)?;
+            // create-only mirrors S3's PutMode::Create: a duplicate version
+            // signals an orphaned publish (crash between body write and
+            // pointer swap) and must not be silently overwritten.
+            match atomic_create_new(&body_path, &body)? {
+                CreateNewOutcome::Created => {}
+                CreateNewOutcome::AlreadyExists => {
+                    return Err(StoreError::Backend(format!(
+                        "manifest body v{n} already exists; refusing to overwrite (orphaned publish or concurrent writer)"
+                    )));
+                }
+            }
             let cur_path = dir.join(CURRENT_FILE);
             atomic_write(&cur_path, format!("v{n}").as_bytes())?;
             Ok(n)

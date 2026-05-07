@@ -174,6 +174,54 @@ pub(crate) fn cleanup_tmp_files(root: &Path) -> Result<(), StoreError> {
     walk(root)
 }
 
+/// Atomic create-only write: writes via tmp + hard_link, refusing to overwrite
+/// an existing target. mirrors object_store's `PutMode::Create`. errors are
+/// reported via the dedicated `AlreadyExists(path)` flavour returned in the
+/// `Result` so callers can distinguish them from generic backend failures.
+pub(crate) enum CreateNewOutcome {
+    Created,
+    AlreadyExists,
+}
+
+pub(crate) fn atomic_create_new(path: &Path, body: &[u8]) -> Result<CreateNewOutcome, StoreError> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| StoreError::Backend("path has no parent".into()))?;
+    std::fs::create_dir_all(parent).map_err(|e| StoreError::Backend(format!("mkdir {}: {e}", parent.display())))?;
+
+    let suffix: String = thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(12)
+        .map(char::from)
+        .collect();
+    let file_name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| StoreError::Backend("bad file name".into()))?;
+    let tmp = parent.join(format!("{file_name}.tmp.{suffix}"));
+
+    {
+        let mut f = std::fs::File::create(&tmp).map_err(|e| StoreError::Backend(format!("create tmp: {e}")))?;
+        f.write_all(body)
+            .map_err(|e| StoreError::Backend(format!("write: {e}")))?;
+        f.sync_all().map_err(|e| StoreError::Backend(format!("fsync: {e}")))?;
+    }
+
+    // hard_link is atomic: succeeds only if `path` does not yet exist.
+    let link_res = std::fs::hard_link(&tmp, path);
+    let _ = std::fs::remove_file(&tmp);
+    let outcome = match link_res {
+        Ok(()) => CreateNewOutcome::Created,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => CreateNewOutcome::AlreadyExists,
+        Err(e) => return Err(StoreError::Backend(format!("link: {e}"))),
+    };
+
+    if let Ok(d) = std::fs::File::open(parent) {
+        let _ = d.sync_all();
+    }
+    Ok(outcome)
+}
+
 /// Atomic write: tmp file in same dir, fsync, rename. parents are created.
 pub(crate) fn atomic_write(path: &Path, body: &[u8]) -> Result<(), StoreError> {
     let parent = path
