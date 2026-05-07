@@ -201,6 +201,14 @@ fn handle_layer(body: &[Token], layer_line: usize, skel: &mut Skeleton) {
         i += 1;
     }
     let resolved = name.unwrap_or_else(|| format!("unnamed_layer_l{layer_line}"));
+    // emit a warning per layer so --strict surfaces incomplete coverage as a
+    // non-zero exit. translation today is a name-only scaffold; downstream
+    // tooling should not mistake the output for a finished config.
+    warn!(
+        line = layer_line,
+        layer = %resolved,
+        "phase-0: layer translation is a scaffold (name only); hand-tune required"
+    );
     skel.layers.push(resolved);
 }
 
