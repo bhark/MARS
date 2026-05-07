@@ -28,9 +28,11 @@ pub struct ArtifactWriter {
     bbox: Option<Bbox>,
     feature_count: Option<u64>,
     source_ref: Option<SourceRef>,
-    // deferred geometry features so we can validate feature_count against the
-    // payload at finish() rather than in the infallible add_* call.
+    // deferred so finish() can validate (ascending feature_id, declared count)
+    // and surface errors that the infallible add_* calls cannot.
     pending_features: Option<Vec<FeatureGeom>>,
+    pending_class_assignment: Option<Vec<(u64, u16)>>,
+    pending_label_candidates: Option<Vec<LabelCandidate>>,
 }
 
 impl ArtifactWriter {
@@ -43,6 +45,8 @@ impl ArtifactWriter {
             feature_count: None,
             source_ref: None,
             pending_features: None,
+            pending_class_assignment: None,
+            pending_label_candidates: None,
         }
     }
 
@@ -60,13 +64,13 @@ impl ArtifactWriter {
     }
 
     pub fn add_class_assignment(&mut self, items: &[(u64, u16)]) -> &mut Self {
-        let bytes = class_assignment::encode_class_assignment(items);
-        self.add_section(SectionKind::ClassAssignment, bytes)
+        self.pending_class_assignment = Some(items.to_vec());
+        self
     }
 
     pub fn add_label_candidates(&mut self, items: &[LabelCandidate]) -> &mut Self {
-        let bytes = label_candidates::encode_label_candidates(items);
-        self.add_section(SectionKind::LabelCandidates, bytes)
+        self.pending_label_candidates = Some(items.to_vec());
+        self
     }
 
     pub fn add_style_refs(&mut self, refs: &[String]) -> &mut Self {
@@ -118,6 +122,14 @@ impl ArtifactWriter {
             }
             let bytes = geometry::encode_geometry_payload(&features)?;
             self.sections.push((SectionKind::GeometryPayload, bytes));
+        }
+        if let Some(items) = self.pending_class_assignment.take() {
+            let bytes = class_assignment::encode_class_assignment(&items)?;
+            self.sections.push((SectionKind::ClassAssignment, bytes));
+        }
+        if let Some(items) = self.pending_label_candidates.take() {
+            let bytes = label_candidates::encode_label_candidates(&items)?;
+            self.sections.push((SectionKind::LabelCandidates, bytes));
         }
 
         let feature_count = self.feature_count.unwrap_or(0);

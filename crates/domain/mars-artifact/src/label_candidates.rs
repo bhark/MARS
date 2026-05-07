@@ -57,8 +57,20 @@ const SHAPE_MASK: u8 = 0b11 << SHAPE_SHIFT;
 // adds 2. 15 is the cheapest legal entry, used to bound the count up front.
 const MIN_ENTRY_LEN: usize = 8 + 1 + 2 + 2 + 2;
 
-#[must_use]
-pub fn encode_label_candidates(items: &[LabelCandidate]) -> Bytes {
+/// encoder mirrors decoder: feature_id ascending (equal allowed for repeats).
+/// validates input rather than emit a blob the decoder will reject.
+pub fn encode_label_candidates(items: &[LabelCandidate]) -> Result<Bytes, ArtifactError> {
+    let mut prev: Option<u64> = None;
+    for c in items {
+        if let Some(p) = prev
+            && c.feature_id < p
+        {
+            return Err(ArtifactError::Malformed(
+                "label candidates must be ascending by feature_id",
+            ));
+        }
+        prev = Some(c.feature_id);
+    }
     let mut out = Vec::with_capacity(4 + items.len() * (MIN_ENTRY_LEN + 8));
     out.extend_from_slice(&(items.len() as u32).to_le_bytes());
     for c in items {
@@ -92,7 +104,7 @@ pub fn encode_label_candidates(items: &[LabelCandidate]) -> Bytes {
         out.extend_from_slice(&(bytes.len() as u16).to_le_bytes());
         out.extend_from_slice(bytes);
     }
-    Bytes::from(out)
+    Ok(Bytes::from(out))
 }
 
 pub fn decode_label_candidates(bytes: &[u8]) -> Result<Vec<LabelCandidate>, ArtifactError> {
@@ -232,14 +244,14 @@ mod tests {
     #[test]
     fn round_trip() {
         let cs = sample();
-        let bytes = encode_label_candidates(&cs);
+        let bytes = encode_label_candidates(&cs).unwrap();
         let decoded = decode_label_candidates(&bytes).unwrap();
         assert_eq!(cs, decoded);
     }
 
     #[test]
     fn empty_round_trip() {
-        let bytes = encode_label_candidates(&[]);
+        let bytes = encode_label_candidates(&[]).unwrap();
         assert_eq!(decode_label_candidates(&bytes).unwrap(), Vec::<LabelCandidate>::new());
     }
 
@@ -261,14 +273,14 @@ mod tests {
     #[test]
     fn rejects_truncated_body() {
         let cs = sample();
-        let bytes = encode_label_candidates(&cs);
+        let bytes = encode_label_candidates(&cs).unwrap();
         // chop off the last byte
         let short = &bytes[..bytes.len() - 1];
         assert!(decode_label_candidates(short).is_err());
     }
 
     #[test]
-    fn rejects_unsorted_features() {
+    fn encoder_rejects_unsorted_features() {
         let unsorted = vec![
             LabelCandidate {
                 feature_id: 5,
@@ -287,9 +299,8 @@ mod tests {
                 text: "b".into(),
             },
         ];
-        let bytes = encode_label_candidates(&unsorted);
         assert!(matches!(
-            decode_label_candidates(&bytes),
+            encode_label_candidates(&unsorted),
             Err(ArtifactError::Malformed(_))
         ));
     }

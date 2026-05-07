@@ -6,15 +6,31 @@ use crate::ArtifactError;
 
 const ENTRY_LEN: usize = 8 + 2;
 
-#[must_use]
-pub fn encode_class_assignment(items: &[(u64, u16)]) -> Bytes {
+/// encoder mirrors decoder's invariants: feature_id strictly ascending, no
+/// duplicates. validating at encode time prevents producing artifacts that
+/// would only fail at runtime decode.
+pub fn encode_class_assignment(items: &[(u64, u16)]) -> Result<Bytes, ArtifactError> {
+    let mut prev: Option<u64> = None;
+    for (id, _) in items {
+        if let Some(p) = prev {
+            if *id == p {
+                return Err(ArtifactError::Malformed("duplicate feature_id"));
+            }
+            if *id < p {
+                return Err(ArtifactError::Malformed(
+                    "class assignments must be ascending by feature_id",
+                ));
+            }
+        }
+        prev = Some(*id);
+    }
     let mut out = Vec::with_capacity(4 + items.len() * ENTRY_LEN);
     out.extend_from_slice(&(items.len() as u32).to_le_bytes());
     for (id, cls) in items {
         out.extend_from_slice(&id.to_le_bytes());
         out.extend_from_slice(&cls.to_le_bytes());
     }
-    Bytes::from(out)
+    Ok(Bytes::from(out))
 }
 
 pub fn decode_class_assignment(bytes: &[u8]) -> Result<Vec<(u64, u16)>, ArtifactError> {

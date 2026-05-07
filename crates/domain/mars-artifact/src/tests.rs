@@ -264,7 +264,7 @@ fn empty_geometries_roundtrip() {
 #[test]
 fn class_assignment_roundtrip() {
     let items = vec![(1u64, 0u16), (5, 2), (42, 7)];
-    let bytes = crate::encode_class_assignment(&items);
+    let bytes = crate::encode_class_assignment(&items).unwrap();
     let back = decode_class_assignment(&bytes).unwrap();
     assert_eq!(items, back);
 }
@@ -474,7 +474,7 @@ fn class_assignment_rejects_duplicate() {
 
 #[test]
 fn class_assignment_rejects_trailing_bytes() {
-    let mut buf = crate::encode_class_assignment(&[(1u64, 0u16)]).to_vec();
+    let mut buf = crate::encode_class_assignment(&[(1u64, 0u16)]).unwrap().to_vec();
     buf.push(0);
     let err = decode_class_assignment(&buf).unwrap_err();
     assert!(matches!(err, ArtifactError::Malformed(_)));
