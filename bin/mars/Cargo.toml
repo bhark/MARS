@@ -20,6 +20,10 @@ default = []
 # end-to-end test that spins up a postgis container; gated because docker
 # is not always available. plain `cargo test` skips it.
 e2e = []
+# host-side image-diff harness for the MARS-vs-MapServer parity bundle. opt-in;
+# requires a bundle produced by mars-diff-capture (see scripts/run-demo-diff.sh)
+# and MARS_DIFF_BUNDLE pointing at it.
+mapserver-diff = []
 
 [dependencies]
 # composition root: names every concrete adapter
@@ -55,3 +59,5 @@ png = { workspace = true }
 tempfile = { workspace = true }
 serde_yaml_ng = { workspace = true }
 rand = { workspace = true }
+serde      = { workspace = true }
+serde_json = { workspace = true }

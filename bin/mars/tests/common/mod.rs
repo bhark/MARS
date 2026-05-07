@@ -4,6 +4,9 @@
 #![allow(dead_code, unreachable_pub)]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+#[cfg(feature = "mapserver-diff")]
+pub mod perf_report;
+
 use std::fmt;
 
 #[derive(Debug, Clone)]

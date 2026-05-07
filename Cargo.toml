@@ -26,6 +26,7 @@ members = [
     "bin/mars-import-mapfile",
     "bin/mars-compile",
     "bin/mars-bin-shared",
+    "bin/mars-diff-capture",
 ]
 
 # fuzz crate excluded from workspace builds: it requires nightly + libfuzzer
@@ -108,6 +109,10 @@ rustybuzz           = "0.20"
 fontdb              = { version = "0.23", default-features = false }
 tiny-skia           = "0.12"
 rstar               = "0.12"
+# only used by bin/mars-diff-capture (in-cluster mapserver-parity harness).
+# pinned to match object_store's transitive reqwest, so we don't
+# pull two reqwest majors into the build.
+reqwest             = { version = "0.12", default-features = false, features = ["rustls-tls", "http2"] }
 
 [workspace.lints.rust]
 unsafe_code              = "deny"
