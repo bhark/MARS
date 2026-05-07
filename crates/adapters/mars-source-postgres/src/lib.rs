@@ -126,9 +126,28 @@ impl PgSource {
         let mgr = if pg_cfg.get_ssl_mode() == tokio_postgres::config::SslMode::Disable {
             deadpool_postgres::Manager::from_config(pg_cfg, NoTls, mgr_cfg)
         } else {
+            // install_default returns Err only when a provider is already
+            // installed in this process — benign when the host wired one up
+            // already, suspicious only on first call. surface errors from
+            // root loading, since silently trusting an empty store would
+            // make every TLS connect fail with an opaque protocol error.
             let _ = rustls::crypto::ring::default_provider().install_default();
+            let load = rustls_native_certs::load_native_certs();
+            if !load.errors.is_empty() {
+                let summary: Vec<String> = load.errors.iter().take(3).map(|e| e.to_string()).collect();
+                tracing::warn!(
+                    errors = ?summary,
+                    total = load.errors.len(),
+                    "rustls-native-certs partial load",
+                );
+            }
+            if load.certs.is_empty() {
+                return Err(SourceError::Backend(
+                    "no native trust roots available; refusing to connect with empty trust store".into(),
+                ));
+            }
             let mut roots = rustls::RootCertStore::empty();
-            for cert in rustls_native_certs::load_native_certs().certs {
+            for cert in load.certs {
                 let _ = roots.add(cert);
             }
             let tls_cfg = rustls::ClientConfig::builder()
