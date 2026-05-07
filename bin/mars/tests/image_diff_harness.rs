@@ -1,9 +1,13 @@
 //! image-diff harness: renders the parcels-mini fixture against a real
-//! postgis container and compares the PNG output against a checked-in golden.
+//! postgis container and compares the PNG output against checked-in goldens.
 //! gated on the `e2e` cargo feature, like `e2e_render.rs`.
 //!
-//! regenerate the golden by setting `MARS_GOLDEN_REGENERATE=1`; see the
-//! fixture README.
+//! drives a small matrix of `Case`s against a single shared runtime so the
+//! per-case overhead is just a render call. each case has its own golden plus
+//! its own per-channel tolerance and per-image diff-ratio budget.
+//!
+//! regenerate every golden by setting `MARS_GOLDEN_REGENERATE=1`. otherwise
+//! any case whose diff exceeds its budget fails the test.
 
 #![cfg(feature = "e2e")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -33,22 +37,71 @@ use tokio_postgres::NoTls;
 use tokio_util::sync::CancellationToken;
 
 mod common;
-use common::{assert_within_tolerance, diff_pngs};
+use common::diff_pngs;
 
-const RENDER_W: u32 = 512;
-const RENDER_H: u32 = 512;
-const TILE_EXTENT_M: f64 = 1024.0;
-// per-channel jitter ceiling and per-image budget. tight but tolerates
-// tiny-skia AA noise across patch versions.
-const TOLERANCE_CHANNELS: u8 = 2;
-const MAX_DIFF_RATIO: f32 = 0.005;
+/// one case in the diff matrix.
+struct Case {
+    /// stable id; doubles as the golden filename stem under `goldens/`.
+    name: &'static str,
+    plan: RenderPlan,
+    /// per-channel delta beyond which a pixel is counted as differing.
+    tolerance: u8,
+    /// maximum fraction of differing pixels tolerated for this case.
+    max_diff_ratio: f32,
+}
+
+fn cases() -> Vec<Case> {
+    vec![
+        Case {
+            name: "parcels-cell-0-0",
+            plan: RenderPlan {
+                layers: vec![LayerId::new("parcels")],
+                bbox: Bbox::new(0.0, 0.0, 1023.0, 1023.0),
+                width: 512,
+                height: 512,
+                crs: CrsCode::new("EPSG:25832"),
+                format: ImageFormat::Png,
+            },
+            tolerance: 2,
+            max_diff_ratio: 0.005,
+        },
+        // bottom-left quadrant zoom; non-tile-aligned bbox.
+        Case {
+            name: "parcels-quadrant-sw",
+            plan: RenderPlan {
+                layers: vec![LayerId::new("parcels")],
+                bbox: Bbox::new(0.0, 0.0, 500.0, 500.0),
+                width: 256,
+                height: 256,
+                crs: CrsCode::new("EPSG:25832"),
+                format: ImageFormat::Png,
+            },
+            tolerance: 2,
+            max_diff_ratio: 0.005,
+        },
+        // top-right quadrant zoom; tighter scale, fewer features in view.
+        Case {
+            name: "parcels-quadrant-ne",
+            plan: RenderPlan {
+                layers: vec![LayerId::new("parcels")],
+                bbox: Bbox::new(500.0, 500.0, 1000.0, 1000.0),
+                width: 256,
+                height: 256,
+                crs: CrsCode::new("EPSG:25832"),
+                format: ImageFormat::Png,
+            },
+            tolerance: 2,
+            max_diff_ratio: 0.005,
+        },
+    ]
+}
 
 #[tokio::test(flavor = "multi_thread")]
-async fn demo_mini_matches_golden() -> Result<()> {
+async fn demo_mini_matrix() -> Result<()> {
     let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/parcels-mini");
     let seed_sql = std::fs::read_to_string(fixture_dir.join("seed.sql")).context("read seed.sql")?;
     let yaml_template = std::fs::read_to_string(fixture_dir.join("service.yaml")).context("read service.yaml")?;
-    let golden_path = fixture_dir.join("goldens/parcels-cell-0-0.png");
+    let goldens_dir = fixture_dir.join("goldens");
 
     let password = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
     let container = GenericImage::new("postgis/postgis", "16-3.4")
@@ -113,45 +166,60 @@ async fn demo_mini_matches_golden() -> Result<()> {
         },
     );
 
-    let plan = RenderPlan {
-        layers: vec![LayerId::new("parcels")],
-        bbox: Bbox::new(0.0, 0.0, TILE_EXTENT_M - 1.0, TILE_EXTENT_M - 1.0),
-        width: RENDER_W,
-        height: RENDER_H,
-        crs: CrsCode::new("EPSG:25832"),
-        format: ImageFormat::Png,
-    };
-    let png_bytes = match runtime.render(&plan).await {
-        Ok(b) => b,
-        Err(e) => {
-            dump_logs(&container).await;
-            return Err(anyhow::anyhow!("render: {e}"));
-        }
-    };
-
-    if std::env::var_os("MARS_GOLDEN_REGENERATE").is_some() {
-        if let Some(parent) = golden_path.parent() {
-            std::fs::create_dir_all(parent).context("create goldens dir")?;
-        }
-        std::fs::write(&golden_path, &png_bytes).context("write golden")?;
-        eprintln!(
-            "MARS_GOLDEN_REGENERATE: wrote {} bytes to {}",
-            png_bytes.len(),
-            golden_path.display()
-        );
-        return Ok(());
+    let regenerate = std::env::var_os("MARS_GOLDEN_REGENERATE").is_some();
+    if regenerate {
+        std::fs::create_dir_all(&goldens_dir).context("create goldens dir")?;
     }
 
-    let golden = std::fs::read(&golden_path).with_context(|| {
-        format!(
-            "read golden {} (run with MARS_GOLDEN_REGENERATE=1 to bootstrap)",
-            golden_path.display()
-        )
-    })?;
+    let mut failures = Vec::new();
+    for case in cases() {
+        let golden_path = goldens_dir.join(format!("{}.png", case.name));
+        let png_bytes = match runtime.render(&case.plan).await {
+            Ok(b) => b,
+            Err(e) => {
+                dump_logs(&container).await;
+                return Err(anyhow::anyhow!("render case {}: {e}", case.name));
+            }
+        };
 
-    let report = diff_pngs(&png_bytes, &golden, TOLERANCE_CHANNELS).map_err(|e| anyhow::anyhow!("diff: {e}"))?;
-    eprintln!("image-diff: {report}");
-    assert_within_tolerance(&report, MAX_DIFF_RATIO);
+        if regenerate {
+            std::fs::write(&golden_path, &png_bytes).with_context(|| format!("write golden for case {}", case.name))?;
+            eprintln!(
+                "MARS_GOLDEN_REGENERATE: case={} wrote {} bytes to {}",
+                case.name,
+                png_bytes.len(),
+                golden_path.display()
+            );
+            continue;
+        }
+
+        let golden = std::fs::read(&golden_path).with_context(|| {
+            format!(
+                "read golden {} (run with MARS_GOLDEN_REGENERATE=1 to bootstrap)",
+                golden_path.display()
+            )
+        })?;
+
+        let report = diff_pngs(&png_bytes, &golden, case.tolerance)
+            .map_err(|e| anyhow::anyhow!("diff case {}: {e}", case.name))?;
+        eprintln!("image-diff: case={} {report}", case.name);
+        if report.diff_ratio() > case.max_diff_ratio {
+            failures.push(format!(
+                "case {}: ratio={:.6} > budget {:.6}; {}",
+                case.name,
+                report.diff_ratio(),
+                case.max_diff_ratio,
+                report,
+            ));
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "image-diff matrix had {} failure(s):\n  - {}",
+        failures.len(),
+        failures.join("\n  - ")
+    );
     Ok(())
 }
 
