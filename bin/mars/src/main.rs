@@ -358,13 +358,38 @@ async fn run_compiler(cfg: Config, shutdown: CancellationToken) -> Result<()> {
 async fn run_all_in_one(config_path: &Path, shutdown: CancellationToken) -> Result<()> {
     let cfg = load_and_validate(config_path)?;
     let runtime_cfg = Arc::new(cfg.clone());
-    let compiler_fut = run_compiler(cfg, shutdown.clone());
-    let runtime_fut = run_runtime(runtime_cfg, shutdown.clone());
-    // run both concurrently. on first failure or first clean exit, cancel the
-    // shared shutdown so the surviving half drains promptly.
-    let result = tokio::try_join!(compiler_fut, runtime_fut);
+    // spawn both halves so we can observe the first to finish and cancel the
+    // shared shutdown *before* awaiting the survivor's drain. try_join! would
+    // drop the survivor's future mid-await on a sibling failure, so its HTTP
+    // graceful drain never runs. we want the survivor to see the cancellation
+    // and shut down cleanly.
+    let mut compiler_handle = tokio::spawn(run_compiler(cfg, shutdown.clone()));
+    let mut runtime_handle = tokio::spawn(run_runtime(runtime_cfg, shutdown.clone()));
+
+    let first = tokio::select! {
+        res = &mut compiler_handle => ("compiler", res),
+        res = &mut runtime_handle => ("runtime", res),
+    };
     shutdown.cancel();
-    result.map(|_| ())
+
+    let (first_name, first_res) = first;
+    let (compiler_res, runtime_res) = if first_name == "compiler" {
+        (first_res, runtime_handle.await)
+    } else {
+        (compiler_handle.await, first_res)
+    };
+
+    flatten_join(compiler_res, "compiler")?;
+    flatten_join(runtime_res, "runtime")?;
+    Ok(())
+}
+
+fn flatten_join(res: Result<Result<()>, tokio::task::JoinError>, what: &str) -> Result<()> {
+    match res {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(e)) => Err(e.context(format!("{what} task"))),
+        Err(e) => Err(anyhow!(e).context(format!("{what} task panicked"))),
+    }
 }
 
 // ---------- tooling ----------
