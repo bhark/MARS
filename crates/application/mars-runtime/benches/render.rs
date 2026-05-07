@@ -384,12 +384,7 @@ mod phases {
             self.totals.lock().unwrap().clear();
         }
         pub(super) fn snapshot(&self) -> Vec<(&'static str, Duration)> {
-            self.totals
-                .lock()
-                .unwrap()
-                .iter()
-                .map(|(k, (_, d))| (*k, *d))
-                .collect()
+            self.totals.lock().unwrap().iter().map(|(k, (_, d))| (*k, *d)).collect()
         }
     }
 

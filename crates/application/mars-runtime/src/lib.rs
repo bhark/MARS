@@ -272,18 +272,13 @@ impl Runtime {
                     let cache = cache.clone();
                     let store = store.clone();
                     async move {
-                        let layer_art = match fetch::fetch_layer(
-                            &state,
-                            cache.as_ref(),
-                            store.as_ref(),
-                            &task.layer,
-                            &task.cell,
-                        )
-                        .await?
-                        {
-                            Some(reader) => reader,
-                            None => return Ok(None),
-                        };
+                        let layer_art =
+                            match fetch::fetch_layer(&state, cache.as_ref(), store.as_ref(), &task.layer, &task.cell)
+                                .await?
+                            {
+                                Some(reader) => reader,
+                                None => return Ok(None),
+                            };
                         let source_ref = layer_art.source_ref().cloned().ok_or_else(|| {
                             RuntimeError::Config(mars_config::ConfigError::Invalid(format!(
                                 "layer artifact '{}' is missing source_ref footer",
@@ -329,7 +324,8 @@ impl Runtime {
                         x: k.x,
                         y: k.y,
                     };
-                    let reader = fetch::fetch_source(&state, cache.as_ref(), store.as_ref(), &k.collection, &cell).await?;
+                    let reader =
+                        fetch::fetch_source(&state, cache.as_ref(), store.as_ref(), &k.collection, &cell).await?;
                     Ok::<_, RuntimeError>((k, reader))
                 }
             }))
