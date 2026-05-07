@@ -288,7 +288,15 @@ impl ToSql for SqlParam {
                 _ => Err(format!("cannot bind integer to {ty}").into()),
             },
             SqlParam::Float(f) => match *ty {
-                Type::FLOAT4 => (*f as f32).to_sql(ty, out),
+                Type::FLOAT4 => {
+                    // mirror INT2/INT4 narrowing: refuse to silently truncate
+                    // when the f64 cannot round-trip through f32.
+                    let narrow = *f as f32;
+                    if narrow as f64 != *f && !f.is_nan() {
+                        return Err(format!("float {f} loses precision narrowing to FLOAT4").into());
+                    }
+                    narrow.to_sql(ty, out)
+                }
                 Type::FLOAT8 => f.to_sql(ty, out),
                 _ => Err(format!("cannot bind float to {ty}").into()),
             },
