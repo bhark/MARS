@@ -49,10 +49,13 @@ impl Renderer for TinySkiaRenderer {
             }
         }
 
+        let width = pm.width();
+        let height = pm.height();
+
         Ok(Pixmap {
-            width: pm.width(),
-            height: pm.height(),
-            premultiplied_rgba: pm.data().to_vec(),
+            width,
+            height,
+            premultiplied_rgba: pm.take(),
         })
     }
 }
