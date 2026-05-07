@@ -2286,6 +2286,7 @@ dependencies = [
  "clap",
  "deadpool-postgres",
  "flate2",
+ "jpeg-decoder",
  "mars-bin-shared",
  "mars-compiler",
  "mars-config",
