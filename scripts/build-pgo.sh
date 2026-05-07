@@ -5,10 +5,15 @@
 #          the instrumented binaries dump .profraw files into PGO_DIR.
 # stage 2: merge with llvm-profdata and rebuild bin/mars with -Cprofile-use.
 #
-# the criterion benches (mars-artifact, mars-compiler, mars-runtime) form the
-# training corpus. they exercise the same hot loops the e2e harness does
-# (decode + encode + project + render) without needing docker, which the e2e
-# image-diff harness requires.
+# the training corpus is one criterion bench per dominant runtime hot loop:
+#   mars-artifact/iter          - varint decode + dequantize (~42% cpu)
+#   mars-render/draw_encode     - tiny-skia stroke/fill + png/jpeg encode (~49%)
+#   mars-proj/transform         - reprojection inner loop
+#   mars-runtime/render         - plan/cull/iter call graph (noop renderer)
+#   mars-expr/parse_eval        - filter eval at render time
+#   mars-compiler/decode        - compile-side wkb path; included for parity
+#                                 with the publish path the binary also runs.
+# rationale lives in the PGO plan; if a bench is added/removed, update both.
 #
 # requires: nightly-or-later rustc with PGO support (stable works since 1.37),
 #           and llvm-profdata (rustup component add llvm-tools-preview).
@@ -39,13 +44,18 @@ RUSTFLAGS="-Cprofile-generate=$PGO_DIR" \
 echo "==> stage 1: run benches to dump .profraw"
 # --quick keeps the training pass fast; we only need representative samples
 # to drive the optimiser, not full criterion stats.
-for bench in iter decode render; do
-    pkg=""
-    case "$bench" in
-        iter) pkg="mars-artifact" ;;
-        decode) pkg="mars-compiler" ;;
-        render) pkg="mars-runtime" ;;
-    esac
+# format: "<crate>:<bench>" (one entry per training target).
+corpus=(
+    "mars-artifact:iter"
+    "mars-render:draw_encode"
+    "mars-proj:transform"
+    "mars-runtime:render"
+    "mars-expr:parse_eval"
+    "mars-compiler:decode"
+)
+for spec in "${corpus[@]}"; do
+    pkg="${spec%:*}"
+    bench="${spec#*:}"
     RUSTFLAGS="-Cprofile-generate=$PGO_DIR" \
         cargo bench --profile release-pgo -p "$pkg" --bench "$bench" -- --quick
 done
@@ -61,9 +71,10 @@ echo "==> merging profile data with llvm-profdata"
 llvm-profdata merge -o "$PGO_DIR/merged.profdata" "$PGO_DIR"
 
 echo "==> stage 2: rebuild with -Cprofile-use=$PGO_DIR/merged.profdata"
-# -Cllvm-args=-pgo-warn-missing-function silenced because helper crates with
-# zero coverage in the bench corpus are expected (e.g. wmts paths).
-RUSTFLAGS="-Cprofile-use=$PGO_DIR/merged.profdata -Cllvm-args=-pgo-warn-missing-function=false" \
+# uncovered functions surface as llvm warnings during stage 2. that's the
+# signal we want: it tells us which hot paths the corpus still misses. do
+# not silence it without first triaging what's actually missing.
+RUSTFLAGS="-Cprofile-use=$PGO_DIR/merged.profdata" \
     cargo build --profile release-pgo --workspace --bin mars
 
 echo "==> done. PGO-built mars at target/release-pgo/mars"
