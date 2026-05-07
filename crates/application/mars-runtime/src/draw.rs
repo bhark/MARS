@@ -193,11 +193,14 @@ struct RenderVisitor<'a, 'b> {
 impl GeomVisitor for RenderVisitor<'_, '_> {
     #[inline]
     fn point(&mut self, x: f64, y: f64) {
-        if self.error.is_some() {
+        if self.in_ring {
+            // hot path: per-coord error check would gate every vertex of every
+            // ring. point() can't fail in-ring (no reproject, no allocation
+            // beyond Vec::push), so the gate moves to begin_ring/end_ring.
+            self.f64_scratch.push([x, y]);
             return;
         }
-        if self.in_ring {
-            self.f64_scratch.push([x, y]);
+        if self.error.is_some() {
             return;
         }
         // Point / MultiPoint: standalone vertex. emit 1px square if fill set.
