@@ -58,6 +58,12 @@ const STATUS_FLUSH_INTERVAL: std::time::Duration = std::time::Duration::from_sec
 /// no acks would be flushed in time for a graceful shutdown.
 const IDLE_WAKEUP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 
+/// Upper bound on how long a committed batch may sit in the worker waiting
+/// for the consumer (compiler) to drain. Past this window the slot would
+/// otherwise stall and pg WAL would accumulate without bound. Hitting it
+/// fails the subscription so the compiler resets rather than wedging.
+pub(crate) const DEFAULT_BATCH_SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 /// Spawn the replication subscriber task and return the ack-aware subscription.
 pub(crate) async fn run(
     cfg: Arc<PgConfig>,
@@ -81,6 +87,7 @@ pub(crate) async fn run(
         batch_tx,
         applied_rx,
         cancel: cancel.clone(),
+        batch_send_timeout: cfg.batch_send_timeout.unwrap_or(DEFAULT_BATCH_SEND_TIMEOUT),
     };
     let join = tokio::spawn(worker.run());
 
@@ -152,6 +159,7 @@ struct Worker {
     batch_tx: mpsc::Sender<Result<ChangeBatch, SourceError>>,
     applied_rx: watch::Receiver<u64>,
     cancel: CancellationToken,
+    batch_send_timeout: std::time::Duration,
 }
 
 impl Worker {
@@ -222,7 +230,27 @@ impl Worker {
                     events,
                     source_version: Some(end_lsn.to_string()),
                 };
-                self.batch_tx.send(Ok(batch)).await.map_err(|_| ())
+                // bounded send: if the consumer stalls past the budget we abort the
+                // subscription rather than block, which would pin the slot and let
+                // pg WAL grow without bound.
+                match tokio::time::timeout(self.batch_send_timeout, self.batch_tx.send(Ok(batch))).await {
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err(_)) => Err(()),
+                    Err(_) => {
+                        tracing::error!(
+                            timeout_secs = self.batch_send_timeout.as_secs(),
+                            "replication: batch send stalled; aborting subscription"
+                        );
+                        let _ = self
+                            .batch_tx
+                            .send(Err(SourceError::Backend(format!(
+                                "batch send stalled past {:?}; consumer not draining",
+                                self.batch_send_timeout
+                            ))))
+                            .await;
+                        Err(())
+                    }
+                }
             }
             ReplicationEvent::XLogData { data, .. } => {
                 let msg = match pgoutput::decode(&data) {

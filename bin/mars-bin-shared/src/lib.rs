@@ -50,6 +50,7 @@ pub async fn build_pg_source(cfg: &Config, topology: Option<ReplicationTopology>
         recycle_timeout: pool.recycle_timeout_secs.map(Duration::from_secs),
         statement_timeout: pool.statement_timeout_ms.map(Duration::from_millis),
         fetch_concurrency: pool.fetch_concurrency,
+        batch_send_timeout: pool.batch_send_timeout_secs.map(Duration::from_secs),
     };
     let src = PgSource::connect(pg_cfg).await.context("connect postgres")?;
     Ok(match topology {

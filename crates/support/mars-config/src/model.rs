@@ -209,6 +209,11 @@ pub struct SourcePool {
     /// when fetching a batch of cells. Adapters apply a small default when unset.
     #[serde(default)]
     pub fetch_concurrency: Option<usize>,
+    /// Replication-only: max time the worker will wait for the consumer to
+    /// accept a committed batch. Stalls past this budget abort the subscription
+    /// so the upstream slot does not pin pg WAL indefinitely.
+    #[serde(default)]
+    pub batch_send_timeout_secs: Option<u64>,
 }
 
 /// Change-feed configuration. SPEC §8.2.

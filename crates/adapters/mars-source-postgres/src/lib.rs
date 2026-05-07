@@ -53,6 +53,11 @@ pub struct PgConfig {
     /// single connection inside `fetch_cells`. Falls back to a small default
     /// when `None`. Higher values amortise RTT but stack response buffers.
     pub fetch_concurrency: Option<usize>,
+    /// Maximum time the replication worker will wait for the consumer to
+    /// accept a committed batch before aborting the subscription. Past this
+    /// budget the slot would pin and pg WAL would accumulate without bound.
+    /// Falls back to a sane default when `None`.
+    pub batch_send_timeout: Option<Duration>,
 }
 
 impl std::fmt::Debug for PgConfig {
