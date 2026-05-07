@@ -165,7 +165,7 @@ async fn insert_update_delete_round_trip() {
     assert_eq!(batch.events.len(), 1);
     match &batch.events[0] {
         ChangeEvent::Insert { collection, cells } => {
-            assert_eq!(collection, "roads_c");
+            assert_eq!(collection.as_str(), "roads_c");
             assert_eq!(cells.len(), 1);
         }
         other => panic!("expected Insert, got {other:?}"),
