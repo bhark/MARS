@@ -147,6 +147,28 @@ impl ArtifactReader {
             }
         }
 
+        // mirror writer's invariant: the geometry payload's leading u32 must
+        // match footer.feature_count. cheap, catches malformed/forged blobs.
+        let geom_target = SectionKind::GeometryPayload.as_u16();
+        if let Some(s) = sections.iter().find(|e| e.kind == geom_target) {
+            let file_offset: usize = s
+                .file_offset
+                .try_into()
+                .map_err(|_| ArtifactError::Malformed("section offset too large"))?;
+            if s.length < 4 || bytes.len() < file_offset + 4 {
+                return Err(ArtifactError::Truncated);
+            }
+            let payload_count = u32::from_le_bytes([
+                bytes[file_offset],
+                bytes[file_offset + 1],
+                bytes[file_offset + 2],
+                bytes[file_offset + 3],
+            ]) as u64;
+            if payload_count != feature_count {
+                return Err(ArtifactError::Malformed("feature_count mismatch"));
+            }
+        }
+
         Ok(Self {
             bytes,
             kind,
