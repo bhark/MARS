@@ -50,6 +50,9 @@ impl ArtifactWriter {
         }
     }
 
+    /// Append a raw, pre-encoded section. Duplicate-kind checks (including
+    /// against the typed staging helpers for geometry/class/label) run in
+    /// `finish()`; the builder API stays infallible here.
     pub fn add_section(&mut self, kind: SectionKind, payload: Bytes) -> &mut Self {
         self.sections.push((kind, payload));
         self
@@ -130,6 +133,19 @@ impl ArtifactWriter {
         if let Some(items) = self.pending_label_candidates.take() {
             let bytes = label_candidates::encode_label_candidates(&items)?;
             self.sections.push((SectionKind::LabelCandidates, bytes));
+        }
+
+        // reject duplicate sections (e.g. caller staged geometry via
+        // add_geometry_payload and also pre-encoded one through add_section).
+        // ArtifactReader::open already errors on duplicates; catching it here
+        // gives the encoder side a clear error instead of producing a blob
+        // that fails to open.
+        for i in 0..self.sections.len() {
+            for j in (i + 1)..self.sections.len() {
+                if self.sections[i].0 == self.sections[j].0 {
+                    return Err(ArtifactError::DuplicateSection(self.sections[i].0.as_u16()));
+                }
+            }
         }
 
         let feature_count = self.feature_count.unwrap_or(0);
