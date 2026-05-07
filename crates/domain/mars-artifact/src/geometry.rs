@@ -66,7 +66,7 @@ fn quantize(c: f64) -> Result<i64, ArtifactError> {
 
 #[inline]
 fn dequantize(q: i64) -> f64 {
-    (q as f64) / 1000.0
+    (q as f64) * 0.001
 }
 
 fn write_ring(out: &mut Vec<u8>, ring: &[Coord]) -> Result<(), ArtifactError> {

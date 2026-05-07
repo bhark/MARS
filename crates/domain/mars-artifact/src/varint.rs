@@ -10,6 +10,7 @@ pub(crate) fn write_uvarint(out: &mut Vec<u8>, mut v: u64) {
     out.push(v as u8);
 }
 
+#[inline]
 pub(crate) fn read_uvarint(buf: &[u8], pos: &mut usize) -> Result<u64, ArtifactError> {
     let mut result: u64 = 0;
     let mut shift = 0u32;
@@ -59,6 +60,7 @@ pub(crate) fn write_ivarint(out: &mut Vec<u8>, v: i64) {
     write_uvarint(out, zigzag_encode(v));
 }
 
+#[inline]
 pub(crate) fn read_ivarint(buf: &[u8], pos: &mut usize) -> Result<i64, ArtifactError> {
     Ok(zigzag_decode(read_uvarint(buf, pos)?))
 }
