@@ -2,6 +2,9 @@
 
 MARS is a fast, cloud-first and Kubernetes-friendly single binary for serving WMS and WMTS. It takes a novel approach to self-organizing caching on several tiers, to make scalable WMS/WMTS cheaper, faster and considerably less painful. 
 
+> [!WARNING]
+> This is a pre-alpha WIP. It is NOT suitable for production use. 
+
 ## What?
 
 MARS is a materialised WMS/WMTS service over PostGIS. A `compiler` watches the source database and writes versioned spatial artifacts to an object store; one or more stateless `runtime` replicas render directly from those artifacts via a local SSD cache and `mmap`.
