@@ -220,13 +220,17 @@ done
 
 echo "--- 6. unsafe_code scope ---"
 
-# the designated FFI boundary must opt in explicitly
-if ! grep -q "#\!\[allow(unsafe_code)\]" crates/support/mars-proj/src/lib.rs 2>/dev/null; then
+# the designated FFI boundary must opt in explicitly. match either the lone
+# `#![allow(unsafe_code)]` form or a combined inner allow listing unsafe_code
+# alongside other lints (e.g. `#![allow(clippy::unwrap_used, unsafe_code)]`),
+# so the check cannot be bypassed by hiding unsafe inside a multi-attr allow.
+unsafe_attr_re='#!\[allow\([^)]*\bunsafe_code\b[^)]*\)\]'
+if ! grep -Eq "$unsafe_attr_re" crates/support/mars-proj/src/lib.rs 2>/dev/null; then
     warn "mars-proj (the designated FFI boundary) is missing '#![allow(unsafe_code)]'"
 fi
 
 # no other crate may have a crate-level or module-level allow for unsafe_code
-other_unsafe=$(grep -rl "#!\[allow(unsafe_code)\]" crates/ bin/ --include="*.rs" 2>/dev/null || true)
+other_unsafe=$(grep -rlE "$unsafe_attr_re" crates/ bin/ --include="*.rs" 2>/dev/null || true)
 other_unsafe_filtered=$(echo "$other_unsafe" | grep -v "crates/support/mars-proj/src/lib.rs" | grep -v "crates/adapters/mars-store-fs/src/mmap.rs" || true)
 if [[ -n "$other_unsafe_filtered" ]]; then
     warn "crate-level or module-level '#![allow(unsafe_code)]' found outside permitted boundaries:"

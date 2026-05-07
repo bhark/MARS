@@ -1,4 +1,4 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, unsafe_code)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::env;
 use std::fs;
@@ -67,8 +67,10 @@ fn unknown_band_in_source_binding_is_rejected() {
 }
 
 #[test]
+#[allow(unsafe_code)]
 fn env_default_used_when_unset() {
     let _guard = ENV_LOCK.lock().unwrap();
+    // SAFETY: ENV_LOCK serialises env mutations across these tests.
     unsafe {
         env::remove_var("MARS_TEST_DSN_FORVALTNING");
     }
@@ -93,8 +95,10 @@ interfaces: {}
 }
 
 #[test]
+#[allow(unsafe_code)]
 fn env_unset_no_default_errors() {
     let _guard = ENV_LOCK.lock().unwrap();
+    // SAFETY: ENV_LOCK serialises env mutations across these tests.
     unsafe {
         env::remove_var("MARS_TEST_REQUIRED_VAR");
     }
