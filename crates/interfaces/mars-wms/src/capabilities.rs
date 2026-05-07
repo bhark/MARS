@@ -70,13 +70,14 @@ pub fn capabilities_xml(cfg: &Config, manifest: &Manifest) -> Result<String, Wms
     w.write_event(Event::Start(BytesStart::new("Layer"))).map_err(xml_err)?;
     text_element(&mut w, "Title", &cfg.service.title)?;
 
-    // crs allowlist
-    for crs in &cfg.reprojection.allowlist {
-        text_element(&mut w, "CRS", crs.as_str())?;
-    }
+    // canonical-only crs advertisement: we emit bbox values without a per-crs
+    // transform, so listing every allowlist entry would lie about what's
+    // available. once we round-trip BBOX through the reprojection allowlist
+    // we can advertise the full set again.
+    text_element(&mut w, "CRS", cfg.source.native_crs.as_str())?;
 
     if let Some(bb) = root_bbox {
-        write_bboxes_per_crs(&mut w, cfg, bb)?;
+        write_bbox(&mut w, cfg.source.native_crs.as_str(), bb)?;
     }
 
     // child layers
@@ -89,7 +90,7 @@ pub fn capabilities_xml(cfg: &Config, manifest: &Manifest) -> Result<String, Wms
         }
         let bbox = layer_bboxes.get(&layer.name).copied().or(layer.bbox);
         if let Some(bb) = bbox {
-            write_bboxes_per_crs(&mut w, cfg, bb)?;
+            write_bbox(&mut w, cfg.source.native_crs.as_str(), bb)?;
         }
         if let Some(scale) = &layer.scale {
             if let Some(min) = scale.min {
@@ -177,22 +178,6 @@ fn configured_formats(cfg: &Config) -> Vec<ImageFormat> {
     } else {
         configured
     }
-}
-
-/// Emit one `<BoundingBox>` per advertised CRS at the same canonical
-/// coordinates. WMS 1.3.0 lets clients pick from any advertised CRS; QGIS in
-/// particular wants at minimum a bbox in the canonical CRS plus one per
-/// reprojection allowlist entry.
-fn write_bboxes_per_crs<W: std::io::Write>(w: &mut Writer<W>, cfg: &Config, bbox: Bbox) -> Result<(), WmsError> {
-    let canonical = cfg.source.native_crs.as_str();
-    write_bbox(w, canonical, bbox)?;
-    for crs in &cfg.reprojection.allowlist {
-        if crs.as_str() == canonical {
-            continue;
-        }
-        write_bbox(w, crs.as_str(), bbox)?;
-    }
-    Ok(())
 }
 
 fn write_bbox<W: std::io::Write>(w: &mut Writer<W>, crs: &str, bbox: Bbox) -> Result<(), WmsError> {
@@ -318,15 +303,15 @@ layers:
     }
 
     #[test]
-    fn empty_allowlist_omits_crs() {
-        let mut cfg = minimal_cfg();
-        cfg.reprojection.allowlist.clear();
+    fn advertises_only_canonical_crs() {
+        let cfg = minimal_cfg();
         let m = Manifest::new(1, cfg.service.name.clone(), vec![], vec![], None, vec![]);
         let xml = capabilities_xml(&cfg, &m).unwrap();
-        assert!(
-            !xml.contains("<CRS>"),
-            "expected no CRS elements when allowlist is empty"
-        );
+        // we only emit values in the canonical crs, so the advertised CRS
+        // list and BoundingBox CRS must reflect only that.
+        assert!(xml.contains("<CRS>EPSG:25832</CRS>"));
+        assert!(!xml.contains("<CRS>EPSG:4326</CRS>"));
+        assert!(!xml.contains(r#"CRS="EPSG:4326""#));
     }
 
     #[test]
@@ -372,7 +357,7 @@ layers:
     }
 
     #[test]
-    fn emits_bbox_per_advertised_crs() {
+    fn emits_canonical_bbox_only() {
         let cfg = minimal_cfg();
         let layer = LayerId::new("a");
         let cell = Cell {
@@ -388,9 +373,9 @@ layers:
         };
         let m = Manifest::new(1, cfg.service.name.clone(), vec![], vec![entry], None, vec![]);
         let xml = capabilities_xml(&cfg, &m).unwrap();
-        // canonical + the second allowlist crs (EPSG:4326), no duplicates.
+        // root + child layer = 2 BoundingBox elements, both in canonical crs.
         assert_eq!(xml.matches(r#"CRS="EPSG:25832""#).count(), 2, "{xml}");
-        assert_eq!(xml.matches(r#"CRS="EPSG:4326""#).count(), 2, "{xml}");
+        assert_eq!(xml.matches(r#"CRS="EPSG:4326""#).count(), 0, "{xml}");
     }
 
     #[test]
