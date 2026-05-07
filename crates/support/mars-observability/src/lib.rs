@@ -23,38 +23,23 @@ pub enum ObservabilityError {
     Registry(#[from] prometheus::Error),
 }
 
-/// Stable metric names. Use constants so dashboards survive refactors.
+/// Stable metric names for the metrics actually exposed by [`Metrics`]. Names
+/// land in dashboards, so the public surface here mirrors the facade exactly;
+/// only metrics with a typed setter belong in this module.
 pub mod metrics {
     pub const REQUEST_TOTAL: &str = "mars_request_total";
     pub const REQUEST_DURATION: &str = "mars_request_duration_seconds";
-    pub const REQUEST_FEATURES_READ: &str = "mars_request_features_read";
-    pub const REQUEST_FEATURES_DRAWN: &str = "mars_request_features_drawn";
-    pub const REQUEST_BYTES_READ: &str = "mars_request_bytes_read";
 
-    pub const ARTIFACT_LOOKUP_SECONDS: &str = "mars_artifact_lookup_seconds";
-    pub const ARTIFACT_READ_SECONDS: &str = "mars_artifact_read_seconds";
-    pub const DECODE_SECONDS: &str = "mars_decode_seconds";
-    pub const STYLE_SECONDS: &str = "mars_style_seconds";
     pub const LABEL_SECONDS: &str = "mars_label_seconds";
-    pub const RENDER_SECONDS: &str = "mars_render_seconds";
-    pub const ENCODE_SECONDS: &str = "mars_encode_seconds";
-    pub const REPROJECT_SECONDS: &str = "mars_reproject_seconds";
-
-    pub const CACHE_HITS: &str = "mars_cache_hits_total";
-    pub const CACHE_MISSES: &str = "mars_cache_misses_total";
-    pub const CACHE_BYTES: &str = "mars_cache_bytes";
 
     pub const COMPILER_CHANGE_EVENTS: &str = "mars_compiler_change_events_total";
     pub const COMPILER_DIRTY_CELLS: &str = "mars_compiler_dirty_cells_total";
     pub const COMPILER_REBUILD_DURATION: &str = "mars_compiler_rebuild_duration_seconds";
     pub const COMPILER_WINDOW_LAG: &str = "mars_compiler_window_lag_seconds";
     pub const COMPILER_PUBLISH_RETRIES: &str = "mars_compiler_publish_retries_total";
-    pub const COMPILER_LABEL_CANDIDATES: &str = "mars_compiler_label_candidates_total";
-    pub const COMPILER_LABEL_CANDIDATES_FOREIGN: &str = "mars_compiler_label_candidates_foreign_total";
     pub const CAPABILITIES_REBUILD_FAILURES: &str = "mars_capabilities_rebuild_failures_total";
     pub const MANIFEST_VERSION: &str = "mars_manifest_version";
     pub const MANIFEST_REJECT_TOTAL: &str = "mars_manifest_reject_total";
-    pub const ARTIFACT_VERSION_IN_USE: &str = "mars_artifact_version_in_use";
 }
 
 /// Initialise the global tracing subscriber.
