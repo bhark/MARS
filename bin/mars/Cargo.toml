@@ -38,7 +38,6 @@ mars-source-postgres = { workspace = true }
 mars-render         = { workspace = true }
 mars-artifact       = { workspace = true }
 mars-store          = { workspace = true }
-mars-style          = { workspace = true }
 mars-types          = { workspace = true }
 mars-grid           = { workspace = true }
 mars-bin-shared     = { workspace = true }

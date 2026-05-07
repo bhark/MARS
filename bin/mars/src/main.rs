@@ -15,14 +15,13 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand, ValueEnum};
 use futures_util::StreamExt;
-use mars_bin_shared::{build_pg_source, build_store_and_publisher, load_fonts};
+use mars_bin_shared::{build_pg_source, build_store_and_publisher, build_stylesheet, load_fonts};
 use mars_compiler::{Compiler, Deps as CompilerDeps};
-use mars_config::{ClassStyle, Config, config_dir};
+use mars_config::{Config, config_dir};
 use mars_render::{TinySkiaEncoder, TinySkiaRenderer};
 use mars_runtime::{Deps as RuntimeDeps, Runtime, RuntimeState, run_manifest_reload_loop};
 use mars_store::{LocalCache, ManifestStore};
 use mars_store_fs::FsCache;
-use mars_style::Stylesheet;
 use mars_types::Manifest;
 use tokio_util::sync::CancellationToken;
 
@@ -452,35 +451,6 @@ fn build_cache(cfg: &Config) -> Result<Arc<dyn LocalCache>> {
         FsCache::with_trust_path_hash(&cfg.artifacts.cache.path, max, cfg.artifacts.cache.trust_path_hash)
             .context("open fs cache")?,
     ))
-}
-
-fn build_stylesheet(cfg: &Config) -> Stylesheet {
-    let mut ss = Stylesheet::default();
-    for (name, entry) in &cfg.styles {
-        if let Some(s) = entry.as_geometry() {
-            ss.geometry.insert(name.clone(), Arc::new(s.clone()));
-        } else if let Some(l) = entry.as_label() {
-            ss.labels.insert(name.clone(), Arc::new(l.clone()));
-        }
-    }
-    // also collect inline class styles under `<layer>::<class>` so runtime can
-    // resolve them via the same map; refs are already covered above.
-    for layer in &cfg.layers {
-        for class in &layer.classes {
-            if let ClassStyle::Inline(s) = &class.style {
-                let key = format!("{}::{}", layer.name, class.name);
-                ss.geometry.insert(key, Arc::new(s.clone()));
-            }
-        }
-        // inline label styles land under `<layer>::label` mirroring the
-        // compiler's CompiledLabelSpec::style_id convention.
-        if let Some(label) = &layer.label
-            && let mars_config::LabelStyleAttach::Inline(l) = &label.style
-        {
-            ss.labels.insert(format!("{}::label", layer.name), Arc::new(l.clone()));
-        }
-    }
-    ss
 }
 
 fn empty_manifest(cfg: &Config) -> Manifest {

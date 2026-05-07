@@ -12,7 +12,9 @@
 #![forbid(unsafe_code)]
 
 mod fonts;
+mod stylesheet;
 pub use fonts::load_fonts;
+pub use stylesheet::build_stylesheet;
 
 use std::sync::Arc;
 use std::time::Duration;

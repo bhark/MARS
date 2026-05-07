@@ -2042,7 +2042,6 @@ dependencies = [
  "mars-source-postgres",
  "mars-store",
  "mars-store-fs",
- "mars-style",
  "mars-types",
  "mars-wms",
  "png",
@@ -2085,6 +2084,7 @@ dependencies = [
  "mars-store",
  "mars-store-fs",
  "mars-store-s3",
+ "mars-style",
  "mars-text",
  "tokio",
 ]
@@ -2158,7 +2158,6 @@ dependencies = [
  "mars-source-postgres",
  "mars-store",
  "mars-store-fs",
- "mars-style",
  "mars-types",
  "reqwest",
  "serde",

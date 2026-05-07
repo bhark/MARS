@@ -17,14 +17,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use mars_bin_shared::build_stylesheet;
 use mars_compiler::{Compiler, Deps as CompilerDeps};
-use mars_config::{ClassStyle, Config, config_dir};
+use mars_config::{Config, config_dir};
 use mars_render::{TinySkiaEncoder, TinySkiaRenderer};
 use mars_runtime::{Deps as RuntimeDeps, RenderPlan, Runtime, RuntimeState};
 use mars_source_postgres::{PgConfig, PgSource};
 use mars_store::ManifestStore;
 use mars_store_fs::{FsCache, FsPublisher, FsStore};
-use mars_style::Stylesheet;
 use mars_types::{Bbox, CrsCode, ImageFormat, LayerId};
 use rand::distributions::{Alphanumeric, DistString};
 use tempfile::TempDir;
@@ -297,31 +297,6 @@ async fn run_compile(cfg: &Config) -> Result<()> {
         .await
         .map(|_| ())
         .map_err(|e| anyhow::anyhow!(e))
-}
-
-fn build_stylesheet(cfg: &Config) -> Stylesheet {
-    let mut ss = Stylesheet::default();
-    for (name, entry) in &cfg.styles {
-        if let Some(s) = entry.as_geometry() {
-            ss.geometry.insert(name.clone(), Arc::new(s.clone()));
-        } else if let Some(l) = entry.as_label() {
-            ss.labels.insert(name.clone(), Arc::new(l.clone()));
-        }
-    }
-    for layer in &cfg.layers {
-        for class in &layer.classes {
-            if let ClassStyle::Inline(s) = &class.style {
-                ss.geometry
-                    .insert(format!("{}::{}", layer.name, class.name), Arc::new(s.clone()));
-            }
-        }
-        if let Some(label) = &layer.label
-            && let mars_config::LabelStyleAttach::Inline(l) = &label.style
-        {
-            ss.labels.insert(format!("{}::label", layer.name), Arc::new(l.clone()));
-        }
-    }
-    ss
 }
 
 async fn dump_logs<C>(container: &C)
