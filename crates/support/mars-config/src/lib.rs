@@ -55,6 +55,17 @@ pub enum ConfigError {
     /// Post-parse validation failure.
     #[error("validation: {0}")]
     Invalid(String),
+    /// PROJ introspection failed; cannot determine whether a CRS is metric.
+    /// Distinct from [`ConfigError::Invalid`] so operators can tell a "wrong
+    /// CRS" mistake apart from a broken PROJ install / missing proj.db.
+    #[error("proj unavailable for CRS {code:?}")]
+    ProjUnavailable {
+        /// CRS that PROJ failed to introspect.
+        code: String,
+        /// underlying mars-proj error.
+        #[source]
+        source: mars_proj::ProjError,
+    },
 }
 
 /// Load a configuration document from `path`, resolving `!include` directives
@@ -96,7 +107,7 @@ pub fn validate(config: &Config, config_dir: &Path) -> Result<(), ConfigError> {
     if crs.is_empty() {
         return Err(ConfigError::Invalid("source.native_crs must not be empty".into()));
     }
-    if !is_metric_crs(crs) {
+    if !is_metric_crs(crs)? {
         return Err(ConfigError::Invalid(format!(
             "source.native_crs {:?} is not a recognised metric CRS; mars-runtime requires a metric canonical CRS \
              (units-per-metre = 1). Use a projected, metre-based EPSG code (e.g. EPSG:25832, EPSG:3857).",
@@ -229,9 +240,16 @@ pub fn config_dir(path: &Path) -> PathBuf {
 }
 
 /// Validate that `code` is a projected (metric) CRS using PROJ introspection.
-fn is_metric_crs(code: &str) -> bool {
-    let crs = mars_types::CrsCode::new(code.trim());
-    mars_proj::is_projected(&crs).unwrap_or(false)
+/// PROJ failures (broken install, missing proj.db) surface as
+/// `ConfigError::ProjUnavailable` rather than collapsing into "not metric",
+/// which would mislead operators into thinking they configured the wrong CRS.
+fn is_metric_crs(code: &str) -> Result<bool, ConfigError> {
+    let trimmed = code.trim();
+    let crs = mars_types::CrsCode::new(trimmed);
+    mars_proj::is_projected(&crs).map_err(|source| ConfigError::ProjUnavailable {
+        code: trimmed.to_string(),
+        source,
+    })
 }
 
 #[cfg(test)]
