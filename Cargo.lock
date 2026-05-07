@@ -2296,6 +2296,7 @@ dependencies = [
  "mars-store",
  "mars-store-fs",
  "mars-types",
+ "png",
  "pprof",
  "reqwest",
  "serde",

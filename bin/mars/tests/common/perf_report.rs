@@ -58,6 +58,57 @@ pub struct CaseResult {
     pub max_diff_ratio: f32,
     pub mars: SideTimings,
     pub mapserver: SideTimings,
+    /// fraction (0..=1) of pixels carrying visible content. None on capture
+    /// failure or older bundles that pre-date validity-aware assertions.
+    #[serde(default)]
+    pub mars_coverage: Option<f64>,
+    #[serde(default)]
+    pub mapserver_coverage: Option<f64>,
+}
+
+/// validity classification for a case based on the gap between MARS and
+/// MapServer coverage. used by the host harness to decide whether a pixel-
+/// diff overrun should fail the test or be reported as a soft warning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Validity {
+    /// coverage gap < 2 pp; pixel-diff comparison is honest. budget enforced.
+    Fair,
+    /// 2-10 pp gap; comparison is suspect (likely partial layer exclusion).
+    /// reported as a warning; not enforced.
+    Suspect,
+    /// gap above 10 pp, or MS effectively empty (under 0.5%). reported as
+    /// info; not enforced. this is the "MapServer can't render this" bucket.
+    Invalid,
+    /// coverage missing on either side (older bundle / capture failure).
+    Unknown,
+}
+
+impl Validity {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Fair => "fair",
+            Self::Suspect => "suspect",
+            Self::Invalid => "invalid",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+pub fn classify(c: &CaseResult) -> Validity {
+    let (Some(mars), Some(ms)) = (c.mars_coverage, c.mapserver_coverage) else {
+        return Validity::Unknown;
+    };
+    if ms < 0.005 {
+        return Validity::Invalid;
+    }
+    let gap = (mars - ms).abs();
+    if gap > 0.10 {
+        Validity::Invalid
+    } else if gap > 0.02 {
+        Validity::Suspect
+    } else {
+        Validity::Fair
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -108,11 +159,11 @@ pub fn render_markdown(bundle: &Bundle) -> String {
     let _ = writeln!(out);
     let _ = writeln!(
         out,
-        "| case | layers | mars p50 | mars p95 | ms p50 | ms p95 | mars/ms p50 | mars failures | ms failures |"
+        "| case | layers | validity | mars cov | ms cov | mars p50 | mars p95 | ms p50 | ms p95 | mars/ms p50 | mars fails | ms fails |"
     );
     let _ = writeln!(
         out,
-        "|------|--------|---------:|---------:|-------:|-------:|------------:|--------------:|------------:|"
+        "|------|--------|----------|---------:|-------:|---------:|---------:|-------:|-------:|------------:|-----------:|---------:|"
     );
     for c in &bundle.cases {
         let ratio = if c.mapserver.p50_ms > 0.0 {
@@ -120,11 +171,19 @@ pub fn render_markdown(bundle: &Bundle) -> String {
         } else {
             "n/a".to_owned()
         };
+        let validity = classify(c).label();
+        let fmt_cov = |v: Option<f64>| match v {
+            Some(x) => format!("{:.3}", x),
+            None => "-".to_owned(),
+        };
         let _ = writeln!(
             out,
-            "| {} | {} | {:.1} | {:.1} | {:.1} | {:.1} | {} | {} | {} |",
+            "| {} | {} | {} | {} | {} | {:.1} | {:.1} | {:.1} | {:.1} | {} | {} | {} |",
             c.name,
             c.layers.join("+"),
+            validity,
+            fmt_cov(c.mars_coverage),
+            fmt_cov(c.mapserver_coverage),
             c.mars.p50_ms,
             c.mars.p95_ms,
             c.mapserver.p50_ms,
