@@ -1,4 +1,5 @@
 use std::os::unix::fs::symlink;
+use std::path::Path;
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -15,7 +16,7 @@ fn k(s: &str) -> ArtifactKey {
 }
 
 fn manifest(version: u64) -> Manifest {
-    Manifest::new(version, "svc", vec![], vec![], None, vec![])
+    Manifest::empty(version, "svc")
 }
 
 #[tokio::test]
@@ -228,6 +229,71 @@ async fn symlink_escape_rejected() {
     assert!(
         matches!(err, StoreError::Backend(_)),
         "expected backend rejection, got {err:?}"
+    );
+}
+
+/// helper for the version-rejection tests: write `manifests/v{n}.json` with
+/// a hand-crafted body and point `manifests/current` at it, sidestepping the
+/// publisher (which only emits the current `MANIFEST_FORMAT_VERSION`).
+fn write_legacy_manifest(root: &Path, version: u64, body: &str) {
+    let dir = root.join("manifests");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(format!("v{version}.json")), body).unwrap();
+    std::fs::write(dir.join("current"), format!("v{version}")).unwrap();
+}
+
+#[tokio::test]
+async fn current_rejects_v1_manifest() {
+    let td = TempDir::new().unwrap();
+    let publisher = FsPublisher::new(td.path()).unwrap();
+    // a minimal v1-shaped body. exact-match rejection means the version
+    // gate trips before serde tries to map fields onto the v3 struct.
+    write_legacy_manifest(
+        publisher.root(),
+        1,
+        r#"{"format_version":1,"version":1,"service":"svc","source_artifacts":[],"layer_artifacts":[],"style_artifact":null}"#,
+    );
+
+    let err = publisher.current().await.unwrap_err();
+    assert!(
+        matches!(err, StoreError::UnsupportedManifestVersion { found: 1, supported: 3 }),
+        "expected UnsupportedManifestVersion {{ found: 1, supported: 3 }}, got {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn current_rejects_v2_manifest() {
+    let td = TempDir::new().unwrap();
+    let publisher = FsPublisher::new(td.path()).unwrap();
+    write_legacy_manifest(
+        publisher.root(),
+        2,
+        r#"{"format_version":2,"version":2,"service":"svc","created_at":{"secs_since_epoch":0,"nanos_since_epoch":0},"source_artifacts":[],"layer_artifacts":[],"style_artifact":null,"empty_layer_cells":[],"source_version":null}"#,
+    );
+
+    let err = publisher.current().await.unwrap_err();
+    assert!(
+        matches!(err, StoreError::UnsupportedManifestVersion { found: 2, supported: 3 }),
+        "expected UnsupportedManifestVersion {{ found: 2, supported: 3 }}, got {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn current_rejects_future_manifest_version() {
+    let td = TempDir::new().unwrap();
+    let publisher = FsPublisher::new(td.path()).unwrap();
+    // forwards-incompatibility: a v4 body must also be rejected, not silently
+    // accepted as "newer therefore probably ok".
+    write_legacy_manifest(
+        publisher.root(),
+        1,
+        r#"{"format_version":4,"version":1,"service":"svc","created_at":{"secs_since_epoch":0,"nanos_since_epoch":0},"bindings":[],"pages":[],"class_sidecars":[],"label_sidecars":[],"style_artifact":null,"source_version":null,"epoch":0}"#,
+    );
+
+    let err = publisher.current().await.unwrap_err();
+    assert!(
+        matches!(err, StoreError::UnsupportedManifestVersion { found: 4, supported: 3 }),
+        "expected UnsupportedManifestVersion {{ found: 4, supported: 3 }}, got {err:?}"
     );
 }
 
