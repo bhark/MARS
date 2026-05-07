@@ -222,15 +222,24 @@ async fn handle_wms(State(state): State<AppState>, headers: HeaderMap, raw_query
 }
 
 /// /wmts is reserved for the WMTS interface that lands with the tile cache.
-/// Until then, return a clean 501 so probing clients get a typed answer
-/// rather than a 404 that suggests the route does not exist.
+/// Until then, return a clean 501 with an OGC 07-057-shaped ExceptionReport
+/// so probing clients get a typed answer rather than a 404 — and don't get a
+/// WMS-shaped exception, which a strict client would reject.
 async fn handle_wmts_not_implemented() -> Response {
-    let exc = WmsException {
-        status: StatusCode::NOT_IMPLEMENTED,
-        code: Some("OperationNotSupported"),
-        message: "WMTS is not yet implemented".into(),
-    };
-    wms_exception_response(exc)
+    let body = concat!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>",
+        "<ExceptionReport xmlns=\"http://www.opengis.net/ows/1.1\" version=\"1.1.0\">",
+        "<Exception exceptionCode=\"OperationNotSupported\">",
+        "<ExceptionText>WMTS is not yet implemented</ExceptionText>",
+        "</Exception>",
+        "</ExceptionReport>",
+    );
+    let mut resp = (StatusCode::NOT_IMPLEMENTED, body).into_response();
+    resp.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/xml; charset=utf-8"),
+    );
+    resp
 }
 
 async fn handle_ready(State(state): State<AppState>) -> Response {
@@ -498,7 +507,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn wmts_returns_501_with_service_exception() {
+    async fn wmts_returns_501_with_ows_exception_report() {
         let app = empty_router();
         let resp = app
             .oneshot(Request::builder().uri("/wmts").body(Body::empty()).unwrap())
@@ -506,7 +515,9 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_IMPLEMENTED);
         let body = body_str(resp).await;
-        assert!(body.contains("ServiceExceptionReport"));
+        // OGC 07-057 (WMTS) reuses the OWS ExceptionReport schema, not WMS.
+        assert!(body.contains("ExceptionReport"));
+        assert!(!body.contains("ServiceExceptionReport"));
         assert!(body.contains("OperationNotSupported"));
     }
 
