@@ -17,15 +17,25 @@
 //! a clear error.
 
 use std::env;
-use std::sync::LazyLock;
+use std::sync::OnceLock;
 
 use regex::Regex;
 
 use crate::ConfigError;
 
-#[allow(clippy::expect_used)]
-static ENV_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\$\$|\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}").expect("env regex is valid"));
+const ENV_RE_PATTERN: &str = r"\$\$|\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}";
+
+/// Compile the env-substitution regex once, surfacing failures as a typed
+/// error rather than panicking at module init. The literal is fine today, but
+/// a future tweak that breaks compile would otherwise crash the process
+/// before any logging is initialised.
+fn env_re() -> Result<&'static Regex, ConfigError> {
+    static CELL: OnceLock<Result<Regex, String>> = OnceLock::new();
+    match CELL.get_or_init(|| Regex::new(ENV_RE_PATTERN).map_err(|e| e.to_string())) {
+        Ok(r) => Ok(r),
+        Err(msg) => Err(ConfigError::Invalid(format!("env regex compile failed: {msg}"))),
+    }
+}
 
 /// Apply env substitution to `src`. Unknown variables without a default
 /// produce `EnvMissing`. Double-dollar `$$` is preserved as literal `$`.
@@ -38,7 +48,7 @@ pub(crate) fn substitute(src: &str) -> Result<String, ConfigError> {
     let mut out = String::with_capacity(src.len());
     let mut last_end = 0;
 
-    for caps in ENV_RE.captures_iter(src) {
+    for caps in env_re()?.captures_iter(src) {
         let Some(m) = caps.get(0) else {
             continue;
         };
