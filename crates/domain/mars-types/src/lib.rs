@@ -6,14 +6,11 @@ use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
-/// schema version stamped onto layer-artifact keys (SPEC §10.x). Bumped when the
-/// layer artifact's payload format changes; compiler and runtime read from here
-/// to keep key construction and parsing in lockstep.
-pub const LAYER_SCHEMA_VERSION: u32 = 1;
-
-/// current `Manifest::format_version`. Incremented on incompatible additions to
-/// the on-disk manifest format. Older readers must reject newer values.
-pub const MANIFEST_FORMAT_VERSION: u32 = 2;
+/// current `Manifest::format_version`. Bumped to 3 in LAZARUS Phase B when
+/// the substrate switched from cell-keyed to page-keyed addressing. v3
+/// readers reject anything other than this exact value (no more "accept
+/// `<= max`" — see `mars-store-fs` / `mars-store-s3` manifest readers).
+pub const MANIFEST_FORMAT_VERSION: u32 = 3;
 
 /// upper bound on the on-disk pointer string. Versions are `v\d+` so 32 chars
 /// (`v` + 31 decimal digits) covers anything `u64` can represent comfortably.
@@ -151,11 +148,6 @@ macro_rules! impl_string_newtype {
         }
     };
 }
-
-impl_string_newtype!(
-    /// scale-band identifier (e.g. `"ultra"`, `"hi"`, `"med"`).
-    pub ScaleBand
-);
 
 impl_string_newtype!(
     /// CRS authority code, e.g. `EPSG:25832`. dedup axis (SPEC §7).
@@ -431,14 +423,6 @@ impl LayerSidecarEntry {
     }
 }
 
-/// a spatial partition cell, addressed by `(band, x, y)` in canonical CRS.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct Cell {
-    pub band: ScaleBand,
-    pub x: i64,
-    pub y: i64,
-}
-
 /// 32-byte content hash (BLAKE3) used as physical artifact addressing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ContentHash(pub [u8; 32]);
@@ -476,110 +460,7 @@ fn is_safe_segment(s: &str) -> bool {
     !s.is_empty() && s.len() <= 128 && !s.contains('/') && !s.contains('\0') && s != "." && s != ".."
 }
 
-// hard caps on parsed key shape. honest layer keys are 6 segments / well under
-// 1KB; bound the parse path so a pathological manifest entry can't push us
-// into an unbounded vec allocation.
-const MAX_KEY_LEN: usize = 4096;
-const MAX_KEY_SEGMENTS: usize = 16;
-
-impl ArtifactKey {
-    /// canonical layer-artifact key. shape is `lyr/{layer}/{band}/{cx}_{cy}/v{schema}/{hash}.mars`.
-    pub fn try_build_layer(layer: &LayerId, cell: &Cell, hash: ContentHash) -> Result<Self, ArtifactKeyError> {
-        let layer_s = layer.as_str();
-        let band_s = cell.band.as_str();
-        if !is_safe_segment(layer_s) || !is_safe_segment(band_s) {
-            return Err(ArtifactKeyError::Malformed {
-                key: format!("lyr/{layer_s}/{band_s}/..."),
-            });
-        }
-        Ok(Self::new(format!(
-            "lyr/{layer_s}/{band_s}/{cx}_{cy}/v{ver}/{hex}.mars",
-            cx = cell.x,
-            cy = cell.y,
-            ver = LAYER_SCHEMA_VERSION,
-            hex = hash.to_hex(),
-        )))
-    }
-
-    /// canonical source-artifact key. shape is `src/{collection}/{band}/{cx}_{cy}/{hash}.mars`.
-    pub fn try_build_source(collection: &str, cell: &Cell, hash: ContentHash) -> Result<Self, ArtifactKeyError> {
-        let band_s = cell.band.as_str();
-        if !is_safe_segment(collection) || !is_safe_segment(band_s) {
-            return Err(ArtifactKeyError::Malformed {
-                key: format!("src/{collection}/{band_s}/..."),
-            });
-        }
-        Ok(Self::new(format!(
-            "src/{collection}/{band_s}/{cx}_{cy}/{hex}.mars",
-            cx = cell.x,
-            cy = cell.y,
-            hex = hash.to_hex(),
-        )))
-    }
-
-    /// parse a manifest key into its semantic shape. compiler and runtime use
-    /// the same code path, so a key the compiler writes is, by construction, a
-    /// key the runtime parses.
-    pub fn parse(&self) -> Result<ParsedArtifactKey, ArtifactKeyError> {
-        let s = self.as_str();
-        let bad = || ArtifactKeyError::Malformed { key: s.to_owned() };
-        // a well-formed key is at most ~6 segments and a few hundred bytes; an
-        // attacker-controlled manifest entry should not be able to drive an
-        // unbounded vec allocation here.
-        if s.len() > MAX_KEY_LEN {
-            return Err(bad());
-        }
-        if s.bytes().filter(|b| *b == b'/').count() >= MAX_KEY_SEGMENTS {
-            return Err(bad());
-        }
-        let parts: Vec<&str> = s.split('/').collect();
-        match parts.as_slice() {
-            ["lyr", layer, band, cell, vseg, leaf] => {
-                if !vseg.starts_with('v') || !leaf.ends_with(".mars") {
-                    return Err(bad());
-                }
-                let (cx, cy) = parse_cell_xy(cell).ok_or_else(bad)?;
-                Ok(ParsedArtifactKey::Layer {
-                    layer: LayerId::new((*layer).to_owned()),
-                    cell: Cell {
-                        band: ScaleBand::new((*band).to_owned()),
-                        x: cx,
-                        y: cy,
-                    },
-                })
-            }
-            ["src", coll, band, cell, leaf] => {
-                if !leaf.ends_with(".mars") {
-                    return Err(bad());
-                }
-                let (cx, cy) = parse_cell_xy(cell).ok_or_else(bad)?;
-                Ok(ParsedArtifactKey::Source {
-                    collection: (*coll).to_owned(),
-                    cell: Cell {
-                        band: ScaleBand::new((*band).to_owned()),
-                        x: cx,
-                        y: cy,
-                    },
-                })
-            }
-            _ => Err(bad()),
-        }
-    }
-}
-
-fn parse_cell_xy(seg: &str) -> Option<(i64, i64)> {
-    let (x, y) = seg.split_once('_')?;
-    Some((x.parse().ok()?, y.parse().ok()?))
-}
-
-/// a manifest key parsed back into its semantic shape.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ParsedArtifactKey {
-    Layer { layer: LayerId, cell: Cell },
-    Source { collection: String, cell: Cell },
-}
-
-/// errors raised while parsing an [`ArtifactKey`].
+/// errors raised while building an [`ArtifactKey`] for a known on-disk shape.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum ArtifactKeyError {
     #[error("malformed artifact key '{key}'")]
@@ -604,80 +485,64 @@ impl ImageFormat {
     }
 }
 
-/// marker for a (layer, cell) that falls inside the layer's published domain
-/// but contains no features. emitted by the compiler so the runtime can
-/// distinguish "empty by design" from "manifest broken / incomplete".
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct EmptyLayerCell {
-    pub layer: LayerId,
-    pub cell: Cell,
-}
-
-fn default_manifest_format_version() -> u32 {
-    // legacy floor: pre-v2 manifests omitted the field. readers must
-    // still gate against MANIFEST_FORMAT_VERSION to detect upgrades.
-    1
-}
-
-fn default_manifest_created_at() -> SystemTime {
-    SystemTime::UNIX_EPOCH
-}
-
-/// manifest data-transfer object. SPEC §8.5 / §9.2.
+/// manifest v3 data-transfer object. SPEC §8.5 / §9.2 (post-LAZARUS).
 ///
-/// `format_version` is bumped on incompatible additions to this struct; readers
-/// reject unknown values. `created_at` records publication wall-clock time;
-/// older manifests without the field default to `UNIX_EPOCH` for back-compat.
+/// substrate is `(binding × decimation_level × page)`. each render-time page
+/// lookup is a binary search of `pages` (sorted by `(binding_id, level,
+/// hilbert_range.0)`) plus a bounded linear scan for spatial-bbox hits.
+/// `format_version` is bumped on incompatible changes to this struct; v3
+/// readers reject anything other than the current value (no floor, no
+/// "accept `<= max`" — that contract was retired with the substrate cut).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Manifest {
-    /// On-disk format version of this manifest envelope.
-    #[serde(default = "default_manifest_format_version")]
+    /// On-disk format version of this manifest envelope. Exact-match only.
     pub format_version: u32,
     pub version: u64,
     pub service: String,
     /// publication wall-clock time. SystemTime to avoid pulling chrono into
     /// the workspace; serde encodes as `{ secs_since_epoch, nanos_since_epoch }`.
-    #[serde(default = "default_manifest_created_at")]
     pub created_at: SystemTime,
-    pub source_artifacts: Vec<ArtifactEntry>,
-    pub layer_artifacts: Vec<ArtifactEntry>,
+    pub bindings: Vec<BindingMetadata>,
+    /// page entries sorted by `(binding_id, level, hilbert_range.0)`; a render
+    /// request resolves `(binding_id, level)` first, binary-searches into the
+    /// matching slice, then linear-scans for spatial-bbox intersection.
+    pub pages: Vec<PageEntry>,
+    pub class_sidecars: Vec<LayerSidecarEntry>,
+    pub label_sidecars: Vec<LayerSidecarEntry>,
     pub style_artifact: Option<ArtifactEntry>,
-    /// cells explicitly known to be empty (no features). default = empty vec so
-    /// v1 manifests without the field load cleanly during rollback windows.
-    #[serde(default)]
-    pub empty_layer_cells: Vec<EmptyLayerCell>,
     /// opaque source-side cursor (e.g. pgoutput LSN) at which this manifest's
-    /// state was captured. additive, optional; older manifests deserialise as
-    /// `None` and snapshot compiles set it to `None`.
-    #[serde(default)]
+    /// state was captured. snapshot compiles set this to `None`.
     pub source_version: Option<String>,
+    /// monotonic counter cross-checked by readers as a sanity gate against
+    /// out-of-order manifest pointer publishes.
+    pub epoch: u64,
 }
 
 impl Manifest {
-    /// build a manifest at the current `MANIFEST_FORMAT_VERSION` and `now`.
+    /// build the smallest valid v3 manifest: zero bindings, zero pages, zero
+    /// sidecars. used by stubs and tests; production paths populate the
+    /// collections from compiler output.
     #[must_use]
-    pub fn new(
-        version: u64,
-        service: impl Into<String>,
-        source_artifacts: Vec<ArtifactEntry>,
-        layer_artifacts: Vec<ArtifactEntry>,
-        style_artifact: Option<ArtifactEntry>,
-        empty_layer_cells: Vec<EmptyLayerCell>,
-    ) -> Self {
+    pub fn empty(version: u64, service: impl Into<String>) -> Self {
         Self {
             format_version: MANIFEST_FORMAT_VERSION,
             version,
             service: service.into(),
             created_at: SystemTime::now(),
-            source_artifacts,
-            layer_artifacts,
-            style_artifact,
-            empty_layer_cells,
+            bindings: Vec::new(),
+            pages: Vec::new(),
+            class_sidecars: Vec::new(),
+            label_sidecars: Vec::new(),
+            style_artifact: None,
             source_version: None,
+            epoch: 0,
         }
     }
 }
 
+/// pointer to one object-store-resident artifact carrying ancillary data
+/// (style bundle, page-membership sidecar). page artifacts have richer
+/// metadata and live in `PageEntry`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ArtifactEntry {
     pub key: ArtifactKey,
@@ -720,57 +585,65 @@ mod tests {
     }
 
     #[test]
-    fn manifest_roundtrip() {
-        let m = Manifest::new(1, "demo", vec![], vec![], None, vec![]);
+    fn manifest_empty_roundtrip() {
+        let m = Manifest::empty(1, "demo");
+        assert_eq!(m.format_version, MANIFEST_FORMAT_VERSION);
         let s = serde_json::to_string(&m).unwrap();
         let back: Manifest = serde_json::from_str(&s).unwrap();
         assert_eq!(m, back);
     }
 
     #[test]
-    fn manifest_roundtrip_with_empty_cells() {
-        let m = Manifest::new(
-            1,
-            "demo",
-            vec![],
-            vec![],
-            None,
-            vec![EmptyLayerCell {
-                layer: LayerId::new("roads"),
-                cell: Cell {
-                    band: ScaleBand::new("hi"),
-                    x: 0,
-                    y: 0,
-                },
-            }],
+    fn manifest_roundtrip_populated() {
+        let pk = PageKey {
+            binding_id: BindingId::try_new("buildings").unwrap(),
+            level: DecimationLevel::new(0),
+            page_id: PageId::new(7),
+        };
+        let mut m = Manifest::empty(42, "demo");
+        m.epoch = 1;
+        m.bindings.push(BindingMetadata {
+            binding_id: pk.binding_id.clone(),
+            source_table: "public.buildings".to_owned(),
+            native_crs: CrsCode::new("EPSG:25832"),
+            feature_count_total: 100,
+            levels: vec![],
+            page_membership_sidecar: None,
+        });
+        m.pages.push(PageEntry {
+            key: pk.clone(),
+            content_hash: ContentHash::zero(),
+            spatial_bbox: Bbox::new(0.0, 0.0, 1.0, 1.0),
+            hilbert_range: (HilbertKey::min(), HilbertKey::max()),
+            feature_count: 100,
+            size_bytes: 4096,
+        });
+        m.class_sidecars.push(LayerSidecarEntry {
+            layer_id: LayerId::new("buildings"),
+            page_key: pk,
+            content_hash: ContentHash::zero(),
+            size_bytes: 256,
+            kind: LayerSidecarKind::Class,
+        });
+        let s = serde_json::to_string(&m).unwrap();
+        let back: Manifest = serde_json::from_str(&s).unwrap();
+        assert_eq!(m, back);
+    }
+
+    #[test]
+    fn manifest_rejects_missing_format_version() {
+        // v3 has no serde defaults: a manifest body lacking `format_version`
+        // is a hard parse error, not a silent legacy floor.
+        let valid = serde_json::to_string(&Manifest::empty(1, "x")).unwrap();
+        assert!(serde_json::from_str::<Manifest>(&valid).is_ok());
+
+        // strip the format_version field from the canonical body and confirm
+        // serde refuses to default it.
+        let stripped: String = valid.replacen(&format!(r#""format_version":{MANIFEST_FORMAT_VERSION},"#), "", 1);
+        assert!(
+            serde_json::from_str::<Manifest>(&stripped).is_err(),
+            "missing format_version must be a parse error"
         );
-        let s = serde_json::to_string(&m).unwrap();
-        let back: Manifest = serde_json::from_str(&s).unwrap();
-        assert_eq!(m, back);
-        assert_eq!(back.empty_layer_cells.len(), 1);
-    }
-
-    #[test]
-    fn manifest_back_compat_v1_without_empty_cells() {
-        // v1 on-disk manifest without empty_layer_cells must load with an empty vec
-        // and surface format_version=1 so readers can distinguish legacy payloads.
-        let s = r#"{"version":7,"service":"x","source_artifacts":[],"layer_artifacts":[],"style_artifact":null}"#;
-        let m: Manifest = serde_json::from_str(s).unwrap();
-        assert_eq!(m.version, 7);
-        assert_eq!(m.format_version, 1);
-        assert_eq!(m.created_at, SystemTime::UNIX_EPOCH);
-        assert!(m.empty_layer_cells.is_empty());
-    }
-
-    #[test]
-    fn manifest_back_compat_without_optional_fields() {
-        // legacy on-disk manifest without format_version / created_at must load
-        // and report format_version=1 (the legacy floor), not the current value.
-        let s = r#"{"version":7,"service":"x","source_artifacts":[],"layer_artifacts":[],"style_artifact":null}"#;
-        let m: Manifest = serde_json::from_str(s).unwrap();
-        assert_eq!(m.version, 7);
-        assert_eq!(m.format_version, 1);
-        assert_eq!(m.created_at, SystemTime::UNIX_EPOCH);
     }
 
     #[test]
@@ -786,76 +659,6 @@ mod tests {
         assert_eq!(s, "\"parcels\"");
         let back: LayerId = serde_json::from_str(&s).unwrap();
         assert_eq!(back, l);
-    }
-
-    #[test]
-    fn artifact_key_layer_roundtrip() {
-        let layer = LayerId::new("parcels");
-        let cell = Cell {
-            band: ScaleBand::new("hi"),
-            x: 0,
-            y: 0,
-        };
-        let hash = ContentHash::zero();
-        let key = ArtifactKey::try_build_layer(&layer, &cell, hash).unwrap();
-        match key.parse().unwrap() {
-            ParsedArtifactKey::Layer { layer: l, cell: c } => {
-                assert_eq!(l.as_str(), "parcels");
-                assert_eq!(c.band.as_str(), "hi");
-            }
-            ParsedArtifactKey::Source { .. } => panic!("expected layer"),
-        }
-    }
-
-    #[test]
-    fn artifact_key_source_roundtrip() {
-        let cell = Cell {
-            band: ScaleBand::new("hi"),
-            x: 0,
-            y: 0,
-        };
-        let hash = ContentHash::zero();
-        let key = ArtifactKey::try_build_source("buildings", &cell, hash).unwrap();
-        match key.parse().unwrap() {
-            ParsedArtifactKey::Source { collection, cell: c } => {
-                assert_eq!(collection, "buildings");
-                assert_eq!(c.band.as_str(), "hi");
-            }
-            ParsedArtifactKey::Layer { .. } => panic!("expected source"),
-        }
-    }
-
-    #[test]
-    fn artifact_key_rejects_malformed() {
-        assert!(ArtifactKey::new("nope").parse().is_err());
-        assert!(ArtifactKey::new("lyr/x/y/3_z/v1/a.mars").parse().is_err());
-        assert!(ArtifactKey::new("lyr/x/y/3_4/x1/a.mars").parse().is_err());
-    }
-
-    #[test]
-    fn artifact_key_rejects_unsafe_segments() {
-        let cell = Cell {
-            band: ScaleBand::new("hi"),
-            x: 0,
-            y: 0,
-        };
-        let hash = ContentHash::zero();
-        assert!(
-            ArtifactKey::try_build_source("foo/bar", &cell, hash).is_err(),
-            "slash in collection"
-        );
-        assert!(
-            ArtifactKey::try_build_layer(&LayerId::new(".."), &cell, hash).is_err(),
-            "dotdot in layer"
-        );
-        assert!(
-            ArtifactKey::try_build_layer(&LayerId::new("x\0y"), &cell, hash).is_err(),
-            "null in layer"
-        );
-        assert!(
-            ArtifactKey::try_build_layer(&LayerId::new(""), &cell, hash).is_err(),
-            "empty layer"
-        );
     }
 
     #[test]
