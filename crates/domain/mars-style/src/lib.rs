@@ -223,13 +223,16 @@ pub fn default_placement(kind: LayerGeomKind) -> Placement {
     }
 }
 
-/// Compiled stylesheet, keyed by style name.
+/// Compiled stylesheet, keyed by style name. Both maps share style structs
+/// behind `Arc` so the runtime can clone references without re-allocating
+/// per-feature; previously `geometry` was Arc-shared but `labels` cloned
+/// the whole struct on each layer attach.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Stylesheet {
     #[serde(default)]
     pub geometry: std::collections::BTreeMap<String, Arc<Style>>,
     #[serde(default)]
-    pub labels: std::collections::BTreeMap<String, LabelStyle>,
+    pub labels: std::collections::BTreeMap<String, Arc<LabelStyle>>,
 }
 
 #[cfg(test)]

@@ -144,7 +144,7 @@ fn prepare_layer(
 
         // measure once per candidate. mars-text caches behind the database;
         // re-shaping each time is acceptable for v1 candidate counts.
-        let run = mars_text::measure(&cand.text, style, input.fonts).map_err(|e| {
+        let run = mars_text::measure(&cand.text, style.as_ref(), input.fonts).map_err(|e| {
             RuntimeError::Render(mars_render_port::RenderError::Backend(format!("font measure: {e}")))
         })?;
 
@@ -164,7 +164,7 @@ fn prepare_layer(
             feature_id: cand.feature_id,
             foreign_origin: cand.foreign_origin,
             text: cand.text,
-            style: Arc::new(style.clone()),
+            style: Arc::clone(style),
             anchor: (anchor_x, anchor_y),
             aabb: (min, max),
         });

@@ -460,7 +460,7 @@ fn build_stylesheet(cfg: &Config) -> Stylesheet {
         if let Some(s) = entry.as_geometry() {
             ss.geometry.insert(name.clone(), Arc::new(s.clone()));
         } else if let Some(l) = entry.as_label() {
-            ss.labels.insert(name.clone(), l.clone());
+            ss.labels.insert(name.clone(), Arc::new(l.clone()));
         }
     }
     // also collect inline class styles under `<layer>::<class>` so runtime can
@@ -477,7 +477,7 @@ fn build_stylesheet(cfg: &Config) -> Stylesheet {
         if let Some(label) = &layer.label
             && let mars_config::LabelStyleAttach::Inline(l) = &label.style
         {
-            ss.labels.insert(format!("{}::label", layer.name), l.clone());
+            ss.labels.insert(format!("{}::label", layer.name), Arc::new(l.clone()));
         }
     }
     ss
