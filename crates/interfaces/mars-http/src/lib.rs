@@ -260,9 +260,20 @@ async fn handle_metrics(State(state): State<AppState>) -> Response {
 
 // ---------- helpers ----------
 
+/// Hard cap on incoming `x-request-id`: long enough for UUIDs, short enough
+/// to keep structured-log cardinality and per-line size bounded.
+const REQUEST_ID_MAX_LEN: usize = 128;
+
 fn request_id(state: &AppState, headers: &HeaderMap) -> String {
     if let Some(v) = headers.get("x-request-id").and_then(|h| h.to_str().ok()) {
-        return v.to_owned();
+        // accept only printable ascii (plus space-equivalents) within the cap.
+        // anything else falls back to a counter so a malicious client cannot
+        // inject newlines into structured logs or blow the per-line budget.
+        if (1..=REQUEST_ID_MAX_LEN).contains(&v.len())
+            && v.bytes().all(|b| matches!(b, 0x21..=0x7e))
+        {
+            return v.to_owned();
+        }
     }
     let n = state.request_counter.fetch_add(1, Ordering::Relaxed);
     format!("req-{n}")
