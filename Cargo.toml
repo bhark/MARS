@@ -138,6 +138,16 @@ panic         = "abort"
 inherits      = "release"
 lto           = "fat"
 
+# release-grade codegen with debuginfo retained. used by mars-diff-capture's
+# --profile-case mode: release strips symbols, leaving pprof-rs with only
+# libc dyn symbols to resolve against -> flamegraphs reduce to a single
+# clone() stub. keep debuginfo + the static symbol table here so frame
+# addresses resolve back to MARS / Rust stdlib functions.
+[profile.profiling]
+inherits      = "release"
+debug         = "full"
+strip         = "none"
+
 [profile.dev]
 opt-level = 0
 
