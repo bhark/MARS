@@ -188,14 +188,34 @@ pub fn validate(config: &Config, config_dir: &Path) -> Result<(), ConfigError> {
             }
         }
 
-        if let Some(label) = &layer.label
-            && let LabelStyleAttach::Ref { name } = &label.style
-            && !matches!(config.styles.get(name), Some(StyleEntry::Label(_)))
-        {
-            return Err(ConfigError::Invalid(format!(
-                "layer {} label references unknown or non-label style {:?}",
-                layer.name, name
-            )));
+        if let Some(label) = &layer.label {
+            if let LabelStyleAttach::Ref { name } = &label.style
+                && !matches!(config.styles.get(name), Some(StyleEntry::Label(_)))
+            {
+                return Err(ConfigError::Invalid(format!(
+                    "layer {} label references unknown or non-label style {:?}",
+                    layer.name, name
+                )));
+            }
+
+            if let Some(placement) = &label.placement {
+                let geom = mars_style::LayerGeomKind::parse(layer.kind.as_str());
+                let ok = match (geom, placement) {
+                    (Some(mars_style::LayerGeomKind::Point), mars_style::Placement::Point) => true,
+                    (Some(mars_style::LayerGeomKind::Line), mars_style::Placement::Line { .. }) => true,
+                    (Some(mars_style::LayerGeomKind::Polygon), mars_style::Placement::Polygon { .. }) => true,
+                    // unknown layer kind is rejected separately by other validation paths;
+                    // here we only reject explicit kind/placement mismatches.
+                    (None, _) => true,
+                    _ => false,
+                };
+                if !ok {
+                    return Err(ConfigError::Invalid(format!(
+                        "layer {} placement does not match geometry type {:?}",
+                        layer.name, layer.kind
+                    )));
+                }
+            }
         }
     }
 
@@ -422,6 +442,77 @@ mod tests {
         // zero must be rejected at parse (NonZeroUsize)
         let yaml = "window: 5min\nparallel_cells: 0\n";
         assert!(serde_yaml_ng::from_str::<crate::model::Compiler>(yaml).is_err());
+    }
+
+    #[test]
+    fn rejects_placement_geom_mismatch() {
+        use crate::model::{LabelStyleAttach, LayerLabel};
+        let mut cfg = minimal_config();
+        cfg.layers = vec![Layer {
+            name: mars_types::LayerId::new("roads"),
+            title: String::new(),
+            abstract_: String::new(),
+            kind: "polygon".into(),
+            scale: None,
+            group: None,
+            enable_get_feature_info: false,
+            bbox: None,
+            sources: vec![],
+            classes: vec![],
+            label: Some(LayerLabel {
+                style: LabelStyleAttach::Inline(mars_style::LabelStyle {
+                    font_family: "DejaVu Sans".into(),
+                    font_size: 12.0,
+                    fill: mars_style::Colour::rgb(0, 0, 0),
+                    halo: None,
+                    priority: 0,
+                    min_distance: 0.0,
+                }),
+                text: "{name}".into(),
+                placement: Some(mars_style::Placement::Line {
+                    repeat_m: 250.0,
+                    max_angle_delta_deg: 25.0,
+                }),
+            }),
+        }];
+        assert!(matches!(
+            validate(&cfg, Path::new(".")),
+            Err(ConfigError::Invalid(ref s)) if s.contains("placement does not match")
+        ));
+    }
+
+    #[test]
+    fn accepts_placement_matching_geom() {
+        use crate::model::{LabelStyleAttach, LayerLabel};
+        let mut cfg = minimal_config();
+        cfg.layers = vec![Layer {
+            name: mars_types::LayerId::new("roads"),
+            title: String::new(),
+            abstract_: String::new(),
+            kind: "line".into(),
+            scale: None,
+            group: None,
+            enable_get_feature_info: false,
+            bbox: None,
+            sources: vec![],
+            classes: vec![],
+            label: Some(LayerLabel {
+                style: LabelStyleAttach::Inline(mars_style::LabelStyle {
+                    font_family: "DejaVu Sans".into(),
+                    font_size: 12.0,
+                    fill: mars_style::Colour::rgb(0, 0, 0),
+                    halo: None,
+                    priority: 0,
+                    min_distance: 0.0,
+                }),
+                text: "{name}".into(),
+                placement: Some(mars_style::Placement::Line {
+                    repeat_m: 250.0,
+                    max_angle_delta_deg: 25.0,
+                }),
+            }),
+        }];
+        assert!(validate(&cfg, Path::new(".")).is_ok());
     }
 
     #[test]

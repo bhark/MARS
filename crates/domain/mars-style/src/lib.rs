@@ -139,6 +139,87 @@ pub struct Halo {
     pub width: f32,
 }
 
+/// Label placement strategy. SPEC §5.5.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum Placement {
+    /// Single-anchor placement at the geometry's representative point.
+    Point,
+    /// Repeated placement along a line at fixed arc-length intervals.
+    Line {
+        /// Repeat distance in source-CRS units (metres in projected CRSs).
+        #[serde(default = "Placement::default_repeat_m")]
+        repeat_m: f64,
+        /// Reject candidates whose tangent rotates by more than this across
+        /// the label's footprint, in degrees.
+        #[serde(default = "Placement::default_max_angle_delta_deg")]
+        max_angle_delta_deg: f32,
+    },
+    /// Single-anchor placement inside a polygon.
+    Polygon {
+        /// Anchor selection strategy.
+        #[serde(default)]
+        strategy: PolygonStrategy,
+    },
+}
+
+impl Placement {
+    const fn default_repeat_m() -> f64 {
+        250.0
+    }
+    const fn default_max_angle_delta_deg() -> f32 {
+        25.0
+    }
+}
+
+/// Polygon-label anchor strategy. SPEC §14.1.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PolygonStrategy {
+    /// Place the label at the polygon centroid.
+    #[default]
+    Centroid,
+    /// Reserved for v1.1: constrained inner-skeleton sample.
+    InnerSkeleton,
+}
+
+/// Layer geometry kind. Mirrors the layer `type:` field in service config.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayerGeomKind {
+    Point,
+    Line,
+    Polygon,
+}
+
+impl LayerGeomKind {
+    /// Parse the `type:` field of a layer.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "point" => Some(Self::Point),
+            "line" => Some(Self::Line),
+            "polygon" => Some(Self::Polygon),
+            _ => None,
+        }
+    }
+}
+
+/// Default placement for a layer with no explicit `placement:` block.
+/// SPEC §5.5: lines repeat at 250 m with a 25° angle gate; everything else
+/// gets a single point anchor.
+#[must_use]
+pub fn default_placement(kind: LayerGeomKind) -> Placement {
+    match kind {
+        LayerGeomKind::Line => Placement::Line {
+            repeat_m: 250.0,
+            max_angle_delta_deg: 25.0,
+        },
+        LayerGeomKind::Polygon => Placement::Polygon {
+            strategy: PolygonStrategy::Centroid,
+        },
+        LayerGeomKind::Point => Placement::Point,
+    }
+}
+
 /// Compiled stylesheet, keyed by style name.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Stylesheet {
@@ -205,6 +286,67 @@ mod tests {
         assert_eq!(s.fill.unwrap(), Colour::rgba(0xfa, 0xfa, 0xfa, 0xff));
         assert_eq!(s.stroke.unwrap(), Colour::rgba(0xb4, 0xb4, 0xb4, 0xff));
         assert!((s.stroke_width.unwrap() - 0.6).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn placement_round_trips_each_variant() {
+        let p: Placement = serde_yaml_ng::from_str("kind: point").unwrap();
+        assert!(matches!(p, Placement::Point));
+
+        let p: Placement = serde_yaml_ng::from_str("kind: line").unwrap();
+        match p {
+            Placement::Line {
+                repeat_m,
+                max_angle_delta_deg,
+            } => {
+                assert!((repeat_m - 250.0).abs() < f64::EPSILON);
+                assert!((max_angle_delta_deg - 25.0).abs() < f32::EPSILON);
+            }
+            _ => panic!("expected line"),
+        }
+
+        let p: Placement = serde_yaml_ng::from_str("kind: line\nrepeat_m: 100\nmax_angle_delta_deg: 10").unwrap();
+        match p {
+            Placement::Line {
+                repeat_m,
+                max_angle_delta_deg,
+            } => {
+                assert!((repeat_m - 100.0).abs() < f64::EPSILON);
+                assert!((max_angle_delta_deg - 10.0).abs() < f32::EPSILON);
+            }
+            _ => panic!("expected line"),
+        }
+
+        let p: Placement = serde_yaml_ng::from_str("kind: polygon").unwrap();
+        assert!(matches!(
+            p,
+            Placement::Polygon {
+                strategy: PolygonStrategy::Centroid
+            }
+        ));
+
+        let p: Placement = serde_yaml_ng::from_str("kind: polygon\nstrategy: inner_skeleton").unwrap();
+        assert!(matches!(
+            p,
+            Placement::Polygon {
+                strategy: PolygonStrategy::InnerSkeleton
+            }
+        ));
+    }
+
+    #[test]
+    fn default_placement_picks_per_geom_kind() {
+        assert!(matches!(default_placement(LayerGeomKind::Point), Placement::Point));
+        assert!(matches!(
+            default_placement(LayerGeomKind::Line),
+            Placement::Line { repeat_m: 250.0, .. }
+        ));
+        assert!(matches!(
+            default_placement(LayerGeomKind::Polygon),
+            Placement::Polygon {
+                strategy: PolygonStrategy::Centroid
+            }
+        ));
     }
 
     #[test]

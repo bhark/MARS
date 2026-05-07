@@ -551,9 +551,10 @@ pub struct LayerLabel {
     pub style: LabelStyleAttach,
     /// Text template (`"{column}"`).
     pub text: String,
-    /// Placement rules.
+    /// Placement rules. When omitted, the layer geometry kind drives the
+    /// default (see [`mars_style::default_placement`]).
     #[serde(default)]
-    pub placement: Option<serde_yaml_ng::Value>,
+    pub placement: Option<mars_style::Placement>,
 }
 
 /// Style attachment for a label. Wire form mirrors [`ClassStyle`]:
