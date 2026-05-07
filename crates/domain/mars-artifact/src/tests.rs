@@ -813,9 +813,7 @@ mod spatial_index_tests {
 
     #[test]
     fn query_visit_matches_query() {
-        let items: Vec<_> = (0..100u32)
-            .map(|i| (i, [i as f32, 0.0, i as f32 + 1.0, 1.0]))
-            .collect();
+        let items: Vec<_> = (0..100u32).map(|i| (i, [i as f32, 0.0, i as f32 + 1.0, 1.0])).collect();
         let idx = SpatialIndex::open(build(&items, DEFAULT_NODE_SIZE)).unwrap();
         let q = [10.0, -1.0, 25.0, 2.0];
         let mut a: Vec<u32> = Vec::new();
@@ -904,9 +902,7 @@ mod spatial_index_tests {
     // ---- malformed-input rejection. all paths must Err, never panic. ---------
 
     fn good_bytes() -> Vec<u8> {
-        let items: Vec<_> = (0..64u32)
-            .map(|i| (i, [i as f32, 0.0, i as f32 + 1.0, 1.0]))
-            .collect();
+        let items: Vec<_> = (0..64u32).map(|i| (i, [i as f32, 0.0, i as f32 + 1.0, 1.0])).collect();
         build(&items, 4).to_vec()
     }
 

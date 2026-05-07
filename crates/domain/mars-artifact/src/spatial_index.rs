@@ -327,12 +327,7 @@ impl SpatialIndex {
         let mut level_starts: Vec<u32> = Vec::with_capacity(num_levels as usize + 1);
         for i in 0..=num_levels as usize {
             let o = table_off + i * 4;
-            level_starts.push(u32::from_le_bytes([
-                bytes[o],
-                bytes[o + 1],
-                bytes[o + 2],
-                bytes[o + 3],
-            ]));
+            level_starts.push(u32::from_le_bytes([bytes[o], bytes[o + 1], bytes[o + 2], bytes[o + 3]]));
         }
 
         // monotonic, first == 0, last == num_nodes * NODE_LEN.

@@ -193,10 +193,7 @@ fn bench_query_dilated_bbox(c: &mut Criterion) {
     let n = SMALL;
     let mut items = make_grid(n);
     let extent = page_extent(n);
-    items.push((
-        items.len() as u32,
-        [0.0, extent * 0.5, extent, extent * 0.5 + 1.0],
-    ));
+    items.push((items.len() as u32, [0.0, extent * 0.5, extent, extent * 0.5 + 1.0]));
     let idx = SpatialIndex::open(build_index(&items)).unwrap();
     let q = query_for_hits(n, 500);
     let mut hits = Vec::new();
