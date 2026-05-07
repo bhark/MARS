@@ -75,6 +75,12 @@ pub enum AttrError {
 ///
 /// Returns `AttrError::InputTooLarge` if the row count exceeds `u32::MAX` or
 /// any string field exceeds `u32::MAX` bytes.
+///
+/// **Phase-0 codec, scheduled for replacement.** SPEC §9.3 mandates Apache
+/// Arrow IPC for the attributes section; this informal tag-prefixed format is
+/// a stub used by tests and a few internal call sites until the Arrow port
+/// lands. Do not accumulate new callers around it — when the swap happens,
+/// this signature will be removed in favour of an Arrow-shaped one.
 pub fn encode_row(values: &[(String, AttrValue)]) -> Result<Bytes, AttrError> {
     let count = u32::try_from(values.len()).map_err(|_| AttrError::InputTooLarge { kind: "row count" })?;
     let cap = estimate_size(values);
@@ -107,6 +113,8 @@ pub fn encode_row(values: &[(String, AttrValue)]) -> Result<Bytes, AttrError> {
 
 /// Decode a `(name, AttrValue)` block. Rejects blocks larger than
 /// `MAX_ROW_BYTES` before parsing.
+///
+/// **Phase-0 codec, scheduled for replacement** (see [`encode_row`]).
 pub fn decode_row(bytes: &[u8]) -> Result<Vec<(String, AttrValue)>, AttrError> {
     if bytes.len() > MAX_ROW_BYTES {
         return Err(AttrError::TooLarge {
