@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use mars_style::Style;
+use mars_style::{LabelStyle, Style};
 
 pub use mars_types::ImageFormat;
 
@@ -67,14 +67,14 @@ pub enum DrawOp {
         /// Fill / stroke style.
         style: Arc<Style>,
     },
-    /// Place a label glyph run at an anchor point with the given style ref.
+    /// Place a label glyph run at an anchor point with the given style.
     Label {
-        /// Anchor in pixel space.
+        /// Anchor in pixel space (baseline).
         anchor: (f32, f32),
-        /// Already-shaped text content.
+        /// Plain-text content; renderer shapes and rasterises.
         text: String,
-        /// Reference to a compiled label style.
-        style_ref: String,
+        /// Compiled label style.
+        style: Arc<LabelStyle>,
     },
 }
 

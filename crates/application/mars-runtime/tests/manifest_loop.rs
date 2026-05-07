@@ -141,6 +141,7 @@ fn build_runtime() -> Arc<Runtime> {
         renderer,
         encoder,
         metrics: mars_observability::Metrics::new().expect("metrics"),
+        fonts: std::sync::Arc::new(mars_runtime::Fonts::with_default()),
     }))
 }
 

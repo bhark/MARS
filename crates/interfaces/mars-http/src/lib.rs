@@ -431,6 +431,7 @@ mod tests {
             renderer: Arc::new(NoopRenderer),
             encoder: Arc::new(NoopEncoder),
             metrics: metrics.clone(),
+            fonts: Arc::new(mars_runtime::Fonts::with_default()),
         }))
     }
 

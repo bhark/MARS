@@ -15,7 +15,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand, ValueEnum};
 use futures_util::StreamExt;
-use mars_bin_shared::{build_pg_source, build_store_and_publisher};
+use mars_bin_shared::{build_pg_source, build_store_and_publisher, load_fonts};
 use mars_compiler::{Compiler, Deps as CompilerDeps};
 use mars_config::{ClassStyle, Config, config_dir};
 use mars_render::{TinySkiaEncoder, TinySkiaRenderer};
@@ -158,6 +158,7 @@ async fn run_runtime(cfg: Arc<Config>, shutdown: CancellationToken) -> Result<()
     let (store, publisher) = build_store_and_publisher(&cfg)?;
     let cache = build_cache(&cfg)?;
     let stylesheet = build_stylesheet(&cfg);
+    let fonts = load_fonts(&cfg)?;
 
     let listen = resolve_listen(&cfg)?;
     let wms_cfg = mars_wms::WmsConfig::from_config(&cfg);
@@ -173,6 +174,7 @@ async fn run_runtime(cfg: Arc<Config>, shutdown: CancellationToken) -> Result<()
             renderer: Arc::new(TinySkiaRenderer),
             encoder: Arc::new(TinySkiaEncoder::new(cfg.render.jpeg_quality)),
             metrics: metrics.clone(),
+            fonts,
         },
         pixel_budget,
         None,

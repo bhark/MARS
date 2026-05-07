@@ -268,7 +268,14 @@ mod tests {
         let ops = vec![DrawOp::Label {
             anchor: (0.0, 0.0),
             text: "hi".into(),
-            style_ref: "x".into(),
+            style: Arc::new(mars_style::LabelStyle {
+                font_family: "DejaVu Sans".into(),
+                font_size: 12.0,
+                fill: mars_style::Colour::rgba(0, 0, 0, 255),
+                halo: None,
+                priority: 0,
+                min_distance: 0.0,
+            }),
         }];
         let pm = TinySkiaRenderer.render(canvas, &ops);
         assert!(pm.is_ok(), "label op should be skipped, not error: {pm:?}");

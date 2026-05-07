@@ -163,6 +163,7 @@ async fn demo_mini_matrix() -> Result<()> {
             renderer: Arc::new(TinySkiaRenderer),
             encoder: Arc::new(TinySkiaEncoder::default()),
             metrics: mars_observability::Metrics::new().expect("metrics"),
+            fonts: std::sync::Arc::new(mars_runtime::Fonts::with_default()),
         },
     );
 
@@ -272,6 +273,7 @@ async fn run_compile(cfg: &Config) -> Result<()> {
             store,
             manifest: publisher,
             metrics: mars_observability::Metrics::new().unwrap(),
+            fonts: std::sync::Arc::new(mars_runtime::Fonts::with_default()),
         },
         cfg.clone(),
     );

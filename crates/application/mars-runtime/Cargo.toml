@@ -21,6 +21,8 @@ mars-render-port   = { workspace = true }
 mars-config        = { workspace = true }
 mars-observability = { workspace = true }
 mars-proj          = { workspace = true }
+mars-text          = { workspace = true }
+rstar              = { workspace = true }
 tokio              = { workspace = true }
 tokio-util         = { workspace = true }
 tracing            = { workspace = true }

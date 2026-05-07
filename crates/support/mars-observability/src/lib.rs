@@ -108,6 +108,7 @@ struct MetricsInner {
     compiler_window_lag: Gauge,
     compiler_publish_retries: IntCounter,
     capabilities_rebuild_failures: IntCounter,
+    label_seconds: Histogram,
 }
 
 impl std::fmt::Debug for Metrics {
@@ -167,6 +168,10 @@ impl Metrics {
             metrics::CAPABILITIES_REBUILD_FAILURES,
             "total failures rebuilding the cached WMS capabilities document",
         )?;
+        let label_seconds = Histogram::with_opts(
+            HistogramOpts::new(metrics::LABEL_SECONDS, "label collision pass duration in seconds")
+                .buckets(vec![0.0001, 0.0005, 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0]),
+        )?;
 
         registry.register(Box::new(request_total.clone()))?;
         registry.register(Box::new(request_duration.clone()))?;
@@ -178,6 +183,7 @@ impl Metrics {
         registry.register(Box::new(compiler_window_lag.clone()))?;
         registry.register(Box::new(compiler_publish_retries.clone()))?;
         registry.register(Box::new(capabilities_rebuild_failures.clone()))?;
+        registry.register(Box::new(label_seconds.clone()))?;
 
         Ok(Self {
             inner: Arc::new(MetricsInner {
@@ -192,6 +198,7 @@ impl Metrics {
                 compiler_window_lag,
                 compiler_publish_retries,
                 capabilities_rebuild_failures,
+                label_seconds,
             }),
         })
     }
@@ -251,6 +258,11 @@ impl Metrics {
     /// Increment the capabilities rebuild failure counter.
     pub fn inc_capabilities_rebuild_failures(&self) {
         self.inner.capabilities_rebuild_failures.inc();
+    }
+
+    /// Record one label collision-pass duration.
+    pub fn observe_label_seconds(&self, duration: Duration) {
+        self.inner.label_seconds.observe(duration.as_secs_f64());
     }
 
     /// Encode the current registry as Prometheus text exposition format.

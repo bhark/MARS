@@ -267,6 +267,7 @@ async fn build_runtime(opts: BuildOpts) -> (Runtime, RenderPlan) {
         renderer: Arc::new(NoopRenderer),
         encoder: Arc::new(NoopEncoder),
         metrics: mars_observability::Metrics::new().unwrap(),
+        fonts: std::sync::Arc::new(mars_runtime::Fonts::with_default()),
     };
     let runtime = Runtime::from_state(Arc::new(state), deps);
 

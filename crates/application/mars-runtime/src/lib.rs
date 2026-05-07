@@ -6,6 +6,7 @@
 mod draw;
 mod fetch;
 pub mod key;
+mod labels;
 mod plan;
 pub mod state;
 
@@ -20,6 +21,7 @@ use mars_observability::{Metrics, reject_reason};
 use mars_render_port::{Canvas, Encoder, Renderer};
 use mars_store::{LocalCache, ManifestStore, ObjectStore, StoreError};
 use mars_style::Stylesheet;
+pub use mars_text::Fonts;
 use mars_types::{ArtifactEntry, ArtifactKey, Bbox, CrsCode, ImageFormat, LayerId};
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
@@ -101,6 +103,9 @@ pub struct Deps {
     pub renderer: Arc<dyn Renderer>,
     pub encoder: Arc<dyn Encoder>,
     pub metrics: Metrics,
+    /// font registry shared across the label collision pass and the
+    /// renderer adapter. cheap to clone behind `Arc`.
+    pub fonts: Arc<Fonts>,
 }
 
 /// The render plan as produced by the interface adapter (WMS / WMTS).
@@ -240,7 +245,7 @@ impl Runtime {
         // bottom-layer cell, producing non-deterministic output.
         let cache = self.deps.cache.clone();
         let store = self.deps.store.clone();
-        let layer_with_refs: Vec<(ArtifactReader, SourceKey)> = stream::iter(tasks.into_iter().map(|task| {
+        let layer_with_refs: Vec<(LayerId, ArtifactReader, SourceKey)> = stream::iter(tasks.into_iter().map(|task| {
             let state = state.clone();
             let cache = cache.clone();
             let store = store.clone();
@@ -262,7 +267,7 @@ impl Runtime {
                     x: source_ref.cell_x,
                     y: source_ref.cell_y,
                 };
-                Ok::<_, RuntimeError>(Some((layer_art, key)))
+                Ok::<_, RuntimeError>(Some((task.layer, layer_art, key)))
             }
         }))
         .buffered(8)
@@ -277,7 +282,7 @@ impl Runtime {
         // the footer for no gain.
         let mut unique_keys: Vec<SourceKey> = Vec::new();
         let mut seen: HashSet<SourceKey> = HashSet::new();
-        for (_, k) in &layer_with_refs {
+        for (_, _, k) in &layer_with_refs {
             if seen.insert(k.clone()) {
                 unique_keys.push(k.clone());
             }
@@ -301,13 +306,13 @@ impl Runtime {
         .await?;
         let source_by_key: HashMap<SourceKey, ArtifactReader> = source_readers.into_iter().collect();
 
-        let fetched: Vec<(ArtifactReader, ArtifactReader)> = layer_with_refs
+        let fetched: Vec<(LayerId, ArtifactReader, ArtifactReader)> = layer_with_refs
             .into_iter()
-            .map(|(layer_art, key)| {
+            .map(|(layer, layer_art, key)| {
                 source_by_key
                     .get(&key)
                     .cloned()
-                    .map(|source_art| (source_art, layer_art))
+                    .map(|source_art| (layer, source_art, layer_art))
                     .ok_or_else(|| {
                         RuntimeError::Render(mars_render_port::RenderError::Backend(
                             "internal: source artifact fetch table missing a key".into(),
@@ -333,6 +338,8 @@ impl Runtime {
         let canonical_crs = state.canonical_crs.clone();
         let request_crs = plan.crs.clone();
         let stylesheet_state = state.clone();
+        let fonts = self.deps.fonts.clone();
+        let metrics = self.deps.metrics.clone();
         let bytes = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, RuntimeError> {
             let _permit = permit;
             // build the forward transformer through the per-thread cache so
@@ -343,7 +350,7 @@ impl Runtime {
                 None
             };
             let mut ops = Vec::new();
-            for (source_art, layer_art) in &fetched {
+            for (_, source_art, layer_art) in &fetched {
                 draw::emit_layer_cell(
                     source_art,
                     layer_art,
@@ -354,6 +361,24 @@ impl Runtime {
                     &mut ops,
                 )?;
             }
+            // collect (layer, layer_art) pairs for the label pass. one rtree
+            // is shared across all layers so labels collide globally.
+            let label_layers: Vec<(LayerId, ArtifactReader)> = fetched
+                .iter()
+                .map(|(layer, _, layer_art)| (layer.clone(), layer_art.clone()))
+                .collect();
+            labels::collide_and_emit(
+                &labels::LabelInputs {
+                    layers: &label_layers,
+                    stylesheet: &stylesheet_state.stylesheet,
+                    viewport,
+                    canonical_bbox,
+                    reproject: forward.as_deref(),
+                    fonts: &fonts,
+                    metrics: &metrics,
+                },
+                &mut ops,
+            )?;
             let pixmap = renderer.render(canvas, &ops)?;
             Ok(encoder.encode(&pixmap, format)?)
         })
@@ -854,6 +879,7 @@ mod tests {
                 renderer: renderer.clone(),
                 encoder: Arc::new(NoopEncoder),
                 metrics: mars_observability::Metrics::new().unwrap(),
+                fonts: std::sync::Arc::new(crate::Fonts::with_default()),
             },
         );
 

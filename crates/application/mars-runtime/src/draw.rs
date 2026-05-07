@@ -29,7 +29,7 @@ pub(crate) struct Viewport {
 }
 
 impl Viewport {
-    fn project(self, x: f64, y: f64) -> (f32, f32) {
+    pub(crate) fn project(self, x: f64, y: f64) -> (f32, f32) {
         let w = self.bbox.width();
         let h = self.bbox.height();
         let px = (x - self.bbox.min_x) / w * f64::from(self.width);
