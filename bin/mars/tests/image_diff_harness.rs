@@ -112,7 +112,7 @@ fn cases() -> Vec<Case> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn demo_mini_matrix() -> Result<()> {
+async fn parcels_mini_matrix() -> Result<()> {
     let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/parcels-mini");
     let seed_sql = std::fs::read_to_string(fixture_dir.join("seed.sql")).context("read seed.sql")?;
     let yaml_template = std::fs::read_to_string(fixture_dir.join("service.yaml")).context("read service.yaml")?;

@@ -53,7 +53,7 @@ The MARS YAML refers to these by name:
 ```yaml
 source:
   type: postgis
-  dsn: "postgres://mars@db.example/demo?sslmode=require"
+  dsn: "postgres://mars@db.example/mars?sslmode=require"
   change_feed:
     type: pgoutput
     publication: mars_my_service

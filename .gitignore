@@ -7,6 +7,15 @@
 # diff-harness output bundles (one dir per run)
 /diff-runs
 
+# local-only MapServer parity tooling
+/bin/mars-diff-capture
+/bin/mars/tests/fixtures/forvaltning?
+/bin/mars/tests/fixtures/mapserver-parity
+/bin/mars/tests/forvaltning?_diff_harness.rs
+/bin/mars/tests/mapserver_parity_diff_harness.rs
+/scripts/run-forvaltning?-diff.sh
+/scripts/run-mapserver-parity-diff.sh
+
 # coverage / profiling
 /coverage
 *.profraw

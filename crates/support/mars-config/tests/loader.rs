@@ -72,14 +72,14 @@ fn env_default_used_when_unset() {
     let _guard = ENV_LOCK.lock().unwrap();
     // SAFETY: ENV_LOCK serialises env mutations across these tests.
     unsafe {
-        env::remove_var("MARS_TEST_DSN_FORVALTNING");
+        env::remove_var("MARS_TEST_DSN");
     }
     let dir = tempfile::tempdir().unwrap();
     let yaml = r#"
 service: { name: t }
 source:
   type: postgis
-  dsn: ${MARS_TEST_DSN_FORVALTNING:-postgres://default/x}
+  dsn: ${MARS_TEST_DSN:-postgres://default/x}
   native_crs: EPSG:25832
 artifacts:
   store: { type: fs, path: /tmp/s }

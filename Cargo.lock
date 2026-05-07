@@ -1566,7 +1566,6 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower-service",
- "webpki-roots 1.0.7",
 ]
 
 [[package]]
@@ -2141,32 +2140,6 @@ dependencies = [
  "serde_yaml_ng",
  "tempfile",
  "thiserror 2.0.18",
-]
-
-[[package]]
-name = "mars-diff-capture"
-version = "0.0.1"
-dependencies = [
- "anyhow",
- "clap",
- "mars-bin-shared",
- "mars-compiler",
- "mars-config",
- "mars-observability",
- "mars-render",
- "mars-runtime",
- "mars-source-postgres",
- "mars-store",
- "mars-store-fs",
- "mars-types",
- "reqwest",
- "serde",
- "serde_json",
- "serde_yaml_ng",
- "tokio",
- "tokio-postgres",
- "tokio-util",
- "tracing",
 ]
 
 [[package]]
@@ -3440,7 +3413,6 @@ dependencies = [
  "wasm-bindgen-futures",
  "wasm-streams",
  "web-sys",
- "webpki-roots 1.0.7",
 ]
 
 [[package]]
