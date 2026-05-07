@@ -174,6 +174,14 @@ impl DecodedGeometryCache {
         Some(entry.value.clone())
     }
 
+    /// Drop all retained entries. Diagnostics-only — used by the parity diff
+    /// harness to measure cold-decode wall time across iterations.
+    pub fn clear(&self) {
+        let mut state = self.state.lock();
+        state.lru.clear();
+        state.total_bytes = 0;
+    }
+
     /// Insert a decoded entry under `hash`. Evicts LRU entries until total
     /// bytes ≤ max_bytes; if a single entry exceeds the cap on its own, it is
     /// retained as the sole resident — eviction handles it on the next insert.

@@ -23,6 +23,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 PGO_DIR="${PGO_DIR:-$(pwd)/target/pgo-data}"
+# cap parallel rustc/linker jobs. lto=fat + profile-generate instrumentation
+# blows past 16 GB on a default -j$(nproc); 2 keeps peak RSS well under that
+# while still using both stages' codegen-units=1. override with PGO_JOBS=N.
+PGO_JOBS="${PGO_JOBS:-2}"
 mkdir -p "$PGO_DIR"
 rm -f "$PGO_DIR"/*.profraw "$PGO_DIR"/merged.profdata
 
@@ -37,13 +41,6 @@ if ! command -v llvm-profdata >/dev/null 2>&1; then
     fi
 fi
 
-echo "==> stage 1: build benches with -Cprofile-generate=$PGO_DIR"
-RUSTFLAGS="-Cprofile-generate=$PGO_DIR" \
-    cargo build --profile release-pgo --workspace --benches
-
-echo "==> stage 1: run benches to dump .profraw"
-# --quick keeps the training pass fast; we only need representative samples
-# to drive the optimiser, not full criterion stats.
 # format: "<crate>:<bench>" (one entry per training target).
 corpus=(
     "mars-artifact:iter"
@@ -53,10 +50,19 @@ corpus=(
     "mars-expr:parse_eval"
     "mars-compiler:decode"
 )
+
+# stage 1: build & run each corpus bench with -Cprofile-generate. the
+# instrumented binaries are throwaway, so we drop fat LTO here (overrides
+# release-pgo) to keep linker memory in check; stage 2 still gets fat LTO.
+# --quick keeps the training pass fast; we only need representative samples
+# to drive the optimiser, not full criterion stats.
+echo "==> stage 1: build & run corpus benches with -Cprofile-generate=$PGO_DIR (jobs=$PGO_JOBS)"
 for spec in "${corpus[@]}"; do
     pkg="${spec%:*}"
     bench="${spec#*:}"
     RUSTFLAGS="-Cprofile-generate=$PGO_DIR" \
+    CARGO_PROFILE_RELEASE_PGO_LTO=thin \
+    CARGO_BUILD_JOBS="$PGO_JOBS" \
         cargo bench --profile release-pgo -p "$pkg" --bench "$bench" -- --quick
 done
 
@@ -70,11 +76,12 @@ echo "==> collected $profraw_count .profraw files"
 echo "==> merging profile data with llvm-profdata"
 llvm-profdata merge -o "$PGO_DIR/merged.profdata" "$PGO_DIR"
 
-echo "==> stage 2: rebuild with -Cprofile-use=$PGO_DIR/merged.profdata"
+echo "==> stage 2: rebuild with -Cprofile-use=$PGO_DIR/merged.profdata (jobs=$PGO_JOBS)"
 # uncovered functions surface as llvm warnings during stage 2. that's the
 # signal we want: it tells us which hot paths the corpus still misses. do
 # not silence it without first triaging what's actually missing.
 RUSTFLAGS="-Cprofile-use=$PGO_DIR/merged.profdata" \
+CARGO_BUILD_JOBS="$PGO_JOBS" \
     cargo build --profile release-pgo --workspace --bin mars
 
 echo "==> done. PGO-built mars at target/release-pgo/mars"
