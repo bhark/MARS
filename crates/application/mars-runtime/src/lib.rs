@@ -135,6 +135,9 @@ pub struct Runtime {
     /// hash. amortises the LEB128 varint walk across renders that touch the
     /// same source artifact.
     decoded_cache: Arc<DecodedGeometryCache>,
+    /// rayon-driven parallel emit configuration. when disabled, the emit
+    /// loop runs serially on the calling worker (the pre-Phase-2 path).
+    parallel_emit: mars_config::ParallelEmit,
 }
 
 /// default decoded-geometry cache size when constructed without an explicit one.
@@ -174,6 +177,26 @@ impl Runtime {
         decoded_cache: Arc<DecodedGeometryCache>,
         state: Option<Arc<RuntimeState>>,
     ) -> Self {
+        Self::with_full_config(
+            deps,
+            pixel_budget,
+            decoded_cache,
+            mars_config::ParallelEmit::default(),
+            state,
+        )
+    }
+
+    /// Compose a runtime with all tunables plumbed in. Bin/main uses this to
+    /// thread the resolved render config through; tests delegate via the
+    /// thinner constructors above.
+    #[must_use]
+    pub fn with_full_config(
+        deps: Deps,
+        pixel_budget: u32,
+        decoded_cache: Arc<DecodedGeometryCache>,
+        parallel_emit: mars_config::ParallelEmit,
+        state: Option<Arc<RuntimeState>>,
+    ) -> Self {
         Self {
             state: state.map_or_else(ArcSwapOption::empty, |s| ArcSwapOption::from(Some(s))),
             deps,
@@ -181,6 +204,7 @@ impl Runtime {
             render_sem: Arc::new(Semaphore::new(pixel_budget as usize)),
             pixel_budget,
             decoded_cache,
+            parallel_emit,
         }
     }
 
@@ -197,6 +221,12 @@ impl Runtime {
     #[must_use]
     pub fn decoded_cache_bytes(&self) -> usize {
         self.decoded_cache.current_bytes()
+    }
+
+    /// Drop all retained decoded geometry. Diagnostics-only; used by the
+    /// mapserver-parity diff harness to measure cold-decode wall time.
+    pub fn clear_decoded_cache(&self) {
+        self.decoded_cache.clear();
     }
 
     fn record_reject(&self, reason: String) {
@@ -459,6 +489,7 @@ impl Runtime {
             let fonts = self.deps.fonts.clone();
             let metrics = self.deps.metrics.clone();
             let decoded_cache = self.decoded_cache.clone();
+            let parallel_emit = self.parallel_emit;
             // run the CPU phase on the current worker via block_in_place rather
             // than dispatching to the blocking pool. spawn_blocking adds a
             // 30-80 µs hop into a different thread on every request and shares
@@ -473,14 +504,15 @@ impl Runtime {
                 let _permit = permit;
                 let reproject_pair: draw::ReprojectPair<'_> =
                     needs_reproject.then_some((&canonical_crs, &request_crs));
-                let mut ops = Vec::new();
-                // resolve each unique source artifact into a decoded geometry once
-                // per render, going through the bytes-bounded LRU. on a hit, the
-                // varint walk is amortised across renders that touch the same
-                // source artifact (typical WMTS workloads).
-                let mut decoded_per_render: HashMap<ContentHash, Arc<DecodedSourceGeometry>> = HashMap::new();
-                {
-                    let _emit = tracing::info_span!("cpu.emit").entered();
+                let _emit_outer = tracing::info_span!("cpu.emit").entered();
+                // serial decode pass: dedup source artifacts and resolve each
+                // through the bytes-bounded LRU. emit inputs are built in plan
+                // order, so the per-task vector preserves z-order regardless of
+                // whether the emit step runs serially or in parallel below.
+                let emit_inputs: Vec<(Arc<DecodedSourceGeometry>, ArtifactReader)> = {
+                    let _decode = tracing::info_span!("cpu.emit.decode").entered();
+                    let mut decoded_per_render: HashMap<ContentHash, Arc<DecodedSourceGeometry>> = HashMap::new();
+                    let mut inputs = Vec::with_capacity(fetched.len());
                     for (_, source_art, source_hash, layer_art) in &fetched {
                         let decoded = if let Some(d) = decoded_per_render.get(source_hash) {
                             d.clone()
@@ -497,17 +529,61 @@ impl Runtime {
                             decoded_per_render.insert(*source_hash, d.clone());
                             d
                         };
+                        inputs.push((decoded, layer_art.clone()));
+                    }
+                    inputs
+                };
+
+                // parallel (or serial) emit. each task projects + culls + emits
+                // into a local Vec; chunks are concatenated in plan order to
+                // preserve z-order. emit_layer_cell resolves its own per-thread
+                // PROJ transformer, so workers don't share !Send state.
+                let stylesheet = &stylesheet_state.stylesheet;
+                let chunks: Vec<Vec<mars_render_port::DrawOp>> = if parallel_emit.enabled {
+                    use rayon::prelude::*;
+                    let _par = tracing::info_span!("cpu.emit.parallel").entered();
+                    let min_len = parallel_emit.chunk_size.max(1);
+                    emit_inputs
+                        .par_iter()
+                        .with_min_len(min_len)
+                        .map(|(decoded, layer_art)| -> Result<_, RuntimeError> {
+                            let mut local = Vec::new();
+                            draw::emit_layer_cell(
+                                decoded.as_ref(),
+                                layer_art,
+                                stylesheet,
+                                viewport,
+                                canonical_bbox,
+                                reproject_pair,
+                                &mut local,
+                            )?;
+                            Ok(local)
+                        })
+                        .collect::<Result<Vec<_>, _>>()?
+                } else {
+                    let _ser = tracing::info_span!("cpu.emit.serial").entered();
+                    let mut chunks = Vec::with_capacity(emit_inputs.len());
+                    for (decoded, layer_art) in &emit_inputs {
+                        let mut local = Vec::new();
                         draw::emit_layer_cell(
                             decoded.as_ref(),
                             layer_art,
-                            &stylesheet_state.stylesheet,
+                            stylesheet,
                             viewport,
                             canonical_bbox,
                             reproject_pair,
-                            &mut ops,
+                            &mut local,
                         )?;
+                        chunks.push(local);
                     }
+                    chunks
+                };
+                let mut ops: Vec<mars_render_port::DrawOp> =
+                    Vec::with_capacity(chunks.iter().map(Vec::len).sum());
+                for chunk in chunks {
+                    ops.extend(chunk);
                 }
+                drop(_emit_outer);
                 let geom_ops = ops.len();
                 blocking_span.record("draw_ops", geom_ops as u64);
 
