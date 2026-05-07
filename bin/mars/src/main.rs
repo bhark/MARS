@@ -19,7 +19,7 @@ use mars_bin_shared::{build_pg_source, build_store_and_publisher, build_styleshe
 use mars_compiler::{Compiler, Deps as CompilerDeps};
 use mars_config::{Config, PngCompression as ConfigPngCompression, config_dir};
 use mars_render::{PngCompression as RenderPngCompression, TinySkiaEncoder, TinySkiaRenderer};
-use mars_runtime::{Deps as RuntimeDeps, Runtime, RuntimeState, run_manifest_reload_loop};
+use mars_runtime::{DecodedGeometryCache, Deps as RuntimeDeps, Runtime, RuntimeState, run_manifest_reload_loop};
 use mars_store::{LocalCache, ManifestStore};
 use mars_store_fs::FsCache;
 use mars_types::Manifest;
@@ -190,7 +190,11 @@ async fn run_runtime(cfg: Arc<Config>, shutdown: CancellationToken) -> Result<()
         .render
         .pixel_budget_permits()
         .context("resolve render.pixel_budget")?;
-    let runtime = Arc::new(Runtime::with_pixel_budget(
+    let decoded_cache_bytes = cfg
+        .render
+        .decoded_geometry_cache_bytes()
+        .context("resolve render.decoded_geometry_cache")?;
+    let runtime = Arc::new(Runtime::with_caches(
         RuntimeDeps {
             store,
             cache,
@@ -203,6 +207,7 @@ async fn run_runtime(cfg: Arc<Config>, shutdown: CancellationToken) -> Result<()
             fonts,
         },
         pixel_budget,
+        Arc::new(DecodedGeometryCache::new(decoded_cache_bytes)),
         None,
     ));
 
