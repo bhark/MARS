@@ -368,27 +368,25 @@ impl Runtime {
                     }
                 }
                 tracing::Span::current().record("unique_source_artifacts", unique_keys.len() as u64);
-                let source_readers: Vec<(SourceKey, ArtifactReader)> =
-                    stream::iter(unique_keys.into_iter().map(|k| {
-                        let state = state.clone();
-                        let cache = cache.clone();
-                        let store = store.clone();
-                        async move {
-                            let cell = mars_types::Cell {
-                                band: mars_types::ScaleBand::new(k.band.clone()),
-                                x: k.x,
-                                y: k.y,
-                            };
-                            let reader =
-                                fetch::fetch_source(&state, cache.as_ref(), store.as_ref(), &k.collection, &cell)
-                                    .await?;
-                            Ok::<_, RuntimeError>((k, reader))
-                        }
-                    }))
-                    .buffer_unordered(8)
-                    .try_collect::<Vec<_>>()
-                    .instrument(tracing::info_span!("fetch.source_artifacts"))
-                    .await?;
+                let source_readers: Vec<(SourceKey, ArtifactReader)> = stream::iter(unique_keys.into_iter().map(|k| {
+                    let state = state.clone();
+                    let cache = cache.clone();
+                    let store = store.clone();
+                    async move {
+                        let cell = mars_types::Cell {
+                            band: mars_types::ScaleBand::new(k.band.clone()),
+                            x: k.x,
+                            y: k.y,
+                        };
+                        let reader =
+                            fetch::fetch_source(&state, cache.as_ref(), store.as_ref(), &k.collection, &cell).await?;
+                        Ok::<_, RuntimeError>((k, reader))
+                    }
+                }))
+                .buffer_unordered(8)
+                .try_collect::<Vec<_>>()
+                .instrument(tracing::info_span!("fetch.source_artifacts"))
+                .await?;
                 let source_by_key: HashMap<SourceKey, ArtifactReader> = source_readers.into_iter().collect();
 
                 layer_with_refs
@@ -496,13 +494,11 @@ impl Runtime {
             };
             let bytes = match tokio::runtime::Handle::current().runtime_flavor() {
                 tokio::runtime::RuntimeFlavor::MultiThread => tokio::task::block_in_place(cpu_phase)?,
-                _ => tokio::task::spawn_blocking(cpu_phase)
-                    .await
-                    .map_err(|e| {
-                        RuntimeError::Render(mars_render_port::RenderError::Backend(format!(
-                            "render task panicked: {e}"
-                        )))
-                    })??,
+                _ => tokio::task::spawn_blocking(cpu_phase).await.map_err(|e| {
+                    RuntimeError::Render(mars_render_port::RenderError::Backend(format!(
+                        "render task panicked: {e}"
+                    )))
+                })??,
             };
             Ok(bytes)
         }
