@@ -28,6 +28,11 @@ pub mod units;
 
 pub use model::*;
 
+// `ScaleBand` is a config-only concept post-LAZARUS Phase B (no longer a
+// substrate axis). re-exported from mars-types for now; the canonical
+// definition moves into this crate as the v3 manifest cut lands.
+pub use mars_types::ScaleBand;
+
 /// Errors emitted by the configuration loader and validator.
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
