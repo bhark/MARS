@@ -266,89 +266,146 @@ impl Runtime {
             // bottom-layer cell, producing non-deterministic output.
             let cache = self.deps.cache.clone();
             let store = self.deps.store.clone();
-            let layer_with_refs: Vec<(LayerId, ArtifactReader, SourceKey)> =
-                stream::iter(tasks.into_iter().map(|task| {
-                    let state = state.clone();
-                    let cache = cache.clone();
-                    let store = store.clone();
-                    async move {
-                        let layer_art =
-                            match fetch::fetch_layer(&state, cache.as_ref(), store.as_ref(), &task.layer, &task.cell)
-                                .await?
+            // single-cell single-layer fast path: most tile responses hit this.
+            // skip the futures pipeline + dedup HashMap when the plan has one
+            // task; preserves z-order trivially since there's only one cell.
+            let fetched: Vec<(LayerId, ArtifactReader, ArtifactReader)> = if let [_] = tasks.as_slice() {
+                // safe: just matched a 1-element slice above.
+                let task = tasks.into_iter().next().unwrap_or_else(|| unreachable!("len == 1"));
+                let layer_with_ref: Option<(LayerId, ArtifactReader, SourceKey)> = async {
+                    let layer_art =
+                        match fetch::fetch_layer(&state, cache.as_ref(), store.as_ref(), &task.layer, &task.cell)
+                            .await?
+                        {
+                            Some(reader) => reader,
+                            None => return Ok::<_, RuntimeError>(None),
+                        };
+                    let source_ref = layer_art.source_ref().cloned().ok_or_else(|| {
+                        RuntimeError::Config(mars_config::ConfigError::Invalid(format!(
+                            "layer artifact '{}' is missing source_ref footer",
+                            task.layer
+                        )))
+                    })?;
+                    let key = SourceKey {
+                        collection: source_ref.collection,
+                        band: source_ref.band,
+                        x: source_ref.cell_x,
+                        y: source_ref.cell_y,
+                    };
+                    Ok(Some((task.layer, layer_art, key)))
+                }
+                .instrument(tracing::info_span!("fetch.layer_artifacts"))
+                .await?;
+                tracing::Span::current().record("fetched_layer_artifacts", layer_with_ref.is_some() as u64);
+                match layer_with_ref {
+                    None => Vec::new(),
+                    Some((layer, layer_art, key)) => {
+                        tracing::Span::current().record("unique_source_artifacts", 1u64);
+                        let cell = mars_types::Cell {
+                            band: mars_types::ScaleBand::new(key.band.clone()),
+                            x: key.x,
+                            y: key.y,
+                        };
+                        let source_art = async {
+                            fetch::fetch_source(&state, cache.as_ref(), store.as_ref(), &key.collection, &cell).await
+                        }
+                        .instrument(tracing::info_span!("fetch.source_artifacts"))
+                        .await?;
+                        vec![(layer, source_art, layer_art)]
+                    }
+                }
+            } else {
+                let layer_with_refs: Vec<(LayerId, ArtifactReader, SourceKey)> =
+                    stream::iter(tasks.into_iter().map(|task| {
+                        let state = state.clone();
+                        let cache = cache.clone();
+                        let store = store.clone();
+                        async move {
+                            let layer_art = match fetch::fetch_layer(
+                                &state,
+                                cache.as_ref(),
+                                store.as_ref(),
+                                &task.layer,
+                                &task.cell,
+                            )
+                            .await?
                             {
                                 Some(reader) => reader,
                                 None => return Ok(None),
                             };
-                        let source_ref = layer_art.source_ref().cloned().ok_or_else(|| {
-                            RuntimeError::Config(mars_config::ConfigError::Invalid(format!(
-                                "layer artifact '{}' is missing source_ref footer",
-                                task.layer
-                            )))
-                        })?;
-                        let key = SourceKey {
-                            collection: source_ref.collection,
-                            band: source_ref.band,
-                            x: source_ref.cell_x,
-                            y: source_ref.cell_y,
-                        };
-                        Ok::<_, RuntimeError>(Some((task.layer, layer_art, key)))
+                            let source_ref = layer_art.source_ref().cloned().ok_or_else(|| {
+                                RuntimeError::Config(mars_config::ConfigError::Invalid(format!(
+                                    "layer artifact '{}' is missing source_ref footer",
+                                    task.layer
+                                )))
+                            })?;
+                            let key = SourceKey {
+                                collection: source_ref.collection,
+                                band: source_ref.band,
+                                x: source_ref.cell_x,
+                                y: source_ref.cell_y,
+                            };
+                            Ok::<_, RuntimeError>(Some((task.layer, layer_art, key)))
+                        }
+                    }))
+                    .buffered(8)
+                    .try_collect::<Vec<_>>()
+                    .instrument(tracing::info_span!("fetch.layer_artifacts"))
+                    .await?
+                    .into_iter()
+                    .flatten()
+                    .collect();
+                tracing::Span::current().record("fetched_layer_artifacts", layer_with_refs.len() as u64);
+
+                // dedupe source fetches: a single render often binds the same
+                // source cell from several layers; opening the artifact twice
+                // would re-parse the footer for no gain.
+                let mut unique_keys: Vec<SourceKey> = Vec::new();
+                let mut seen: HashSet<SourceKey> = HashSet::new();
+                for (_, _, k) in &layer_with_refs {
+                    if seen.insert(k.clone()) {
+                        unique_keys.push(k.clone());
                     }
-                }))
-                .buffered(8)
-                .try_collect::<Vec<_>>()
-                .instrument(tracing::info_span!("fetch.layer_artifacts"))
-                .await?
-                .into_iter()
-                .flatten()
-                .collect();
-            tracing::Span::current().record("fetched_layer_artifacts", layer_with_refs.len() as u64);
-
-            // dedupe source fetches: a single render often binds the same source
-            // cell from several layers; opening the artifact twice would re-parse
-            // the footer for no gain.
-            let mut unique_keys: Vec<SourceKey> = Vec::new();
-            let mut seen: HashSet<SourceKey> = HashSet::new();
-            for (_, _, k) in &layer_with_refs {
-                if seen.insert(k.clone()) {
-                    unique_keys.push(k.clone());
                 }
-            }
-            tracing::Span::current().record("unique_source_artifacts", unique_keys.len() as u64);
-            let source_readers: Vec<(SourceKey, ArtifactReader)> = stream::iter(unique_keys.into_iter().map(|k| {
-                let state = state.clone();
-                let cache = cache.clone();
-                let store = store.clone();
-                async move {
-                    let cell = mars_types::Cell {
-                        band: mars_types::ScaleBand::new(k.band.clone()),
-                        x: k.x,
-                        y: k.y,
-                    };
-                    let reader =
-                        fetch::fetch_source(&state, cache.as_ref(), store.as_ref(), &k.collection, &cell).await?;
-                    Ok::<_, RuntimeError>((k, reader))
-                }
-            }))
-            .buffer_unordered(8)
-            .try_collect::<Vec<_>>()
-            .instrument(tracing::info_span!("fetch.source_artifacts"))
-            .await?;
-            let source_by_key: HashMap<SourceKey, ArtifactReader> = source_readers.into_iter().collect();
+                tracing::Span::current().record("unique_source_artifacts", unique_keys.len() as u64);
+                let source_readers: Vec<(SourceKey, ArtifactReader)> =
+                    stream::iter(unique_keys.into_iter().map(|k| {
+                        let state = state.clone();
+                        let cache = cache.clone();
+                        let store = store.clone();
+                        async move {
+                            let cell = mars_types::Cell {
+                                band: mars_types::ScaleBand::new(k.band.clone()),
+                                x: k.x,
+                                y: k.y,
+                            };
+                            let reader =
+                                fetch::fetch_source(&state, cache.as_ref(), store.as_ref(), &k.collection, &cell)
+                                    .await?;
+                            Ok::<_, RuntimeError>((k, reader))
+                        }
+                    }))
+                    .buffer_unordered(8)
+                    .try_collect::<Vec<_>>()
+                    .instrument(tracing::info_span!("fetch.source_artifacts"))
+                    .await?;
+                let source_by_key: HashMap<SourceKey, ArtifactReader> = source_readers.into_iter().collect();
 
-            let fetched: Vec<(LayerId, ArtifactReader, ArtifactReader)> = layer_with_refs
-                .into_iter()
-                .map(|(layer, layer_art, key)| {
-                    source_by_key
-                        .get(&key)
-                        .cloned()
-                        .map(|source_art| (layer, source_art, layer_art))
-                        .ok_or_else(|| {
-                            RuntimeError::Render(mars_render_port::RenderError::Backend(
-                                "internal: source artifact fetch table missing a key".into(),
-                            ))
-                        })
-                })
-                .collect::<Result<_, RuntimeError>>()?;
+                layer_with_refs
+                    .into_iter()
+                    .map(|(layer, layer_art, key)| {
+                        source_by_key
+                            .get(&key)
+                            .cloned()
+                            .map(|source_art| (layer, source_art, layer_art))
+                            .ok_or_else(|| {
+                                RuntimeError::Render(mars_render_port::RenderError::Backend(
+                                    "internal: source artifact fetch table missing a key".into(),
+                                ))
+                            })
+                    })
+                    .collect::<Result<_, RuntimeError>>()?
+            };
 
             let canvas = Canvas {
                 width: plan.width,
