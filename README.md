@@ -113,4 +113,4 @@ MARS is dual-licensed under [Apache 2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT) a
 
 
 > [!NOTE]
-> This project has been a long-standing idea too big to swallow. Recent progress in LLM's has made it more approachable, and it is as such in part a research challenge to see how much LLM's can accomplish. Not a single line of code is human-written. The LLM has been given considerable handholding throughout, though, and all architecture, creative decisions and design choices has been strictly defined by an experienced systems architect and software engineer. 
+> This project has been a long-standing idea too big to swallow. Recent progress in LLM's has made it more approachable, and it is as such in part a research challenge to see how much LLM's can accomplish. Not a single line of code is human-written. We've had to give the LLM considerable handholding throughout, though, and all architecture, creative decisions and design choices has been strictly defined by an experienced systems architect and software engineer. 
