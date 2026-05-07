@@ -69,10 +69,7 @@ pub(crate) fn collide_and_emit(input: &LabelInputs<'_>, out: &mut Vec<DrawOp>) -
             continue;
         }
         let env = AABB::from_corners(cand.aabb.0, cand.aabb.1);
-        let conflict = tree
-            .locate_in_envelope_intersecting(&env)
-            .next()
-            .is_some();
+        let conflict = tree.locate_in_envelope_intersecting(&env).next().is_some();
         if conflict {
             continue;
         }
@@ -144,9 +141,8 @@ fn prepare_layer(
 
         // measure once per candidate. mars-text caches behind the database;
         // re-shaping each time is acceptable for v1 candidate counts.
-        let run = mars_text::measure(&cand.text, style.as_ref(), input.fonts).map_err(|e| {
-            RuntimeError::Render(mars_render_port::RenderError::Backend(format!("font measure: {e}")))
-        })?;
+        let run = mars_text::measure(&cand.text, style.as_ref(), input.fonts)
+            .map_err(|e| RuntimeError::Render(mars_render_port::RenderError::Backend(format!("font measure: {e}"))))?;
 
         let halo_w = style.halo.as_ref().map(|h| h.width).unwrap_or(0.0);
         let pad = halo_w + style.min_distance;
@@ -265,7 +261,9 @@ mod tests {
             style: s.clone(),
         };
         match op {
-            DrawOp::Label { ref text, ref style, .. } => {
+            DrawOp::Label {
+                ref text, ref style, ..
+            } => {
                 assert_eq!(text, "hi");
                 assert_eq!(style.priority, 1);
             }

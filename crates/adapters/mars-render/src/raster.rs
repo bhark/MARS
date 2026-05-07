@@ -108,8 +108,7 @@ pub(crate) fn draw_label(
     style: &LabelStyle,
     fonts: &Fonts,
 ) -> Result<(), RenderError> {
-    let run = mars_text::measure(text, style, fonts)
-        .map_err(|e| RenderError::Backend(format!("font measure: {e}")))?;
+    let run = mars_text::measure(text, style, fonts).map_err(|e| RenderError::Backend(format!("font measure: {e}")))?;
     let mask = mars_text::rasterise(&run).map_err(|e| RenderError::Backend(format!("font rasterise: {e}")))?;
     if mask.coverage.is_empty() {
         return Ok(());

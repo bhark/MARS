@@ -26,6 +26,10 @@ use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Transform};
 /// system fontconfig may or may not surface DejaVu Sans.
 const BUNDLED_DEJAVU: &[u8] = include_bytes!("../test_fonts/DejaVuSans.ttf");
 
+/// shared font bytes; matches fontdb's `Source::Binary` Arc shape so we can
+/// hold the same allocation without copying.
+type FaceBytes = Arc<dyn AsRef<[u8]> + Send + Sync>;
+
 /// errors produced by `mars-text`.
 #[derive(Debug, Error)]
 pub enum FontError {
@@ -100,12 +104,12 @@ impl Fonts {
     /// resolve `id` to an Arc-backed byte source. for `Source::Binary` this
     /// is the Arc fontdb already holds — no copy. for file-backed sources
     /// (loaded via `load_fonts_dir`) we read once and wrap.
-    fn face_bytes(&self, id: ID) -> Result<(Arc<dyn AsRef<[u8]> + Send + Sync>, u32), FontError> {
+    fn face_bytes(&self, id: ID) -> Result<(FaceBytes, u32), FontError> {
         let (src, index) = self
             .db
             .face_source(id)
             .ok_or_else(|| FontError::FaceLoad(format!("face id {id:?}")))?;
-        let arc: Arc<dyn AsRef<[u8]> + Send + Sync> = match src {
+        let arc: FaceBytes = match src {
             Source::Binary(a) => a,
             Source::File(path) => {
                 let data = std::fs::read(&path)?;
@@ -141,7 +145,7 @@ struct ShapedGlyph {
 struct FaceHandle {
     /// shared ttf bytes so the face outlives the database query without
     /// re-copying the buffer on every measure() call.
-    data: Arc<dyn AsRef<[u8]> + Send + Sync>,
+    data: FaceBytes,
     index: u32,
 }
 
@@ -239,16 +243,26 @@ pub fn rasterise(run: &ShapedRun) -> Result<GlyphMask, FontError> {
     let mut have_box = false;
     for g in &run.glyphs {
         let gid = ttf_parser::GlyphId(g.glyph_id);
-        let Some(bbox) = face.glyph_bounding_box(gid) else { continue };
+        let Some(bbox) = face.glyph_bounding_box(gid) else {
+            continue;
+        };
         let x0 = g.x + f32::from(bbox.x_min) * run.pixels_per_unit;
         let x1 = g.x + f32::from(bbox.x_max) * run.pixels_per_unit;
         // glyph y in font units grows up; pixel y grows down. invert here.
         let y0 = g.y - f32::from(bbox.y_max) * run.pixels_per_unit;
         let y1 = g.y - f32::from(bbox.y_min) * run.pixels_per_unit;
-        if x0 < min_x { min_x = x0; }
-        if y0 < min_y { min_y = y0; }
-        if x1 > max_x { max_x = x1; }
-        if y1 > max_y { max_y = y1; }
+        if x0 < min_x {
+            min_x = x0;
+        }
+        if y0 < min_y {
+            min_y = y0;
+        }
+        if x1 > max_x {
+            max_x = x1;
+        }
+        if y1 > max_y {
+            max_y = y1;
+        }
         have_box = true;
     }
     if !have_box {
@@ -270,8 +284,7 @@ pub fn rasterise(run: &ShapedRun) -> Result<GlyphMask, FontError> {
     let width = (mask_x1 - mask_x0).max(1) as u32;
     let height = (mask_y1 - mask_y0).max(1) as u32;
 
-    let mut pm =
-        Pixmap::new(width, height).ok_or_else(|| FontError::FaceParse(format!("pixmap {width}x{height}")))?;
+    let mut pm = Pixmap::new(width, height).ok_or_else(|| FontError::FaceParse(format!("pixmap {width}x{height}")))?;
 
     let mut paint = Paint::default();
     paint.set_color_rgba8(255, 255, 255, 255);
@@ -369,7 +382,11 @@ mod tests {
         let run = measure("hello", &lbl("DejaVu Sans", 12.0), &fonts).unwrap();
         // dejavu sans 12pt "hello" advances ≈ 30.0 px. allow a wide band; the
         // ratchet check below pins the exact value.
-        assert!(run.advance_x > 20.0 && run.advance_x < 40.0, "advance {} out of band", run.advance_x);
+        assert!(
+            run.advance_x > 20.0 && run.advance_x < 40.0,
+            "advance {} out of band",
+            run.advance_x
+        );
         assert!(run.ascent > 0.0);
         assert!(run.descent > 0.0);
         assert_eq!(run.glyphs.len(), 5);

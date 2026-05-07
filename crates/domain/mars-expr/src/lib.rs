@@ -560,8 +560,7 @@ mod proptests {
                     if !matches!(op, CmpOp::Eq | CmpOp::Ne) {
                         return true;
                     }
-                    !matches!(l, Expr::Literal(Literal::Null))
-                        && !matches!(r, Expr::Literal(Literal::Null))
+                    !matches!(l, Expr::Literal(Literal::Null)) && !matches!(r, Expr::Literal(Literal::Null))
                 })
                 .prop_map(|(op, l, r)| Expr::Cmp {
                     op,

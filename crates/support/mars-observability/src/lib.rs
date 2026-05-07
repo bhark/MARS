@@ -154,8 +154,9 @@ impl Metrics {
             "total failures rebuilding the cached WMS capabilities document",
         )?;
         let label_seconds = Histogram::with_opts(
-            HistogramOpts::new(metrics::LABEL_SECONDS, "label collision pass duration in seconds")
-                .buckets(vec![0.0001, 0.0005, 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0]),
+            HistogramOpts::new(metrics::LABEL_SECONDS, "label collision pass duration in seconds").buckets(vec![
+                0.0001, 0.0005, 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0,
+            ]),
         )?;
 
         registry.register(Box::new(request_total.clone()))?;

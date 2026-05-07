@@ -39,7 +39,7 @@ pub async fn build_pg_source(cfg: &Config, topology: Option<ReplicationTopology>
     // change_feed config is meaningless without replication topology - skip it
     // entirely in snapshot mode so we don't ship empty publication/slot strings
     // that look like a configuration request.
-    let feed = topology.is_some().then(|| cfg.source.change_feed.as_ref()).flatten();
+    let feed = topology.is_some().then_some(cfg.source.change_feed.as_ref()).flatten();
     let pg_cfg = PgConfig {
         dsn: cfg.source.dsn.clone(),
         publication: feed.and_then(|f| f.publication.clone()).unwrap_or_default(),

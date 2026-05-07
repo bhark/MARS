@@ -131,7 +131,9 @@ mod tests {
     }
 
     fn render_png(canvas: Canvas, ops: &[DrawOp]) -> Vec<u8> {
-        let pm = TinySkiaRenderer::new(std::sync::Arc::new(mars_text::Fonts::with_default())).render(canvas, ops).unwrap();
+        let pm = TinySkiaRenderer::new(std::sync::Arc::new(mars_text::Fonts::with_default()))
+            .render(canvas, ops)
+            .unwrap();
         TinySkiaEncoder::default().encode(&pm, ImageFormat::Png).unwrap()
     }
 
@@ -299,7 +301,9 @@ mod tests {
             height: 16,
             background: Some(red()),
         };
-        let pm = TinySkiaRenderer::new(std::sync::Arc::new(mars_text::Fonts::with_default())).render(canvas, &[]).unwrap();
+        let pm = TinySkiaRenderer::new(std::sync::Arc::new(mars_text::Fonts::with_default()))
+            .render(canvas, &[])
+            .unwrap();
         let bytes = TinySkiaEncoder::default().encode(&pm, ImageFormat::Jpeg).unwrap();
         assert!(bytes.starts_with(&[0xFF, 0xD8]), "jpeg SOI marker");
 
@@ -321,7 +325,9 @@ mod tests {
             height: 8,
             background: None,
         };
-        let pm = TinySkiaRenderer::new(std::sync::Arc::new(mars_text::Fonts::with_default())).render(canvas, &[]).unwrap();
+        let pm = TinySkiaRenderer::new(std::sync::Arc::new(mars_text::Fonts::with_default()))
+            .render(canvas, &[])
+            .unwrap();
         let bytes = TinySkiaEncoder::default().encode(&pm, ImageFormat::Jpeg).unwrap();
         let mut dec = jpeg_decoder::Decoder::new(std::io::Cursor::new(&bytes));
         let pixels = dec.decode().unwrap();

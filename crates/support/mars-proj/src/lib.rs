@@ -106,10 +106,7 @@ pub fn is_projected(code: &CrsCode) -> Result<bool, ProjError> {
         unsafe {
             let pj = proj_sys::proj_create(ctx_ptr, definition.as_ptr());
             if pj.is_null() {
-                return Err(ProjError::UnknownCrs(format!(
-                    "{code}: {}",
-                    proj_ctx_error(ctx_ptr)
-                )));
+                return Err(ProjError::UnknownCrs(format!("{code}: {}", proj_ctx_error(ctx_ptr))));
             }
             let ty = proj_sys::proj_get_type(pj);
             proj_sys::proj_destroy(pj);

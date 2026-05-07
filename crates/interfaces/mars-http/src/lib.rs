@@ -278,9 +278,7 @@ fn request_id(state: &AppState, headers: &HeaderMap) -> String {
         // accept only printable ascii (plus space-equivalents) within the cap.
         // anything else falls back to a counter so a malicious client cannot
         // inject newlines into structured logs or blow the per-line budget.
-        if (1..=REQUEST_ID_MAX_LEN).contains(&v.len())
-            && v.bytes().all(|b| matches!(b, 0x21..=0x7e))
-        {
+        if (1..=REQUEST_ID_MAX_LEN).contains(&v.len()) && v.bytes().all(|b| matches!(b, 0x21..=0x7e)) {
             return v.to_owned();
         }
     }
