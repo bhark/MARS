@@ -2,9 +2,11 @@
 
 #![forbid(unsafe_code)]
 
+mod capabilities;
 mod exception;
 mod parse;
 
+pub use capabilities::capabilities_xml;
 pub use exception::ows_exception_report;
 
 use std::collections::BTreeMap;

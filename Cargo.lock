@@ -2578,6 +2578,7 @@ dependencies = [
  "mars-types",
  "percent-encoding",
  "quick-xml 0.39.3",
+ "serde_yaml_ng",
  "thiserror 2.0.18",
 ]
 
