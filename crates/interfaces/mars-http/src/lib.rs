@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! /wms        WMS 1.3.0
-//! /wmts       WMTS 1.0.0 (GetTile; GetCapabilities lands with slice 3)
+//! /wmts       WMTS 1.0.0
 //! /healthz    liveness
 //! /readyz     readiness (gated on a usable manifest)
 //! /metrics    Prometheus scrape
@@ -84,11 +84,20 @@ pub fn capabilities_handle(body: String) -> CapabilitiesHandle {
     Arc::new(ArcSwap::from(Arc::new(CapabilitiesDoc::new(body))))
 }
 
+/// Bundle of per-interface capabilities handles. Travel together through
+/// `router` / `serve` so the signature stays narrow as more interfaces land.
+#[derive(Clone)]
+pub struct CapabilitiesBundle {
+    pub wms: CapabilitiesHandle,
+    pub wmts: CapabilitiesHandle,
+}
+
 /// Shared per-request state.
 #[derive(Clone)]
 struct AppState {
     runtime: Arc<Runtime>,
-    capabilities: CapabilitiesHandle,
+    wms_capabilities: CapabilitiesHandle,
+    wmts_capabilities: CapabilitiesHandle,
     wms_cfg: Arc<WmsConfig>,
     wmts_cfg: Arc<WmtsConfig>,
     metrics: Metrics,
@@ -98,14 +107,15 @@ struct AppState {
 /// Build the router. Exposed for in-process testing via `tower::ServiceExt`.
 pub fn router(
     runtime: Arc<Runtime>,
-    capabilities: CapabilitiesHandle,
+    capabilities: CapabilitiesBundle,
     wms_cfg: WmsConfig,
     wmts_cfg: WmtsConfig,
     metrics: Metrics,
 ) -> Router {
     let state = AppState {
         runtime,
-        capabilities,
+        wms_capabilities: capabilities.wms,
+        wmts_capabilities: capabilities.wmts,
         wms_cfg: Arc::new(wms_cfg),
         wmts_cfg: Arc::new(wmts_cfg),
         metrics,
@@ -131,7 +141,7 @@ pub fn router(
 pub async fn serve(
     cfg: ServerConfig,
     runtime: Arc<Runtime>,
-    capabilities: CapabilitiesHandle,
+    capabilities: CapabilitiesBundle,
     wms_cfg: WmsConfig,
     wmts_cfg: WmtsConfig,
     metrics: Metrics,
@@ -196,24 +206,7 @@ async fn handle_wms(State(state): State<AppState>, headers: HeaderMap, raw_query
         };
 
         match parsed {
-            WmsRequest::GetCapabilities => {
-                let doc = state.capabilities.load_full();
-                let etag_value = match HeaderValue::from_str(&doc.etag) {
-                    Ok(v) => v,
-                    Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "bad etag").into_response(),
-                };
-                if let Some(req_etag) = headers.get(header::IF_NONE_MATCH)
-                    && req_etag == etag_value
-                {
-                    let mut h = HeaderMap::new();
-                    h.insert(header::ETAG, etag_value);
-                    return (StatusCode::NOT_MODIFIED, h).into_response();
-                }
-                let mut h = HeaderMap::new();
-                h.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/xml"));
-                h.insert(header::ETAG, etag_value);
-                (StatusCode::OK, h, doc.body.clone()).into_response()
-            }
+            WmsRequest::GetCapabilities => serve_capabilities(&state.wms_capabilities, &headers),
             WmsRequest::GetMap(plan) => {
                 let mime = plan.format.mime();
                 match state.runtime.render(&plan).await {
@@ -248,15 +241,7 @@ async fn handle_wmts(
         };
 
         match parsed {
-            // capabilities lands with WMTS slice 3; return a typed 501 so probing
-            // clients receive a structured answer rather than the 200/empty body
-            // axum would default to.
-            WmtsRequest::GetCapabilities => wmts_exception_response(EdgeException {
-                status: StatusCode::NOT_IMPLEMENTED,
-                code: Some("OperationNotSupported"),
-                locator: None,
-                message: "WMTS GetCapabilities is not yet implemented".into(),
-            }),
+            WmtsRequest::GetCapabilities => serve_capabilities(&state.wmts_capabilities, &headers),
             WmtsRequest::GetTile(plan) => {
                 let mime = plan.format.mime();
                 match state.runtime.render(&plan).await {
@@ -272,6 +257,25 @@ async fn handle_wmts(
     }
     .instrument(span)
     .await
+}
+
+fn serve_capabilities(handle: &CapabilitiesHandle, headers: &HeaderMap) -> Response {
+    let doc = handle.load_full();
+    let etag_value = match HeaderValue::from_str(&doc.etag) {
+        Ok(v) => v,
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "bad etag").into_response(),
+    };
+    if let Some(req_etag) = headers.get(header::IF_NONE_MATCH)
+        && *req_etag == etag_value
+    {
+        let mut h = HeaderMap::new();
+        h.insert(header::ETAG, etag_value);
+        return (StatusCode::NOT_MODIFIED, h).into_response();
+    }
+    let mut h = HeaderMap::new();
+    h.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/xml"));
+    h.insert(header::ETAG, etag_value);
+    (StatusCode::OK, h, doc.body.clone()).into_response()
 }
 
 async fn handle_ready(State(state): State<AppState>) -> Response {
@@ -558,7 +562,10 @@ mod tests {
         let metrics = Metrics::new().unwrap();
         router(
             empty_runtime(&metrics),
-            capabilities_handle("<caps/>".into()),
+            CapabilitiesBundle {
+                wms: capabilities_handle("<wmscaps/>".into()),
+                wmts: capabilities_handle("<wmtscaps/>".into()),
+            },
             test_wms_cfg(),
             test_wmts_cfg(),
             metrics,
@@ -646,10 +653,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn wmts_get_capabilities_501() {
-        // GetCapabilities lands with WMTS slice 3; until then it returns a
-        // typed 501 OWS exception so probing clients receive a structured
-        // response instead of a 200/empty body.
+    async fn wmts_get_capabilities_200() {
         let app = empty_router();
         let resp = app
             .oneshot(
@@ -660,10 +664,44 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(resp.status(), StatusCode::OK);
+        let ct = resp.headers().get(header::CONTENT_TYPE).cloned().unwrap();
+        assert_eq!(ct, "application/xml");
+        assert!(resp.headers().get(header::ETAG).is_some(), "etag header expected");
         let body = body_str(resp).await;
-        assert!(body.contains("ExceptionReport"));
-        assert!(body.contains(r#"exceptionCode="OperationNotSupported""#));
+        // empty_router seeds with literal "<wmtscaps/>"; the WMS handle holds
+        // a different body so this confirms the right handle was selected.
+        assert!(body.contains("<wmtscaps/>"));
+        assert!(!body.contains("<wmscaps/>"));
+    }
+
+    #[tokio::test]
+    async fn wmts_capabilities_304_on_matching_etag() {
+        let app = empty_router();
+        let first = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/wmts?service=WMTS&version=1.0.0&request=GetCapabilities")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let etag = first.headers().get(header::ETAG).cloned().unwrap();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/wmts?service=WMTS&version=1.0.0&request=GetCapabilities")
+                    .header(header::IF_NONE_MATCH, etag.clone())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(resp.headers().get(header::ETAG).cloned().unwrap(), etag);
+        assert!(body_str(resp).await.is_empty());
     }
 
     #[tokio::test]
@@ -698,7 +736,10 @@ mod tests {
         runtime.swap_state(Arc::new(ready_state_with_band()));
         let app = router(
             runtime,
-            capabilities_handle("<caps/>".into()),
+            CapabilitiesBundle {
+                wms: capabilities_handle("<wmscaps/>".into()),
+                wmts: capabilities_handle("<wmtscaps/>".into()),
+            },
             test_wms_cfg(),
             test_wmts_cfg(),
             metrics,
@@ -757,7 +798,10 @@ mod tests {
         let runtime = empty_runtime(&metrics);
         let app = router(
             runtime.clone(),
-            capabilities_handle("<caps/>".into()),
+            CapabilitiesBundle {
+                wms: capabilities_handle("<wmscaps/>".into()),
+                wmts: capabilities_handle("<wmtscaps/>".into()),
+            },
             test_wms_cfg(),
             test_wmts_cfg(),
             metrics,
@@ -824,7 +868,10 @@ mod tests {
         let caps = capabilities_handle("<caps>v1</caps>".into());
         let app = router(
             empty_runtime(&metrics),
-            caps.clone(),
+            CapabilitiesBundle {
+                wms: caps.clone(),
+                wmts: capabilities_handle("<wmtscaps/>".into()),
+            },
             test_wms_cfg(),
             test_wmts_cfg(),
             metrics,
@@ -909,7 +956,10 @@ mod tests {
         runtime.swap_state(Arc::new(state));
         let app = router(
             runtime,
-            capabilities_handle("<caps/>".into()),
+            CapabilitiesBundle {
+                wms: capabilities_handle("<wmscaps/>".into()),
+                wmts: capabilities_handle("<wmtscaps/>".into()),
+            },
             test_wms_cfg(),
             test_wmts_cfg(),
             metrics,
@@ -939,7 +989,10 @@ mod tests {
         runtime.swap_state(Arc::new(ready_state_with_band()));
         let app = router(
             runtime,
-            capabilities_handle("<caps/>".into()),
+            CapabilitiesBundle {
+                wms: capabilities_handle("<wmscaps/>".into()),
+                wmts: capabilities_handle("<wmtscaps/>".into()),
+            },
             test_wms_cfg(),
             test_wmts_cfg(),
             metrics,

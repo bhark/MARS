@@ -245,17 +245,20 @@ async fn run_runtime(cfg: Arc<Config>, shutdown: CancellationToken) -> Result<()
         }
     });
 
-    let initial_caps = match &manifest_opt {
-        Some(manifest) => mars_wms::capabilities_xml(&cfg, manifest),
-        None => mars_wms::capabilities_xml(&cfg, &empty_manifest(&cfg)),
-    }
-    .map_err(|e| anyhow!("capabilities: {e}"))?;
-    let caps_handle = mars_http::capabilities_handle(initial_caps);
+    let initial_manifest_for_caps = manifest_opt.clone().unwrap_or_else(|| empty_manifest(&cfg));
+    let initial_wms_caps =
+        mars_wms::capabilities_xml(&cfg, &initial_manifest_for_caps).map_err(|e| anyhow!("wms capabilities: {e}"))?;
+    let initial_wmts_caps =
+        mars_wmts::capabilities_xml(&cfg, &initial_manifest_for_caps).map_err(|e| anyhow!("wmts capabilities: {e}"))?;
+    let caps_bundle = mars_http::CapabilitiesBundle {
+        wms: mars_http::capabilities_handle(initial_wms_caps),
+        wmts: mars_http::capabilities_handle(initial_wmts_caps),
+    };
 
     let caps_task = tokio::spawn(rebuild_capabilities_loop(
         manifests.clone(),
         cfg.clone(),
-        caps_handle.clone(),
+        caps_bundle.clone(),
         metrics.clone(),
         shutdown.clone(),
     ));
@@ -263,7 +266,7 @@ async fn run_runtime(cfg: Arc<Config>, shutdown: CancellationToken) -> Result<()
     let serve_result = mars_http::serve(
         mars_http::ServerConfig { listen },
         runtime,
-        caps_handle,
+        caps_bundle,
         wms_cfg,
         wmts_cfg,
         metrics,
@@ -295,7 +298,7 @@ async fn run_runtime(cfg: Arc<Config>, shutdown: CancellationToken) -> Result<()
 async fn rebuild_capabilities_loop(
     manifests: Arc<dyn ManifestStore>,
     cfg: Arc<Config>,
-    handle: mars_http::CapabilitiesHandle,
+    handles: mars_http::CapabilitiesBundle,
     metrics: mars_observability::Metrics,
     shutdown: CancellationToken,
 ) {
@@ -325,10 +328,17 @@ async fn rebuild_capabilities_loop(
             }
         };
         match mars_wms::capabilities_xml(&cfg, &manifest) {
-            Ok(body) => handle.store(Arc::new(mars_http::CapabilitiesDoc::new(body))),
+            Ok(body) => handles.wms.store(Arc::new(mars_http::CapabilitiesDoc::new(body))),
             Err(e) => {
                 metrics.inc_capabilities_rebuild_failures();
-                tracing::error!(error = %e, "capabilities: rebuild failed");
+                tracing::error!(error = %e, "capabilities: wms rebuild failed");
+            }
+        }
+        match mars_wmts::capabilities_xml(&cfg, &manifest) {
+            Ok(body) => handles.wmts.store(Arc::new(mars_http::CapabilitiesDoc::new(body))),
+            Err(e) => {
+                metrics.inc_capabilities_rebuild_failures();
+                tracing::error!(error = %e, "capabilities: wmts rebuild failed");
             }
         }
     }
