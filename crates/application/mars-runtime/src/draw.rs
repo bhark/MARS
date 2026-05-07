@@ -1,13 +1,15 @@
 //! per-cell draw-op emission: decode source + layer artifacts, merge-walk by
 //! feature_id, viewport bbox filter, world→pixel transform, push DrawOp::Path.
 
+use std::sync::Arc;
+
 use mars_artifact::{
     ArtifactReader, GeomType, GeomVisitor, SectionKind, decode_class_assignment, decode_style_refs, iter_feature_index,
     visit_one_geom,
 };
 use mars_proj::Transformer;
 use mars_render_port::{DrawOp, Path, Subpath};
-use mars_style::Stylesheet;
+use mars_style::{Style, Stylesheet};
 use mars_types::Bbox;
 
 use crate::RuntimeError;
@@ -79,6 +81,15 @@ pub(crate) fn emit_layer_cell(
     let style_refs_section = layer.section(SectionKind::StyleRefs)?;
     let style_refs = decode_style_refs(&style_refs_section)?;
 
+    // resolve styles by class_index once per layer so the feature loop
+    // becomes a Vec index instead of a per-feature BTreeMap-by-String probe.
+    // entries are None for style_refs that don't resolve in the stylesheet
+    // (the feature path keeps the same skip-and-debug semantics).
+    let resolved_styles: Vec<Option<Arc<Style>>> = style_refs
+        .iter()
+        .map(|name| stylesheet.geometry.get(name).cloned())
+        .collect();
+
     // shared scratch buffers, reused across features. f64_scratch carries
     // ring coords through the reproject FFI; subpaths is the per-feature
     // accumulator drained into a DrawOp.
@@ -107,20 +118,21 @@ pub(crate) fn emit_layer_cell(
             continue;
         }
 
-        let style_id = match style_refs.get(class_index) {
-            Some(s) => s,
+        let style = match resolved_styles.get(class_index) {
+            Some(Some(s)) => s.clone(),
+            Some(None) => {
+                tracing::debug!(
+                    class_index,
+                    style = %style_refs.get(class_index).map(String::as_str).unwrap_or(""),
+                    "style missing from stylesheet"
+                );
+                continue;
+            }
             None => {
                 tracing::debug!(
                     "class_index {class_index} out of style_refs range ({})",
                     style_refs.len()
                 );
-                continue;
-            }
-        };
-        let style = match stylesheet.geometry.get(style_id) {
-            Some(s) => s.clone(),
-            None => {
-                tracing::debug!("style '{style_id}' missing from stylesheet");
                 continue;
             }
         };

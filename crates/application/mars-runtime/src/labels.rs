@@ -113,15 +113,29 @@ fn prepare_layer(
         return Ok(None);
     }
 
+    // resolve label styles by ref index once per layer; the per-candidate loop
+    // becomes a Vec index instead of a BTreeMap-by-String probe.
+    let resolved_styles: Vec<Option<Arc<LabelStyle>>> = style_refs
+        .iter()
+        .map(|name| input.stylesheet.labels.get(name).cloned())
+        .collect();
+
     let mut out = Vec::with_capacity(candidates.len());
     for cand in candidates {
-        let Some(style_name) = style_refs.get(cand.style_ref_idx as usize) else {
-            tracing::debug!(idx = cand.style_ref_idx, "label style_ref_idx out of range");
-            continue;
-        };
-        let Some(style) = input.stylesheet.labels.get(style_name) else {
-            tracing::debug!(name = %style_name, "label style not in stylesheet");
-            continue;
+        let style = match resolved_styles.get(cand.style_ref_idx as usize) {
+            Some(Some(s)) => s,
+            Some(None) => {
+                tracing::debug!(
+                    idx = cand.style_ref_idx,
+                    name = %style_refs.get(cand.style_ref_idx as usize).map(String::as_str).unwrap_or(""),
+                    "label style not in stylesheet"
+                );
+                continue;
+            }
+            None => {
+                tracing::debug!(idx = cand.style_ref_idx, "label style_ref_idx out of range");
+                continue;
+            }
         };
         let Some((world_x, world_y)) = candidate_anchor(&cand.shape) else {
             continue;
