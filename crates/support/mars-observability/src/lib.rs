@@ -72,6 +72,29 @@ pub mod reject_reason {
     pub const VALIDATION_ERROR: &str = "validation_error";
 }
 
+/// Bucket an HTTP status into one of `2xx/3xx/4xx/5xx/other`. We deliberately
+/// drop the exact code from the metric label to keep cardinality bounded:
+/// emitting raw status codes multiplies by interface (and any future label),
+/// which is the canonical Prometheus footgun. Specific codes belong in logs
+/// and traces, not in metric labels.
+pub mod status_class {
+    pub const C2XX: &str = "2xx";
+    pub const C3XX: &str = "3xx";
+    pub const C4XX: &str = "4xx";
+    pub const C5XX: &str = "5xx";
+    pub const OTHER: &str = "other";
+
+    pub fn bucket(status: u16) -> &'static str {
+        match status {
+            200..=299 => C2XX,
+            300..=399 => C3XX,
+            400..=499 => C4XX,
+            500..=599 => C5XX,
+            _ => OTHER,
+        }
+    }
+}
+
 /// Strongly-typed Prometheus metrics facade. Cheap to clone (`Arc` inside).
 ///
 /// Hides the underlying `Registry` and individual metric handles; callers can
@@ -191,10 +214,9 @@ impl Metrics {
 
     /// Record one completed HTTP request.
     pub fn observe_request(&self, interface: &str, status: u16, duration: Duration) {
-        let status_str = status.to_string();
         self.inner
             .request_total
-            .with_label_values(&[interface, &status_str])
+            .with_label_values(&[interface, status_class::bucket(status)])
             .inc();
         self.inner
             .request_duration
@@ -278,7 +300,7 @@ mod tests {
         let text = m.encode_text().unwrap();
         assert!(text.contains("mars_request_total"));
         assert!(text.contains("interface=\"wms\""));
-        assert!(text.contains("status=\"200\""));
+        assert!(text.contains("status=\"2xx\""));
         assert!(text.contains("mars_request_duration_seconds"));
         assert!(text.contains("mars_manifest_version 42"));
         assert!(text.contains("mars_manifest_reject_total"));
