@@ -114,14 +114,18 @@ impl ArtifactWriter {
         }
 
         // resolve pending geometry now: the encoder both validates input
-        // ordering and lets us cross-check feature_count.
+        // ordering and lets us cross-check feature_count. derive the count
+        // from the staged features when the caller didn't set one.
         if let Some(features) = self.pending_features.take() {
-            if let Some(declared) = self.feature_count
-                && declared != features.len() as u64
-            {
-                return Err(ArtifactError::InvalidWriterState(
-                    "feature_count does not match encoded feature count",
-                ));
+            let actual = features.len() as u64;
+            match self.feature_count {
+                Some(declared) if declared != actual => {
+                    return Err(ArtifactError::InvalidWriterState(
+                        "feature_count does not match encoded feature count",
+                    ));
+                }
+                None => self.feature_count = Some(actual),
+                _ => {}
             }
             let bytes = geometry::encode_geometry_payload(&features)?;
             self.sections.push((SectionKind::GeometryPayload, bytes));
@@ -148,7 +152,22 @@ impl ArtifactWriter {
             }
         }
 
-        let feature_count = self.feature_count.unwrap_or(0);
+        // a geometry section without a known feature_count would silently lie
+        // in the footer (zero features, body has them). require it explicitly
+        // when geometry is present and could not be derived from staged input.
+        let has_geometry = self
+            .sections
+            .iter()
+            .any(|(k, _)| *k == SectionKind::GeometryPayload);
+        let feature_count = match self.feature_count {
+            Some(n) => n,
+            None if has_geometry => {
+                return Err(ArtifactError::InvalidWriterState(
+                    "feature_count not set for artifact with geometry payload",
+                ));
+            }
+            None => 0,
+        };
 
         let mut out = Vec::new();
         // header

@@ -443,6 +443,38 @@ fn writer_validates_feature_count_against_payload() {
 }
 
 #[test]
+fn writer_derives_feature_count_from_staged_payload() {
+    let features = vec![
+        FeatureGeom {
+            id: 1,
+            bbox: [0.0; 4],
+            geom: GeomKind::Point((0.0, 0.0)),
+        },
+        FeatureGeom {
+            id: 2,
+            bbox: [0.0; 4],
+            geom: GeomKind::Point((1.0, 1.0)),
+        },
+    ];
+    let mut w = ArtifactWriter::new(ArtifactKind::Source);
+    w.add_geometry_payload(features)
+        .set_bbox(Bbox::new(0.0, 0.0, 1.0, 1.0));
+    let bytes = w.finish().unwrap();
+    let reader = ArtifactReader::open(bytes).unwrap();
+    assert_eq!(reader.feature_count(), 2);
+}
+
+#[test]
+fn writer_rejects_geometry_without_feature_count() {
+    // raw geometry section bypasses the staging path; feature_count must
+    // then be set explicitly or the footer would silently say zero.
+    let mut w = ArtifactWriter::new(ArtifactKind::Source);
+    w.add_section(SectionKind::GeometryPayload, Bytes::from_static(&[0u8; 4]))
+        .set_bbox(Bbox::new(0.0, 0.0, 1.0, 1.0));
+    assert!(matches!(w.finish(), Err(ArtifactError::InvalidWriterState(_))));
+}
+
+#[test]
 fn class_assignment_rejects_unsorted() {
     // hand-build: count=2, ids 5,1 (decreasing)
     let mut buf = Vec::new();
