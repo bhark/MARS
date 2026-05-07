@@ -6,7 +6,7 @@
 //! the previous version - never a partial.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
 use futures_core::stream::BoxStream;
@@ -75,8 +75,17 @@ impl FsPublisher {
         &self.root
     }
 
-    async fn read_current_manifest(root: PathBuf) -> Result<Option<(String, Manifest)>, StoreError> {
+    async fn read_current_manifest(root: PathBuf) -> Result<Option<(String, SystemTime, Manifest)>, StoreError> {
         let current_path = root.join(MANIFEST_DIR).join(CURRENT_FILE);
+        // capture mtime alongside pointer so the watcher can distinguish
+        // pointer="vN" → "vM" → "vN" (a republish-and-rollback within one
+        // poll interval) from a steady "vN" - SPEC §10.5 requires emitting
+        // on every pointer change.
+        let mtime = match tokio::fs::metadata(&current_path).await {
+            Ok(m) => m.modified().unwrap_or(SystemTime::UNIX_EPOCH),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(StoreError::Backend(format!("stat current: {e}"))),
+        };
         let pointer = match tokio::fs::read_to_string(&current_path).await {
             Ok(pointer) => pointer.trim().to_owned(),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -98,7 +107,7 @@ impl FsPublisher {
                 supported: MANIFEST_FORMAT_VERSION,
             });
         }
-        Ok(Some((pointer, manifest)))
+        Ok(Some((pointer, mtime, manifest)))
     }
 }
 
@@ -133,7 +142,7 @@ impl ManifestStore for FsPublisher {
 
     async fn current(&self) -> Result<Option<Manifest>, StoreError> {
         match Self::read_current_manifest(self.root.clone()).await? {
-            Some((_pointer, manifest)) => Ok(Some(manifest)),
+            Some((_pointer, _mtime, manifest)) => Ok(Some(manifest)),
             None => Ok(None),
         }
     }
@@ -144,6 +153,7 @@ impl ManifestStore for FsPublisher {
             root: PathBuf,
             poll_interval: Duration,
             last_pointer: Option<String>,
+            last_mtime: Option<SystemTime>,
             sleep_before_read: bool,
         }
 
@@ -151,6 +161,7 @@ impl ManifestStore for FsPublisher {
             root: self.root.clone(),
             poll_interval: self.poll_interval,
             last_pointer: None,
+            last_mtime: None,
             sleep_before_read: false,
         };
         let stream = stream::unfold(state, |mut state| async move {
@@ -161,8 +172,12 @@ impl ManifestStore for FsPublisher {
                 }
 
                 match Self::read_current_manifest(state.root.clone()).await {
-                    Ok(Some((pointer, manifest))) if state.last_pointer.as_deref() != Some(pointer.as_str()) => {
+                    Ok(Some((pointer, mtime, manifest)))
+                        if state.last_pointer.as_deref() != Some(pointer.as_str())
+                            || state.last_mtime != Some(mtime) =>
+                    {
                         state.last_pointer = Some(pointer);
+                        state.last_mtime = Some(mtime);
                         return Some((Ok(manifest), state));
                     }
                     Ok(Some(_)) | Ok(None) => {}
