@@ -141,6 +141,35 @@ pub struct ServiceMeta {
     /// Operator contact email.
     #[serde(default)]
     pub contact_email: String,
+    /// Font discovery for label rendering. SPEC §14.
+    #[serde(default)]
+    pub fonts: Fonts,
+}
+
+/// Font discovery configuration. Controls which directories the renderer
+/// scans for TrueType faces, and whether the vendored DejaVu Sans fallback
+/// is registered last so labels never depend on system fontconfig.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Fonts {
+    /// Directories to walk for `.ttf` / `.otf` faces.
+    #[serde(default)]
+    pub paths: Vec<String>,
+    /// When true, append the vendored DejaVu Sans fallback. Defaults to true.
+    #[serde(default = "default_bundle_default")]
+    pub bundle_default: bool,
+}
+
+impl Default for Fonts {
+    fn default() -> Self {
+        Self {
+            paths: Vec::new(),
+            bundle_default: default_bundle_default(),
+        }
+    }
+}
+
+fn default_bundle_default() -> bool {
+    true
 }
 
 /// Source database configuration. SPEC §5.2.

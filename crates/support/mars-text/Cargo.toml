@@ -1,0 +1,19 @@
+[package]
+name        = "mars-text"
+version     = "0.0.1"
+edition.workspace     = true
+license.workspace     = true
+repository.workspace  = true
+authors.workspace     = true
+publish.workspace     = true
+description = "Font discovery, shaping (rustybuzz), and glyph rasterisation for MARS labels."
+
+[lints]
+workspace = true
+
+[dependencies]
+mars-style = { workspace = true }
+fontdb     = { workspace = true, features = ["fs"] }
+rustybuzz  = { workspace = true }
+tiny-skia  = { workspace = true }
+thiserror  = { workspace = true }

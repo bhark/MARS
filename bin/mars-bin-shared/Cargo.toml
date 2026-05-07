@@ -20,6 +20,7 @@ mars-source-postgres = { workspace = true }
 mars-store          = { workspace = true }
 mars-store-fs       = { workspace = true }
 mars-store-s3       = { workspace = true }
+mars-text           = { workspace = true }
 
 tokio   = { workspace = true }
 anyhow  = { workspace = true }

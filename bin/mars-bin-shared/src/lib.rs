@@ -11,6 +11,9 @@
 
 #![forbid(unsafe_code)]
 
+mod fonts;
+pub use fonts::load_fonts;
+
 use std::sync::Arc;
 use std::time::Duration;
 

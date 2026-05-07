@@ -21,6 +21,7 @@ members = [
     "crates/support/mars-config",
     "crates/support/mars-observability",
     "crates/support/mars-proj",
+    "crates/support/mars-text",
     "bin/mars",
     "bin/mars-import-mapfile",
     "bin/mars-compile",
@@ -67,6 +68,7 @@ mars-http           = { path = "crates/interfaces/mars-http" }
 mars-config         = { path = "crates/support/mars-config" }
 mars-observability  = { path = "crates/support/mars-observability" }
 mars-proj           = { path = "crates/support/mars-proj" }
+mars-text           = { path = "crates/support/mars-text" }
 # bin-only shared composition wiring (see bin/mars-bin-shared)
 mars-bin-shared     = { path = "bin/mars-bin-shared" }
 
@@ -102,6 +104,10 @@ prometheus          = "0.14"
 libfuzzer-sys       = "0.4"
 object_store        = { version = "0.13", default-features = false, features = ["aws"] }
 criterion           = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
+rustybuzz           = "0.20"
+fontdb              = { version = "0.23", default-features = false }
+tiny-skia           = "0.12"
+rstar               = "0.12"
 
 [workspace.lints.rust]
 unsafe_code              = "deny"

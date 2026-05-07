@@ -37,7 +37,7 @@ is_port()     { [[ "$1" == "mars-source" || "$1" == "mars-store" || "$1" == "mar
 is_adapter()  { [[ "$1" == "mars-source-postgres" || "$1" == "mars-store-s3" || "$1" == "mars-store-fs" || "$1" == "mars-render" ]]; }
 is_app()      { [[ "$1" == "mars-compiler" || "$1" == "mars-runtime" ]]; }
 is_interface(){ [[ "$1" == "mars-wms" || "$1" == "mars-wmts" || "$1" == "mars-http" ]]; }
-is_support()  { [[ "$1" == "mars-config" || "$1" == "mars-observability" || "$1" == "mars-proj" ]]; }
+is_support()  { [[ "$1" == "mars-config" || "$1" == "mars-observability" || "$1" == "mars-proj" || "$1" == "mars-text" ]]; }
 
 is_bin() { [[ "$1" == "mars" || "$1" == "mars-import-mapfile" || "$1" == "mars-compile" || "$1" == "mars-bin-shared" ]]; }
 
