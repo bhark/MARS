@@ -44,6 +44,7 @@ fn env_re() -> Result<&'static Regex, ConfigError> {
 pub(crate) fn substitute(src: &str) -> Result<String, ConfigError> {
     detect_nested_defaults(src)?;
 
+    let comment_mask = comment_mask(src);
     let mut missing: Option<String> = None;
     let mut out = String::with_capacity(src.len());
     let mut last_end = 0;
@@ -53,6 +54,14 @@ pub(crate) fn substitute(src: &str) -> Result<String, ConfigError> {
             continue;
         };
         out.push_str(&src[last_end..m.start()]);
+
+        // matches inside YAML comments are not config inputs; pass through
+        // verbatim so a commented-out `${VAR}` does not produce EnvMissing.
+        if comment_mask.get(m.start()).copied().unwrap_or(false) {
+            out.push_str(m.as_str());
+            last_end = m.end();
+            continue;
+        }
 
         if m.as_str() == "$$" {
             out.push('$');
@@ -121,6 +130,61 @@ fn detect_nested_defaults(src: &str) -> Result<(), ConfigError> {
         i += 1;
     }
     Ok(())
+}
+
+/// Build a byte-mask flagging positions that lie inside a YAML line comment.
+/// A `#` starts a comment only when not inside a quoted scalar and either at
+/// line start or preceded by whitespace. Quote state is tracked per line; YAML
+/// scalars rarely span lines and any real structural corruption is caught by
+/// the downstream parse.
+fn comment_mask(src: &str) -> Vec<bool> {
+    let bytes = src.as_bytes();
+    let mut mask = vec![false; bytes.len()];
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut at_line_start = true;
+    let mut prev_byte: Option<u8> = None;
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'\n' {
+            in_single = false;
+            in_double = false;
+            at_line_start = true;
+            prev_byte = None;
+            i += 1;
+            continue;
+        }
+        if !in_single && !in_double {
+            let after_ws = prev_byte.is_none_or(|p| p == b' ' || p == b'\t');
+            if b == b'#' && (at_line_start || after_ws) {
+                let mut j = i;
+                while j < bytes.len() && bytes[j] != b'\n' {
+                    mask[j] = true;
+                    j += 1;
+                }
+                prev_byte = Some(b'#');
+                at_line_start = false;
+                i = j;
+                continue;
+            }
+            if b == b'\'' {
+                in_single = true;
+            } else if b == b'"' {
+                in_double = true;
+            }
+        } else if in_single && b == b'\'' {
+            in_single = false;
+        } else if in_double && b == b'"' && prev_byte != Some(b'\\') {
+            in_double = false;
+        }
+        if b != b' ' && b != b'\t' {
+            at_line_start = false;
+        }
+        prev_byte = Some(b);
+        i += 1;
+    }
+    mask
 }
 
 fn validate_yaml_safe(value: &str) -> Result<(), &'static str> {
@@ -264,6 +328,39 @@ mod tests {
         let err = substitute("val=${A:-${B:-x}}").unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("nested"), "expected nested-defaults rejection, got {msg}");
+    }
+
+    #[test]
+    fn substitute_skips_var_in_full_line_comment() {
+        let result = substitute("# disabled: ${MARS_TEST_NEVER_SET}\nkey: val\n").unwrap();
+        assert_eq!(result, "# disabled: ${MARS_TEST_NEVER_SET}\nkey: val\n");
+    }
+
+    #[test]
+    fn substitute_skips_var_in_trailing_comment() {
+        let result = substitute("key: val # ${MARS_TEST_NEVER_SET}\n").unwrap();
+        assert_eq!(result, "key: val # ${MARS_TEST_NEVER_SET}\n");
+    }
+
+    #[test]
+    fn substitute_first_var_substitutes_second_in_comment_stays() {
+        // PATH always exists; OTHER_NEVER_SET would error if not in comment.
+        let result = substitute("path=${PATH} # ${MARS_TEST_OTHER_NEVER_SET}\n").unwrap();
+        assert!(!result.contains("${PATH}"));
+        assert!(result.contains("${MARS_TEST_OTHER_NEVER_SET}"));
+    }
+
+    #[test]
+    fn substitute_in_quoted_string_with_hash_is_not_a_comment() {
+        let result = substitute("key: \"value # ${MARS_TEST_QUOTED:-fallback}\"\n").unwrap();
+        assert_eq!(result, "key: \"value # fallback\"\n");
+    }
+
+    #[test]
+    fn substitute_hash_without_leading_whitespace_is_not_a_comment() {
+        // foo#${VAR} - the # is not preceded by whitespace, so not a comment
+        let result = substitute("key: foo#${MARS_TEST_INLINE_HASH:-bar}\n").unwrap();
+        assert_eq!(result, "key: foo#bar\n");
     }
 
     #[test]

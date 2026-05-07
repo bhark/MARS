@@ -123,6 +123,35 @@ interfaces: {}
 }
 
 #[test]
+#[allow(unsafe_code)]
+fn env_in_yaml_comment_is_ignored() {
+    let _guard = ENV_LOCK.lock().unwrap();
+    // SAFETY: ENV_LOCK serialises env mutations across these tests.
+    unsafe {
+        env::remove_var("MARS_TEST_COMMENTED_OUT");
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let yaml = r#"
+service: { name: t }
+source:
+  type: postgis
+  # historical: dsn: ${MARS_TEST_COMMENTED_OUT}
+  dsn: postgres://example/x
+  native_crs: EPSG:25832
+artifacts:
+  store: { type: fs, path: /tmp/s }
+  cache: { path: /tmp/c, max_size: 1MiB }
+scales: { bands: [{ name: hi, max_denom: 1 }] }
+cells: { grid: regular, origin: [0, 0], size_per_band: { hi: 1m } }
+interfaces: {}
+"#;
+    let p = dir.path().join("c.yaml");
+    fs::write(&p, yaml).unwrap();
+    let cfg = load(&p).unwrap();
+    assert_eq!(cfg.source.dsn, "postgres://example/x");
+}
+
+#[test]
 fn include_resolves_relative() {
     let dir = tempfile::tempdir().unwrap();
     let main = r#"
