@@ -2,6 +2,11 @@
 /target
 **/*.rs.bk
 
+# in-container cargo home for the mapserver-diff capture build
+/.cargo-diff-capture
+# diff-harness output bundles (one dir per run)
+/diff-runs
+
 # coverage / profiling
 /coverage
 *.profraw
