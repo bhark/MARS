@@ -254,10 +254,14 @@ mod tests {
                     id: 0,
                     // 1638.4 m/px at level 0 with 256-px tiles = 419430.4 m per tile.
                     scale_denominator: 1638.4 / STANDARDIZED_PIXEL_SIZE_M,
+                    matrix_width: 1,
+                    matrix_height: 1,
                 },
                 TileMatrixLevel {
                     id: 1,
                     scale_denominator: 819.2 / STANDARDIZED_PIXEL_SIZE_M,
+                    matrix_width: 2,
+                    matrix_height: 2,
                 },
             ],
         }
@@ -404,6 +408,8 @@ mod tests {
                     // pixel_size_units = sd * 0.00028 / METERS_PER_DEGREE_EQUATOR
                     // pick sd so units=1.0
                     scale_denominator: METERS_PER_DEGREE_EQUATOR / STANDARDIZED_PIXEL_SIZE_M,
+                    matrix_width: 2,
+                    matrix_height: 1,
                 }],
             },
         );
@@ -433,6 +439,8 @@ mod tests {
                 levels: vec![TileMatrixLevel {
                     id: 0,
                     scale_denominator: 1000.0,
+                    matrix_width: 1,
+                    matrix_height: 1,
                 }],
             },
         );

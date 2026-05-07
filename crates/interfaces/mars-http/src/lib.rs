@@ -589,6 +589,8 @@ mod tests {
                 levels: vec![TileMatrixLevel {
                     id: 0,
                     scale_denominator: 1.0 / 0.000_28,
+                    matrix_width: 1,
+                    matrix_height: 1,
                 }],
             },
         );

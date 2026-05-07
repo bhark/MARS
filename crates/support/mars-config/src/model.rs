@@ -520,6 +520,18 @@ pub struct TileMatrixLevel {
     pub id: u32,
     /// Scale denominator at this level.
     pub scale_denominator: f64,
+    /// Width of the matrix in tiles. Required by OGC WMTS 1.0.0 (07-057r7
+    /// §6.1) and surfaced verbatim in `Capabilities`. Defaults to 1 so the
+    /// minimum-viable single-tile setup needs no boilerplate.
+    #[serde(default = "one")]
+    pub matrix_width: u32,
+    /// Height of the matrix in tiles. See `matrix_width`.
+    #[serde(default = "one")]
+    pub matrix_height: u32,
+}
+
+fn one() -> u32 {
+    1
 }
 
 /// Reprojection allowlist. SPEC §6.
