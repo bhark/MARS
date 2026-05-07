@@ -205,6 +205,10 @@ pub struct SourcePool {
     /// on every checkout.
     #[serde(default)]
     pub statement_timeout_ms: Option<u64>,
+    /// Bound on concurrent in-flight queries pipelined on a single connection
+    /// when fetching a batch of cells. Adapters apply a small default when unset.
+    #[serde(default)]
+    pub fetch_concurrency: Option<usize>,
 }
 
 /// Change-feed configuration. SPEC §8.2.

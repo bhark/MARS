@@ -2,7 +2,7 @@
 
 use bytes::Bytes;
 use deadpool_postgres::Pool;
-use futures_util::future::try_join_all;
+use futures_util::stream::{self, StreamExt, TryStreamExt};
 use mars_expr::Expr;
 use mars_source::{AttrValue, RowBytes, SourceBinding, SourceError};
 use mars_types::{Bbox, Cell};
@@ -46,15 +46,22 @@ pub(crate) async fn fetch_cell(
     Ok(out)
 }
 
+/// default in-flight query bound for `fetch_cells`. small enough to keep
+/// per-connection memory bounded under bbox bursts; large enough to overlap
+/// a handful of round trips on cold queries.
+pub(crate) const DEFAULT_FETCH_CONCURRENCY: usize = 8;
+
 /// Pipelined batch variant: fetch every `(cell, bbox)` pair through one pool
-/// connection and one prepared statement, fanning out the executes
-/// concurrently. tokio-postgres queues them on the same wire so the server
-/// runs them serialised but RTT amortises across the batch.
+/// connection and one prepared statement, fanning out the executes with a
+/// bounded number of in-flight queries. tokio-postgres queues them on the
+/// same wire so the server runs them serialised but RTT amortises within the
+/// configured window. callers must pass `concurrency >= 1`.
 pub(crate) async fn fetch_cells(
     pool: &Pool,
     binding: &SourceBinding,
     cells: &[(Cell, Bbox)],
     filter: Option<&Expr>,
+    concurrency: usize,
 ) -> Result<Vec<(Cell, Vec<RowBytes>)>, SourceError> {
     if cells.is_empty() {
         return Ok(Vec::new());
@@ -87,10 +94,20 @@ pub(crate) async fn fetch_cells(
         .map(|p| p.iter().map(|x| x as &(dyn ToSql + Sync)).collect())
         .collect();
 
-    let futs = pg_params.iter().map(|params| client.query(&stmt, params.as_slice()));
-    let results = try_join_all(futs)
-        .await
-        .map_err(|e| SourceError::Backend(format!("query: {}", fmt_pg_err(&e))))?;
+    let n = concurrency.max(1);
+    let client = &client;
+    let stmt = &stmt;
+    let pg_params = &pg_params;
+    let results: Vec<_> = stream::iter(0..pg_params.len())
+        .map(|i| async move {
+            client
+                .query(stmt, pg_params[i].as_slice())
+                .await
+                .map_err(|e| SourceError::Backend(format!("query: {}", fmt_pg_err(&e))))
+        })
+        .buffered(n)
+        .try_collect()
+        .await?;
 
     let mut out = Vec::with_capacity(cells.len());
     for ((cell, _), rows) in cells.iter().zip(results) {

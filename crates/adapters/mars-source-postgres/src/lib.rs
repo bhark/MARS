@@ -49,6 +49,10 @@ pub struct PgConfig {
     /// Per-statement timeout applied via `SET statement_timeout` on every
     /// checkout. `None` leaves the server default in place.
     pub statement_timeout: Option<Duration>,
+    /// Bound on the number of concurrent in-flight queries pipelined on a
+    /// single connection inside `fetch_cells`. Falls back to a small default
+    /// when `None`. Higher values amortise RTT but stack response buffers.
+    pub fetch_concurrency: Option<usize>,
 }
 
 impl std::fmt::Debug for PgConfig {
@@ -232,7 +236,8 @@ impl Source for PgSource {
         cells: &[(Cell, Bbox)],
         filter: Option<&Expr>,
     ) -> Result<Vec<(Cell, Vec<RowBytes>)>, SourceError> {
-        fetch::fetch_cells(&self.pool, binding, cells, filter).await
+        let concurrency = self.cfg.fetch_concurrency.unwrap_or(fetch::DEFAULT_FETCH_CONCURRENCY);
+        fetch::fetch_cells(&self.pool, binding, cells, filter, concurrency).await
     }
 }
 
