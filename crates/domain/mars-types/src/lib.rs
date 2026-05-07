@@ -193,6 +193,12 @@ fn is_safe_segment(s: &str) -> bool {
     !s.is_empty() && s.len() <= 128 && !s.contains('/') && !s.contains('\0') && s != "." && s != ".."
 }
 
+// hard caps on parsed key shape. honest layer keys are 6 segments / well under
+// 1KB; bound the parse path so a pathological manifest entry can't push us
+// into an unbounded vec allocation.
+const MAX_KEY_LEN: usize = 4096;
+const MAX_KEY_SEGMENTS: usize = 16;
+
 impl ArtifactKey {
     /// canonical layer-artifact key. shape is `lyr/{layer}/{band}/{cx}_{cy}/v{schema}/{hash}.mars`.
     pub fn try_build_layer(layer: &LayerId, cell: &Cell, hash: ContentHash) -> Result<Self, ArtifactKeyError> {
@@ -233,8 +239,17 @@ impl ArtifactKey {
     /// key the runtime parses.
     pub fn parse(&self) -> Result<ParsedArtifactKey, ArtifactKeyError> {
         let s = self.as_str();
-        let parts: Vec<&str> = s.split('/').collect();
         let bad = || ArtifactKeyError::Malformed { key: s.to_owned() };
+        // a well-formed key is at most ~6 segments and a few hundred bytes; an
+        // attacker-controlled manifest entry should not be able to drive an
+        // unbounded vec allocation here.
+        if s.len() > MAX_KEY_LEN {
+            return Err(bad());
+        }
+        if s.bytes().filter(|b| *b == b'/').count() >= MAX_KEY_SEGMENTS {
+            return Err(bad());
+        }
+        let parts: Vec<&str> = s.split('/').collect();
         match parts.as_slice() {
             ["lyr", layer, band, cell, vseg, leaf] => {
                 if !vseg.starts_with('v') || !leaf.ends_with(".mars") {
