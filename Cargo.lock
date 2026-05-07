@@ -2149,6 +2149,7 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "clap",
+ "deadpool-postgres",
  "mars-bin-shared",
  "mars-compiler",
  "mars-config",
@@ -2164,7 +2165,6 @@ dependencies = [
  "serde_json",
  "serde_yaml_ng",
  "tokio",
- "tokio-postgres",
  "tokio-util",
  "tracing",
 ]

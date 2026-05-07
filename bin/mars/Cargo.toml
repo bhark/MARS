@@ -20,6 +20,9 @@ default = []
 # end-to-end test that spins up a postgis container; gated because docker
 # is not always available. plain `cargo test` skips it.
 e2e = []
+# host-side parity harness against an external MapServer bundle; off by default
+# because it requires a pre-captured fixture directory (MARS_DIFF_BUNDLE).
+mapserver-diff = []
 
 [dependencies]
 # composition root: names every concrete adapter
