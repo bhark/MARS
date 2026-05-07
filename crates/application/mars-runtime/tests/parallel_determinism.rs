@@ -38,13 +38,7 @@ fn make_polygon(id: u64, offset: f64) -> FeatureGeom {
     FeatureGeom {
         id,
         bbox: [x0 as f32, 0.0, x1 as f32, 5.0],
-        geom: GeomKind::Polygon(vec![vec![
-            (x0, 0.0),
-            (x1, 0.0),
-            (x1, 5.0),
-            (x0, 5.0),
-            (x0, 0.0),
-        ]]),
+        geom: GeomKind::Polygon(vec![vec![(x0, 0.0), (x1, 0.0), (x1, 5.0), (x0, 5.0), (x0, 0.0)]]),
     }
 }
 
@@ -191,7 +185,12 @@ async fn build_fixture(layers: usize, cells_x: i64, cells_y: i64) -> Fixture {
     // boundaries (cells_in_bbox uses inclusive ..= edges).
     let plan = RenderPlan {
         layers: layer_ids,
-        bbox: Bbox::new(0.001, 0.001, cell_size * cells_x as f64 - 0.001, cell_size * cells_y as f64 - 0.001),
+        bbox: Bbox::new(
+            0.001,
+            0.001,
+            cell_size * cells_x as f64 - 0.001,
+            cell_size * cells_y as f64 - 0.001,
+        ),
         width: 256,
         height: 256,
         crs: canonical_crs,
@@ -227,10 +226,7 @@ fn build_runtime(fx: &Fixture, parallel_emit: ParallelEmit, mock: Arc<MockRender
 fn render_under_pool(fx: &Fixture, parallel_emit: ParallelEmit, threads: usize) -> Vec<DrawOp> {
     let mock = Arc::new(MockRenderer::default());
     let runtime = build_runtime(fx, parallel_emit, mock.clone());
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(threads)
-        .build()
-        .unwrap();
+    let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
     pool.install(|| {
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)

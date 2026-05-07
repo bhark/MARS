@@ -502,8 +502,7 @@ impl Runtime {
             let cpu_phase = move || -> Result<Vec<u8>, RuntimeError> {
                 let _entered = blocking_span.enter();
                 let _permit = permit;
-                let reproject_pair: draw::ReprojectPair<'_> =
-                    needs_reproject.then_some((&canonical_crs, &request_crs));
+                let reproject_pair: draw::ReprojectPair<'_> = needs_reproject.then_some((&canonical_crs, &request_crs));
                 let _emit_outer = tracing::info_span!("cpu.emit").entered();
                 // serial decode pass: dedup source artifacts and resolve each
                 // through the bytes-bounded LRU. emit inputs are built in plan
@@ -578,8 +577,7 @@ impl Runtime {
                     }
                     chunks
                 };
-                let mut ops: Vec<mars_render_port::DrawOp> =
-                    Vec::with_capacity(chunks.iter().map(Vec::len).sum());
+                let mut ops: Vec<mars_render_port::DrawOp> = Vec::with_capacity(chunks.iter().map(Vec::len).sum());
                 for chunk in chunks {
                     ops.extend(chunk);
                 }
