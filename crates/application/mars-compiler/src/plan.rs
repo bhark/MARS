@@ -292,7 +292,7 @@ pub(crate) fn compile_label(
     });
     let (style_id, priority) = match &spec.style {
         LabelStyleAttach::Ref { name } => (name.clone(), 0),
-        LabelStyleAttach::Inline(s) => (format!("{}::label", layer.name), clamp_priority(s.priority)),
+        LabelStyleAttach::Inline(s) => (format!("{}::label", layer.name), s.priority),
     };
     Ok(Some(CompiledLabelSpec {
         text,
@@ -300,10 +300,6 @@ pub(crate) fn compile_label(
         style_id,
         priority,
     }))
-}
-
-fn clamp_priority(p: i32) -> u16 {
-    p.clamp(0, i32::from(u16::MAX)) as u16
 }
 
 pub(crate) fn compile_classes(layer: &Layer) -> Result<Vec<CompiledClass>, PlanError> {

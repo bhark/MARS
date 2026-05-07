@@ -97,11 +97,6 @@ impl Fonts {
             .ok_or_else(|| FontError::FamilyNotFound(family.to_owned()))
     }
 
-    /// borrow face bytes + index. returns `None` if `id` is not in the db.
-    fn with_face_data<R>(&self, id: ID, f: impl FnOnce(&[u8], u32) -> R) -> Option<R> {
-        self.db.with_face_data(id, |bytes, idx| f(bytes, idx))
-    }
-
     /// resolve `id` to an Arc-backed byte source. for `Source::Binary` this
     /// is the Arc fontdb already holds — no copy. for file-backed sources
     /// (loaded via `load_fonts_dir`) we read once and wrap.

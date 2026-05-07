@@ -125,8 +125,11 @@ pub struct LabelStyle {
     pub fill: Colour,
     #[serde(default)]
     pub halo: Option<Halo>,
+    // u16 to match the artifact wire format. accepting i32 here would silently
+    // truncate at emit time (LabelCandidate::priority is u16); reject out-of
+    // range values at config-load instead.
     #[serde(default)]
-    pub priority: i32,
+    pub priority: u16,
     #[serde(default)]
     pub min_distance: f32,
 }

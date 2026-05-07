@@ -34,9 +34,7 @@ pub fn emit_candidates(
     label_style: Option<&LabelStyle>,
     expected_srid: Option<u32>,
 ) -> Result<Vec<LabelCandidate>, CompilerError> {
-    let priority: u16 = label_style
-        .map(|s| s.priority.clamp(0, i32::from(u16::MAX)) as u16)
-        .unwrap_or(label.priority);
+    let priority: u16 = label_style.map(|s| s.priority).unwrap_or(label.priority);
 
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {

@@ -197,7 +197,7 @@ mod tests {
 
     use super::*;
 
-    fn style(priority: i32) -> LabelStyle {
+    fn style(priority: u16) -> LabelStyle {
         LabelStyle {
             font_family: "DejaVu Sans".into(),
             font_size: 14.0,
