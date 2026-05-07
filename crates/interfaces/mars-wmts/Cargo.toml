@@ -17,3 +17,4 @@ mars-runtime  = { workspace = true }
 mars-config   = { workspace = true }
 thiserror     = { workspace = true }
 percent-encoding = "2"
+quick-xml     = "0.39"

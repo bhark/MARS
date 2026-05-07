@@ -2,7 +2,10 @@
 
 #![forbid(unsafe_code)]
 
+mod exception;
 mod parse;
+
+pub use exception::ows_exception_report;
 
 use std::collections::BTreeMap;
 
