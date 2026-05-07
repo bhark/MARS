@@ -56,7 +56,18 @@ impl Fonts {
     pub fn load<P: AsRef<Path>>(paths: &[P], bundle_default: bool) -> Result<Self, FontError> {
         let mut db = Database::new();
         for p in paths {
-            db.load_fonts_dir(p.as_ref());
+            let path = p.as_ref();
+            // fontdb::load_fonts_dir silently swallows i/o errors; surface the
+            // most common operator mistake (path missing or unreadable) before
+            // labels go quietly blank.
+            match std::fs::metadata(path) {
+                Ok(_) => db.load_fonts_dir(path),
+                Err(e) => tracing::warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "font path skipped",
+                ),
+            }
         }
         if bundle_default {
             db.load_font_data(BUNDLED_DEJAVU.to_vec());

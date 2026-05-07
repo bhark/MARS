@@ -17,3 +17,4 @@ fontdb     = { workspace = true, features = ["fs"] }
 rustybuzz  = { workspace = true }
 tiny-skia  = { workspace = true }
 thiserror  = { workspace = true }
+tracing    = { workspace = true }
