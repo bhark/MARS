@@ -91,8 +91,8 @@ impl FsPublisher {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(StoreError::Backend(format!("read current: {e}"))),
         };
-        if pointer.is_empty() || pointer.contains('/') || pointer.contains('\\') || pointer.contains("..") {
-            return Err(StoreError::Backend(format!("malformed manifest pointer: {pointer:?}")));
+        if let Err(e) = mars_types::validate_manifest_pointer(&pointer) {
+            return Err(StoreError::Backend(format!("malformed manifest pointer {pointer:?}: {e}")));
         }
 
         let body_path = root.join(MANIFEST_DIR).join(format!("{pointer}.json"));

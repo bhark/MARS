@@ -137,6 +137,8 @@ impl S3Publisher {
                     .map_err(|e| StoreError::Backend(format!("manifest pointer not utf-8: {e}")))?
                     .trim()
                     .to_owned();
+                mars_types::validate_manifest_pointer(&pointer)
+                    .map_err(|e| StoreError::Backend(format!("malformed manifest pointer {pointer:?}: {e}")))?;
                 Ok(ReadCurrent::Body {
                     pointer,
                     version: Some(UpdateVersion { e_tag: etag, version }),
@@ -151,8 +153,8 @@ impl S3Publisher {
     }
 
     async fn fetch_manifest_body(&self, pointer: &str) -> Result<Manifest, StoreError> {
-        if pointer.is_empty() || pointer.contains('/') || pointer.contains('\\') || pointer.contains("..") {
-            return Err(StoreError::Backend(format!("malformed manifest pointer: {pointer:?}")));
+        if let Err(e) = mars_types::validate_manifest_pointer(pointer) {
+            return Err(StoreError::Backend(format!("malformed manifest pointer {pointer:?}: {e}")));
         }
         let path = join_prefix(&self.prefix, &format!("{MANIFEST_DIR}/{pointer}.json"));
         let bytes = retry_transient(|| async {
