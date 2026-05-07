@@ -65,9 +65,6 @@ struct BuildOpts {
     reproject_to: Option<&'static str>,
 }
 
-// `with_grid` and `with_vertex_count` ship in this commit but are first
-// consumed by the Phase 1 coverage cases added in the follow-up commit.
-#[allow(dead_code)]
 impl BuildOpts {
     fn single_cell(geom: GeomShape, layers: usize) -> Self {
         Self {
@@ -619,5 +616,39 @@ fn bench_multi_layer(c: &mut Criterion) {
     );
 }
 
-criterion_group!(benches, bench_canonical, bench_reproject, bench_multi_layer);
+/// Phase 1 coverage: workloads that stress axes the existing cases miss.
+/// Composite_100_layers exercises the cpu.emit O(N) scaling that motivates
+/// parallel emit. Many-cells exercises plan resolution + per-cell fetch fan
+/// out. Tiny-payload many-cells reproduces the per-call-overhead-dominated
+/// regression class where features are cheap but emit is called often.
+fn bench_phase1_coverage(c: &mut Criterion) {
+    run_render_bench(
+        c,
+        "runtime_render",
+        "canonical/composite_100_layers_linestring",
+        BuildOpts::single_cell(GeomShape::LineString, 100),
+    );
+    run_render_bench(
+        c,
+        "runtime_render",
+        "canonical/single_layer_10x10_cells_polygon",
+        BuildOpts::single_cell(GeomShape::Polygon, 1).with_grid(10, 10, 256),
+    );
+    run_render_bench(
+        c,
+        "runtime_render",
+        "canonical/single_layer_10x10_cells_tiny_linestring",
+        BuildOpts::single_cell(GeomShape::LineString, 1)
+            .with_grid(10, 10, 4)
+            .with_vertex_count(4, 4),
+    );
+}
+
+criterion_group!(
+    benches,
+    bench_canonical,
+    bench_reproject,
+    bench_multi_layer,
+    bench_phase1_coverage
+);
 criterion_main!(benches);
