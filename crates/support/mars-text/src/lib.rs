@@ -17,7 +17,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use fontdb::{Database, Family, ID, Query, Stretch, Style as FontStyle, Weight};
+use fontdb::{Database, Family, ID, Query, Source, Stretch, Style as FontStyle, Weight};
 use mars_style::LabelStyle;
 use thiserror::Error;
 use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Transform};
@@ -90,6 +90,24 @@ impl Fonts {
     fn with_face_data<R>(&self, id: ID, f: impl FnOnce(&[u8], u32) -> R) -> Option<R> {
         self.db.with_face_data(id, |bytes, idx| f(bytes, idx))
     }
+
+    /// resolve `id` to an Arc-backed byte source. for `Source::Binary` this
+    /// is the Arc fontdb already holds — no copy. for file-backed sources
+    /// (loaded via `load_fonts_dir`) we read once and wrap.
+    fn face_bytes(&self, id: ID) -> Result<(Arc<dyn AsRef<[u8]> + Send + Sync>, u32), FontError> {
+        let (src, index) = self
+            .db
+            .face_source(id)
+            .ok_or_else(|| FontError::FaceLoad(format!("face id {id:?}")))?;
+        let arc: Arc<dyn AsRef<[u8]> + Send + Sync> = match src {
+            Source::Binary(a) => a,
+            Source::File(path) => {
+                let data = std::fs::read(&path)?;
+                Arc::new(data)
+            }
+        };
+        Ok((arc, index))
+    }
 }
 
 /// shaped, single-line glyph run in pixel space relative to a baseline anchor.
@@ -114,11 +132,20 @@ struct ShapedGlyph {
     y: f32,
 }
 
-#[derive(Debug)]
 struct FaceHandle {
-    /// owned ttf bytes so the face outlives the database query.
-    data: Vec<u8>,
+    /// shared ttf bytes so the face outlives the database query without
+    /// re-copying the buffer on every measure() call.
+    data: Arc<dyn AsRef<[u8]> + Send + Sync>,
     index: u32,
+}
+
+impl std::fmt::Debug for FaceHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FaceHandle")
+            .field("len", &self.data.as_ref().as_ref().len())
+            .field("index", &self.index)
+            .finish()
+    }
 }
 
 /// shape a single line of text. returns a [`ShapedRun`] in pixel space.
@@ -128,11 +155,9 @@ struct FaceHandle {
 /// `style.font_size / units_per_em`.
 pub fn measure(text: &str, style: &LabelStyle, fonts: &Fonts) -> Result<ShapedRun, FontError> {
     let id = fonts.select(&style.font_family)?;
-    let (data, index) = fonts
-        .with_face_data(id, |bytes, idx| (bytes.to_vec(), idx))
-        .ok_or_else(|| FontError::FaceLoad(style.font_family.clone()))?;
+    let (data, index) = fonts.face_bytes(id)?;
 
-    let face_for_shape = rustybuzz::Face::from_slice(&data, index)
+    let face_for_shape = rustybuzz::Face::from_slice(data.as_ref().as_ref(), index)
         .ok_or_else(|| FontError::FaceParse(style.font_family.clone()))?;
     let upem = face_for_shape.units_per_em() as f32;
     let pixels_per_unit = style.font_size / upem;
@@ -197,7 +222,7 @@ pub struct GlyphMask {
 /// uses tiny-skia internally as a software outline rasteriser. the resulting
 /// mask is tightly cropped around the union of glyph bounding boxes.
 pub fn rasterise(run: &ShapedRun) -> Result<GlyphMask, FontError> {
-    let face = ttf_parser::Face::parse(&run.face.data, run.face.index)
+    let face = ttf_parser::Face::parse(run.face.data.as_ref().as_ref(), run.face.index)
         .map_err(|e| FontError::FaceParse(format!("{e:?}")))?;
 
     // first pass: union of glyph bounding boxes in pixel space.
