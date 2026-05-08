@@ -18,21 +18,21 @@ pub fn build_stylesheet(cfg: &Config) -> Stylesheet {
             ss.labels.insert(name.clone(), Arc::new(l.clone()));
         }
     }
-    // also collect inline class styles under `<layer>::<class>` so runtime can
-    // resolve them via the same map; refs are already covered above.
+    // collect inline class + label styles under `<layer>__<class>` and
+    // `<layer>__label`, matching the synthesised style_ref names the compiler
+    // writes into the page's StyleRefs section
+    // (mars-compiler::plan: `format!("{layer}__{class}")`).
     for layer in &cfg.layers {
         for class in &layer.classes {
             if let ClassStyle::Inline(s) = &class.style {
-                let key = format!("{}::{}", layer.name, class.name);
+                let key = format!("{}__{}", layer.name, class.name);
                 ss.geometry.insert(key, Arc::new(s.clone()));
             }
         }
-        // inline label styles land under `<layer>::label` mirroring the
-        // compiler's CompiledLabelSpec::style_id convention.
         if let Some(label) = &layer.label
             && let LabelStyleAttach::Inline(l) = &label.style
         {
-            ss.labels.insert(format!("{}::label", layer.name), Arc::new(l.clone()));
+            ss.labels.insert(format!("{}__label", layer.name), Arc::new(l.clone()));
         }
     }
     ss
