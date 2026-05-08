@@ -41,6 +41,8 @@ pub struct CollectionTopology {
     pub table: String,
     /// Geometry column name in the relation.
     pub geometry_column: String,
+    /// feature id column name in the relation.
+    pub id_column: String,
 }
 
 impl CollectionTopology {
@@ -98,6 +100,8 @@ pub(crate) struct RelationCache {
 #[derive(Debug, Clone)]
 pub(crate) struct CachedRelation {
     pub topology: CollectionTopology,
+    pub id_col_idx: usize,
+    pub id_type_oid: u32,
     pub geometry_col_idx: usize,
     /// pgoutput replica-identity byte: `d` default, `n` nothing, `f` full,
     /// `i` index. used by the translator to produce a useful operator-facing
@@ -128,6 +132,7 @@ mod tests {
                 schema: "public".into(),
                 table: "roads_t".into(),
                 geometry_column: "geom".into(),
+                id_column: "gid".into(),
             }],
             bands: vec![],
             max_cells_per_row: 1024,

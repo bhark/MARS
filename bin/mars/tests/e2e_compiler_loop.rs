@@ -84,6 +84,7 @@ async fn live_compiler_loop_advances_manifest_on_change() -> Result<()> {
             schema: "mars_loop".into(),
             table: "polys".into(),
             geometry_column: "geom".into(),
+            id_column: "id".into(),
         }],
         bands: vec![BandConfig {
             name: ScaleBand::new("hi"),

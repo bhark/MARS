@@ -110,6 +110,7 @@ fn topology_for(collections: &[(&str, &str)]) -> ReplicationTopology {
                 schema: "public".into(),
                 table: (*table).into(),
                 geometry_column: "geom".into(),
+                id_column: "id".into(),
             })
             .collect(),
         bands: vec![BandConfig {

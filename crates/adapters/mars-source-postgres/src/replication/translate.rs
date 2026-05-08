@@ -2,10 +2,10 @@
 
 use std::borrow::Cow;
 
-use mars_source::{ChangeEvent, SourceError};
+use mars_source::{ChangeEvent, GeometryEnvelope, SourceError};
 
 use super::pgoutput::{ColumnData, DeletePayload, Message, Relation, Tuple, UpdatePayload};
-use super::wkb_bbox::bbox_of;
+use super::wkb_bbox::{bbox_of, centroid_of};
 use super::{CachedRelation, RelationCache, ReplicationTopology};
 
 /// Zero or more consumer-visible events from a single pgoutput message.
@@ -56,10 +56,22 @@ fn cache_relation(rel: Relation, cache: &mut RelationCache, topology: &Replicati
         );
         return;
     };
+    let Some(id_col_idx) = rel.columns.iter().position(|c| c.name == top.id_column) else {
+        tracing::error!(
+            namespace = %rel.namespace,
+            relation = %rel.name,
+            id_column = %top.id_column,
+            "pgoutput: relation missing id column declared by topology"
+        );
+        return;
+    };
+    let id_type_oid = rel.columns[id_col_idx].type_oid;
     cache.insert(
         rel.oid,
         CachedRelation {
             topology: top.clone(),
+            id_col_idx,
+            id_type_oid,
             geometry_col_idx: geom_col_idx,
             replica_identity: rel.replica_identity,
         },
@@ -80,12 +92,12 @@ fn insert_event(
             format!("insert for unknown relation oid {oid}"),
         ));
     };
-    // phase-c: bbox extraction stays as the seam where HilbertKey will be
-    // derived from the new-row geometry envelope.
-    let geom = extract_geom_bytes(tuple, entry.geometry_col_idx)?;
-    let _bbox = bbox_of(&geom).map_err(|e| SourceError::backend("wkb", e))?;
+    let feature_id = extract_feature_id(tuple, entry)?;
+    let new_envelope = envelope_from_tuple(tuple, entry.geometry_col_idx)?;
     Ok(Translated(vec![ChangeEvent::Insert {
         collection: entry.topology.collection.clone(),
+        feature_id,
+        new_envelope,
     }]))
 }
 
@@ -108,13 +120,15 @@ fn update_event(
     let Some(old) = payload.full_old.as_ref() else {
         return Err(missing_full_old_error(entry, "update"));
     };
-    let old_geom = extract_geom_bytes(old, entry.geometry_col_idx)?;
-    let _old_bbox = bbox_of(&old_geom).map_err(|e| SourceError::backend("wkb (old)", e))?;
-    let new_geom = extract_geom_bytes(&payload.new, entry.geometry_col_idx)?;
-    let _new_bbox = bbox_of(&new_geom).map_err(|e| SourceError::backend("wkb (new)", e))?;
+    let feature_id = extract_feature_id(&payload.new, entry)?;
+    let old_envelope = envelope_from_tuple(old, entry.geometry_col_idx)?;
+    let new_envelope = envelope_from_tuple(&payload.new, entry.geometry_col_idx)?;
 
     Ok(Translated(vec![ChangeEvent::Update {
         collection: entry.topology.collection.clone(),
+        feature_id,
+        new_envelope,
+        old_envelope: Some(old_envelope),
     }]))
 }
 
@@ -155,10 +169,12 @@ fn delete_event(
         DeletePayload::Full(t) => t,
         DeletePayload::KeyOnly(_) => return Err(missing_full_old_error(entry, "delete")),
     };
-    let geom = extract_geom_bytes(tuple, entry.geometry_col_idx)?;
-    let _bbox = bbox_of(&geom).map_err(|e| SourceError::backend("wkb", e))?;
+    let feature_id = extract_feature_id(tuple, entry)?;
+    let old_envelope = envelope_from_tuple(tuple, entry.geometry_col_idx)?;
     Ok(Translated(vec![ChangeEvent::Delete {
         collection: entry.topology.collection.clone(),
+        feature_id,
+        old_envelope: Some(old_envelope),
     }]))
 }
 
@@ -195,6 +211,67 @@ fn extract_geom_bytes<'a>(tuple: &'a Tuple<'a>, idx: usize) -> Result<Cow<'a, [u
         ColumnData::Unchanged => Err(SourceError::backend_msg(
             "pgoutput",
             "geometry column is TOAST-unchanged in OLD tuple (REPLICA IDENTITY FULL?)",
+        )),
+    }
+}
+
+fn envelope_from_tuple(tuple: &Tuple<'_>, geom_idx: usize) -> Result<GeometryEnvelope, SourceError> {
+    let geom = extract_geom_bytes(tuple, geom_idx)?;
+    // todo phase g: consolidate this duplicate wkb walker with mars-artifact.
+    let bbox = bbox_of(&geom).map_err(|e| SourceError::backend("wkb bbox", e))?;
+    let centroid = centroid_of(&geom).map_err(|e| SourceError::backend("wkb centroid", e))?;
+    Ok(GeometryEnvelope { centroid, bbox })
+}
+
+fn extract_feature_id(tuple: &Tuple<'_>, entry: &CachedRelation) -> Result<u64, SourceError> {
+    let col = tuple.columns.get(entry.id_col_idx).ok_or_else(|| {
+        SourceError::backend_msg("pgoutput", format!("id col index {} out of range", entry.id_col_idx))
+    })?;
+    let signed = match col {
+        ColumnData::Text(b) => parse_text_feature_id(b)?,
+        ColumnData::Binary(b) => parse_binary_feature_id(b, entry.id_type_oid)?,
+        ColumnData::Null => return Err(SourceError::backend_msg("pgoutput", "feature id is NULL")),
+        ColumnData::Unchanged => return Err(SourceError::backend_msg("pgoutput", "feature id is TOAST-unchanged")),
+    };
+    if signed < 0 {
+        return Err(SourceError::backend_msg(
+            "pgoutput",
+            format!("negative feature id rejected: {signed}"),
+        ));
+    }
+    #[allow(clippy::cast_sign_loss)]
+    Ok(signed as u64)
+}
+
+fn parse_text_feature_id(b: &[u8]) -> Result<i64, SourceError> {
+    let s = std::str::from_utf8(b).map_err(|e| SourceError::backend("feature id utf8", e))?;
+    s.parse::<i64>()
+        .map_err(|e| SourceError::backend("feature id parse", e))
+}
+
+fn parse_binary_feature_id(b: &[u8], type_oid: u32) -> Result<i64, SourceError> {
+    match type_oid {
+        20 => {
+            let arr: [u8; 8] = b
+                .try_into()
+                .map_err(|_| SourceError::backend_msg("feature id binary", "invalid int8 length"))?;
+            Ok(i64::from_be_bytes(arr))
+        }
+        21 => {
+            let arr: [u8; 2] = b
+                .try_into()
+                .map_err(|_| SourceError::backend_msg("feature id binary", "invalid int2 length"))?;
+            Ok(i64::from(i16::from_be_bytes(arr)))
+        }
+        23 => {
+            let arr: [u8; 4] = b
+                .try_into()
+                .map_err(|_| SourceError::backend_msg("feature id binary", "invalid int4 length"))?;
+            Ok(i64::from(i32::from_be_bytes(arr)))
+        }
+        other => Err(SourceError::backend_msg(
+            "feature id binary",
+            format!("unsupported id type oid: {other}"),
         )),
     }
 }
@@ -250,12 +327,14 @@ mod tests {
                     schema: "public".into(),
                     table: "roads_t".into(),
                     geometry_column: "geom".into(),
+                    id_column: "gid".into(),
                 },
                 CollectionTopology {
                     collection: "buildings".into(),
                     schema: "public".into(),
                     table: "buildings_t".into(),
                     geometry_column: "geom".into(),
+                    id_column: "gid".into(),
                 },
             ],
             bands: vec![BandConfig {
@@ -359,7 +438,24 @@ mod tests {
         )
         .unwrap();
         match one_event(res) {
-            ChangeEvent::Insert { collection } => assert_eq!(collection.as_str(), "roads"),
+            ChangeEvent::Insert {
+                collection,
+                feature_id,
+                new_envelope,
+            } => {
+                assert_eq!(collection.as_str(), "roads");
+                assert_eq!(feature_id, 42);
+                assert_eq!(new_envelope.centroid, [50.0, 50.0]);
+                assert_eq!(
+                    (
+                        new_envelope.bbox.min_x,
+                        new_envelope.bbox.min_y,
+                        new_envelope.bbox.max_x,
+                        new_envelope.bbox.max_y,
+                    ),
+                    (50.0, 50.0, 50.0, 50.0)
+                );
+            }
             other => panic!("expected Insert event, got {other:?}"),
         }
     }
@@ -389,7 +485,19 @@ mod tests {
             &t,
         )
         .unwrap();
-        assert!(matches!(one_event(res), ChangeEvent::Update { .. }));
+        match one_event(res) {
+            ChangeEvent::Update {
+                feature_id,
+                new_envelope,
+                old_envelope,
+                ..
+            } => {
+                assert_eq!(feature_id, 42);
+                assert_eq!(old_envelope.unwrap().centroid, [50.0, 50.0]);
+                assert_eq!(new_envelope.centroid, [2000.0, 2000.0]);
+            }
+            other => panic!("expected Update event, got {other:?}"),
+        }
     }
 
     #[test]
@@ -471,7 +579,17 @@ mod tests {
             &t,
         )
         .unwrap();
-        assert!(matches!(one_event(res), ChangeEvent::Delete { .. }));
+        match one_event(res) {
+            ChangeEvent::Delete {
+                feature_id,
+                old_envelope,
+                ..
+            } => {
+                assert_eq!(feature_id, 42);
+                assert_eq!(old_envelope.unwrap().centroid, [10.0, 10.0]);
+            }
+            other => panic!("expected Delete event, got {other:?}"),
+        }
 
         // key-only must error
         let err = translate(

@@ -17,8 +17,8 @@ use mars_source_postgres::{CollectionTopology, ReplicationTopology, SourceCollec
 const MAX_CELLS_PER_ROW: usize = 4096;
 
 /// Build the replication topology from configuration. Deduplicates source
-/// bindings on `(schema, table, geometry_column)` so the same physical table
-/// appearing in multiple layers maps to a single replication entry.
+/// bindings on `(schema, table, geometry_column, id_column)` so the same
+/// physical table appearing in multiple layers maps to a single replication entry.
 pub(crate) fn build_replication_topology(cfg: &Config) -> Result<ReplicationTopology> {
     let origin = (cfg.cells.origin[0], cfg.cells.origin[1]);
     let cell_sizes = cfg.cells.size_per_band_m().context("resolve cells.size_per_band")?;
@@ -37,16 +37,23 @@ pub(crate) fn build_replication_topology(cfg: &Config) -> Result<ReplicationTopo
         });
     }
 
-    let mut seen: BTreeMap<(String, String, String), CollectionTopology> = BTreeMap::new();
+    let mut seen: BTreeMap<(String, String, String, String), CollectionTopology> = BTreeMap::new();
     for layer in &cfg.layers {
         for binding in &layer.sources {
             let (schema, table) = binding.schema_table();
-            let key = (schema.to_string(), table.to_string(), binding.geometry_column.clone());
+            let id_column = binding.id_column.as_deref().unwrap_or("id");
+            let key = (
+                schema.to_string(),
+                table.to_string(),
+                binding.geometry_column.clone(),
+                id_column.to_string(),
+            );
             seen.entry(key).or_insert_with(|| CollectionTopology {
                 collection: SourceCollectionId::new(binding.from.clone()),
                 schema: schema.to_string(),
                 table: table.to_string(),
                 geometry_column: binding.geometry_column.clone(),
+                id_column: id_column.to_string(),
             });
         }
     }
@@ -230,6 +237,7 @@ mod tests {
         let cfg = cfg_with_layers(vec![layer("a", vec![("public.roads", "the_geom")])]);
         let topo = build_replication_topology(&cfg).unwrap();
         assert_eq!(topo.collections[0].geometry_column, "the_geom");
+        assert_eq!(topo.collections[0].id_column, "id");
         assert_eq!(topo.collections[0].collection.as_str(), "public.roads");
     }
 
