@@ -4,8 +4,8 @@ use bytes::Bytes;
 use mars_types::{Bbox, ContentHash};
 
 use crate::{
-    ArtifactError, ArtifactKind, FORMAT_VERSION, MAGIC, SectionKind, generated::mars::artifact as fb,
-    section::FLAG_COMPRESSED, writer::SourceRef,
+    ArtifactError, ArtifactKind, FORMAT_VERSION, MAGIC, SectionKind, attrs::AttributesSection,
+    generated::mars::artifact as fb, section::FLAG_COMPRESSED, writer::SourceRef,
 };
 
 const HEADER_LEN: usize = 8 + 4 + 4;
@@ -197,6 +197,44 @@ impl ArtifactReader {
     #[must_use]
     pub fn source_ref(&self) -> Option<&SourceRef> {
         self.source_ref.as_ref()
+    }
+
+    /// Borrow the attributes section, validated against the v3 directory format.
+    /// Returns `Err(SectionMissing)` if no Attributes section is present.
+    pub fn attributes_section(&self) -> Result<AttributesSection<'_>, ArtifactError> {
+        let bytes = self.section_slice(SectionKind::Attributes)?;
+        Ok(AttributesSection::open(bytes)?)
+    }
+
+    /// Random-access lookup of one row's per-feature payload by `feature_id`.
+    /// Returns `Ok(None)` when the id is absent from the attributes section.
+    /// Errors out if the section is missing or malformed.
+    pub fn attributes_by_feature_id(&self, feature_id: u64) -> Result<Option<&[u8]>, ArtifactError> {
+        let sec = self.attributes_section()?;
+        Ok(sec.lookup(feature_id)?)
+    }
+
+    /// Borrow a section payload by kind without copying. Used by typed
+    /// accessors such as [`Self::attributes_section`].
+    fn section_slice(&self, kind: SectionKind) -> Result<&[u8], ArtifactError> {
+        let target = kind.as_u16();
+        let entry = self
+            .sections
+            .iter()
+            .find(|e| e.kind == target)
+            .ok_or(ArtifactError::SectionMissing(kind))?;
+        let file_offset: usize = entry
+            .file_offset
+            .try_into()
+            .map_err(|_| ArtifactError::Malformed("section offset too large"))?;
+        let length: usize = entry
+            .length
+            .try_into()
+            .map_err(|_| ArtifactError::Malformed("section length too large"))?;
+        let end = file_offset
+            .checked_add(length)
+            .ok_or(ArtifactError::Malformed("section span overflow"))?;
+        Ok(&self.bytes[file_offset..end])
     }
 
     /// zero-copy slice of an uncompressed section payload by kind. v1 rejects

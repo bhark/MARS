@@ -38,7 +38,9 @@ mod style_refs;
 mod varint;
 mod writer;
 
-pub use attrs::{AttrError, AttrValue, MAX_ROW_BYTES, decode_row, encode_row};
+pub use attrs::{
+    AttrError, AttrValue, AttributesSection, MAX_ROW_BYTES, decode_row, encode_attributes_section, encode_row,
+};
 pub use class_assignment::{decode_class_assignment, encode_class_assignment};
 pub use geometry::{
     Coord, FeatureGeom, FeatureIndexEntry, FeatureIndexIter, FeatureWriter, GeomKind, GeomPayloadBuilder, GeomType,
@@ -76,6 +78,8 @@ pub enum ArtifactError {
     CoordOutOfRange(f64),
     #[error("features must be sorted by id ascending")]
     UnsortedFeatures,
+    #[error("attributes section: {0}")]
+    Attrs(#[from] AttrError),
 }
 
 #[repr(u8)]

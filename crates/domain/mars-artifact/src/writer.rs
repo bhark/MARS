@@ -4,7 +4,7 @@ use bytes::Bytes;
 use mars_types::{Bbox, ContentHash};
 
 use crate::{
-    ArtifactError, ArtifactKind, FORMAT_VERSION, MAGIC, SectionKind, class_assignment,
+    ArtifactError, ArtifactKind, FORMAT_VERSION, MAGIC, SectionKind, attrs, class_assignment,
     generated::mars::artifact as fb,
     geometry::{self, FeatureGeom},
     label_candidates::{self, LabelCandidate},
@@ -33,6 +33,7 @@ pub struct ArtifactWriter {
     pending_features: Option<Vec<FeatureGeom>>,
     pending_class_assignment: Option<Vec<(u64, u16)>>,
     pending_label_candidates: Option<Vec<LabelCandidate>>,
+    pending_attributes: Option<Vec<(u64, Vec<u8>)>>,
 }
 
 impl ArtifactWriter {
@@ -47,6 +48,7 @@ impl ArtifactWriter {
             pending_features: None,
             pending_class_assignment: None,
             pending_label_candidates: None,
+            pending_attributes: None,
         }
     }
 
@@ -68,6 +70,15 @@ impl ArtifactWriter {
 
     pub fn add_class_assignment(&mut self, items: &[(u64, u16)]) -> &mut Self {
         self.pending_class_assignment = Some(items.to_vec());
+        self
+    }
+
+    /// Stage an attributes section. Each `(feature_id, row_bytes)` pair is the
+    /// per-feature payload produced by [`attrs::encode_row`]; the writer wraps
+    /// them in a directory-indexed section so the reader can binary-search by
+    /// `feature_id`. Errors surface in [`Self::finish`].
+    pub fn add_attributes(&mut self, rows: Vec<(u64, Vec<u8>)>) -> &mut Self {
+        self.pending_attributes = Some(rows);
         self
     }
 
@@ -142,6 +153,11 @@ impl ArtifactWriter {
         if let Some(items) = self.pending_label_candidates.take() {
             let bytes = label_candidates::encode_label_candidates(&items)?;
             self.sections.push((SectionKind::LabelCandidates, bytes));
+        }
+        if let Some(rows) = self.pending_attributes.take() {
+            let refs: Vec<(u64, &[u8])> = rows.iter().map(|(id, p)| (*id, p.as_slice())).collect();
+            let bytes = attrs::encode_attributes_section(&refs)?;
+            self.sections.push((SectionKind::Attributes, bytes));
         }
 
         // reject duplicate sections (e.g. caller staged geometry via
