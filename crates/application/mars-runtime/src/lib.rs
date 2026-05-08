@@ -23,11 +23,13 @@ use mars_types::{Bbox, CrsCode, ImageFormat, LayerId};
 use tokio::sync::Semaphore;
 
 mod fetch;
+mod gfi;
 mod plan;
 mod render;
 mod state;
 
 pub use fetch::{fetch_page, fetch_sidecar};
+pub use gfi::LayerFeatureInfo;
 pub use plan::{pick_binding_and_level, reproject_viewport, resolve_pages};
 pub use state::{IndexError, PageIndex, RuntimeState};
 
@@ -269,6 +271,18 @@ impl Runtime {
     pub fn swap_state(&self, state: Arc<RuntimeState>) {
         self.state.store(Some(state));
         self.last_reject_reason.store(None);
+    }
+
+    /// Resolve a pixel-space click into the matching `(layer, feature)` set
+    /// for layers with `enable_get_feature_info`. The point is in render-plan
+    /// pixel coordinates; out-of-bounds clicks return an empty list.
+    pub async fn get_feature_info(
+        &self,
+        plan: &RenderPlan,
+        point_px: (u32, u32),
+    ) -> Result<Vec<LayerFeatureInfo>, RuntimeError> {
+        let state = self.current_state().ok_or(RuntimeError::NotReady)?;
+        gfi::get_feature_info(&state, &self.deps, plan, point_px).await
     }
 
     /// Execute one render plan and return encoded image bytes.

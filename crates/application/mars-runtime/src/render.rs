@@ -13,21 +13,21 @@ use bytes::Bytes;
 use futures_util::StreamExt;
 use futures_util::stream::FuturesUnordered;
 use mars_artifact::{
-    ArtifactReader, GeomKind, SectionKind, SpatialIndex, decode_class_assignment, decode_geometry_at_slots,
-    decode_style_refs,
+    ArtifactReader, GeomKind, LabelCandidate, LabelShape, SectionKind, SpatialIndex, decode_class_assignment,
+    decode_geometry_at_slots, decode_label_candidates, decode_style_refs,
 };
 use mars_config::Layer;
 use mars_render_port::{Canvas, DrawOp, Path, Subpath};
-use mars_style::{Colour, Style, Stylesheet};
+use mars_style::{Colour, LabelStyle, Style, Stylesheet};
 use mars_types::{Bbox, BindingMetadata, LayerId, PageEntry};
 
 use crate::state::RuntimeState;
 use crate::{Deps, RenderPlan, RuntimeError};
 use crate::{fetch::fetch_page, fetch::fetch_sidecar, plan as planning};
 
-/// fallback style used until D5 wires the class-sidecar join. blue fill +
-/// dark stroke so the spine is clearly visible against the white default
-/// background of the test fixtures.
+/// fallback style used when no class sidecar binds the feature to a named
+/// stylesheet entry. blue fill + dark stroke so the spine stays visible
+/// against the white default background of the test fixtures.
 fn fallback_style() -> Arc<Style> {
     Arc::new(Style {
         fill: Some(Colour {
@@ -63,6 +63,7 @@ pub(crate) async fn render_plan(
         background: None,
     };
     let mut all_ops: Vec<DrawOp> = Vec::new();
+    let mut all_labels: Vec<PreparedLabel> = Vec::new();
     let fallback = fallback_style();
     for layer_id in &plan.layers {
         let layer_cfg = lookup_layer(config, layer_id)?;
@@ -85,9 +86,16 @@ pub(crate) async fn render_plan(
         if pages.is_empty() {
             continue;
         }
-        let layer_ops = render_layer_pages(deps, state, layer_id, binding, &pages, plan, &fallback).await?;
-        all_ops.extend(layer_ops);
+        let layer_out = render_layer_pages(deps, state, layer_id, binding, &pages, plan, &fallback).await?;
+        all_ops.extend(layer_out.ops);
+        all_labels.extend(layer_out.labels);
     }
+
+    // greedy collision over the accumulated label set: sort by priority
+    // descending, place survivors that don't collide with already-placed
+    // labels' approximate text bbox.
+    let label_ops = collide_and_emit_labels(all_labels, plan.width, plan.height);
+    all_ops.extend(label_ops);
 
     let pixmap = deps.renderer.render(canvas, &all_ops)?;
     let bytes = deps.encoder.encode(&pixmap, plan.format)?;
@@ -104,6 +112,11 @@ fn lookup_layer<'c>(config: &'c mars_config::Config, layer_id: &LayerId) -> Resu
         })
 }
 
+struct LayerOutput {
+    ops: Vec<DrawOp>,
+    labels: Vec<PreparedLabel>,
+}
+
 async fn render_layer_pages(
     deps: &Deps,
     state: &RuntimeState,
@@ -112,7 +125,7 @@ async fn render_layer_pages(
     pages: &[&PageEntry],
     plan: &RenderPlan,
     fallback: &Arc<Style>,
-) -> Result<Vec<DrawOp>, RuntimeError> {
+) -> Result<LayerOutput, RuntimeError> {
     let mut futs = FuturesUnordered::new();
     for page in pages {
         let store = deps.store.clone();
@@ -122,19 +135,30 @@ async fn render_layer_pages(
             .index
             .class_sidecar(&state.manifest, layer_id, &entry.key)
             .cloned();
+        let label_entry = state
+            .index
+            .label_sidecar(&state.manifest, layer_id, &entry.key)
+            .cloned();
         futs.push(async move {
             let page_bytes = fetch_page(&cache, &store, &entry).await?;
             let class_bytes = match &class_entry {
                 Some(e) => Some(fetch_sidecar(&cache, &store, e).await?),
                 None => None,
             };
-            Ok::<_, RuntimeError>((entry, page_bytes, class_bytes))
+            let label_bytes = match &label_entry {
+                Some(e) => Some(fetch_sidecar(&cache, &store, e).await?),
+                None => None,
+            };
+            Ok::<_, RuntimeError>((entry, page_bytes, class_bytes, label_bytes))
         });
     }
-    let mut all_ops: Vec<DrawOp> = Vec::new();
+    let mut out = LayerOutput {
+        ops: Vec::new(),
+        labels: Vec::new(),
+    };
     let same_crs = binding.native_crs.as_str() == plan.crs.as_str();
     while let Some(res) = futs.next().await {
-        let (entry, page_bytes, class_bytes) = res?;
+        let (entry, page_bytes, class_bytes, label_bytes) = res?;
         let class = match class_bytes {
             Some(b) => Some(ClassResolver::open(b)?),
             None => None,
@@ -149,9 +173,14 @@ async fn render_layer_pages(
             fallback,
             same_crs,
         )?;
-        all_ops.append(&mut page_ops);
+        out.ops.append(&mut page_ops);
+        if let Some(bytes) = label_bytes {
+            let mut prepared =
+                prepare_labels(bytes, plan, binding, class.as_ref(), &state.stylesheet, same_crs)?;
+            out.labels.append(&mut prepared);
+        }
     }
-    Ok(all_ops)
+    Ok(out)
 }
 
 /// resolves `feature_id -> Style` by binary-searching the class assignment
@@ -374,6 +403,131 @@ fn world_to_pixel(c: (f64, f64), viewport: Bbox, w: u32, h: u32) -> (f32, f32) {
     let px = nx * f64::from(w);
     let py = (1.0 - ny) * f64::from(h);
     (px as f32, py as f32)
+}
+
+/// label candidate that has been resolved against the active stylesheet and
+/// projected into request-CRS pixel space. carries enough state for the
+/// collision pass to keep or drop it without redoing the projection.
+struct PreparedLabel {
+    anchor_px: (f32, f32),
+    text: String,
+    style: Arc<LabelStyle>,
+    priority: u16,
+    bbox_px: (f32, f32, f32, f32),
+}
+
+fn prepare_labels(
+    bytes: Bytes,
+    plan: &RenderPlan,
+    binding: &BindingMetadata,
+    class: Option<&ClassResolver>,
+    stylesheet: &Stylesheet,
+    same_crs: bool,
+) -> Result<Vec<PreparedLabel>, RuntimeError> {
+    let reader = ArtifactReader::open(bytes).map_err(map_artifact_err)?;
+    let label_bytes = reader.section(SectionKind::LabelCandidates).map_err(map_artifact_err)?;
+    let candidates = decode_label_candidates(&label_bytes).map_err(map_artifact_err)?;
+    if candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::with_capacity(candidates.len());
+    let xform = if same_crs {
+        None
+    } else {
+        Some(mars_proj::cached_transformer(&binding.native_crs, &plan.crs).map_err(map_proj_err)?)
+    };
+    for c in candidates {
+        let anchor_world = match label_anchor_world(&c, xform.as_deref()) {
+            Some(a) => a,
+            None => continue,
+        };
+        let anchor_px = world_to_pixel(anchor_world, plan.bbox, plan.width, plan.height);
+        if !inside_pixel_canvas(anchor_px, plan.width, plan.height) {
+            continue;
+        }
+        let style_name = class
+            .and_then(|cl| cl.style_refs.get(c.style_ref_idx as usize))
+            .map(String::as_str);
+        let Some(style) = style_name.and_then(|n| stylesheet.labels.get(n).cloned()) else {
+            continue;
+        };
+        let bbox_px = approximate_text_bbox(&c.text, anchor_px, &style);
+        out.push(PreparedLabel {
+            anchor_px,
+            text: c.text,
+            style,
+            priority: c.priority,
+            bbox_px,
+        });
+    }
+    Ok(out)
+}
+
+fn label_anchor_world(
+    c: &LabelCandidate,
+    xform: Option<&mars_proj::Transformer>,
+) -> Option<(f64, f64)> {
+    let (wx, wy) = match &c.shape {
+        LabelShape::Point { x, y } | LabelShape::PolygonAnchor { x, y } => (f64::from(*x), f64::from(*y)),
+        // polyline labels: take the midpoint of the polyline. naive but
+        // reasonable for v1; a future pass that reuses the placement
+        // engine's arc-length sampling can refine.
+        LabelShape::Polyline(points) => {
+            if points.is_empty() {
+                return None;
+            }
+            let mid = points[points.len() / 2];
+            (f64::from(mid.0), f64::from(mid.1))
+        }
+    };
+    match xform {
+        None => Some((wx, wy)),
+        Some(t) => t.transform_point(wx, wy).ok(),
+    }
+}
+
+fn inside_pixel_canvas(p: (f32, f32), w: u32, h: u32) -> bool {
+    p.0 >= 0.0 && p.1 >= 0.0 && p.0 <= w as f32 && p.1 <= h as f32
+}
+
+/// approximate text bbox at `anchor_px` in pixel space. width is a coarse
+/// `chars × 0.55 × font_size` estimate; height is `font_size × 1.2`. enough
+/// for the greedy collision pass; a font-aware refinement lives in a
+/// follow-up that exposes a measure-text API on the renderer port.
+fn approximate_text_bbox(text: &str, anchor: (f32, f32), style: &LabelStyle) -> (f32, f32, f32, f32) {
+    let font_size = style.font_size.max(1.0);
+    let chars = text.chars().count().max(1) as f32;
+    let half_w = (chars * 0.55 * font_size) * 0.5;
+    let half_h = (font_size * 1.2) * 0.5;
+    (anchor.0 - half_w, anchor.1 - half_h, anchor.0 + half_w, anchor.1 + half_h)
+}
+
+/// run a greedy collision pass over the accumulated label set and return
+/// the surviving `DrawOp::Label` ops in placement order.
+fn collide_and_emit_labels(mut labels: Vec<PreparedLabel>, _w: u32, _h: u32) -> Vec<DrawOp> {
+    if labels.is_empty() {
+        return Vec::new();
+    }
+    // priority desc → place high-priority labels first, drop conflicts.
+    labels.sort_by_key(|l| std::cmp::Reverse(l.priority));
+    let mut placed: Vec<(f32, f32, f32, f32)> = Vec::with_capacity(labels.len());
+    let mut ops = Vec::with_capacity(labels.len());
+    for label in labels {
+        if placed.iter().any(|b| pixel_bbox_overlaps(*b, label.bbox_px)) {
+            continue;
+        }
+        placed.push(label.bbox_px);
+        ops.push(DrawOp::Label {
+            anchor: label.anchor_px,
+            text: label.text,
+            style: label.style,
+        });
+    }
+    ops
+}
+
+fn pixel_bbox_overlaps(a: (f32, f32, f32, f32), b: (f32, f32, f32, f32)) -> bool {
+    a.0 < b.2 && a.2 > b.0 && a.1 < b.3 && a.3 > b.1
 }
 
 fn map_artifact_err(e: mars_artifact::ArtifactError) -> RuntimeError {
