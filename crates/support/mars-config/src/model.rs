@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
 use std::time::Duration;
 
-use mars_style::{LabelStyle, Style};
+use mars_style::{LabelStyle, LabelSurvival, Style};
 use mars_types::{Bbox, CrsCode, LayerId};
 use serde::{Deserialize, Serialize};
 
@@ -612,6 +612,11 @@ pub struct Layer {
     /// Optional label declaration.
     #[serde(default)]
     pub label: Option<LayerLabel>,
+    /// Label-survival policy across decimation levels. Default `Independent`
+    /// (label retained even when geometry is pruned at the level). LAZARUS
+    /// §Decimation.
+    #[serde(default)]
+    pub label_survival: LabelSurvival,
 }
 
 /// Half-open scale window with denominator bounds.

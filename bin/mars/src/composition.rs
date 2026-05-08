@@ -228,6 +228,7 @@ mod tests {
                 style: ClassStyle::Ref { name: "x".into() },
             }],
             label: None,
+            label_survival: mars_config::LabelSurvival::Independent,
         }
     }
 

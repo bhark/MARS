@@ -29,6 +29,10 @@ pub mod model;
 pub mod units;
 
 pub use model::*;
+// re-export style value types operators reach for through mars-config so
+// downstream crates (mars-compiler, bin/mars) need not depend on mars-style
+// just to name a `Layer.label_survival` value.
+pub use mars_style::{LabelStyle, LabelSurvival, Placement, PolygonStrategy};
 
 mars_types::impl_string_newtype!(
     /// Scale-band identifier used in binding configuration (post-LAZARUS
@@ -209,6 +213,42 @@ pub fn validate(config: &Config, config_dir: &Path) -> Result<(), ConfigError> {
                     "layer {} class {:?} when: parse error: {e}",
                     layer.name, class.name
                 )));
+            }
+        }
+
+        // collect every attribute name the layer references via class
+        // when: expressions or label.text templates. each binding declared
+        // for this layer must list every referenced attribute, otherwise
+        // the snapshot path would silently observe a missing column at
+        // eval time.
+        let mut referenced: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for class in &layer.classes {
+            if let Some(when) = &class.when
+                && let Ok(expr) = mars_expr::parse(when)
+            {
+                mars_expr::collect_idents(&expr, &mut referenced);
+            }
+        }
+        if let Some(label) = &layer.label
+            && let Ok(template) = mars_expr::parse_template(&label.text)
+        {
+            for seg in &template.segments {
+                if let mars_expr::Segment::Ident(name) = seg {
+                    referenced.insert(name.clone());
+                }
+            }
+        }
+        for (i, binding) in layer.sources.iter().enumerate() {
+            let declared: std::collections::BTreeSet<&str> =
+                binding.attributes.iter().map(String::as_str).collect();
+            for name in &referenced {
+                if !declared.contains(name.as_str()) {
+                    return Err(ConfigError::Invalid(format!(
+                        "layer {} source[{i}] (from {:?}) does not declare attribute {name:?} \
+                         referenced by a class when: or label text",
+                        layer.name, binding.from
+                    )));
+                }
             }
         }
 
@@ -459,6 +499,114 @@ mod tests {
     }
 
     #[test]
+    fn rejects_when_clause_referencing_undeclared_attribute() {
+        let mut cfg = minimal_config();
+        cfg.layers = vec![Layer {
+            name: mars_types::LayerId::new("roads"),
+            title: String::new(),
+            abstract_: String::new(),
+            kind: "line".into(),
+            scale: None,
+            group: None,
+            enable_get_feature_info: false,
+            bbox: None,
+            sources: vec![SourceBinding {
+                scale: None,
+                band: None,
+                from: "roads".into(),
+                geometry_column: "geom".into(),
+                id_column: Some("id".into()),
+                attributes: vec!["name".into()],
+                levels: None,
+                page_size_target_bytes: None,
+            }],
+            classes: vec![crate::model::Class {
+                name: "primary".into(),
+                title: String::new(),
+                when: Some("kind = 'major'".into()),
+                style: ClassStyle::Inline(Default::default()),
+            }],
+            label: None,
+            label_survival: mars_style::LabelSurvival::Independent,
+        }];
+        assert!(matches!(
+            validate(&cfg, Path::new(".")),
+            Err(ConfigError::Invalid(ref s)) if s.contains("attribute") && s.contains("kind")
+        ));
+    }
+
+    #[test]
+    fn rejects_label_text_referencing_undeclared_attribute() {
+        use crate::model::{LabelStyleAttach, LayerLabel};
+        let mut cfg = minimal_config();
+        cfg.layers = vec![Layer {
+            name: mars_types::LayerId::new("roads"),
+            title: String::new(),
+            abstract_: String::new(),
+            kind: "line".into(),
+            scale: None,
+            group: None,
+            enable_get_feature_info: false,
+            bbox: None,
+            sources: vec![SourceBinding {
+                scale: None,
+                band: None,
+                from: "roads".into(),
+                geometry_column: "geom".into(),
+                id_column: Some("id".into()),
+                attributes: vec!["name".into()],
+                levels: None,
+                page_size_target_bytes: None,
+            }],
+            classes: vec![],
+            label: Some(LayerLabel {
+                style: LabelStyleAttach::Inline(mars_style::LabelStyle {
+                    font_family: "DejaVu Sans".into(),
+                    font_size: 12.0,
+                    fill: mars_style::Colour::rgb(0, 0, 0),
+                    halo: None,
+                    priority: 0,
+                    min_distance: 0.0,
+                }),
+                text: "{name} ({kind})".into(),
+                placement: None,
+            }),
+            label_survival: mars_style::LabelSurvival::Independent,
+        }];
+        assert!(matches!(
+            validate(&cfg, Path::new(".")),
+            Err(ConfigError::Invalid(ref s)) if s.contains("attribute") && s.contains("kind")
+        ));
+    }
+
+    #[test]
+    fn label_survival_defaults_to_independent_when_absent() {
+        // serde default kicks in when the layer YAML has no `label_survival:` line.
+        let yaml = r#"
+name: roads
+type: line
+sources: []
+"#;
+        let layer: Layer = serde_yaml_ng::from_str(yaml).unwrap();
+        assert!(matches!(layer.label_survival, mars_style::LabelSurvival::Independent));
+    }
+
+    #[test]
+    fn label_survival_follow_geometry_round_trips() {
+        let yaml = r#"
+name: roads
+type: line
+sources: []
+label_survival: follow_geometry
+"#;
+        let layer: Layer = serde_yaml_ng::from_str(yaml).unwrap();
+        assert!(matches!(
+            layer.label_survival,
+            mars_style::LabelSurvival::FollowGeometry
+        ));
+    }
+
+    #[test]
     fn rejects_unparseable_when_clause() {
         let mut cfg = minimal_config();
         cfg.layers = vec![Layer {
@@ -478,6 +626,7 @@ mod tests {
                 style: ClassStyle::Inline(Default::default()),
             }],
             label: None,
+            label_survival: mars_style::LabelSurvival::Independent,
         }];
         assert!(matches!(
             validate(&cfg, Path::new(".")),
@@ -527,6 +676,7 @@ mod tests {
                 },
             ],
             label: None,
+            label_survival: mars_style::LabelSurvival::Independent,
         }];
         assert!(matches!(
             validate(&cfg, Path::new(".")),
@@ -607,6 +757,7 @@ mod tests {
                     max_angle_delta_deg: 25.0,
                 }),
             }),
+            label_survival: mars_style::LabelSurvival::Independent,
         }];
         assert!(matches!(
             validate(&cfg, Path::new(".")),
@@ -644,6 +795,7 @@ mod tests {
                     max_angle_delta_deg: 25.0,
                 }),
             }),
+            label_survival: mars_style::LabelSurvival::Independent,
         }];
         assert!(validate(&cfg, Path::new(".")).is_ok());
     }
@@ -661,6 +813,7 @@ mod tests {
             sources: vec![binding],
             classes: vec![],
             label: None,
+            label_survival: mars_style::LabelSurvival::Independent,
         }
     }
 
@@ -794,6 +947,7 @@ mod tests {
             sources: vec![],
             classes: vec![],
             label: None,
+            label_survival: mars_style::LabelSurvival::Independent,
         };
         cfg.layers = vec![layer.clone(), layer];
         assert!(matches!(

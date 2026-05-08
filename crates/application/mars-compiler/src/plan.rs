@@ -265,6 +265,7 @@ mod tests {
                 style: ClassStyle::Inline(Default::default()),
             }],
             label: None,
+            label_survival: mars_config::LabelSurvival::Independent,
         }
     }
 
