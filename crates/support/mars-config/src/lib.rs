@@ -21,6 +21,8 @@
 
 use std::path::{Path, PathBuf};
 
+use mars_types::LayerId;
+
 mod env_subst;
 mod include;
 pub mod model;
@@ -182,6 +184,9 @@ pub fn validate(config: &Config, config_dir: &Path) -> Result<(), ConfigError> {
                     layer.name
                 )));
             }
+
+            validate_binding_from(&layer.name, i, &binding.from)?;
+            validate_binding_levels(&layer.name, i, binding)?;
         }
 
         for class in &layer.classes {
@@ -245,6 +250,81 @@ pub fn validate(config: &Config, config_dir: &Path) -> Result<(), ConfigError> {
 #[must_use]
 pub fn config_dir(path: &Path) -> PathBuf {
     path.parent().map(PathBuf::from).unwrap_or_default()
+}
+
+/// Reject `from:` strings that are not a single change-feed-mappable table.
+/// LAZARUS §39-41 documents the v1 restriction: a binding must point at one
+/// real table or a single-table view so pgoutput events map to a single
+/// feature_id. Multi-table joins, embedded SELECTs, or compound DDL fragments
+/// are rejected here, far from the snapshot path that would otherwise fail
+/// opaquely later.
+fn validate_binding_from(layer: &LayerId, idx: usize, from: &str) -> Result<(), ConfigError> {
+    let trimmed = from.trim();
+    if trimmed.is_empty() {
+        return Err(ConfigError::Invalid(format!(
+            "layer {layer} source[{idx}] from must not be empty"
+        )));
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    let bad_substr = ["(", ")", ";", " join ", " select ", " from ", " where ", " union "]
+        .iter()
+        .find(|s| lower.contains(*s));
+    if let Some(needle) = bad_substr {
+        return Err(ConfigError::Invalid(format!(
+            "layer {layer} source[{idx}] from {from:?} is not a single-table reference \
+             (contains {needle:?}); v1 bindings must name one table or a single-table view \
+             so the change-feed can map events to feature ids"
+        )));
+    }
+    // single-segment names route to `public`; allow at most `schema.table`.
+    if trimmed.matches('.').count() > 1 {
+        return Err(ConfigError::Invalid(format!(
+            "layer {layer} source[{idx}] from {from:?} must be `table` or `schema.table`"
+        )));
+    }
+    Ok(())
+}
+
+/// Validate per-level decimation config on a single binding.
+fn validate_binding_levels(layer: &LayerId, idx: usize, binding: &SourceBinding) -> Result<(), ConfigError> {
+    if let Some(target) = binding.page_size_target_bytes
+        && target == 0
+    {
+        return Err(ConfigError::Invalid(format!(
+            "layer {layer} source[{idx}] page_size_target_bytes must be > 0"
+        )));
+    }
+    let Some(levels) = &binding.levels else {
+        return Ok(());
+    };
+    if levels.is_empty() {
+        return Err(ConfigError::Invalid(format!(
+            "layer {layer} source[{idx}] levels: must not be empty when set"
+        )));
+    }
+    let mut prev: Option<u8> = None;
+    for (li, lvl) in levels.iter().enumerate() {
+        if let Some(p) = prev
+            && lvl.level <= p
+        {
+            return Err(ConfigError::Invalid(format!(
+                "layer {layer} source[{idx}] levels[{li}] level {} must be strictly greater than previous {}",
+                lvl.level, p
+            )));
+        }
+        prev = Some(lvl.level);
+        if !lvl.vertex_tolerance_m.is_finite() || lvl.vertex_tolerance_m < 0.0 {
+            return Err(ConfigError::Invalid(format!(
+                "layer {layer} source[{idx}] levels[{li}] vertex_tolerance_m must be finite and >= 0"
+            )));
+        }
+        if !lvl.geometry_min_size_m.is_finite() || lvl.geometry_min_size_m < 0.0 {
+            return Err(ConfigError::Invalid(format!(
+                "layer {layer} source[{idx}] levels[{li}] geometry_min_size_m must be finite and >= 0"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Validate that `code` is a projected (metric) CRS using PROJ introspection.
@@ -566,6 +646,137 @@ mod tests {
             }),
         }];
         assert!(validate(&cfg, Path::new(".")).is_ok());
+    }
+
+    fn layer_with_binding(binding: SourceBinding) -> Layer {
+        Layer {
+            name: mars_types::LayerId::new("roads"),
+            title: String::new(),
+            abstract_: String::new(),
+            kind: "line".into(),
+            scale: None,
+            group: None,
+            enable_get_feature_info: false,
+            bbox: None,
+            sources: vec![binding],
+            classes: vec![],
+            label: None,
+        }
+    }
+
+    fn binding(from: &str) -> SourceBinding {
+        SourceBinding {
+            scale: None,
+            band: None,
+            from: from.into(),
+            geometry_column: "geom".into(),
+            id_column: Some("id".into()),
+            attributes: vec![],
+            levels: None,
+            page_size_target_bytes: None,
+        }
+    }
+
+    #[test]
+    fn accepts_simple_table_binding() {
+        let mut cfg = minimal_config();
+        cfg.layers = vec![layer_with_binding(binding("buildings"))];
+        assert!(validate(&cfg, Path::new(".")).is_ok());
+
+        cfg.layers = vec![layer_with_binding(binding("public.buildings"))];
+        assert!(validate(&cfg, Path::new(".")).is_ok());
+    }
+
+    #[test]
+    fn rejects_multi_table_from() {
+        for bad in [
+            "(SELECT id FROM a JOIN b USING (k))",
+            "a JOIN b ON a.k=b.k",
+            "a; truncate b",
+        ] {
+            let mut cfg = minimal_config();
+            cfg.layers = vec![layer_with_binding(binding(bad))];
+            let err = validate(&cfg, Path::new("."));
+            assert!(
+                matches!(&err, Err(ConfigError::Invalid(s)) if s.contains("single-table")),
+                "expected single-table rejection for {bad:?}, got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_overdotted_from() {
+        let mut cfg = minimal_config();
+        cfg.layers = vec![layer_with_binding(binding("a.b.c"))];
+        let err = validate(&cfg, Path::new("."));
+        assert!(matches!(&err, Err(ConfigError::Invalid(s)) if s.contains("schema.table")));
+    }
+
+    #[test]
+    fn rejects_empty_levels() {
+        let mut cfg = minimal_config();
+        let mut b = binding("buildings");
+        b.levels = Some(vec![]);
+        cfg.layers = vec![layer_with_binding(b)];
+        let err = validate(&cfg, Path::new("."));
+        assert!(matches!(&err, Err(ConfigError::Invalid(s)) if s.contains("must not be empty")));
+    }
+
+    #[test]
+    fn rejects_non_increasing_levels() {
+        let mut cfg = minimal_config();
+        let mut b = binding("buildings");
+        b.levels = Some(vec![
+            DecimationLevelConfig {
+                level: 0,
+                vertex_tolerance_m: 0.0,
+                geometry_min_size_m: 0.0,
+                label_min_priority: 0,
+            },
+            DecimationLevelConfig {
+                level: 0,
+                vertex_tolerance_m: 1.0,
+                geometry_min_size_m: 1.0,
+                label_min_priority: 0,
+            },
+        ]);
+        cfg.layers = vec![layer_with_binding(b)];
+        let err = validate(&cfg, Path::new("."));
+        assert!(matches!(&err, Err(ConfigError::Invalid(s)) if s.contains("strictly greater")));
+    }
+
+    #[test]
+    fn rejects_negative_tolerances() {
+        let mut cfg = minimal_config();
+        let mut b = binding("buildings");
+        b.levels = Some(vec![DecimationLevelConfig {
+            level: 0,
+            vertex_tolerance_m: -1.0,
+            geometry_min_size_m: 0.0,
+            label_min_priority: 0,
+        }]);
+        cfg.layers = vec![layer_with_binding(b)];
+        let err = validate(&cfg, Path::new("."));
+        assert!(matches!(&err, Err(ConfigError::Invalid(s)) if s.contains("vertex_tolerance_m")));
+    }
+
+    #[test]
+    fn rejects_zero_page_size_target() {
+        let mut cfg = minimal_config();
+        let mut b = binding("buildings");
+        b.page_size_target_bytes = Some(0);
+        cfg.layers = vec![layer_with_binding(b)];
+        let err = validate(&cfg, Path::new("."));
+        assert!(matches!(&err, Err(ConfigError::Invalid(s)) if s.contains("page_size_target_bytes")));
+    }
+
+    #[test]
+    fn page_size_target_resolves_to_default() {
+        let b = binding("buildings");
+        assert_eq!(b.resolved_page_size_target(), DEFAULT_PAGE_SIZE_TARGET_BYTES);
+        let mut b2 = binding("x");
+        b2.page_size_target_bytes = Some(1234);
+        assert_eq!(b2.resolved_page_size_target(), 1234);
     }
 
     #[test]

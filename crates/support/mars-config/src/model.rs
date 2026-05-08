@@ -644,7 +644,20 @@ pub struct SourceBinding {
     /// Materialised attribute columns.
     #[serde(default)]
     pub attributes: Vec<String>,
+    /// Per-decimation-level decimation rules for this binding. When unset,
+    /// the compiler defaults to a single level-0 (raw) materialisation.
+    /// LAZARUS Phase C substrate: the snapshot emits one page set per level,
+    /// pruned by `geometry_min_size_m` and simplified to `vertex_tolerance_m`.
+    #[serde(default)]
+    pub levels: Option<Vec<DecimationLevelConfig>>,
+    /// Byte-budget target per page artifact. None resolves to the substrate
+    /// default (~5 MiB).
+    #[serde(default)]
+    pub page_size_target_bytes: Option<u64>,
 }
+
+/// Default byte-budget target per page artifact (~5 MiB).
+pub const DEFAULT_PAGE_SIZE_TARGET_BYTES: u64 = 5 * 1024 * 1024;
 
 impl SourceBinding {
     /// Split `from` into `(schema, table)`. Single-segment names route to
@@ -656,6 +669,29 @@ impl SourceBinding {
             None => ("public", self.from.as_str()),
         }
     }
+
+    /// Resolve `page_size_target_bytes` against the substrate default.
+    #[must_use]
+    pub fn resolved_page_size_target(&self) -> u64 {
+        self.page_size_target_bytes.unwrap_or(DEFAULT_PAGE_SIZE_TARGET_BYTES)
+    }
+}
+
+/// Per-decimation-level rules driving page emission for one binding.
+/// LAZARUS §244-256: each level produces a render set (geometry pruned by
+/// `geometry_min_size_m`, simplified to `vertex_tolerance_m`) and a label
+/// set (candidates retained at or above `label_min_priority`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DecimationLevelConfig {
+    /// Decimation level index. Level 0 is the raw (canonical) materialisation.
+    pub level: u8,
+    /// Douglas-Peucker tolerance in canonical CRS units (metres for the
+    /// metric CRSes mars-runtime requires).
+    pub vertex_tolerance_m: f64,
+    /// Drop features whose bbox-diagonal is below this threshold at this level.
+    pub geometry_min_size_m: f64,
+    /// Retain label candidates at or above this priority at this level.
+    pub label_min_priority: u32,
 }
 
 /// Layer class. SPEC §5.3.
