@@ -19,8 +19,8 @@ pub mod access;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_core::stream::BoxStream;
-use mars_types::CrsCode;
 pub use mars_types::SourceCollectionId;
+use mars_types::{Bbox, CrsCode};
 
 pub use access::RowAttrs;
 
@@ -90,29 +90,50 @@ impl SourceError {
     }
 }
 
+/// geometry summary carried by a change event.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GeometryEnvelope {
+    /// centroid in canonical crs.
+    pub centroid: [f64; 2],
+    /// axis-aligned row bounds.
+    pub bbox: Bbox,
+}
+
 /// One change-feed event, lowered from a postgres logical-decoding message
 /// or a polling diff.
 ///
-/// Phase B carries only the collection identity; Phase C adds the per-event
-/// geometry envelope (raw WKB + bbox/centroid for old/new rows under
-/// `REPLICA IDENTITY FULL`) so the compiler can derive each row's Hilbert
-/// key without round-tripping through a cell grid.
+/// `old_envelope` is `Some` only when the feed supplies the old row, e.g.
+/// postgres `REPLICA IDENTITY FULL`.
 #[derive(Debug, Clone)]
 pub enum ChangeEvent {
     /// A row was inserted.
     Insert {
         /// Logical name of the source table / collection.
         collection: SourceCollectionId,
+        /// stable feature id.
+        feature_id: u64,
+        /// inserted-row envelope.
+        new_envelope: GeometryEnvelope,
     },
     /// A row was updated.
     Update {
         /// Logical name of the source table / collection.
         collection: SourceCollectionId,
+        /// stable feature id.
+        feature_id: u64,
+        /// new-row envelope.
+        new_envelope: GeometryEnvelope,
+        /// old-row envelope, if supplied by the feed.
+        old_envelope: Option<GeometryEnvelope>,
     },
     /// A row was deleted.
     Delete {
         /// Logical name of the source table / collection.
         collection: SourceCollectionId,
+        /// stable feature id.
+        feature_id: u64,
+        /// deleted-row envelope, if supplied by the feed.
+        old_envelope: Option<GeometryEnvelope>,
     },
     /// The whole collection was truncated; the binding goes through a
     /// bootstrap-equivalent rebuild.
@@ -238,6 +259,13 @@ pub trait Source: Send + Sync + 'static {
         &'a self,
         binding: &'a SourceBinding,
     ) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError>;
+
+    /// stream rows matching feature ids.
+    async fn fetch_by_feature_ids<'a>(
+        &'a self,
+        binding: &'a SourceBinding,
+        ids: &'a [i64],
+    ) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError>;
 }
 
 /// Per-row record returned by `Source`. Geometry is opaque adapter-native
@@ -271,6 +299,16 @@ pub mod stub {
         ) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError> {
             Err(SourceError::NotImplemented {
                 what: "fetch_full_table_streaming",
+            })
+        }
+
+        async fn fetch_by_feature_ids<'a>(
+            &'a self,
+            _binding: &'a SourceBinding,
+            _ids: &'a [i64],
+        ) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError> {
+            Err(SourceError::NotImplemented {
+                what: "fetch_by_feature_ids",
             })
         }
     }
