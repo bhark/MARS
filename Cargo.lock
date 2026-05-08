@@ -2161,6 +2161,7 @@ name = "mars"
 version = "0.0.1"
 dependencies = [
  "anyhow",
+ "async-trait",
  "bytes",
  "clap",
  "futures-util",
@@ -2173,6 +2174,7 @@ dependencies = [
  "mars-observability",
  "mars-render",
  "mars-runtime",
+ "mars-source",
  "mars-source-postgres",
  "mars-store",
  "mars-store-fs",

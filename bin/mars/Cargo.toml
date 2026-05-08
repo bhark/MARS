@@ -60,3 +60,5 @@ serde_yaml_ng = { workspace = true }
 rand = { workspace = true }
 serde      = { workspace = true }
 serde_json = { workspace = true }
+mars-source  = { workspace = true }
+async-trait  = { workspace = true }
