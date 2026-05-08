@@ -36,6 +36,7 @@ mod section;
 mod spatial_index;
 mod style_refs;
 mod varint;
+mod wkb;
 mod writer;
 
 pub use attrs::{
@@ -52,6 +53,7 @@ pub use label_candidates::{LabelCandidate, LabelShape, decode_label_candidates, 
 pub use reader::ArtifactReader;
 pub use spatial_index::{DEFAULT_NODE_SIZE, SpatialIndex, SpatialIndexBuilder};
 pub use style_refs::{decode_style_refs, encode_style_refs};
+pub use wkb::{WkbError, wkb_bbox, wkb_to_feature_geom};
 pub use writer::{ArtifactWriter, SourceRef};
 
 #[derive(Debug, thiserror::Error)]
