@@ -24,7 +24,6 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use mars_grid::GridError;
 use mars_observability::Metrics;
 use mars_runtime::{RenderPlan, Runtime, RuntimeError};
 use mars_wms::{WmsConfig, WmsError, WmsRequest};
@@ -415,20 +414,19 @@ fn wmts_runtime_error_response(e: RuntimeError, plan: &RenderPlan) -> Response {
 }
 
 fn log_render_failure(e: &RuntimeError, plan: &RenderPlan) {
-    let cell = match e {
-        RuntimeError::SourceMissing { cell, .. } => Some(*cell),
-        _ => None,
-    };
     match e {
         RuntimeError::NotReady => {
-            tracing::warn!(error = %e, layers = ?plan.layers, bbox = ?plan.bbox, cell = ?cell, "render failed")
+            tracing::warn!(error = %e, layers = ?plan.layers, bbox = ?plan.bbox, "render failed")
         }
         _ => {
-            tracing::error!(error = %e, layers = ?plan.layers, bbox = ?plan.bbox, cell = ?cell, "render failed")
+            tracing::error!(error = %e, layers = ?plan.layers, bbox = ?plan.bbox, "render failed")
         }
     }
 }
 
+// phase-b: the runtime stub only surfaces a handful of variants; phase-d will
+// reintroduce `Proj`, `Grid`, `SourceMissing`, `BadKey`, `Artifact` and the
+// per-variant edge-exception mapping along with the page-keyed render path.
 fn map_runtime_error(e: &RuntimeError) -> EdgeException {
     match e {
         RuntimeError::NotReady => EdgeException {
@@ -436,20 +434,6 @@ fn map_runtime_error(e: &RuntimeError) -> EdgeException {
             code: None,
             locator: None,
             message: "Service temporarily unavailable".into(),
-        },
-        RuntimeError::Proj(proj_err) => match proj_err {
-            mars_proj::ProjError::UnknownCrs(name) => EdgeException {
-                status: StatusCode::BAD_REQUEST,
-                code: Some("InvalidCRS"),
-                locator: Some("CRS"),
-                message: format!("CRS '{name}' is not supported"),
-            },
-            _ => EdgeException {
-                status: StatusCode::BAD_REQUEST,
-                code: Some("InvalidCRS"),
-                locator: Some("CRS"),
-                message: "Coordinate transformation failed".into(),
-            },
         },
         RuntimeError::NotImplemented { what } => EdgeException {
             status: StatusCode::NOT_IMPLEMENTED,
@@ -463,42 +447,15 @@ fn map_runtime_error(e: &RuntimeError) -> EdgeException {
             locator: Some("LAYERS"),
             message: format!("Layer '{layer}' is not defined"),
         },
-        RuntimeError::Grid(grid_err) => match grid_err {
-            GridError::TooManyCells { requested, limit } => EdgeException {
-                status: StatusCode::BAD_REQUEST,
-                code: Some("InvalidParameterValue"),
-                locator: Some("BBOX"),
-                message: format!("Request covers too many cells ({requested} > {limit})"),
-            },
-            GridError::NoBandForScale(denom) => EdgeException {
-                status: StatusCode::BAD_REQUEST,
-                code: Some("InvalidParameterValue"),
-                locator: Some("BBOX"),
-                message: format!("Scale {denom} is not supported"),
-            },
-            _ => internal_error(),
-        },
         RuntimeError::PixelBudgetExceeded { requested, budget } => EdgeException {
             status: StatusCode::BAD_REQUEST,
             code: Some("InvalidParameterValue"),
             locator: None,
             message: format!("Request requires {requested} pixels but server budget is {budget}"),
         },
-        // SPEC §8.5: a source artifact missing from the manifest is a broken
-        // manifest; surface as 404 so clients can distinguish "no data" from
-        // "we broke". layer-level misses are soft-skipped upstream.
-        RuntimeError::SourceMissing { .. } => EdgeException {
-            status: StatusCode::NOT_FOUND,
-            code: Some("LayerNotQueryable"),
-            locator: None,
-            message: "No data available for the requested area".into(),
-        },
-        RuntimeError::BadKey { .. }
-        | RuntimeError::Config(_)
-        | RuntimeError::Store(_)
-        | RuntimeError::Render(_)
-        | RuntimeError::Encode(_)
-        | RuntimeError::Artifact(_) => internal_error(),
+        RuntimeError::Config(_) | RuntimeError::Store(_) | RuntimeError::Render(_) | RuntimeError::Encode(_) => {
+            internal_error()
+        }
     }
 }
 
@@ -610,13 +567,8 @@ mod tests {
 
     fn ready_state() -> RuntimeState {
         RuntimeState {
-            canonical_crs: CrsCode::new("EPSG:25832"),
-            bands: Vec::new(),
-            layer_order: Vec::new(),
             stylesheet: Default::default(),
-            manifest: Manifest::new(1, "test", Vec::new(), Vec::new(), None, Vec::new()),
-            layer_index: Default::default(),
-            source_index: Default::default(),
+            manifest: Manifest::empty(1, "test"),
         }
     }
 
@@ -727,39 +679,8 @@ mod tests {
         assert!(!body.contains("ServiceExceptionReport"));
     }
 
-    #[tokio::test]
-    async fn wmts_get_tile_renders_through_runtime() {
-        // happy path through the existing render pipeline: a layer with a
-        // valid band binding renders an empty PNG (NoopRenderer + NoopEncoder).
-        let metrics = Metrics::new().unwrap();
-        let runtime = empty_runtime(&metrics);
-        runtime.swap_state(Arc::new(ready_state_with_band()));
-        let app = router(
-            runtime,
-            CapabilitiesBundle {
-                wms: capabilities_handle("<wmscaps/>".into()),
-                wmts: capabilities_handle("<wmtscaps/>".into()),
-            },
-            test_wms_cfg(),
-            test_wmts_cfg(),
-            metrics,
-        );
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri(
-                        "/wmts?service=WMTS&version=1.0.0&request=GetTile&layer=a&style=&\
-                         format=image/png&tilematrixset=dk_25832&tilematrix=0&tilecol=0&tilerow=0",
-                    )
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        let ct = resp.headers().get(header::CONTENT_TYPE).cloned().unwrap();
-        assert_eq!(ct.to_str().unwrap(), "image/png");
-    }
+    // phase-d: re-add `wmts_get_tile_renders_through_runtime` once the stub
+    // render() returns successful pixel bytes for a configured layer.
 
     #[tokio::test]
     async fn wmts_invalid_tms_is_400_with_locator() {
@@ -890,22 +811,8 @@ mod tests {
         assert!(body_str(resp).await.contains("v2"));
     }
 
-    fn ready_state_with_band() -> RuntimeState {
-        RuntimeState {
-            canonical_crs: CrsCode::new("EPSG:25832"),
-            bands: vec![mars_grid::BandConfig {
-                name: mars_types::ScaleBand::new("hi"),
-                max_denom: u32::MAX,
-                origin: (0.0, 0.0),
-                cell_size: 1024.0,
-            }],
-            layer_order: vec![mars_types::LayerId::new("a")],
-            stylesheet: Default::default(),
-            manifest: Manifest::new(1, "test", Vec::new(), Vec::new(), None, Vec::new()),
-            layer_index: Default::default(),
-            source_index: Default::default(),
-        }
-    }
+    // phase-d: restore `ready_state_with_band` once `RuntimeState` carries the
+    // per-band / per-layer / per-source indices the render path needs.
 
     #[tokio::test]
     async fn wms_invalid_400() {
@@ -947,69 +854,10 @@ mod tests {
         assert!(!body.contains("code="));
     }
 
-    #[tokio::test]
-    async fn wms_unknown_layer_returns_layer_not_defined() {
-        let metrics = Metrics::new().unwrap();
-        let runtime = empty_runtime(&metrics);
-        let mut state = ready_state_with_band();
-        state.layer_order = vec![mars_types::LayerId::new("b")];
-        runtime.swap_state(Arc::new(state));
-        let app = router(
-            runtime,
-            CapabilitiesBundle {
-                wms: capabilities_handle("<wmscaps/>".into()),
-                wmts: capabilities_handle("<wmtscaps/>".into()),
-            },
-            test_wms_cfg(),
-            test_wmts_cfg(),
-            metrics,
-        );
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/wms?service=WMS&version=1.3.0&request=GetMap&layers=a&styles=&crs=EPSG:25832&bbox=0,0,10,10&width=16&height=16&format=image/png")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-        let body = body_str(resp).await;
-        assert!(body.contains(r#"code="LayerNotDefined""#));
-        assert!(body.contains("Layer &apos;a&apos; is not defined"));
-    }
-
-    #[tokio::test]
-    async fn wms_layer_without_band_binding_renders_empty() {
-        // a layer that has no manifest binding for the picked band soft-skips
-        // (contributes nothing) instead of failing the whole render — so that
-        // wide+narrow band composites still produce a valid image.
-        let metrics = Metrics::new().unwrap();
-        let runtime = empty_runtime(&metrics);
-        runtime.swap_state(Arc::new(ready_state_with_band()));
-        let app = router(
-            runtime,
-            CapabilitiesBundle {
-                wms: capabilities_handle("<wmscaps/>".into()),
-                wmts: capabilities_handle("<wmtscaps/>".into()),
-            },
-            test_wms_cfg(),
-            test_wmts_cfg(),
-            metrics,
-        );
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/wms?service=WMS&version=1.3.0&request=GetMap&layers=a&styles=&crs=EPSG:25832&bbox=0,0,10,10&width=16&height=16&format=image/png")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        let ct = resp.headers().get(header::CONTENT_TYPE).cloned().unwrap();
-        assert_eq!(ct.to_str().unwrap(), "image/png");
-    }
+    // phase-d: re-add `wms_unknown_layer_returns_layer_not_defined` and
+    // `wms_layer_without_band_binding_renders_empty` once the runtime knows
+    // about the configured layer set and surfaces `LayerNotDefined` ahead of
+    // the page-keyed render path.
 
     #[tokio::test]
     async fn wms_bad_request_records_semantic_400_in_metrics() {
