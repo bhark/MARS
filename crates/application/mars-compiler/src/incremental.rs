@@ -186,38 +186,44 @@ impl<'a> IncrementalCycle<'a> {
     }
 
     fn mark_key_at_level(&mut self, binding_id: &BindingId, level: &LevelMetadata, key: HilbertKey) {
-        let entry = self.dirty.per_binding.entry(binding_id.clone()).or_default();
-        if entry.truncated {
+        if self
+            .dirty
+            .per_binding
+            .get(binding_id)
+            .is_some_and(|entry| entry.truncated)
+        {
             return;
         }
-        let Some(page_id) = page_for_key(level, key) else {
+
+        let page_ids = pages_for_key(level, key);
+        if page_ids.is_empty() {
             self.dirty.warnings.push(IncrementalWarning::MissingPage {
                 binding_id: binding_id.clone(),
                 level: level.level,
                 key,
             });
             return;
-        };
-        entry.per_level.entry(level.level).or_default().insert(page_id);
+        }
+
+        let entry = self.dirty.per_binding.entry(binding_id.clone()).or_default();
+        entry.per_level.entry(level.level).or_default().extend(page_ids);
     }
 }
 
-fn page_for_key(level: &LevelMetadata, key: HilbertKey) -> Option<PageId> {
+fn pages_for_key(level: &LevelMetadata, key: HilbertKey) -> Vec<PageId> {
     let ranges = &level.hilbert_range_table;
-    let mut lo = 0usize;
-    let mut hi = ranges.len();
-    while lo < hi {
-        let mid = lo + (hi - lo) / 2;
-        let (range_lo, range_hi) = ranges[mid];
-        if key < range_lo {
-            hi = mid;
-        } else if key > range_hi {
-            lo = mid + 1;
-        } else {
-            return Some(PageId::new(mid as u64));
+    let end = ranges.partition_point(|(range_lo, _)| *range_lo <= key);
+    let mut page_ids = Vec::new();
+    for idx in (0..end).rev() {
+        let (range_lo, range_hi) = ranges[idx];
+        if range_hi < key {
+            break;
+        }
+        if range_lo <= key {
+            page_ids.push(PageId::new(idx as u64));
         }
     }
-    None
+    page_ids
 }
 
 #[cfg(test)]
@@ -372,6 +378,16 @@ mod tests {
                 binding_id: BindingId::try_new("buildings").unwrap(),
                 feature_id: 999,
             }]
+        );
+    }
+
+    #[test]
+    fn duplicate_hilbert_key_marks_every_matching_page() {
+        let key = HilbertKey::new(42);
+        let page_ids = pages_for_key(&level(0, vec![(key, key), (key, key), (key, key)]), key);
+        assert_eq!(
+            BTreeSet::from_iter(page_ids),
+            BTreeSet::from_iter([PageId::new(0), PageId::new(1), PageId::new(2)])
         );
     }
 }
