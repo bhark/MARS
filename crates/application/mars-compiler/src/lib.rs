@@ -10,6 +10,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod decimate;
 pub mod hilbert;
 pub mod incremental;
 pub mod plan;
