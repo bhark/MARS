@@ -25,6 +25,13 @@ pub struct BindingDirty {
     pub truncated: bool,
     /// dirty page ids grouped by decimation level.
     pub per_level: BTreeMap<DecimationLevel, BTreeSet<PageId>>,
+    /// feature ids observed by this cycle's events. populated for
+    /// Insert / Update / Delete; the rebuild path includes these in
+    /// `fetch_by_feature_ids` so newly inserted features land in the
+    /// right page even though the page-membership sidecar does not yet
+    /// know about them. `Truncate` clears this set since the binding
+    /// reverts to the bootstrap path.
+    pub observed: BTreeSet<u64>,
 }
 
 /// non-fatal incremental-cycle warning.
@@ -88,10 +95,11 @@ impl<'a> IncrementalCycle<'a> {
         match event {
             ChangeEvent::Insert {
                 collection,
+                feature_id,
                 new_envelope,
-                ..
             } => {
                 let binding_id = self.binding_id_for(&collection)?;
+                self.observe(&binding_id, feature_id);
                 self.mark_envelope(&binding_id, &new_envelope)?;
             }
             ChangeEvent::Update {
@@ -101,6 +109,7 @@ impl<'a> IncrementalCycle<'a> {
                 old_envelope,
             } => {
                 let binding_id = self.binding_id_for(&collection)?;
+                self.observe(&binding_id, feature_id);
                 self.mark_envelope(&binding_id, &new_envelope)?;
                 self.mark_old_side(&binding_id, feature_id, old_envelope.as_ref())?;
             }
@@ -110,6 +119,7 @@ impl<'a> IncrementalCycle<'a> {
                 old_envelope,
             } => {
                 let binding_id = self.binding_id_for(&collection)?;
+                self.observe(&binding_id, feature_id);
                 self.mark_old_side(&binding_id, feature_id, old_envelope.as_ref())?;
             }
             ChangeEvent::Truncate { collection } => {
@@ -117,9 +127,17 @@ impl<'a> IncrementalCycle<'a> {
                 let entry = self.dirty.per_binding.entry(binding_id).or_default();
                 entry.truncated = true;
                 entry.per_level.clear();
+                entry.observed.clear();
             }
         }
         Ok(())
+    }
+
+    fn observe(&mut self, binding_id: &BindingId, feature_id: u64) {
+        let entry = self.dirty.per_binding.entry(binding_id.clone()).or_default();
+        if !entry.truncated {
+            entry.observed.insert(feature_id);
+        }
     }
 
     /// finish the cycle.
@@ -367,12 +385,20 @@ mod tests {
             BTreeSet::from_iter((0..5).map(PageId::new))
         );
 
+        // observed feature ids accumulated for non-truncated bindings.
+        assert_eq!(
+            roads.observed,
+            BTreeSet::from_iter([1u64, 2, 3, 77])
+        );
+
         let buildings = dirty
             .per_binding
             .get(&BindingId::try_new("buildings").unwrap())
             .unwrap();
         assert!(buildings.truncated);
         assert!(buildings.per_level.is_empty());
+        // truncate clears observed: bootstrap path supersedes per-feature ids.
+        assert!(buildings.observed.is_empty());
         assert_eq!(
             dirty.warnings,
             vec![IncrementalWarning::MissingOldGeometry {
