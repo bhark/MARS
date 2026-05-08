@@ -40,6 +40,7 @@ use mars_types::{
 
 use crate::class_eval::{LabelSpec, RowAttrs, assign_class, emit_label_candidate};
 use crate::decimate::{passes_min_size, simplify};
+use crate::external_sort::{ExternalSortConfig, WorkingSetGuard, bucketed_sort_in_place};
 use crate::hilbert::key_from_centroid;
 use crate::plan::{BindingPlan, BootstrapPlan, LayerPlan, LevelPlan};
 use crate::sidecar::encode_sidecar;
@@ -53,6 +54,7 @@ pub async fn run_snapshot(
     plan: &BootstrapPlan,
     service_name: String,
     manifest_version: u64,
+    working_set_bytes: u64,
 ) -> Result<Manifest, CompilerError> {
     let mut bindings_meta: Vec<BindingMetadata> = Vec::with_capacity(plan.bindings.len());
     let mut pages_meta: Vec<PageEntry> = Vec::new();
@@ -60,7 +62,7 @@ pub async fn run_snapshot(
     let mut label_sidecars: Vec<LayerSidecarEntry> = Vec::new();
 
     for binding in &plan.bindings {
-        let mut out = snapshot_one_binding(deps, binding, plan).await?;
+        let mut out = snapshot_one_binding(deps, binding, plan, working_set_bytes).await?;
         bindings_meta.push(out.meta);
         pages_meta.append(&mut out.pages);
         class_sidecars.append(&mut out.class_sidecars);
@@ -102,8 +104,9 @@ async fn snapshot_one_binding(
     deps: &Deps,
     binding: &BindingPlan,
     plan: &BootstrapPlan,
+    working_set_bytes: u64,
 ) -> Result<BindingOutput, CompilerError> {
-    let rows = collect_binding_rows(deps, binding).await?;
+    let rows = collect_binding_rows(deps, binding, working_set_bytes).await?;
     let total_features = rows.len() as u64;
 
     if rows.is_empty() {
@@ -134,7 +137,7 @@ async fn snapshot_one_binding(
             KeyedRow { key, ..r }
         })
         .collect();
-    keyed.sort_by_key(|r| r.key);
+    bucketed_sort_in_place(&mut keyed, ExternalSortConfig::DEFAULT.bucket_bits, |r| r.key);
 
     // page-membership sidecar is computed once per binding (level-independent
     // mapping feature_id -> hilbert key).
@@ -288,7 +291,11 @@ struct KeyedRow {
     key: HilbertKey,
 }
 
-async fn collect_binding_rows(deps: &Deps, binding: &BindingPlan) -> Result<Vec<KeyedRow>, CompilerError> {
+async fn collect_binding_rows(
+    deps: &Deps,
+    binding: &BindingPlan,
+    working_set_bytes: u64,
+) -> Result<Vec<KeyedRow>, CompilerError> {
     let port_binding = PortBinding::new(
         SourceCollectionId::new(binding.binding_id.as_str()),
         binding_schema(&binding.source_table),
@@ -300,6 +307,7 @@ async fn collect_binding_rows(deps: &Deps, binding: &BindingPlan) -> Result<Vec<
     )?;
     let mut stream = deps.source.fetch_full_table_streaming(&port_binding).await?;
 
+    let mut guard = WorkingSetGuard::new(working_set_bytes);
     let mut rows: Vec<KeyedRow> = Vec::new();
     while let Some(item) = stream.next().await {
         let row: RowBytes = item?;
@@ -308,6 +316,14 @@ async fn collect_binding_rows(deps: &Deps, binding: &BindingPlan) -> Result<Vec<
             wkb_to_feature_geom(&row.geometry, row.feature_id).map_err(|e| CompilerError::LegacySubstrateRetired {
                 what: stringify_wkb_err(&e),
             })?;
+        let attr_bytes: u64 = row.attributes.iter().map(|(k, _)| (k.len() + 16) as u64).sum();
+        if let Err(observed) = guard.add(geom_bytes_estimate.saturating_add(attr_bytes).saturating_add(64)) {
+            return Err(CompilerError::WorkingSetExceeded {
+                binding: binding.binding_id.as_str().to_string(),
+                observed_bytes: observed,
+                ceiling_bytes: working_set_bytes,
+            });
+        }
         rows.push(KeyedRow {
             feature,
             attrs: Arc::new(row.attributes),
@@ -829,7 +845,7 @@ mod tests {
             layers: vec![layer_plan("dots", "points", true)],
         };
 
-        let manifest = run_snapshot(&deps, &plan, "test".into(), 1).await.unwrap();
+        let manifest = run_snapshot(&deps, &plan, "test".into(), 1, 4 * 1024 * 1024 * 1024).await.unwrap();
         assert_eq!(manifest.bindings.len(), 1);
         assert_eq!(manifest.bindings[0].feature_count_total, 100);
         assert_eq!(manifest.pages.len(), 1);
@@ -915,7 +931,7 @@ mod tests {
             bindings: vec![bp],
             layers: vec![layer_plan("dots", "points", false)],
         };
-        let manifest = run_snapshot(&deps, &plan, "test".into(), 1).await.unwrap();
+        let manifest = run_snapshot(&deps, &plan, "test".into(), 1, 4 * 1024 * 1024 * 1024).await.unwrap();
 
         // levels 0 + 1 each have at least one page; level 2 has zero (all pruned).
         let level_pages = |lvl: u8| {
@@ -948,7 +964,7 @@ mod tests {
             bindings: vec![binding_plan("pts", 16 * 1024)],
             layers: vec![],
         };
-        let manifest = run_snapshot(&deps, &plan, "test".into(), 1).await.unwrap();
+        let manifest = run_snapshot(&deps, &plan, "test".into(), 1, 4 * 1024 * 1024 * 1024).await.unwrap();
         let pages: Vec<&PageEntry> = manifest.pages.iter().collect();
         assert!(pages.len() > 1);
         let total: u64 = pages.iter().map(|p| p.feature_count).sum();
@@ -960,5 +976,36 @@ mod tests {
         // no layers in plan -> no class/label sidecars.
         assert!(manifest.class_sidecars.is_empty());
         assert!(manifest.label_sidecars.is_empty());
+    }
+
+    #[tokio::test]
+    async fn working_set_ceiling_yields_named_error() {
+        // 64-byte ceiling is below the per-row floor of 64 + attr_bytes + WKB,
+        // so the second row puts us over.
+        let rows: Vec<RowBytes> = (0..8)
+            .map(|i| RowBytes {
+                feature_id: i,
+                geometry: point_wkb(f64::from(i as i32), f64::from(i as i32)),
+                attributes: vec![("name".into(), AttrValue::String(format!("row{i}")))],
+            })
+            .collect();
+        let (deps, _store) = make_deps(rows);
+        let plan = BootstrapPlan {
+            bindings: vec![binding_plan("pts", 16 * 1024)],
+            layers: vec![],
+        };
+        let err = run_snapshot(&deps, &plan, "test".into(), 1, 64).await.unwrap_err();
+        match err {
+            CompilerError::WorkingSetExceeded {
+                binding,
+                observed_bytes,
+                ceiling_bytes,
+            } => {
+                assert_eq!(binding, "pts");
+                assert!(observed_bytes > ceiling_bytes);
+                assert_eq!(ceiling_bytes, 64);
+            }
+            other => panic!("expected WorkingSetExceeded, got {other:?}"),
+        }
     }
 }

@@ -12,6 +12,7 @@
 
 pub mod class_eval;
 pub mod decimate;
+pub mod external_sort;
 pub mod hilbert;
 pub mod incremental;
 pub mod plan;
@@ -84,6 +85,24 @@ pub enum CompilerError {
         /// Stable short label naming the unimplemented surface.
         what: &'static str,
     },
+    /// Bootstrap accumulated row bytes exceeded the configured working-set
+    /// ceiling. Hits the LAZARUS bailout protocol: lift
+    /// `compiler.bootstrap_working_set_bytes` once measurement justifies it,
+    /// or split the binding. The disk-spilled external sort that lifts this
+    /// limit altogether is a tracked carry-over.
+    #[error(
+        "bootstrap working set exceeded: binding {binding} accumulated {observed_bytes} bytes \
+         (ceiling {ceiling_bytes}). lift compiler.bootstrap_working_set_bytes or split the binding."
+    )]
+    WorkingSetExceeded {
+        /// Affected binding id.
+        binding: String,
+        /// Observed accumulated row-byte estimate at the point the ceiling
+        /// was crossed.
+        observed_bytes: u64,
+        /// Configured working-set ceiling.
+        ceiling_bytes: u64,
+    },
 }
 
 /// All ports the compiler depends on, bundled for easy composition by the bin.
@@ -124,8 +143,15 @@ impl Compiler {
         })?;
         let prev_version = self.deps.manifest.current().await?.map_or(0, |m| m.version);
         let next_version = prev_version + 1;
-        let manifest =
-            snapshot::run_snapshot(&self.deps, &plan, self.config.service.name.clone(), next_version).await?;
+        let working_set_bytes = self.config.compiler.bootstrap_working_set()?;
+        let manifest = snapshot::run_snapshot(
+            &self.deps,
+            &plan,
+            self.config.service.name.clone(),
+            next_version,
+            working_set_bytes,
+        )
+        .await?;
         let v = publish_with_retry(self.deps.manifest.as_ref(), &manifest, &self.deps.metrics, &shutdown).await?;
         tracing::info!(
             version = v,
