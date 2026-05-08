@@ -307,7 +307,7 @@ mod tests {
                 linestring_le(&[(-5.0, -6.0), (7.0, 8.0)]),
             ],
         );
-        let multipolygon = multi_le(WKB_MULTIPOLYGON, &[poly.clone()]);
+        let multipolygon = multi_le(WKB_MULTIPOLYGON, std::slice::from_ref(&poly));
 
         for wkb in [point, line, poly, multipoint, multiline, multipolygon] {
             assert_centroid_matches_bbox_midpoint(&wkb);
