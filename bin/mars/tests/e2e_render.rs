@@ -36,7 +36,6 @@ const FILL_B: (u8, u8, u8) = (38, 139, 210); // blue-ish
 const FILL_C: (u8, u8, u8) = (46, 204, 113); // green-ish
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "C.2.b: page rebuild execution"]
 async fn end_to_end_compile_and_render() -> Result<()> {
     // start postgis
     let password = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);

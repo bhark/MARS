@@ -163,7 +163,7 @@ async fn parcels_mini_matrix() -> Result<()> {
         .await
         .context("read current manifest")?
         .context("manifest absent after compile")?;
-    assert!(!manifest.layer_artifacts.is_empty(), "no layer artifacts published");
+    assert!(!manifest.pages.is_empty(), "no page artifacts published");
 
     let stylesheet = build_stylesheet(&cfg);
     let state = RuntimeState::from_config_and_manifest(&cfg, stylesheet, manifest)
