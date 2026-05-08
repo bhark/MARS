@@ -20,6 +20,8 @@ use crate::SqlParam;
 use crate::lower::lower_to_sql;
 use crate::quote::quote_ident;
 
+const PG_ID_BATCH: usize = 16_384;
+
 /// Stream every row of `binding`'s table in pg-table order. The producer runs
 /// on a spawned task so the returned stream owns nothing borrowed from the
 /// pool checkout; back-pressure flows through a bounded mpsc channel.
@@ -75,6 +77,62 @@ pub(crate) async fn fetch_full_table_streaming(
     Ok(Box::pin(stream))
 }
 
+pub(crate) async fn fetch_by_feature_ids(
+    pool: Pool,
+    binding: SourceBinding,
+    ids: Vec<i64>,
+) -> Result<BoxStream<'static, Result<RowBytes, SourceError>>, SourceError> {
+    let sql = build_feature_ids_query(&binding)?;
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<RowBytes, SourceError>>(64);
+
+    if ids.is_empty() {
+        drop(tx);
+        let stream = futures_util::stream::unfold(rx, |mut rx| async move { rx.recv().await.map(|item| (item, rx)) });
+        return Ok(Box::pin(stream));
+    }
+
+    tokio::spawn(async move {
+        let send_err = |e: SourceError, tx: &tokio::sync::mpsc::Sender<_>| {
+            let tx = tx.clone();
+            async move {
+                let _ = tx.send(Err(e)).await;
+            }
+        };
+
+        let client = match pool.get().await {
+            Ok(c) => c,
+            Err(e) => {
+                send_err(SourceError::backend("pool checkout", e), &tx).await;
+                return;
+            }
+        };
+
+        for chunk in ids.chunks(PG_ID_BATCH) {
+            let chunk_ids = chunk.to_vec();
+            let row_stream = match client.query_raw(&sql, [(&chunk_ids) as &(dyn ToSql + Sync)]).await {
+                Ok(s) => s,
+                Err(e) => {
+                    send_err(SourceError::backend("query_raw feature_ids", e), &tx).await;
+                    return;
+                }
+            };
+            tokio::pin!(row_stream);
+            while let Some(item) = row_stream.next().await {
+                let decoded = match item {
+                    Ok(row) => decode_row(&row, &binding),
+                    Err(e) => Err(SourceError::backend("row stream", e)),
+                };
+                if tx.send(decoded).await.is_err() {
+                    return;
+                }
+            }
+        }
+    });
+
+    let stream = futures_util::stream::unfold(rx, |mut rx| async move { rx.recv().await.map(|item| (item, rx)) });
+    Ok(Box::pin(stream))
+}
+
 /// `SELECT id, ST_AsBinary(geom), attrs... FROM s.t` -- no spatial filter, no
 /// ORDER BY. Used by snapshot bootstrap.
 fn build_full_table_query(binding: &SourceBinding) -> Result<String, SourceError> {
@@ -90,6 +148,23 @@ fn build_full_table_query(binding: &SourceBinding) -> Result<String, SourceError
         select.push_str(&q);
     }
     Ok(format!("SELECT {select} FROM {schema_q}.{table_q}"))
+}
+
+fn build_feature_ids_query(binding: &SourceBinding) -> Result<String, SourceError> {
+    let id_q = quote_ident(&binding.id_column)?;
+    let geom_q = quote_ident(&binding.geometry_column)?;
+    let schema_q = quote_ident(&binding.from_schema)?;
+    let table_q = quote_ident(&binding.from_table)?;
+
+    let mut select = format!("{id_q}, ST_AsBinary({geom_q}) AS geom");
+    for a in &binding.attributes {
+        let q = quote_ident(a)?;
+        select.push_str(", ");
+        select.push_str(&q);
+    }
+    Ok(format!(
+        "SELECT {select} FROM {schema_q}.{table_q} WHERE {id_q} = ANY($1::bigint[])"
+    ))
 }
 
 /// SRID extraction: only EPSG codes are supported in v1.
@@ -351,6 +426,15 @@ mod tests {
         assert!(sql.contains("FROM \"public\".\"t\""));
         assert!(sql.contains("ST_MakeEnvelope($1, $2, $3, $4, $5)"));
         assert_eq!(params.len(), 5);
+    }
+
+    #[test]
+    fn feature_ids_query_quotes_identifiers() {
+        let sql = build_feature_ids_query(&b()).unwrap();
+        assert_eq!(
+            sql,
+            "SELECT \"gid\", ST_AsBinary(\"geom\") AS geom, \"name\", \"kind\" FROM \"public\".\"t\" WHERE \"gid\" = ANY($1::bigint[])"
+        );
     }
 
     #[test]

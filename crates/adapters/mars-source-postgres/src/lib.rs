@@ -228,6 +228,14 @@ impl Source for PgSource {
     ) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError> {
         fetch::fetch_full_table_streaming(self.pool.clone(), binding.clone()).await
     }
+
+    async fn fetch_by_feature_ids<'a>(
+        &'a self,
+        binding: &'a SourceBinding,
+        ids: &'a [i64],
+    ) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError> {
+        fetch::fetch_by_feature_ids(self.pool.clone(), binding.clone(), ids.to_vec()).await
+    }
 }
 
 #[async_trait]
