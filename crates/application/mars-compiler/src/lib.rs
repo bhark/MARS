@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 
 pub mod hilbert;
+pub mod incremental;
 pub mod plan;
 pub mod sidecar;
 pub mod snapshot;
@@ -60,6 +61,9 @@ pub enum CompilerError {
     /// Configuration was rejected during validation.
     #[error("config: {0}")]
     Config(#[from] mars_config::ConfigError),
+    /// incremental dirty-page identification failed.
+    #[error(transparent)]
+    Incremental(#[from] incremental::IncrementalError),
     /// Another compiler instance holds the leader lock; this process should
     /// exit cleanly without producing output.
     #[error("another compiler instance is the leader")]

@@ -512,6 +512,16 @@ mod tests {
             let owned: Vec<RowBytes> = self.rows.clone();
             Ok(Box::pin(stream::iter(owned.into_iter().map(Ok))))
         }
+
+        async fn fetch_by_feature_ids<'a>(
+            &'a self,
+            _binding: &'a PortBinding,
+            _ids: &'a [i64],
+        ) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError> {
+            Err(SourceError::NotImplemented {
+                what: "test fetch_by_feature_ids",
+            })
+        }
     }
 
     #[derive(Default)]
