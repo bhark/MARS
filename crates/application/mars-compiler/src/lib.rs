@@ -16,6 +16,7 @@ pub mod external_sort;
 pub mod hilbert;
 pub mod incremental;
 pub mod plan;
+pub mod rebuild;
 pub mod sidecar;
 pub mod snapshot;
 

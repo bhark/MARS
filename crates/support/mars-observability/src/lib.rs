@@ -37,6 +37,7 @@ pub mod metrics {
     pub const COMPILER_REBUILD_DURATION: &str = "mars_compiler_rebuild_duration_seconds";
     pub const COMPILER_WINDOW_LAG: &str = "mars_compiler_window_lag_seconds";
     pub const COMPILER_PUBLISH_RETRIES: &str = "mars_compiler_publish_retries_total";
+    pub const COMPILER_SIDECAR_THRESHOLD_WARNINGS: &str = "mars_compiler_sidecar_threshold_warnings_total";
     pub const CAPABILITIES_REBUILD_FAILURES: &str = "mars_capabilities_rebuild_failures_total";
     pub const MANIFEST_VERSION: &str = "mars_manifest_version";
     pub const MANIFEST_REJECT_TOTAL: &str = "mars_manifest_reject_total";
@@ -117,6 +118,7 @@ struct MetricsInner {
     compiler_rebuild_duration: Histogram,
     compiler_window_lag: Gauge,
     compiler_publish_retries: IntCounter,
+    compiler_sidecar_threshold_warnings: IntCounterVec,
     capabilities_rebuild_failures: IntCounter,
     label_seconds: Histogram,
 }
@@ -174,6 +176,13 @@ impl Metrics {
             metrics::COMPILER_PUBLISH_RETRIES,
             "total compiler publish retries on transient store errors",
         )?;
+        let compiler_sidecar_threshold_warnings = IntCounterVec::new(
+            Opts::new(
+                metrics::COMPILER_SIDECAR_THRESHOLD_WARNINGS,
+                "total page-membership sidecar size threshold warnings, labeled by binding",
+            ),
+            &["binding"],
+        )?;
         let capabilities_rebuild_failures = IntCounter::new(
             metrics::CAPABILITIES_REBUILD_FAILURES,
             "total failures rebuilding the cached WMS capabilities document",
@@ -193,6 +202,7 @@ impl Metrics {
         registry.register(Box::new(compiler_rebuild_duration.clone()))?;
         registry.register(Box::new(compiler_window_lag.clone()))?;
         registry.register(Box::new(compiler_publish_retries.clone()))?;
+        registry.register(Box::new(compiler_sidecar_threshold_warnings.clone()))?;
         registry.register(Box::new(capabilities_rebuild_failures.clone()))?;
         registry.register(Box::new(label_seconds.clone()))?;
 
@@ -208,6 +218,7 @@ impl Metrics {
                 compiler_rebuild_duration,
                 compiler_window_lag,
                 compiler_publish_retries,
+                compiler_sidecar_threshold_warnings,
                 capabilities_rebuild_failures,
                 label_seconds,
             }),
@@ -263,6 +274,16 @@ impl Metrics {
     /// Increment the compiler publish-retry counter.
     pub fn inc_compiler_publish_retries(&self) {
         self.inner.compiler_publish_retries.inc();
+    }
+
+    /// Increment the page-membership sidecar threshold-warning counter for
+    /// `binding`. Operators see this metric when the encoded sidecar
+    /// crosses the configured size warning threshold (LAZARUS bailout 4).
+    pub fn inc_compiler_sidecar_threshold_warning(&self, binding: &str) {
+        self.inner
+            .compiler_sidecar_threshold_warnings
+            .with_label_values(&[binding])
+            .inc();
     }
 
     /// Increment the capabilities rebuild failure counter.
