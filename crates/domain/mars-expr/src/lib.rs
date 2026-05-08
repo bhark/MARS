@@ -88,6 +88,29 @@ pub trait AttributeAccess {
     fn get(&self, name: &str) -> Option<Literal>;
 }
 
+/// Collect every identifier name referenced by `expr` into `out`. Used by
+/// config validation to confirm each binding materialises the attributes its
+/// layers consume.
+pub fn collect_idents(expr: &Expr, out: &mut std::collections::BTreeSet<String>) {
+    match expr {
+        Expr::Literal(_) => {}
+        Expr::Ident(name) => {
+            out.insert(name.clone());
+        }
+        Expr::Cmp { lhs, rhs, .. } => {
+            collect_idents(lhs, out);
+            collect_idents(rhs, out);
+        }
+        Expr::Logic { args, .. } => {
+            for a in args {
+                collect_idents(a, out);
+            }
+        }
+        Expr::Not(inner) | Expr::IsNull(inner) | Expr::IsNotNull(inner) => collect_idents(inner, out),
+        Expr::In { lhs, .. } | Expr::Like { lhs, .. } => collect_idents(lhs, out),
+    }
+}
+
 // `Display` re-emits valid grammar so a parsed `Expr` can round-trip through
 // `parse(format!("{e}"))`. Comparison precedence is below logic-not, so cmp
 // and friends do not need parens; logic ops do.
