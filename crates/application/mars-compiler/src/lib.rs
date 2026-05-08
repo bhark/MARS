@@ -13,6 +13,7 @@
 pub mod hilbert;
 pub mod plan;
 pub mod sidecar;
+pub mod snapshot;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -109,12 +110,23 @@ impl Compiler {
     }
 
     /// Acquire the leader lock and run a single snapshot compile, publishing
-    /// an empty v3 manifest. Phase C reinstates the real snapshot pipeline.
+    /// the resulting v3 manifest.
     pub async fn run_snapshot_once(&self, shutdown: CancellationToken) -> Result<u64, CompilerError> {
         let _guard = self.acquire_leader().await?;
-        let manifest = Manifest::empty(1, self.config.service.name.clone());
+        let plan = plan::build_bootstrap_plan(&self.config).map_err(|_| CompilerError::LegacySubstrateRetired {
+            what: "snapshot: build_bootstrap_plan",
+        })?;
+        let prev_version = self.deps.manifest.current().await?.map_or(0, |m| m.version);
+        let next_version = prev_version + 1;
+        let manifest =
+            snapshot::run_snapshot(&self.deps, &plan, self.config.service.name.clone(), next_version).await?;
         let v = publish_with_retry(self.deps.manifest.as_ref(), &manifest, &self.deps.metrics, &shutdown).await?;
-        tracing::info!(version = v, "compiler: empty v3 manifest published (phase-b stub)");
+        tracing::info!(
+            version = v,
+            bindings = manifest.bindings.len(),
+            pages = manifest.pages.len(),
+            "compiler: snapshot manifest published"
+        );
         Ok(v)
     }
 

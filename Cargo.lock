@@ -2242,7 +2242,10 @@ dependencies = [
 name = "mars-compiler"
 version = "0.0.1"
 dependencies = [
+ "async-trait",
  "bytes",
+ "futures-core",
+ "futures-util",
  "mars-artifact",
  "mars-config",
  "mars-observability",
