@@ -45,8 +45,8 @@ pub use attrs::{
 pub use class_assignment::{decode_class_assignment, encode_class_assignment};
 pub use geometry::{
     Coord, FeatureGeom, FeatureIndexEntry, FeatureIndexIter, FeatureWriter, GeomKind, GeomPayloadBuilder, GeomType,
-    GeomVisitor, decode_geometry_payload, decode_geometry_payload_filtered, decode_one_geom, encode_geometry_payload,
-    iter_feature_index, visit_one_geom,
+    GeomVisitor, decode_geometry_at_slots, decode_geometry_payload, decode_geometry_payload_filtered, decode_one_geom,
+    encode_geometry_payload, iter_feature_index, visit_one_geom,
 };
 pub use hash::compute_content_hash;
 pub use label_candidates::{LabelCandidate, LabelShape, decode_label_candidates, encode_label_candidates};

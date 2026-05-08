@@ -846,6 +846,51 @@ where
     Ok(out)
 }
 
+/// Decode features at the given slot positions in the geometry payload.
+///
+/// `slots` is the set of feature indices returned by
+/// [`crate::SpatialIndex::query`]; entries are the position in the
+/// payload's id-sorted feature index (the same `idx` the snapshot writer
+/// passed to `SpatialIndexBuilder::add`). Out-of-range slots are silently
+/// dropped — they cannot match any feature.
+///
+/// `slots` need not be sorted or deduped. The function sorts a local copy
+/// and walks the index once.
+pub fn decode_geometry_at_slots(
+    bytes: &[u8],
+    slots: &[u32],
+) -> Result<Vec<FeatureGeom>, ArtifactError> {
+    if slots.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut sorted = slots.to_vec();
+    sorted.sort_unstable();
+    sorted.dedup();
+    let iter = iter_feature_index(bytes)?;
+    let coord_area = iter.coord_area();
+    let mut out: Vec<FeatureGeom> = Vec::with_capacity(sorted.len());
+    let mut cursor = 0usize;
+    for (slot_idx, entry) in iter.enumerate() {
+        let entry = entry?;
+        if cursor >= sorted.len() {
+            break;
+        }
+        let want = sorted[cursor];
+        let slot_u32 = u32::try_from(slot_idx).map_err(|_| ArtifactError::Malformed("slot index overflow"))?;
+        if slot_u32 != want {
+            continue;
+        }
+        cursor += 1;
+        let geom = decode_one_geom(coord_area, &entry)?;
+        out.push(FeatureGeom {
+            id: entry.id,
+            bbox: entry.bbox,
+            geom,
+        });
+    }
+    Ok(out)
+}
+
 fn parse_payload_header(bytes: &[u8]) -> Result<(usize, usize), ArtifactError> {
     if bytes.len() < 4 {
         return Err(ArtifactError::Truncated);

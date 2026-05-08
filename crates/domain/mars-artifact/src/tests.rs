@@ -4,8 +4,9 @@ use proptest::prelude::*;
 
 use crate::{
     ArtifactError, ArtifactKind, ArtifactReader, ArtifactWriter, FORMAT_VERSION, MAGIC, SectionKind, SourceRef,
-    compute_content_hash, decode_class_assignment, decode_geometry_payload, decode_geometry_payload_filtered,
-    decode_one_geom, decode_style_refs, encode_geometry_payload, iter_feature_index, visit_one_geom,
+    compute_content_hash, decode_class_assignment, decode_geometry_at_slots, decode_geometry_payload,
+    decode_geometry_payload_filtered, decode_one_geom, decode_style_refs, encode_geometry_payload, iter_feature_index,
+    visit_one_geom,
 };
 use crate::{Coord, FeatureGeom, GeomKind, GeomVisitor};
 
@@ -483,6 +484,59 @@ fn writer_validates_feature_count_against_payload() {
         .set_bbox(Bbox::new(0.0, 0.0, 1.0, 1.0))
         .set_feature_count(99);
     assert!(matches!(w.finish(), Err(ArtifactError::InvalidWriterState(_))));
+}
+
+#[test]
+fn decode_geometry_at_slots_returns_only_requested() {
+    let features = vec![
+        FeatureGeom {
+            id: 10,
+            bbox: [0.0, 0.0, 1.0, 1.0],
+            geom: GeomKind::Point((0.5, 0.5)),
+        },
+        FeatureGeom {
+            id: 20,
+            bbox: [1.0, 1.0, 2.0, 2.0],
+            geom: GeomKind::Point((1.5, 1.5)),
+        },
+        FeatureGeom {
+            id: 30,
+            bbox: [2.0, 2.0, 3.0, 3.0],
+            geom: GeomKind::Point((2.5, 2.5)),
+        },
+    ];
+    let bytes = encode_geometry_payload(&features).unwrap();
+    let got = decode_geometry_at_slots(&bytes, &[2, 0]).unwrap();
+    assert_eq!(got.len(), 2);
+    let ids: Vec<u64> = got.iter().map(|f| f.id).collect();
+    assert!(ids.contains(&10));
+    assert!(ids.contains(&30));
+    assert!(!ids.contains(&20));
+}
+
+#[test]
+fn decode_geometry_at_slots_dedupes_input() {
+    let features = vec![FeatureGeom {
+        id: 7,
+        bbox: [0.0, 0.0, 1.0, 1.0],
+        geom: GeomKind::Point((0.0, 0.0)),
+    }];
+    let bytes = encode_geometry_payload(&features).unwrap();
+    let got = decode_geometry_at_slots(&bytes, &[0, 0, 0]).unwrap();
+    assert_eq!(got.len(), 1);
+    assert_eq!(got[0].id, 7);
+}
+
+#[test]
+fn decode_geometry_at_slots_silently_drops_oob() {
+    let features = vec![FeatureGeom {
+        id: 1,
+        bbox: [0.0, 0.0, 1.0, 1.0],
+        geom: GeomKind::Point((0.0, 0.0)),
+    }];
+    let bytes = encode_geometry_payload(&features).unwrap();
+    let got = decode_geometry_at_slots(&bytes, &[42]).unwrap();
+    assert!(got.is_empty());
 }
 
 #[test]
