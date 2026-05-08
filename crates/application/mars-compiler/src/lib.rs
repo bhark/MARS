@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 
 pub mod hilbert;
+pub mod plan;
 
 use std::sync::Arc;
 use std::time::Duration;
