@@ -57,6 +57,20 @@ pub fn wkb_bbox(wkb: &[u8]) -> Result<Bbox, WkbError> {
     acc.finish()
 }
 
+/// Centroid of an arbitrary supported WKB / EWKB geometry. Defined as the
+/// midpoint of the geometry's axis-aligned bbox. Cheap (single bbox walk)
+/// and consistent with the Hilbert keying used by the compiler — the curve
+/// is parameterised over the binding's combined bbox extent, so the
+/// centroid only ever needs to be a stable point inside the geometry's
+/// envelope, not an area-weighted true centroid. LAZARUS Phase C.
+pub fn wkb_centroid(wkb: &[u8]) -> Result<[f64; 2], WkbError> {
+    let bbox = wkb_bbox(wkb)?;
+    Ok([
+        (bbox.min_x + bbox.max_x) * 0.5,
+        (bbox.min_y + bbox.max_y) * 0.5,
+    ])
+}
+
 /// Decode a WKB / EWKB geometry into a [`FeatureGeom`] keyed by `id`. Bbox
 /// is computed in the same pass.
 pub fn wkb_to_feature_geom(wkb: &[u8], id: u64) -> Result<FeatureGeom, WkbError> {
@@ -416,6 +430,20 @@ mod tests {
         let mut v = point_le(0.0, 0.0);
         v.truncate(v.len() - 4);
         assert!(matches!(wkb_to_feature_geom(&v, 0), Err(WkbError::Truncated)));
+    }
+
+    #[test]
+    fn wkb_centroid_returns_bbox_midpoint() {
+        // point centroid is the point itself.
+        assert_eq!(wkb_centroid(&point_le(7.0, 7.0)).unwrap(), [7.0, 7.0]);
+        // linestring centroid is the midpoint of the bbox, not the path centroid.
+        let centroid = wkb_centroid(&linestring_le(&[(0.0, 0.0), (10.0, 4.0)])).unwrap();
+        assert_eq!(centroid, [5.0, 2.0]);
+    }
+
+    #[test]
+    fn wkb_centroid_propagates_empty() {
+        assert!(matches!(wkb_centroid(&polygon_le(&[])), Err(WkbError::Empty)));
     }
 
     #[test]

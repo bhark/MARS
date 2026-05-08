@@ -21,10 +21,11 @@ polling = []
 e2e = ["dep:testcontainers"]
 
 [dependencies]
-mars-source = { workspace = true }
-mars-types  = { workspace = true }
-mars-expr   = { workspace = true }
-mars-grid   = { workspace = true }
+mars-source   = { workspace = true }
+mars-types    = { workspace = true }
+mars-expr     = { workspace = true }
+mars-grid     = { workspace = true }
+mars-artifact = { workspace = true }
 async-trait = { workspace = true }
 futures-core = { workspace = true }
 futures-util = { workspace = true }
