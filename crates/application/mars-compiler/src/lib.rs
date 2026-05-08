@@ -18,6 +18,7 @@ pub mod incremental;
 pub mod plan;
 pub mod rebalance;
 pub mod rebuild;
+pub mod reconcile;
 pub mod sidecar;
 pub mod snapshot;
 
@@ -27,7 +28,7 @@ use std::time::Duration;
 
 use mars_config::Config;
 use mars_observability::Metrics;
-use mars_source::{ChangeBatch, ChangeFeed, LeaderLock, LeaderLockGuard, Source};
+use mars_source::{ChangeBatch, ChangeEvent, ChangeFeed, LeaderLock, LeaderLockGuard, Source};
 use mars_store::{ManifestStore, ObjectStore, StoreError};
 use mars_types::{BindingId, LevelMetadata, Manifest, PageEntry};
 use tokio_util::sync::CancellationToken;
@@ -131,13 +132,23 @@ pub struct Deps {
 pub struct Compiler {
     deps: Deps,
     config: Config,
+    /// Per-binding cycle counter that drives the periodic reconciliation hook
+    /// in [`Self::run_cycle_once`]. Single-instance leader-elected compiler
+    /// means we can keep this in process; on leader handover the counter
+    /// resets, which is intentional (a new leader runs a fresh
+    /// reconciliation pass before drift accumulates).
+    cycle_counter: tokio::sync::RwLock<HashMap<BindingId, u32>>,
 }
 
 impl Compiler {
     /// Build a `Compiler` from its ports and validated config.
     #[must_use]
     pub fn new(deps: Deps, config: Config) -> Self {
-        Self { deps, config }
+        Self {
+            deps,
+            config,
+            cycle_counter: tokio::sync::RwLock::new(HashMap::new()),
+        }
     }
 
     /// Acquire the leader lock and run a single snapshot compile, publishing
@@ -214,6 +225,42 @@ impl Compiler {
             sidecars.insert(id.clone(), reader);
         }
 
+        // periodic reconciliation: bump per-binding counters; for any binding
+        // that hits its cadence, run a reconciliation pass and prepend the
+        // synthetic events to the cycle. counters reset to zero on fire so
+        // that a single oversized cycle doesn't repeatedly trigger.
+        let mut reconcile_events: Vec<ChangeEvent> = Vec::new();
+        {
+            let mut counters = self.cycle_counter.write().await;
+            for binding_plan in &plan.bindings {
+                let counter = counters.entry(binding_plan.binding_id.clone()).or_insert(0);
+                *counter = counter.saturating_add(1);
+                if *counter >= binding_plan.reconcile_every_cycles {
+                    *counter = 0;
+                    if let Some(sc) = sidecars.get(&binding_plan.binding_id) {
+                        let outcome = reconcile::reconcile_binding(&self.deps, binding_plan, sc).await?;
+                        for w in [
+                            (
+                                "missing_in_sidecar",
+                                outcome.report.missing_in_sidecar.len(),
+                            ),
+                            ("orphan_in_sidecar", outcome.report.orphan_in_sidecar.len()),
+                        ] {
+                            if w.1 > 0 {
+                                tracing::warn!(
+                                    binding = binding_plan.binding_id.as_str(),
+                                    kind = w.0,
+                                    count = w.1,
+                                    "page-membership sidecar drift repaired by reconciliation"
+                                );
+                            }
+                        }
+                        reconcile_events.extend(outcome.synthetic_events);
+                    }
+                }
+            }
+        }
+
         // build an incremental cycle, ingest every event.
         let level_meta: HashMap<BindingId, Vec<LevelMetadata>> = prior
             .bindings
@@ -223,6 +270,10 @@ impl Compiler {
         let mut cycle = incremental::IncrementalCycle::new(&plan, &sidecars, &level_meta);
         let mut last_source_version: Option<String> = prior.source_version.clone();
         let mut event_count: u64 = 0;
+        for event in reconcile_events {
+            cycle.ingest(event)?;
+            event_count += 1;
+        }
         for batch in batches {
             for event in batch.events {
                 cycle.ingest(event)?;
