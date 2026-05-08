@@ -19,8 +19,12 @@ use mars_render_port::{Encoder, Renderer};
 use mars_store::{LocalCache, ManifestStore, ObjectStore, StoreError};
 use mars_style::Stylesheet;
 pub use mars_text::Fonts;
-use mars_types::{Bbox, CrsCode, ImageFormat, LayerId, Manifest};
+use mars_types::{Bbox, CrsCode, ImageFormat, LayerId};
 use tokio::sync::Semaphore;
+
+mod state;
+
+pub use state::{IndexError, PageIndex, RuntimeState};
 
 /// default budget of in-flight raw-pixmap pixels across all concurrent renders.
 const DEFAULT_PIXEL_BUDGET: u32 = 128_000_000;
@@ -102,6 +106,23 @@ pub enum RuntimeError {
         /// Configured upper bound.
         budget: u32,
     },
+    /// Manifest violates a structural invariant the runtime relies on for
+    /// hot-path correctness (e.g. unsorted `pages` vector, orphan sidecars).
+    #[error("invalid manifest: {reason}")]
+    InvalidManifest {
+        /// Human-readable description of the violation.
+        reason: String,
+    },
+    /// A configured layer has no source binding present in the loaded
+    /// manifest. Indicates either a stale manifest or a config that diverged
+    /// from the compiler's BindingPlan.
+    #[error("layer '{layer}' does not match the loaded manifest: {reason}")]
+    ConfigManifestMismatch {
+        /// Layer name from the configuration.
+        layer: String,
+        /// Human-readable mismatch reason.
+        reason: String,
+    },
 }
 
 /// All ports the runtime needs.
@@ -136,31 +157,6 @@ pub struct RenderPlan {
     pub crs: CrsCode,
     /// Output image format.
     pub format: ImageFormat,
-}
-
-/// Loaded snapshot of the current manifest plus derived runtime state.
-///
-/// Phase B holds only the manifest; Phase D reintroduces the page index
-/// and per-layer derived state.
-#[derive(Debug)]
-pub struct RuntimeState {
-    /// The active manifest snapshot.
-    pub manifest: Manifest,
-    /// Active stylesheet (passed through unchanged).
-    pub stylesheet: Stylesheet,
-}
-
-impl RuntimeState {
-    /// Build a runtime state from the current config, stylesheet, and a
-    /// freshly-loaded manifest. Phase B accepts every well-formed manifest;
-    /// Phase D will reintroduce per-layer / per-binding validation.
-    pub fn from_config_and_manifest(
-        _config: &mars_config::Config,
-        stylesheet: Stylesheet,
-        manifest: Manifest,
-    ) -> Result<Self, RuntimeError> {
-        Ok(Self { manifest, stylesheet })
-    }
 }
 
 /// The runtime service.

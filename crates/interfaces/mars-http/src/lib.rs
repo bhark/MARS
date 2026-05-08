@@ -453,9 +453,12 @@ fn map_runtime_error(e: &RuntimeError) -> EdgeException {
             locator: None,
             message: format!("Request requires {requested} pixels but server budget is {budget}"),
         },
-        RuntimeError::Config(_) | RuntimeError::Store(_) | RuntimeError::Render(_) | RuntimeError::Encode(_) => {
-            internal_error()
-        }
+        RuntimeError::Config(_)
+        | RuntimeError::Store(_)
+        | RuntimeError::Render(_)
+        | RuntimeError::Encode(_)
+        | RuntimeError::InvalidManifest { .. }
+        | RuntimeError::ConfigManifestMismatch { .. } => internal_error(),
     }
 }
 
@@ -479,7 +482,7 @@ mod tests {
     };
     use mars_runtime::{Deps, RuntimeState};
     use mars_store::stub::{NotImplementedCache, NotImplementedStore};
-    use mars_types::{CrsCode, ImageFormat, Manifest};
+    use mars_types::{CrsCode, ImageFormat};
     use tower::ServiceExt;
 
     #[derive(Debug)]
@@ -566,10 +569,7 @@ mod tests {
     }
 
     fn ready_state() -> RuntimeState {
-        RuntimeState {
-            stylesheet: Default::default(),
-            manifest: Manifest::empty(1, "test"),
-        }
+        RuntimeState::empty(1, "test")
     }
 
     async fn body_str(resp: Response) -> String {
