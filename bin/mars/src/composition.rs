@@ -58,6 +58,13 @@ pub(crate) fn build_replication_topology(cfg: &Config) -> Result<ReplicationTopo
                         id_column
                     ));
                 }
+                if existing.collection.as_str() != binding.from {
+                    return Err(anyhow!(
+                        "source relation {schema}.{table} is declared with multiple source names: {:?} vs {:?}",
+                        existing.collection.as_str(),
+                        binding.from
+                    ));
+                }
                 continue;
             }
             seen.insert(
@@ -275,6 +282,16 @@ mod tests {
         cfg.layers[1].sources[0].id_column = Some("gid".into());
         let err = build_replication_topology(&cfg).unwrap_err().to_string();
         assert!(err.contains("conflicting id_column"), "{err}");
+    }
+
+    #[test]
+    fn build_replication_topology_rejects_relation_source_aliases() {
+        let cfg = cfg_with_layers(vec![
+            layer("a", vec![("roads", "geom")]),
+            layer("b", vec![("public.roads", "geom")]),
+        ]);
+        let err = build_replication_topology(&cfg).unwrap_err().to_string();
+        assert!(err.contains("multiple source names"), "{err}");
     }
 
     #[test]
