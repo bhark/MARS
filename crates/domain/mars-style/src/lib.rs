@@ -186,6 +186,22 @@ pub enum PolygonStrategy {
     InnerSkeleton,
 }
 
+/// Per-layer label-survival policy across decimation levels. LAZARUS §Decimation:
+/// at low zoom we may prune a feature's geometry but still want its label. The
+/// default `Independent` keeps the label candidate alive even when geometry is
+/// dropped at this level (prevents the floating town-name regression).
+/// `FollowGeometry` is the strict mode for layers where a label without its
+/// geometry is meaningless.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LabelSurvival {
+    /// Label retained at this level regardless of geometry pruning.
+    #[default]
+    Independent,
+    /// Label dropped if the underlying geometry is pruned at this level.
+    FollowGeometry,
+}
+
 /// Layer geometry kind. Mirrors the layer `type:` field in service config.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LayerGeomKind {
@@ -353,6 +369,17 @@ mod tests {
                 strategy: PolygonStrategy::Centroid
             }
         ));
+    }
+
+    #[test]
+    fn label_survival_round_trips_and_defaults_independent() {
+        // default
+        assert!(matches!(LabelSurvival::default(), LabelSurvival::Independent));
+        // wire form is snake_case
+        let i: LabelSurvival = serde_yaml_ng::from_str("independent").unwrap();
+        assert!(matches!(i, LabelSurvival::Independent));
+        let f: LabelSurvival = serde_yaml_ng::from_str("follow_geometry").unwrap();
+        assert!(matches!(f, LabelSurvival::FollowGeometry));
     }
 
     #[test]
