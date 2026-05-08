@@ -738,6 +738,15 @@ mod tests {
                 what: "test fetch_by_feature_ids",
             })
         }
+
+        async fn stream_feature_ids<'a>(
+            &'a self,
+            _binding: &'a PortBinding,
+        ) -> Result<BoxStream<'a, Result<i64, SourceError>>, SourceError> {
+            Err(SourceError::NotImplemented {
+                what: "test stream_feature_ids",
+            })
+        }
     }
 
     #[derive(Default)]

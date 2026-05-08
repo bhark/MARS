@@ -84,6 +84,16 @@ impl Source for FakeSource {
             .collect();
         Ok(Box::pin(stream::iter(owned.into_iter().map(Ok))))
     }
+
+    async fn stream_feature_ids<'a>(
+        &'a self,
+        _binding: &'a PortBinding,
+    ) -> Result<BoxStream<'a, Result<i64, SourceError>>, SourceError> {
+        let lock = self.rows.lock().unwrap();
+        let mut ids: Vec<i64> = lock.keys().map(|id| *id as i64).collect();
+        ids.sort();
+        Ok(Box::pin(stream::iter(ids.into_iter().map(Ok))))
+    }
 }
 
 #[derive(Default)]

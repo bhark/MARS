@@ -133,6 +133,72 @@ pub(crate) async fn fetch_by_feature_ids(
     Ok(Box::pin(stream))
 }
 
+/// stream every feature id from `binding`'s table; used by the periodic
+/// reconciliation hook to compare the source id set against the
+/// page-membership sidecar's id set.
+pub(crate) async fn stream_feature_ids(
+    pool: Pool,
+    binding: SourceBinding,
+) -> Result<BoxStream<'static, Result<i64, SourceError>>, SourceError> {
+    let sql = build_feature_ids_only_query(&binding)?;
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<i64, SourceError>>(64);
+
+    tokio::spawn(async move {
+        let send_err = |e: SourceError, tx: &tokio::sync::mpsc::Sender<_>| {
+            let tx = tx.clone();
+            async move {
+                let _ = tx.send(Err(e)).await;
+            }
+        };
+        let client = match pool.get().await {
+            Ok(c) => c,
+            Err(e) => {
+                send_err(SourceError::backend("pool checkout", e), &tx).await;
+                return;
+            }
+        };
+        let no_params: [&(dyn ToSql + Sync); 0] = [];
+        let row_stream = match client.query_raw(&sql, no_params).await {
+            Ok(s) => s,
+            Err(e) => {
+                send_err(SourceError::backend("query_raw stream_feature_ids", e), &tx).await;
+                return;
+            }
+        };
+        tokio::pin!(row_stream);
+        while let Some(item) = row_stream.next().await {
+            let decoded = match item {
+                Ok(row) => match read_int(&row, 0) {
+                    Ok(Some(id)) if id >= 0 => Ok(id),
+                    Ok(Some(id)) => Err(SourceError::backend_msg(
+                        "stream_feature_ids",
+                        format!("negative feature id rejected: {id}"),
+                    )),
+                    Ok(None) => Err(SourceError::backend_msg(
+                        "stream_feature_ids",
+                        "feature id column is NULL",
+                    )),
+                    Err(e) => Err(e),
+                },
+                Err(e) => Err(SourceError::backend("row stream", e)),
+            };
+            if tx.send(decoded).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    let stream = futures_util::stream::unfold(rx, |mut rx| async move { rx.recv().await.map(|item| (item, rx)) });
+    Ok(Box::pin(stream))
+}
+
+fn build_feature_ids_only_query(binding: &SourceBinding) -> Result<String, SourceError> {
+    let id_q = quote_ident(&binding.id_column)?;
+    let schema_q = quote_ident(&binding.from_schema)?;
+    let table_q = quote_ident(&binding.from_table)?;
+    Ok(format!("SELECT {id_q} FROM {schema_q}.{table_q}"))
+}
+
 /// `SELECT id, ST_AsBinary(geom), attrs... FROM s.t` -- no spatial filter, no
 /// ORDER BY. Used by snapshot bootstrap.
 fn build_full_table_query(binding: &SourceBinding) -> Result<String, SourceError> {

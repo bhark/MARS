@@ -266,6 +266,15 @@ pub trait Source: Send + Sync + 'static {
         binding: &'a SourceBinding,
         ids: &'a [i64],
     ) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError>;
+
+    /// Stream every feature id present in the binding's table, in undefined
+    /// order. Used by the periodic reconciliation hook to compare the source
+    /// id set against the page-membership sidecar's id set without paying the
+    /// cost of a full geometry/attribute fetch.
+    async fn stream_feature_ids<'a>(
+        &'a self,
+        binding: &'a SourceBinding,
+    ) -> Result<BoxStream<'a, Result<i64, SourceError>>, SourceError>;
 }
 
 /// Per-row record returned by `Source`. Geometry is opaque adapter-native
@@ -309,6 +318,15 @@ pub mod stub {
         ) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError> {
             Err(SourceError::NotImplemented {
                 what: "fetch_by_feature_ids",
+            })
+        }
+
+        async fn stream_feature_ids<'a>(
+            &'a self,
+            _binding: &'a SourceBinding,
+        ) -> Result<BoxStream<'a, Result<i64, SourceError>>, SourceError> {
+            Err(SourceError::NotImplemented {
+                what: "stream_feature_ids",
             })
         }
     }
