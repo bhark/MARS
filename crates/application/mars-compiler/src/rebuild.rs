@@ -73,7 +73,8 @@ pub struct RebuildOutcome {
     pub refreshed_bindings: Vec<BindingMetadata>,
 }
 
-/// Run one rebuild pass for the given dirty set.
+/// Run one rebuild pass for the given dirty set. Per-binding sidecar
+/// thresholds are read from the matching [`BindingPlan`].
 pub async fn rebuild_pages(
     deps: &Deps,
     plan: &BootstrapPlan,
@@ -81,7 +82,6 @@ pub async fn rebuild_pages(
     sidecars: &HashMap<BindingId, SidecarReader<'_>>,
     dirty: DirtyPages,
     working_set_bytes: u64,
-    sidecar_warn_bytes: u64,
 ) -> Result<RebuildOutcome, CompilerError> {
     let mut outcome = RebuildOutcome::default();
     for (binding_id, binding_dirty) in dirty.per_binding {
@@ -89,6 +89,12 @@ pub async fn rebuild_pages(
             rebuild_binding_truncate(deps, plan, &binding_id, working_set_bytes, &mut outcome).await?;
             continue;
         }
+        let sidecar_warn = plan
+            .bindings
+            .iter()
+            .find(|b| b.binding_id == binding_id)
+            .map(|b| b.sidecar_size_warn_bytes)
+            .unwrap_or(u64::MAX);
         rebuild_binding_incremental(
             deps,
             plan,
@@ -97,7 +103,7 @@ pub async fn rebuild_pages(
             &binding_id,
             &binding_dirty,
             working_set_bytes,
-            sidecar_warn_bytes,
+            sidecar_warn,
             &mut outcome,
         )
         .await?;

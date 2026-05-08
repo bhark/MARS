@@ -86,6 +86,15 @@ pub struct BindingPlan {
     pub native_crs: CrsCode,
     pub levels: Vec<LevelPlan>,
     pub page_size_target_bytes: u64,
+    /// Encoded page-membership sidecar size threshold past which the rebuild
+    /// path emits a runbook-pointing warning. Resolved from
+    /// [`mars_config::SourceBinding::sidecar_size_warn_bytes`] via
+    /// [`mars_config::SourceBinding::resolved_sidecar_size_warn_bytes`].
+    /// LAZARUS bailout 4.
+    pub sidecar_size_warn_bytes: u64,
+    /// Cadence (in incremental cycles) of the full feature-id reconciliation
+    /// pass. LAZARUS §Page-membership sidecar.
+    pub reconcile_every_cycles: u32,
 }
 
 /// One pre-parsed class entry on a [`LayerPlan`]. `when` parses once at
@@ -154,6 +163,10 @@ pub fn build_bootstrap_plan(cfg: &Config) -> Result<BootstrapPlan, PlanError> {
     for layer in &cfg.layers {
         for binding in &layer.sources {
             let id = binding_id_for(&binding.from)?;
+            let sidecar_warn = binding.resolved_sidecar_size_warn_bytes().map_err(|_| PlanError::ConflictingBinding {
+                id: id.clone(),
+                detail: "sidecar_size_warn_bytes failed to parse",
+            })?;
             let plan = BindingPlan {
                 binding_id: id.clone(),
                 source_table: binding.from.clone(),
@@ -163,6 +176,8 @@ pub fn build_bootstrap_plan(cfg: &Config) -> Result<BootstrapPlan, PlanError> {
                 native_crs: native_crs.clone(),
                 levels: level_plans(binding.levels.as_deref()),
                 page_size_target_bytes: binding.resolved_page_size_target(),
+                sidecar_size_warn_bytes: sidecar_warn,
+                reconcile_every_cycles: binding.resolved_reconcile_every_cycles(),
             };
 
             if let Some(existing) = bindings.iter().find(|b| b.binding_id == id) {
@@ -325,6 +340,18 @@ fn ensure_consistent(existing: &BindingPlan, candidate: &BindingPlan) -> Result<
         return Err(PlanError::ConflictingBinding {
             id: existing.binding_id.clone(),
             detail: "page_size_target_bytes",
+        });
+    }
+    if existing.sidecar_size_warn_bytes != candidate.sidecar_size_warn_bytes {
+        return Err(PlanError::ConflictingBinding {
+            id: existing.binding_id.clone(),
+            detail: "sidecar_size_warn_bytes",
+        });
+    }
+    if existing.reconcile_every_cycles != candidate.reconcile_every_cycles {
+        return Err(PlanError::ConflictingBinding {
+            id: existing.binding_id.clone(),
+            detail: "reconcile_every_cycles",
         });
     }
     Ok(())

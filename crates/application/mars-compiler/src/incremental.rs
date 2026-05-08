@@ -270,6 +270,8 @@ mod tests {
                 label_min_priority: 0,
             }],
             page_size_target_bytes: 1024,
+            sidecar_size_warn_bytes: u64::MAX,
+            reconcile_every_cycles: 24,
         }
     }
 

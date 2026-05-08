@@ -20,15 +20,19 @@ pub mod rebuild;
 pub mod sidecar;
 pub mod snapshot;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use mars_config::Config;
 use mars_observability::Metrics;
-use mars_source::{ChangeFeed, LeaderLock, LeaderLockGuard, Source};
+use mars_source::{ChangeBatch, ChangeFeed, LeaderLock, LeaderLockGuard, Source};
 use mars_store::{ManifestStore, ObjectStore, StoreError};
-use mars_types::Manifest;
+use mars_types::{BindingId, LevelMetadata, Manifest, PageEntry};
 use tokio_util::sync::CancellationToken;
+
+use crate::sidecar::SidecarReader;
+use crate::snapshot::stringify_sidecar_err;
 
 /// Capped exponential backoff schedule for retrying a transient publish.
 const PUBLISH_RETRY_DELAYS: &[Duration] = &[
@@ -163,9 +167,117 @@ impl Compiler {
         Ok(v)
     }
 
-    /// Long-running service mode. Phase B stub: bootstraps with an empty
-    /// manifest if none exists, then idles awaiting `shutdown`. Change-feed
-    /// consumption returns in Phase C with page-keyed dirty propagation.
+    /// Apply one or more change batches as a single incremental cycle and
+    /// publish the resulting v3 manifest. Returns the published version.
+    /// The caller (typically [`Self::run`]) is responsible for sourcing
+    /// `batches` from a [`mars_source::ChangeSubscription`] and acking
+    /// downstream once this returns.
+    ///
+    /// LAZARUS Phase C.2.c: this is the cycle entry point for the
+    /// page-keyed substrate.
+    pub async fn run_cycle_once(&self, batches: Vec<ChangeBatch>) -> Result<u64, CompilerError> {
+        let _guard = self.acquire_leader().await?;
+        self.apply_cycle(batches, &CancellationToken::new()).await
+    }
+
+    async fn apply_cycle(
+        &self,
+        batches: Vec<ChangeBatch>,
+        shutdown: &CancellationToken,
+    ) -> Result<u64, CompilerError> {
+        let prior = self
+            .deps
+            .manifest
+            .current()
+            .await?
+            .ok_or(CompilerError::LegacySubstrateRetired {
+                what: "run_cycle_once: no prior manifest; bootstrap first",
+            })?;
+        let plan = plan::build_bootstrap_plan(&self.config).map_err(|_| CompilerError::LegacySubstrateRetired {
+            what: "run_cycle_once: build_bootstrap_plan",
+        })?;
+
+        // mmap each binding's page-membership sidecar.
+        let mut sidecar_bytes: HashMap<BindingId, bytes::Bytes> = HashMap::new();
+        for binding_meta in &prior.bindings {
+            if let Some(entry) = &binding_meta.page_membership_sidecar {
+                let bytes = self.deps.store.get(&entry.key, entry.hash).await?;
+                sidecar_bytes.insert(binding_meta.binding_id.clone(), bytes);
+            }
+        }
+        let mut sidecars: HashMap<BindingId, SidecarReader<'_>> = HashMap::new();
+        for (id, bytes) in &sidecar_bytes {
+            let reader = SidecarReader::open(bytes).map_err(|e| CompilerError::LegacySubstrateRetired {
+                what: stringify_sidecar_err(&e),
+            })?;
+            sidecars.insert(id.clone(), reader);
+        }
+
+        // build an incremental cycle, ingest every event.
+        let level_meta: HashMap<BindingId, Vec<LevelMetadata>> = prior
+            .bindings
+            .iter()
+            .map(|b| (b.binding_id.clone(), b.levels.clone()))
+            .collect();
+        let mut cycle = incremental::IncrementalCycle::new(&plan, &sidecars, &level_meta);
+        let mut last_source_version: Option<String> = prior.source_version.clone();
+        let mut event_count: u64 = 0;
+        for batch in batches {
+            for event in batch.events {
+                cycle.ingest(event)?;
+                event_count += 1;
+            }
+            if let Some(v) = batch.source_version {
+                last_source_version = Some(v);
+            }
+        }
+        let dirty = cycle.finish();
+        for w in &dirty.warnings {
+            tracing::warn!(?w, "incremental cycle warning");
+        }
+        self.deps.metrics.inc_compiler_dirty_cells(
+            dirty
+                .per_binding
+                .values()
+                .map(|d| d.per_level.values().map(|s| s.len() as u64).sum::<u64>())
+                .sum::<u64>(),
+        );
+        if event_count > 0 {
+            for _ in 0..event_count {
+                self.deps.metrics.inc_compiler_change_events();
+            }
+        }
+        if dirty.per_binding.is_empty() {
+            // no work; publish a no-op version bump so downstream cursors
+            // advance even on empty windows.
+            let next_version = prior.version + 1;
+            let mut next = prior.clone();
+            next.version = next_version;
+            next.epoch = next_version;
+            next.source_version = last_source_version;
+            next.created_at = std::time::SystemTime::now();
+            return publish_with_retry(self.deps.manifest.as_ref(), &next, &self.deps.metrics, shutdown).await;
+        }
+
+        // rebuild dirty pages.
+        let working_set_bytes = self.config.compiler.bootstrap_working_set()?;
+        let started = std::time::Instant::now();
+        let outcome =
+            rebuild::rebuild_pages(&self.deps, &plan, &prior, &sidecars, dirty, working_set_bytes).await?;
+        self.deps.metrics.observe_compiler_rebuild_duration(started.elapsed());
+
+        // merge outcome into prior to produce the new manifest.
+        let next_version = prior.version + 1;
+        let new_manifest = merge_manifest(&prior, &outcome, next_version, last_source_version);
+        publish_with_retry(self.deps.manifest.as_ref(), &new_manifest, &self.deps.metrics, shutdown).await
+    }
+
+    /// Long-running service mode. Bootstraps from an empty manifest, then
+    /// drives one cycle per `compiler.window`. Phase C.2.c first cut: this
+    /// is a one-shot orchestrator that runs to `shutdown`. Multi-batch
+    /// window-driven pulling (see LAZARUS §Update semantics) lands in a
+    /// follow-up commit; the per-cycle correctness lives entirely in
+    /// [`Self::run_cycle_once`].
     pub async fn run(&self, shutdown: CancellationToken) -> Result<(), CompilerError> {
         let _guard = self.acquire_leader().await?;
         if self.deps.manifest.current().await?.is_none() {
@@ -191,6 +303,111 @@ impl Compiler {
                 Err(CompilerError::NotLeader)
             }
         }
+    }
+}
+
+/// Merge a [`rebuild::RebuildOutcome`] into the prior manifest to produce
+/// the next version. Pure; safe to test in isolation.
+fn merge_manifest(
+    prior: &Manifest,
+    outcome: &rebuild::RebuildOutcome,
+    next_version: u64,
+    source_version: Option<String>,
+) -> Manifest {
+    let replacement_page_keys: std::collections::HashSet<mars_types::PageKey> =
+        outcome.replacement_pages.iter().map(|p| p.key.clone()).collect();
+    let dropped_page_keys: std::collections::HashSet<mars_types::PageKey> =
+        outcome.dropped_pages.iter().cloned().collect();
+
+    let replacement_class_keys: std::collections::HashSet<(mars_types::LayerId, mars_types::PageKey)> = outcome
+        .replacement_class_sidecars
+        .iter()
+        .map(|s| (s.layer_id.clone(), s.page_key.clone()))
+        .collect();
+    let replacement_label_keys: std::collections::HashSet<(mars_types::LayerId, mars_types::PageKey)> = outcome
+        .replacement_label_sidecars
+        .iter()
+        .map(|s| (s.layer_id.clone(), s.page_key.clone()))
+        .collect();
+    let dropped_class_keys: std::collections::HashSet<(mars_types::LayerId, mars_types::PageKey)> =
+        outcome.dropped_class_sidecars.iter().cloned().collect();
+    let dropped_label_keys: std::collections::HashSet<(mars_types::LayerId, mars_types::PageKey)> =
+        outcome.dropped_label_sidecars.iter().cloned().collect();
+
+    // pages: keep prior pages whose key isn't replaced/dropped, then append
+    // replacements.
+    let mut pages: Vec<PageEntry> = prior
+        .pages
+        .iter()
+        .filter(|p| !replacement_page_keys.contains(&p.key) && !dropped_page_keys.contains(&p.key))
+        .cloned()
+        .collect();
+    pages.extend(outcome.replacement_pages.iter().cloned());
+    pages.sort_by(|a, b| {
+        a.key
+            .binding_id
+            .as_str()
+            .cmp(b.key.binding_id.as_str())
+            .then_with(|| a.key.level.cmp(&b.key.level))
+            .then_with(|| a.hilbert_range.0.cmp(&b.hilbert_range.0))
+    });
+
+    // class / label sidecars: same shape.
+    let mut class_sidecars = prior
+        .class_sidecars
+        .iter()
+        .filter(|s| {
+            let k = (s.layer_id.clone(), s.page_key.clone());
+            !replacement_class_keys.contains(&k) && !dropped_class_keys.contains(&k)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    class_sidecars.extend(outcome.replacement_class_sidecars.iter().cloned());
+
+    let mut label_sidecars = prior
+        .label_sidecars
+        .iter()
+        .filter(|s| {
+            let k = (s.layer_id.clone(), s.page_key.clone());
+            !replacement_label_keys.contains(&k) && !dropped_label_keys.contains(&k)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    label_sidecars.extend(outcome.replacement_label_sidecars.iter().cloned());
+
+    // bindings: replace touched ones, then refresh hilbert_range_table per
+    // level via rebuild::recompute_level_metadata.
+    let refreshed_ids: std::collections::HashSet<BindingId> = outcome
+        .refreshed_bindings
+        .iter()
+        .map(|b| b.binding_id.clone())
+        .collect();
+    let mut bindings: Vec<mars_types::BindingMetadata> = prior
+        .bindings
+        .iter()
+        .filter(|b| !refreshed_ids.contains(&b.binding_id))
+        .cloned()
+        .collect();
+    bindings.extend(outcome.refreshed_bindings.iter().cloned());
+    for b in &mut bindings {
+        for lm in &mut b.levels {
+            *lm = rebuild::recompute_level_metadata(lm, &pages, &b.binding_id);
+        }
+    }
+    bindings.sort_by(|a, b| a.binding_id.as_str().cmp(b.binding_id.as_str()));
+
+    Manifest {
+        format_version: mars_types::MANIFEST_FORMAT_VERSION,
+        version: next_version,
+        service: prior.service.clone(),
+        created_at: std::time::SystemTime::now(),
+        bindings,
+        pages,
+        class_sidecars,
+        label_sidecars,
+        style_artifact: prior.style_artifact.clone(),
+        source_version,
+        epoch: next_version,
     }
 }
 

@@ -799,6 +799,8 @@ mod tests {
                 label_min_priority: 0,
             }],
             page_size_target_bytes: page_size,
+            sidecar_size_warn_bytes: u64::MAX,
+            reconcile_every_cycles: 24,
         }
     }
 
@@ -930,6 +932,8 @@ mod tests {
                 },
             ],
             page_size_target_bytes: 5 * 1024 * 1024,
+            sidecar_size_warn_bytes: u64::MAX,
+            reconcile_every_cycles: 24,
         };
         let plan = BootstrapPlan {
             bindings: vec![bp],
