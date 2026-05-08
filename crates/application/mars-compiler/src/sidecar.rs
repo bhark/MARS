@@ -126,6 +126,54 @@ impl<'a> SidecarReader<'a> {
         self.count == 0
     }
 
+    /// Iterate every `(feature_id, hilbert_key)` pair in feature_id order.
+    /// O(N); intended for incremental rebuilds that need to scan the whole
+    /// binding once per cycle.
+    pub fn iter(&self) -> impl Iterator<Item = (u64, HilbertKey)> + '_ {
+        (0..self.count).map(move |i| {
+            let off = HEADER_LEN + i * ENTRY_LEN;
+            let id = u64::from_le_bytes([
+                self.bytes[off],
+                self.bytes[off + 1],
+                self.bytes[off + 2],
+                self.bytes[off + 3],
+                self.bytes[off + 4],
+                self.bytes[off + 5],
+                self.bytes[off + 6],
+                self.bytes[off + 7],
+            ]);
+            let kbase = off + 8;
+            let key = u64::from_le_bytes([
+                self.bytes[kbase],
+                self.bytes[kbase + 1],
+                self.bytes[kbase + 2],
+                self.bytes[kbase + 3],
+                self.bytes[kbase + 4],
+                self.bytes[kbase + 5],
+                self.bytes[kbase + 6],
+                self.bytes[kbase + 7],
+            ]);
+            (id, HilbertKey::new(key))
+        })
+    }
+
+    /// Collect feature_ids whose hilbert key falls in any of `ranges`. Each
+    /// range is `(lo, hi)` inclusive. Single-pass over the sidecar; used by
+    /// the rebuild path to resolve dirty-page member sets.
+    #[must_use]
+    pub fn feature_ids_in_ranges(&self, ranges: &[(HilbertKey, HilbertKey)]) -> Vec<u64> {
+        if ranges.is_empty() {
+            return Vec::new();
+        }
+        let mut out: Vec<u64> = Vec::new();
+        for (id, key) in self.iter() {
+            if ranges.iter().any(|(lo, hi)| key >= *lo && key <= *hi) {
+                out.push(id);
+            }
+        }
+        out
+    }
+
     /// Binary-search for `feature_id`. `Ok(None)` when the id is absent.
     pub fn lookup(&self, feature_id: u64) -> Option<HilbertKey> {
         if self.count == 0 {
@@ -265,6 +313,49 @@ mod tests {
         let mut munged = bytes.to_vec();
         munged[4] = 99;
         assert!(matches!(SidecarReader::open(&munged), Err(SidecarError::BadHeader)));
+    }
+
+    #[test]
+    fn iter_yields_all_pairs_in_feature_id_order() {
+        let mut e = vec![
+            (5u64, HilbertKey::new(50)),
+            (1u64, HilbertKey::new(10)),
+            (3u64, HilbertKey::new(30)),
+        ];
+        let bytes = encode_sidecar(&mut e).unwrap();
+        let reader = SidecarReader::open(&bytes).unwrap();
+        let pairs: Vec<(u64, HilbertKey)> = reader.iter().collect();
+        assert_eq!(
+            pairs,
+            vec![
+                (1, HilbertKey::new(10)),
+                (3, HilbertKey::new(30)),
+                (5, HilbertKey::new(50)),
+            ]
+        );
+    }
+
+    #[test]
+    fn feature_ids_in_ranges_filters_by_key() {
+        let mut e = vec![
+            (10u64, HilbertKey::new(100)),
+            (20u64, HilbertKey::new(200)),
+            (30u64, HilbertKey::new(300)),
+            (40u64, HilbertKey::new(400)),
+            (50u64, HilbertKey::new(500)),
+        ];
+        let bytes = encode_sidecar(&mut e).unwrap();
+        let reader = SidecarReader::open(&bytes).unwrap();
+        let ranges = vec![
+            (HilbertKey::new(150), HilbertKey::new(250)),
+            (HilbertKey::new(350), HilbertKey::new(500)),
+        ];
+        let ids = reader.feature_ids_in_ranges(&ranges);
+        assert_eq!(ids, vec![20, 40, 50]);
+
+        // empty range list yields empty result.
+        let empty = reader.feature_ids_in_ranges(&[]);
+        assert!(empty.is_empty());
     }
 
     #[test]
