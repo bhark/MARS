@@ -93,14 +93,14 @@ pub async fn run_snapshot(
     })
 }
 
-struct BindingOutput {
-    meta: BindingMetadata,
-    pages: Vec<PageEntry>,
-    class_sidecars: Vec<LayerSidecarEntry>,
-    label_sidecars: Vec<LayerSidecarEntry>,
+pub(crate) struct BindingOutput {
+    pub(crate) meta: BindingMetadata,
+    pub(crate) pages: Vec<PageEntry>,
+    pub(crate) class_sidecars: Vec<LayerSidecarEntry>,
+    pub(crate) label_sidecars: Vec<LayerSidecarEntry>,
 }
 
-async fn snapshot_one_binding(
+pub(crate) async fn snapshot_one_binding(
     deps: &Deps,
     binding: &BindingPlan,
     plan: &BootstrapPlan,
@@ -283,12 +283,16 @@ async fn emit_level(
     Ok(level_meta)
 }
 
+/// One source row decoded into a feature, with attrs preserved for class /
+/// label evaluation and a Hilbert key assigned over the binding's combined
+/// bbox. Shared between the bootstrap and rebuild paths so both go through
+/// the same `flush_page` / `emit_layer_sidecars` pipeline.
 #[derive(Debug, Clone)]
-struct KeyedRow {
-    feature: FeatureGeom,
-    attrs: Arc<Vec<(String, AttrValue)>>,
-    geom_bytes_estimate: u64,
-    key: HilbertKey,
+pub(crate) struct KeyedRow {
+    pub(crate) feature: FeatureGeom,
+    pub(crate) attrs: Arc<Vec<(String, AttrValue)>>,
+    pub(crate) geom_bytes_estimate: u64,
+    pub(crate) key: HilbertKey,
 }
 
 async fn collect_binding_rows(
@@ -364,7 +368,7 @@ fn estimate_row_size(r: &KeyedRow) -> u64 {
     r.geom_bytes_estimate + attr_bytes as u64 + 64
 }
 
-async fn flush_page(
+pub(crate) async fn flush_page(
     deps: &Deps,
     binding: &BindingPlan,
     level: DecimationLevel,
@@ -465,7 +469,7 @@ async fn flush_page(
     })
 }
 
-async fn emit_layer_sidecars(
+pub(crate) async fn emit_layer_sidecars(
     deps: &Deps,
     level: &LevelPlan,
     page: &PageEntry,
@@ -587,7 +591,7 @@ fn build_label_artifact(labels: &[LabelCandidate], page_bbox: Bbox) -> Result<By
     })
 }
 
-fn empty_level_metadata(level: &LevelPlan) -> LevelMetadata {
+pub(crate) fn empty_level_metadata(level: &LevelPlan) -> LevelMetadata {
     LevelMetadata {
         level: level.level,
         vertex_tolerance_m: level.vertex_tolerance_m,
@@ -599,15 +603,15 @@ fn empty_level_metadata(level: &LevelPlan) -> LevelMetadata {
     }
 }
 
-fn binding_schema(from: &str) -> &str {
+pub(crate) fn binding_schema(from: &str) -> &str {
     from.split_once('.').map(|(s, _)| s).unwrap_or("public")
 }
 
-fn binding_table(from: &str) -> &str {
+pub(crate) fn binding_table(from: &str) -> &str {
     from.split_once('.').map(|(_, t)| t).unwrap_or(from)
 }
 
-fn membership_sidecar_object_key(binding: &str, hash: &ContentHash) -> Result<ArtifactKey, CompilerError> {
+pub(crate) fn membership_sidecar_object_key(binding: &str, hash: &ContentHash) -> Result<ArtifactKey, CompilerError> {
     if binding.contains('/') || binding.contains('\0') {
         return Err(CompilerError::LegacySubstrateRetired {
             what: "snapshot: sidecar key sanitisation",
@@ -631,7 +635,7 @@ fn attr_value_to_artifact(v: &AttrValue) -> ArtAttrValue {
 
 // stringify_* helpers fold typed errors into LegacySubstrateRetired until the
 // compiler error taxonomy is filled in alongside C.2.c rebuild paths.
-fn stringify_wkb_err(_e: &mars_artifact::WkbError) -> &'static str {
+pub(crate) fn stringify_wkb_err(_e: &mars_artifact::WkbError) -> &'static str {
     "snapshot: WKB decode"
 }
 fn stringify_attr_err(_e: &mars_artifact::AttrError) -> &'static str {
@@ -640,7 +644,7 @@ fn stringify_attr_err(_e: &mars_artifact::AttrError) -> &'static str {
 fn stringify_artifact_err(_e: &mars_artifact::ArtifactError) -> &'static str {
     "snapshot: artifact assembly"
 }
-fn stringify_sidecar_err(_e: &crate::sidecar::SidecarError) -> &'static str {
+pub(crate) fn stringify_sidecar_err(_e: &crate::sidecar::SidecarError) -> &'static str {
     "snapshot: sidecar encode"
 }
 
