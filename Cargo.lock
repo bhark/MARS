@@ -2403,7 +2403,6 @@ dependencies = [
  "arc-swap",
  "async-trait",
  "bytes",
- "criterion",
  "futures-util",
  "hashbrown 0.15.5",
  "hashlink",

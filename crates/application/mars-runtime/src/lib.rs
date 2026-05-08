@@ -1,147 +1,178 @@
-//! mars runtime use-case: per-request render pipeline. depends on the
-//! `mars-render-port` *port*, never a renderer adapter; the bin chooses one.
+//! mars runtime use-case: per-request render pipeline.
+//!
+//! Phase B (LAZARUS): the cell-keyed substrate is retired with the v3
+//! manifest cut, and the page-keyed render path lands in Phase D. The
+//! crate's public API surface stays in place so the bins, the WMS / WMTS
+//! interfaces, and the HTTP layer keep compiling; `Runtime::render`
+//! short-circuits to `RuntimeError::NotImplemented` and the manifest
+//! reload loop simply mirrors empty `RuntimeState`s into the swap slot.
 
 #![forbid(unsafe_code)]
 
-mod decoded;
-mod draw;
-mod fetch;
-pub mod key;
-mod labels;
-mod plan;
-pub mod state;
-
-pub use decoded::DecodedGeometryCache;
-
-use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
 use arc_swap::ArcSwapOption;
-use futures_util::{StreamExt, TryStreamExt, stream};
-use mars_artifact::ArtifactReader;
+use futures_util::StreamExt;
 use mars_observability::{Metrics, reject_reason};
-use mars_render_port::{Canvas, Encoder, Renderer};
+use mars_render_port::{Encoder, Renderer};
 use mars_store::{LocalCache, ManifestStore, ObjectStore, StoreError};
 use mars_style::Stylesheet;
 pub use mars_text::Fonts;
-use mars_types::{ArtifactEntry, ArtifactKey, Bbox, ContentHash, CrsCode, ImageFormat, LayerId};
-
-use crate::decoded::{DecodedSourceGeometry, decode_source_geometry};
+use mars_types::{Bbox, CrsCode, ImageFormat, LayerId, Manifest};
 use tokio::sync::Semaphore;
-use tokio::task::JoinHandle;
-use tokio::time::timeout;
-use tracing::Instrument;
-
-pub use plan::denom_from_plan;
-pub use state::RuntimeState;
-
-const WARM_CONCURRENCY: usize = 8;
-const WARM_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// default budget of in-flight raw-pixmap pixels across all concurrent renders.
-/// 128M pixels ≈ 512 MiB at 4 bytes/pixel (premultiplied RGBA). a request
-/// reserves `width * height` permits for the duration of its render, so this
-/// caps total pixmap memory regardless of how many requests are dispatched.
 const DEFAULT_PIXEL_BUDGET: u32 = 128_000_000;
 
-/// hard limit on cells a single request may cover. prevents oom from
-/// pathological bbox / tiny cell size combinations.
-pub(crate) const MAX_CELLS_PER_REQUEST: usize = 1_000_000;
+/// default decoded-geometry cache size when constructed without an explicit one.
+const DEFAULT_DECODED_CACHE_BYTES: usize = 256 * 1024 * 1024;
 
-/// owned key for source-artifact dedup within a single render. layer artifacts'
-/// `source_ref` carries owned strings so we can't borrow into the index without
-/// extra plumbing; the cost is two heap clones per task, which is dwarfed by
-/// the avoided artifact reopen.
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-struct SourceKey {
-    collection: String,
-    band: String,
-    x: i64,
-    y: i64,
+/// Decoded-geometry LRU cache. Phase B is a sized counter only; phase-d
+/// reintroduces the real per-page geometry cache and its eviction policy.
+#[derive(Debug)]
+pub struct DecodedGeometryCache {
+    capacity_bytes: usize,
+    current_bytes: std::sync::atomic::AtomicUsize,
 }
 
+impl DecodedGeometryCache {
+    /// Build an empty cache sized to `capacity_bytes`.
+    #[must_use]
+    pub fn new(capacity_bytes: usize) -> Self {
+        Self {
+            capacity_bytes,
+            current_bytes: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    /// Bytes currently retained.
+    #[must_use]
+    pub fn current_bytes(&self) -> usize {
+        self.current_bytes.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Configured capacity in bytes.
+    #[must_use]
+    pub fn capacity_bytes(&self) -> usize {
+        self.capacity_bytes
+    }
+
+    /// Drop all retained decoded geometry.
+    pub fn clear(&self) {
+        self.current_bytes.store(0, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Errors surfaced from the runtime.
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
+    /// No manifest snapshot is loaded yet.
     #[error("runtime is not ready")]
     NotReady,
+    /// Manifest / object store error.
     #[error(transparent)]
     Store(#[from] mars_store::StoreError),
+    /// Renderer adapter error.
     #[error(transparent)]
     Render(#[from] mars_render_port::RenderError),
+    /// Encoder error.
     #[error(transparent)]
     Encode(#[from] mars_render_port::EncodeError),
-    #[error(transparent)]
-    Artifact(#[from] mars_artifact::ArtifactError),
-    #[error(transparent)]
-    Grid(#[from] mars_grid::GridError),
-    #[error(transparent)]
-    Proj(#[from] mars_proj::ProjError),
-    #[error("layer '{layer}' is not defined")]
-    LayerNotDefined { layer: String },
-    #[error("source artifact missing for collection '{collection}' band '{band}' cell {cell:?}")]
-    SourceMissing {
-        collection: String,
-        band: String,
-        cell: (i64, i64),
-    },
-    #[error("malformed manifest key '{key}': {reason}")]
-    BadKey { key: String, reason: String },
+    /// Configuration error.
     #[error(transparent)]
     Config(#[from] mars_config::ConfigError),
+    /// Layer not declared in config.
+    #[error("layer '{layer}' is not defined")]
+    LayerNotDefined {
+        /// Layer that the request asked for.
+        layer: String,
+    },
+    /// Phase-D: page-keyed render pipeline is not yet implemented.
     #[error("not implemented: {what}")]
-    NotImplemented { what: &'static str },
+    NotImplemented {
+        /// Stable label naming the missing surface.
+        what: &'static str,
+    },
+    /// Pixel budget would be exceeded by this request.
     #[error("request requires {requested} pixels but pixel_budget is {budget}")]
-    PixelBudgetExceeded { requested: u64, budget: u32 },
+    PixelBudgetExceeded {
+        /// Pixels requested by this render.
+        requested: u64,
+        /// Configured upper bound.
+        budget: u32,
+    },
 }
 
 /// All ports the runtime needs.
 #[derive(Clone)]
 pub struct Deps {
+    /// Object store.
     pub store: Arc<dyn ObjectStore>,
+    /// Local SSD cache.
     pub cache: Arc<dyn LocalCache>,
+    /// Renderer adapter.
     pub renderer: Arc<dyn Renderer>,
+    /// Encoder adapter.
     pub encoder: Arc<dyn Encoder>,
+    /// Metrics handle.
     pub metrics: Metrics,
-    /// font registry shared across the label collision pass and the
-    /// renderer adapter. cheap to clone behind `Arc`.
+    /// Font registry.
     pub fonts: Arc<Fonts>,
 }
 
 /// The render plan as produced by the interface adapter (WMS / WMTS).
 #[derive(Debug, Clone)]
 pub struct RenderPlan {
+    /// Layers to render in declared order.
     pub layers: Vec<LayerId>,
+    /// Viewport bbox in `crs` units.
     pub bbox: Bbox,
+    /// Viewport width in pixels.
     pub width: u32,
+    /// Viewport height in pixels.
     pub height: u32,
+    /// Request CRS.
     pub crs: CrsCode,
+    /// Output image format.
     pub format: ImageFormat,
 }
 
+/// Loaded snapshot of the current manifest plus derived runtime state.
+///
+/// Phase B holds only the manifest; Phase D reintroduces the page index
+/// and per-layer derived state.
+#[derive(Debug)]
+pub struct RuntimeState {
+    /// The active manifest snapshot.
+    pub manifest: Manifest,
+    /// Active stylesheet (passed through unchanged).
+    pub stylesheet: Stylesheet,
+}
+
+impl RuntimeState {
+    /// Build a runtime state from the current config, stylesheet, and a
+    /// freshly-loaded manifest. Phase B accepts every well-formed manifest;
+    /// Phase D will reintroduce per-layer / per-binding validation.
+    pub fn from_config_and_manifest(
+        _config: &mars_config::Config,
+        stylesheet: Stylesheet,
+        manifest: Manifest,
+    ) -> Result<Self, RuntimeError> {
+        Ok(Self { manifest, stylesheet })
+    }
+}
+
+/// The runtime service.
 pub struct Runtime {
     state: ArcSwapOption<RuntimeState>,
     deps: Deps,
-    /// reason the most recent manifest swap was rejected, if any. exposed for
-    /// the debug endpoint; cleared on a successful swap.
     last_reject_reason: ArcSwapOption<String>,
-    /// pixel-budget semaphore. each render acquires `width * height` permits
-    /// for the duration of its render, bounding total in-flight pixmap memory.
     render_sem: Arc<Semaphore>,
-    /// pixel budget the semaphore was sized with. used to fail fast on
-    /// requests that could never fit, instead of blocking forever.
     pixel_budget: u32,
-    /// bytes-bounded LRU of decoded source-artifact geometry, keyed by content
-    /// hash. amortises the LEB128 varint walk across renders that touch the
-    /// same source artifact.
     decoded_cache: Arc<DecodedGeometryCache>,
-    /// rayon-driven parallel emit configuration. when disabled, the emit
-    /// loop runs serially on the calling worker (the pre-Phase-2 path).
     parallel_emit: mars_config::ParallelEmit,
 }
-
-/// default decoded-geometry cache size when constructed without an explicit one.
-const DEFAULT_DECODED_CACHE_BYTES: usize = 256 * 1024 * 1024;
 
 impl Runtime {
     /// Compose a runtime without an active manifest snapshot.
@@ -156,8 +187,7 @@ impl Runtime {
         Self::with_pixel_budget(deps, DEFAULT_PIXEL_BUDGET, Some(state))
     }
 
-    /// Compose a runtime with a custom pixel budget (raw pixmap pixels in flight).
-    /// Used by the bin to thread the configured budget through.
+    /// Compose a runtime with a custom pixel budget.
     #[must_use]
     pub fn with_pixel_budget(deps: Deps, pixel_budget: u32, state: Option<Arc<RuntimeState>>) -> Self {
         Self::with_caches(
@@ -168,8 +198,7 @@ impl Runtime {
         )
     }
 
-    /// Compose a runtime with the full set of tunable caches. The bin uses this
-    /// to thread the configured decoded-geometry cache size through.
+    /// Compose a runtime with the full set of tunable caches.
     #[must_use]
     pub fn with_caches(
         deps: Deps,
@@ -186,9 +215,7 @@ impl Runtime {
         )
     }
 
-    /// Compose a runtime with all tunables plumbed in. Bin/main uses this to
-    /// thread the resolved render config through; tests delegate via the
-    /// thinner constructors above.
+    /// Compose a runtime with all tunables plumbed in.
     #[must_use]
     pub fn with_full_config(
         deps: Deps,
@@ -208,33 +235,21 @@ impl Runtime {
         }
     }
 
-    /// Snapshot of the most recent manifest reject reason. `None` when the
-    /// last observed manifest was accepted (or no manifest has been seen).
+    /// Snapshot of the most recent manifest reject reason.
     #[must_use]
     pub fn last_reject_reason(&self) -> Option<Arc<String>> {
         self.last_reject_reason.load_full()
     }
 
-    /// Bytes currently retained by the decoded-geometry cache. Operational
-    /// signal for the debug endpoint and a hook for tests to assert cache
-    /// behaviour.
+    /// Bytes currently retained by the decoded-geometry cache.
     #[must_use]
     pub fn decoded_cache_bytes(&self) -> usize {
         self.decoded_cache.current_bytes()
     }
 
-    /// Drop all retained decoded geometry. Diagnostics-only; used by the
-    /// mapserver-parity diff harness to measure cold-decode wall time.
+    /// Drop all retained decoded geometry.
     pub fn clear_decoded_cache(&self) {
         self.decoded_cache.clear();
-    }
-
-    fn record_reject(&self, reason: String) {
-        self.last_reject_reason.store(Some(Arc::new(reason)));
-    }
-
-    fn clear_reject(&self) {
-        self.last_reject_reason.store(None);
     }
 
     /// Returns true when an active manifest snapshot is loaded.
@@ -252,396 +267,54 @@ impl Runtime {
     /// Atomically replace the active state snapshot.
     pub fn swap_state(&self, state: Arc<RuntimeState>) {
         self.state.store(Some(state));
+        self.last_reject_reason.store(None);
     }
 
     /// Execute one render plan and return encoded image bytes.
-    pub async fn render(&self, plan: &RenderPlan) -> Result<Vec<u8>, RuntimeError> {
-        let state = self.current_state().ok_or(RuntimeError::NotReady)?;
-
-        for layer in &plan.layers {
-            if !state.layer_order.contains(layer) {
-                return Err(RuntimeError::LayerNotDefined {
-                    layer: layer.as_str().to_owned(),
-                });
-            }
-        }
-
-        // pixel-budget gate: fail fast if a single request exceeds the pool;
-        // upstream parsers should already cap this, but a non-WMS plan source
-        // (or a misconfigured budget) could otherwise wedge.
-        let pixels = u64::from(plan.width) * u64::from(plan.height);
-        if pixels > u64::from(self.pixel_budget) {
-            return Err(RuntimeError::PixelBudgetExceeded {
-                requested: pixels,
-                budget: self.pixel_budget,
-            });
-        }
-
-        // request-level span carrying counters as fields. child phase spans
-        // (fetch.*, cpu.*) nest under it via `.instrument(request_span)` and
-        // the in-spawn_blocking `.enter()` below. fields stay low-cardinality:
-        // never include layer ids or other free-form strings.
-        let request_span = tracing::info_span!(
-            "runtime.render",
-            layers = plan.layers.len(),
-            cells = tracing::field::Empty,
-            fetched_layer_artifacts = tracing::field::Empty,
-            unique_source_artifacts = tracing::field::Empty,
-            draw_ops = tracing::field::Empty,
-            labels = tracing::field::Empty,
+    ///
+    /// Phase B stub: the cell-keyed plan resolution + decoder + draw pipeline
+    /// is retired; phase-d reintroduces the page-keyed render path. Until
+    /// then this returns `RuntimeError::NotImplemented`.
+    pub async fn render(&self, _plan: &RenderPlan) -> Result<Vec<u8>, RuntimeError> {
+        let _state = self.current_state().ok_or(RuntimeError::NotReady)?;
+        // touch fields to silence unused warnings until phase-d wires them up.
+        let _ = (
+            &self.deps,
+            &self.render_sem,
+            self.pixel_budget,
+            &self.decoded_cache,
+            &self.parallel_emit,
         );
-        let blocking_span = request_span.clone();
+        Err(RuntimeError::NotImplemented {
+            what: "mars-runtime::render (phase-d)",
+        })
+    }
 
-        async move {
-            // reproject the request bbox into canonical CRS for cell selection.
-            // forward (canonical -> request) transformer is built later inside
-            // spawn_blocking — Transformer is !Send and must live on one thread.
-            // Both legs go through the per-thread cache so a busy worker amortises
-            // proj_create_crs_to_crs + proj_normalize_for_visualization across
-            // requests.
-            let needs_reproject = plan.crs != state.canonical_crs;
-            let canonical_bbox = if needs_reproject {
-                mars_proj::cached_transformer(&plan.crs, &state.canonical_crs)?.transform_bbox(plan.bbox)?
-            } else {
-                plan.bbox
-            };
+    fn record_reject(&self, reason: String) {
+        self.last_reject_reason.store(Some(Arc::new(reason)));
+    }
+}
 
-            let tasks = plan::resolve(plan, &state, canonical_bbox)?;
-            tracing::Span::current().record("cells", tasks.len() as u64);
-            let viewport = draw::Viewport {
-                bbox: plan.bbox,
-                width: plan.width,
-                height: plan.height,
-            };
-
-            // acquire the render permit *before* issuing any fetches. fetch I/O
-            // pulls bytes through the cache budget; without backpressure on the
-            // fetch path a burst of concurrent requests would each pull their full
-            // working set into the cache before the semaphore admits any of them
-            // to render, blowing past the configured cache size.
-            // safe: pixels <= pixel_budget (validated above), and pixel_budget fits u32.
-            #[allow(clippy::cast_possible_truncation)]
-            let permits = pixels as u32;
-            let permit = self.render_sem.clone().acquire_many_owned(permits).await.map_err(|_| {
-                RuntimeError::Render(mars_render_port::RenderError::Backend("render semaphore closed".into()))
-            })?;
-
-            // collect fetched artifacts under async; geometry + render run sync.
-            // ordered `buffered` (not `buffer_unordered`) is required: tasks are
-            // emitted in layer/cell z-order by `plan::resolve`, and the draw loop
-            // below consumes them in vec order. completion-order delivery would
-            // let a top-layer cell that finishes early sit beneath a later-finishing
-            // bottom-layer cell, producing non-deterministic output.
-            let cache = self.deps.cache.clone();
-            let store = self.deps.store.clone();
-            // single-cell single-layer fast path: most tile responses hit this.
-            // skip the futures pipeline + dedup HashMap when the plan has one
-            // task; preserves z-order trivially since there's only one cell.
-            let fetched: Vec<(LayerId, ArtifactReader, ContentHash, ArtifactReader)> = if let [_] = tasks.as_slice() {
-                // safe: just matched a 1-element slice above.
-                let task = tasks.into_iter().next().unwrap_or_else(|| unreachable!("len == 1"));
-                let layer_with_ref: Option<(LayerId, ArtifactReader, SourceKey, ContentHash)> = async {
-                    let layer_art =
-                        match fetch::fetch_layer(&state, cache.as_ref(), store.as_ref(), &task.layer, &task.cell)
-                            .await?
-                        {
-                            Some(reader) => reader,
-                            None => return Ok::<_, RuntimeError>(None),
-                        };
-                    let source_ref = layer_art.source_ref().cloned().ok_or_else(|| {
-                        RuntimeError::Config(mars_config::ConfigError::Invalid(format!(
-                            "layer artifact '{}' is missing source_ref footer",
-                            task.layer
-                        )))
-                    })?;
-                    let source_hash = source_ref.content_hash;
-                    let key = SourceKey {
-                        collection: source_ref.collection,
-                        band: source_ref.band,
-                        x: source_ref.cell_x,
-                        y: source_ref.cell_y,
-                    };
-                    Ok(Some((task.layer, layer_art, key, source_hash)))
-                }
-                .instrument(tracing::info_span!("fetch.layer_artifacts"))
-                .await?;
-                tracing::Span::current().record("fetched_layer_artifacts", layer_with_ref.is_some() as u64);
-                match layer_with_ref {
-                    None => Vec::new(),
-                    Some((layer, layer_art, key, source_hash)) => {
-                        tracing::Span::current().record("unique_source_artifacts", 1u64);
-                        let cell = mars_types::Cell {
-                            band: mars_types::ScaleBand::new(key.band.clone()),
-                            x: key.x,
-                            y: key.y,
-                        };
-                        let source_art = async {
-                            fetch::fetch_source(&state, cache.as_ref(), store.as_ref(), &key.collection, &cell).await
-                        }
-                        .instrument(tracing::info_span!("fetch.source_artifacts"))
-                        .await?;
-                        vec![(layer, source_art, source_hash, layer_art)]
-                    }
-                }
-            } else {
-                let layer_with_refs: Vec<(LayerId, ArtifactReader, SourceKey, ContentHash)> =
-                    stream::iter(tasks.into_iter().map(|task| {
-                        let state = state.clone();
-                        let cache = cache.clone();
-                        let store = store.clone();
-                        async move {
-                            let layer_art = match fetch::fetch_layer(
-                                &state,
-                                cache.as_ref(),
-                                store.as_ref(),
-                                &task.layer,
-                                &task.cell,
-                            )
-                            .await?
-                            {
-                                Some(reader) => reader,
-                                None => return Ok(None),
-                            };
-                            let source_ref = layer_art.source_ref().cloned().ok_or_else(|| {
-                                RuntimeError::Config(mars_config::ConfigError::Invalid(format!(
-                                    "layer artifact '{}' is missing source_ref footer",
-                                    task.layer
-                                )))
-                            })?;
-                            let source_hash = source_ref.content_hash;
-                            let key = SourceKey {
-                                collection: source_ref.collection,
-                                band: source_ref.band,
-                                x: source_ref.cell_x,
-                                y: source_ref.cell_y,
-                            };
-                            Ok::<_, RuntimeError>(Some((task.layer, layer_art, key, source_hash)))
-                        }
-                    }))
-                    .buffered(8)
-                    .try_collect::<Vec<_>>()
-                    .instrument(tracing::info_span!("fetch.layer_artifacts"))
-                    .await?
-                    .into_iter()
-                    .flatten()
-                    .collect();
-                tracing::Span::current().record("fetched_layer_artifacts", layer_with_refs.len() as u64);
-
-                // dedupe source fetches: a single render often binds the same
-                // source cell from several layers; opening the artifact twice
-                // would re-parse the footer for no gain.
-                let mut unique_keys: Vec<SourceKey> = Vec::new();
-                let mut seen: HashSet<SourceKey> = HashSet::new();
-                for (_, _, k, _) in &layer_with_refs {
-                    if seen.insert(k.clone()) {
-                        unique_keys.push(k.clone());
-                    }
-                }
-                tracing::Span::current().record("unique_source_artifacts", unique_keys.len() as u64);
-                let source_readers: Vec<(SourceKey, ArtifactReader)> = stream::iter(unique_keys.into_iter().map(|k| {
-                    let state = state.clone();
-                    let cache = cache.clone();
-                    let store = store.clone();
-                    async move {
-                        let cell = mars_types::Cell {
-                            band: mars_types::ScaleBand::new(k.band.clone()),
-                            x: k.x,
-                            y: k.y,
-                        };
-                        let reader =
-                            fetch::fetch_source(&state, cache.as_ref(), store.as_ref(), &k.collection, &cell).await?;
-                        Ok::<_, RuntimeError>((k, reader))
-                    }
-                }))
-                .buffer_unordered(8)
-                .try_collect::<Vec<_>>()
-                .instrument(tracing::info_span!("fetch.source_artifacts"))
-                .await?;
-                let source_by_key: HashMap<SourceKey, ArtifactReader> = source_readers.into_iter().collect();
-
-                layer_with_refs
-                    .into_iter()
-                    .map(|(layer, layer_art, key, source_hash)| {
-                        source_by_key
-                            .get(&key)
-                            .cloned()
-                            .map(|source_art| (layer, source_art, source_hash, layer_art))
-                            .ok_or_else(|| {
-                                RuntimeError::Render(mars_render_port::RenderError::Backend(
-                                    "internal: source artifact fetch table missing a key".into(),
-                                ))
-                            })
-                    })
-                    .collect::<Result<_, RuntimeError>>()?
-            };
-
-            let canvas = Canvas {
-                width: plan.width,
-                height: plan.height,
-                background: None,
-            };
-            let renderer = self.deps.renderer.clone();
-            let encoder = self.deps.encoder.clone();
-            let format = plan.format;
-            let canonical_crs = state.canonical_crs.clone();
-            let request_crs = plan.crs.clone();
-            let stylesheet_state = state.clone();
-            let fonts = self.deps.fonts.clone();
-            let metrics = self.deps.metrics.clone();
-            let decoded_cache = self.decoded_cache.clone();
-            let parallel_emit = self.parallel_emit;
-            // run the CPU phase on the current worker via block_in_place rather
-            // than dispatching to the blocking pool. spawn_blocking adds a
-            // 30-80 µs hop into a different thread on every request and shares
-            // its pool with i/o blocking calls; block_in_place keeps the work
-            // on the current worker, lets the scheduler steal cooperatively,
-            // and reuses the per-thread proj transformer cache that's already
-            // alive on this worker. block_in_place panics on the
-            // `current_thread` flavor so we fall back to spawn_blocking there;
-            // production always runs multi-thread.
-            let cpu_phase = move || -> Result<Vec<u8>, RuntimeError> {
-                let _entered = blocking_span.enter();
-                let _permit = permit;
-                let reproject_pair: draw::ReprojectPair<'_> = needs_reproject.then_some((&canonical_crs, &request_crs));
-                let _emit_outer = tracing::info_span!("cpu.emit").entered();
-                // serial decode pass: dedup source artifacts and resolve each
-                // through the bytes-bounded LRU. emit inputs are built in plan
-                // order, so the per-task vector preserves z-order regardless of
-                // whether the emit step runs serially or in parallel below.
-                let emit_inputs: Vec<(Arc<DecodedSourceGeometry>, ArtifactReader)> = {
-                    let _decode = tracing::info_span!("cpu.emit.decode").entered();
-                    let mut decoded_per_render: HashMap<ContentHash, Arc<DecodedSourceGeometry>> = HashMap::new();
-                    let mut inputs = Vec::with_capacity(fetched.len());
-                    for (_, source_art, source_hash, layer_art) in &fetched {
-                        let decoded = if let Some(d) = decoded_per_render.get(source_hash) {
-                            d.clone()
-                        } else {
-                            let d = match decoded_cache.get(source_hash) {
-                                Some(d) => d,
-                                None => {
-                                    let _decode_span = tracing::debug_span!("cpu.emit.decode_source").entered();
-                                    let arc = Arc::new(decode_source_geometry(source_art)?);
-                                    decoded_cache.insert(*source_hash, arc.clone());
-                                    arc
-                                }
-                            };
-                            decoded_per_render.insert(*source_hash, d.clone());
-                            d
-                        };
-                        inputs.push((decoded, layer_art.clone()));
-                    }
-                    inputs
-                };
-
-                // parallel (or serial) emit. each task projects + culls + emits
-                // into a local Vec; chunks are concatenated in plan order to
-                // preserve z-order. emit_layer_cell resolves its own per-thread
-                // PROJ transformer, so workers don't share !Send state.
-                let stylesheet = &stylesheet_state.stylesheet;
-                let chunks: Vec<Vec<mars_render_port::DrawOp>> = if parallel_emit.enabled {
-                    use rayon::prelude::*;
-                    let _par = tracing::info_span!("cpu.emit.parallel").entered();
-                    let min_len = parallel_emit.chunk_size.max(1);
-                    emit_inputs
-                        .par_iter()
-                        .with_min_len(min_len)
-                        .map(|(decoded, layer_art)| -> Result<_, RuntimeError> {
-                            let mut local = Vec::new();
-                            draw::emit_layer_cell(
-                                decoded.as_ref(),
-                                layer_art,
-                                stylesheet,
-                                viewport,
-                                canonical_bbox,
-                                reproject_pair,
-                                &mut local,
-                            )?;
-                            Ok(local)
-                        })
-                        .collect::<Result<Vec<_>, _>>()?
-                } else {
-                    let _ser = tracing::info_span!("cpu.emit.serial").entered();
-                    let mut chunks = Vec::with_capacity(emit_inputs.len());
-                    for (decoded, layer_art) in &emit_inputs {
-                        let mut local = Vec::new();
-                        draw::emit_layer_cell(
-                            decoded.as_ref(),
-                            layer_art,
-                            stylesheet,
-                            viewport,
-                            canonical_bbox,
-                            reproject_pair,
-                            &mut local,
-                        )?;
-                        chunks.push(local);
-                    }
-                    chunks
-                };
-                let mut ops: Vec<mars_render_port::DrawOp> = Vec::with_capacity(chunks.iter().map(Vec::len).sum());
-                for chunk in chunks {
-                    ops.extend(chunk);
-                }
-                drop(_emit_outer);
-                let geom_ops = ops.len();
-                blocking_span.record("draw_ops", geom_ops as u64);
-
-                // collect (layer, layer_art) pairs for the label pass. one rtree
-                // is shared across all layers so labels collide globally.
-                let label_layers: Vec<(LayerId, ArtifactReader)> = fetched
-                    .iter()
-                    .map(|(layer, _, _, layer_art)| (layer.clone(), layer_art.clone()))
-                    .collect();
-                {
-                    let _labels = tracing::info_span!("cpu.labels").entered();
-                    labels::collide_and_emit(
-                        &labels::LabelInputs {
-                            layers: &label_layers,
-                            stylesheet: &stylesheet_state.stylesheet,
-                            viewport,
-                            canonical_bbox,
-                            reproject: reproject_pair,
-                            fonts: &fonts,
-                            metrics: &metrics,
-                        },
-                        &mut ops,
-                    )?;
-                }
-                blocking_span.record("labels", (ops.len() - geom_ops) as u64);
-
-                let pixmap = {
-                    let _raster = tracing::info_span!("cpu.raster").entered();
-                    renderer.render(canvas, &ops)?
-                };
-                let bytes = {
-                    // low-cardinality format tag so PNG vs JPEG cost is
-                    // distinguishable in flamegraphs and trace exporters.
-                    let format_tag = match format {
-                        ImageFormat::Png => "png",
-                        ImageFormat::Jpeg => "jpeg",
-                    };
-                    let _encode = tracing::info_span!("cpu.encode", format = format_tag).entered();
-                    encoder.encode(&pixmap, format)?
-                };
-                Ok(bytes)
-            };
-            let bytes = match tokio::runtime::Handle::current().runtime_flavor() {
-                tokio::runtime::RuntimeFlavor::MultiThread => tokio::task::block_in_place(cpu_phase)?,
-                _ => tokio::task::spawn_blocking(cpu_phase).await.map_err(|e| {
-                    RuntimeError::Render(mars_render_port::RenderError::Backend(format!(
-                        "render task panicked: {e}"
-                    )))
-                })??,
-            };
-            Ok(bytes)
-        }
-        .instrument(request_span)
-        .await
+/// Compute the rendered image's denominator at the configured viewport.
+/// Phase B keeps the helper exposed for the WMS / WMTS interface code; the
+/// formula is pure and unaffected by the substrate cut.
+#[must_use]
+pub fn denom_from_plan(bbox_width: f64, width_px: u32) -> u32 {
+    if !bbox_width.is_finite() || bbox_width <= 0.0 || width_px == 0 {
+        return u32::MAX;
+    }
+    // 0.00028 m/pixel is the OGC reference at 90 dpi; phase-d will revisit
+    // dpi when it integrates the configurable pixel-density knob.
+    let denom = bbox_width / (f64::from(width_px) * 0.000_28);
+    if !denom.is_finite() || denom < 0.0 || denom > f64::from(u32::MAX) {
+        u32::MAX
+    } else {
+        denom as u32
     }
 }
 
 /// Consume a manifest watch stream and atomically hot-swap valid runtime states.
-/// Returns when the stream ends or `shutdown` is cancelled. On cancellation any
-/// in-flight warming task is aborted and drained with a 30 s timeout.
+/// Returns when the stream ends or `shutdown` is cancelled.
 pub async fn run_manifest_reload_loop(
     runtime: Arc<Runtime>,
     manifests: Arc<dyn ManifestStore>,
@@ -650,31 +323,18 @@ pub async fn run_manifest_reload_loop(
     shutdown: tokio_util::sync::CancellationToken,
 ) -> Result<(), RuntimeError> {
     let mut manifests = manifests.watch().await?;
-    let mut warming: Option<JoinHandle<()>> = None;
 
     loop {
         let next = tokio::select! {
             biased;
-            _ = shutdown.cancelled() => {
-                if let Some(task) = warming.take() {
-                    task.abort();
-                    let _ = timeout(Duration::from_secs(30), task).await;
-                }
-                return Ok(());
-            }
+            _ = shutdown.cancelled() => return Ok(()),
             n = manifests.next() => match n {
                 Some(n) => n,
-                None => {
-                    if let Some(task) = warming.take() {
-                        task.abort();
-                        let _ = timeout(Duration::from_secs(30), task).await;
-                    }
-                    return Ok(());
-                }
+                None => return Ok(()),
             },
         };
         let manifest = match next {
-            Ok(manifest) => manifest,
+            Ok(m) => m,
             Err(e) => {
                 let label = classify_store_error(&e);
                 let reason = format!("invalid snapshot: {e}");
@@ -685,479 +345,52 @@ pub async fn run_manifest_reload_loop(
             }
         };
 
-        // monotonicity: refuse anything not strictly newer than the active
-        // version. silent identical-version skip would mask a real downgrade.
-        if let Some(current) = runtime.current_state() {
-            if manifest.version == current.manifest.version {
-                continue;
-            }
+        // monotonicity: refuse anything not strictly newer than the active version.
+        if let Some(current) = runtime.current_state()
+            && manifest.version <= current.manifest.version
+        {
             if manifest.version < current.manifest.version {
                 let reason = format!(
                     "manifest version {} is older than active {}",
                     manifest.version, current.manifest.version
-                );
-                tracing::error!(
-                    new_version = manifest.version,
-                    current_version = current.manifest.version,
-                    "manifest watch: rejecting older manifest"
                 );
                 runtime
                     .deps
                     .metrics
                     .inc_manifest_reject(reject_reason::BACKWARDS_VERSION);
                 runtime.record_reject(reason);
-                continue;
             }
+            continue;
         }
 
         let new_version = manifest.version;
-        let state = match RuntimeState::from_config_and_manifest(&config, stylesheet.clone(), manifest) {
-            Ok(state) => Arc::new(state),
+        match RuntimeState::from_config_and_manifest(&config, stylesheet.clone(), manifest) {
+            Ok(state) => {
+                runtime.swap_state(Arc::new(state));
+                tracing::info!(version = new_version, "runtime: manifest swapped");
+            }
             Err(e) => {
                 let reason = format!("manifest v{new_version} rejected: {e}");
-                tracing::error!(version = new_version, error = %e, "manifest watch: rejecting manifest");
                 runtime
                     .deps
                     .metrics
                     .inc_manifest_reject(reject_reason::VALIDATION_ERROR);
                 runtime.record_reject(reason);
-                continue;
             }
-        };
-
-        let previous = runtime.current_state();
-        let previous_keys = previous.as_deref().map(referenced_keys).unwrap_or_default();
-        let warm_entries = referenced_entries(&state)
-            .into_iter()
-            .filter(|entry| !previous_keys.contains(&entry.key))
-            .collect::<Vec<_>>();
-        // eviction priority hint goes here when the runtime tracks per-key
-        // refcounts; lru in the fs cache covers correctness today.
-
-        runtime.swap_state(state);
-        runtime.clear_reject();
-        runtime.deps.metrics.set_manifest_version(new_version);
-
-        if let Some(task) = warming.take() {
-            task.abort();
-            let _ = timeout(Duration::from_secs(30), task).await;
         }
-        warming = Some(spawn_warming(
-            runtime.deps.cache.clone(),
-            runtime.deps.store.clone(),
-            warm_entries,
-        ));
     }
 }
 
-/// classify a `StoreError` produced during manifest watch into a bounded
-/// reject-reason label. anything not specifically recognised falls back to
-/// `parse_error`.
-fn classify_store_error(err: &StoreError) -> &'static str {
-    match err {
+fn classify_store_error(e: &StoreError) -> &'static str {
+    match e {
         StoreError::UnsupportedManifestVersion { .. } => reject_reason::UNSUPPORTED_FORMAT_VERSION,
-        StoreError::HashMismatch { .. } | StoreError::NotFound(_) => reject_reason::INVALID_SNAPSHOT,
-        _ => reject_reason::PARSE_ERROR,
+        StoreError::HashMismatch { .. } => reject_reason::HASH_MISMATCH,
+        _ => reject_reason::IO_ERROR,
     }
 }
 
-fn referenced_entries(state: &RuntimeState) -> Vec<ArtifactEntry> {
-    let present_count = state
-        .layer_index
-        .values()
-        .filter(|s| matches!(s, state::LayerCellState::Present(_)))
-        .count();
-    let mut entries = Vec::with_capacity(
-        present_count + state.source_index.len() + usize::from(state.manifest.style_artifact.is_some()),
-    );
-    entries.extend(state.layer_index.values().filter_map(|s| match s {
-        state::LayerCellState::Present(e) => Some(e.clone()),
-        state::LayerCellState::Empty => None,
-    }));
-    entries.extend(state.source_index.values().cloned());
-    if let Some(entry) = &state.manifest.style_artifact {
-        entries.push(entry.clone());
-    }
-    entries
-}
-
-/// keys referenced by `state`, collected directly without intermediate `Vec`.
-/// hot path: every manifest swap calls this twice.
-fn referenced_keys(state: &RuntimeState) -> HashSet<ArtifactKey> {
-    let present_count = state
-        .layer_index
-        .values()
-        .filter(|s| matches!(s, state::LayerCellState::Present(_)))
-        .count();
-    let mut out = HashSet::with_capacity(
-        present_count + state.source_index.len() + usize::from(state.manifest.style_artifact.is_some()),
-    );
-    out.extend(state.layer_index.values().filter_map(|s| match s {
-        state::LayerCellState::Present(e) => Some(e.key.clone()),
-        state::LayerCellState::Empty => None,
-    }));
-    out.extend(state.source_index.values().map(|e| e.key.clone()));
-    if let Some(entry) = &state.manifest.style_artifact {
-        out.insert(entry.key.clone());
-    }
-    out
-}
-
-fn spawn_warming(
-    cache: Arc<dyn LocalCache>,
-    store: Arc<dyn ObjectStore>,
-    entries: Vec<ArtifactEntry>,
-) -> JoinHandle<()> {
-    tokio::spawn(async move {
-        stream::iter(entries)
-            .for_each_concurrent(WARM_CONCURRENCY, |entry| {
-                let cache = cache.clone();
-                let store = store.clone();
-                async move {
-                    match timeout(WARM_TIMEOUT, cache.get_or_fetch(&entry.key, entry.hash, store.as_ref())).await {
-                        Ok(Ok(_)) => {}
-                        Ok(Err(e)) => {
-                            tracing::warn!(
-                                key = %entry.key,
-                                error = %e,
-                                "manifest watch: artifact warm failed"
-                            );
-                        }
-                        Err(_) => {
-                            tracing::warn!(
-                                key = %entry.key,
-                                "manifest watch: artifact warm timed out"
-                            );
-                        }
-                    }
-                }
-            })
-            .await;
-    })
-}
-
-#[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-mod tests {
-    use std::collections::HashMap;
-    use std::sync::{Arc, Mutex};
-    use std::time::Duration;
-
-    use async_trait::async_trait;
-    use bytes::Bytes;
-    use mars_artifact::{ArtifactKind, ArtifactWriter, FeatureGeom, GeomKind, SourceRef};
-    use mars_config::{
-        ArtifactCache, ArtifactStore, Artifacts, Band, Cells, Class, ClassStyle, Config, Layer, Scales, ServiceMeta,
-        Source,
-    };
-    use mars_render_port::{Canvas, DrawOp, EncodeError, Encoder, ImageFormat, Pixmap, RenderError, Renderer};
-    use mars_store::mem::{InMemoryCache, InMemoryStore};
-    use mars_store::{LocalCache, ObjectStore, StoreError};
-    use mars_style::{Colour, Style, Stylesheet};
-    use mars_types::{ArtifactEntry, ArtifactKey, Bbox, Cell, ContentHash, CrsCode, LayerId, Manifest, ScaleBand};
-    use tokio::time::sleep;
-
-    use crate::{Deps, RenderPlan, Runtime, RuntimeState, key};
-
-    #[derive(Debug, Default)]
-    struct RecordingRenderer {
-        ops: Mutex<Vec<DrawOp>>,
-    }
-
-    impl Renderer for RecordingRenderer {
-        fn render(&self, canvas: Canvas, ops: &[DrawOp]) -> Result<Pixmap, RenderError> {
-            self.ops.lock().expect("poison").extend_from_slice(ops);
-            Ok(Pixmap {
-                width: canvas.width,
-                height: canvas.height,
-                premultiplied_rgba: vec![0; (canvas.width * canvas.height * 4) as usize],
-            })
-        }
-    }
-
-    #[derive(Debug, Default)]
-    struct NoopEncoder;
-
-    impl Encoder for NoopEncoder {
-        fn encode(&self, _pixmap: &Pixmap, _format: ImageFormat) -> Result<Vec<u8>, EncodeError> {
-            Ok(vec![])
-        }
-    }
-
-    struct DelayingStore {
-        delays: HashMap<ArtifactKey, Duration>,
-        inner: InMemoryStore,
-    }
-
-    #[async_trait]
-    impl ObjectStore for DelayingStore {
-        async fn get(&self, key: &ArtifactKey, expected: ContentHash) -> Result<Bytes, StoreError> {
-            if let Some(delay) = self.delays.get(key) {
-                sleep(*delay).await;
-            }
-            self.inner.get(key, expected).await
-        }
-        async fn put(&self, key: &ArtifactKey, body: Bytes) -> Result<ContentHash, StoreError> {
-            self.inner.put(key, body).await
-        }
-        async fn delete(&self, key: &ArtifactKey) -> Result<(), StoreError> {
-            self.inner.delete(key).await
-        }
-        async fn list(&self, prefix: &str) -> Result<Vec<ArtifactKey>, StoreError> {
-            self.inner.list(prefix).await
-        }
-    }
-
-    fn source_artifact() -> Bytes {
-        let mut w = ArtifactWriter::new(ArtifactKind::Source);
-        w.add_geometry_payload(vec![FeatureGeom {
-            id: 1,
-            bbox: [0.0, 0.0, 1.0, 1.0],
-            geom: GeomKind::Point((5.0, 5.0)),
-        }])
-        .set_bbox(Bbox::new(0.0, 0.0, 10.0, 10.0))
-        .set_feature_count(1);
-        w.finish().unwrap()
-    }
-
-    fn layer_artifact(collection: &str) -> Bytes {
-        let mut w = ArtifactWriter::new(ArtifactKind::Layer);
-        w.add_class_assignment(&[(1, 0)])
-            .add_style_refs(&["red".into()])
-            .set_source_ref(SourceRef {
-                collection: collection.into(),
-                band: "hi".into(),
-                cell_x: 0,
-                cell_y: 0,
-                content_hash: ContentHash::zero(),
-            })
-            .set_bbox(Bbox::new(0.0, 0.0, 10.0, 10.0));
-        w.finish().unwrap()
-    }
-
-    fn minimal_config() -> Config {
-        let mut size_per_band = std::collections::BTreeMap::new();
-        size_per_band.insert("hi".into(), "4096m".into());
-        Config {
-            service: ServiceMeta {
-                name: "t".into(),
-                ..Default::default()
-            },
-            source: Source {
-                kind: "memory".into(),
-                dsn: "memory://".into(),
-                native_crs: CrsCode::new("EPSG:25832"),
-                change_feed: None,
-                pool: Default::default(),
-            },
-            artifacts: Artifacts {
-                store: ArtifactStore {
-                    kind: "fs".into(),
-                    endpoint: None,
-                    bucket: None,
-                    prefix: None,
-                    path: Some("/tmp".into()),
-
-                    allow_http: false,
-                },
-                cache: ArtifactCache {
-                    path: "/tmp".into(),
-                    max_size: "1GiB".into(),
-                    eviction: "lru".into(),
-                    trust_path_hash: false,
-                },
-            },
-            scales: Scales {
-                bands: vec![Band {
-                    name: "hi".into(),
-                    max_denom: 25000,
-                }],
-            },
-            cells: Cells {
-                grid: "regular".into(),
-                origin: [0.0, 0.0],
-                size_per_band,
-                extent: None,
-            },
-            interfaces: Default::default(),
-            tile_matrix_sets: Default::default(),
-            reprojection: Default::default(),
-            styles: Default::default(),
-            layers: vec![],
-            observability: Default::default(),
-            render: Default::default(),
-            compiler: Default::default(),
-        }
-    }
-
-    async fn build_state_with_two_layers(
-        store: &InMemoryStore,
-    ) -> (RuntimeState, Vec<ArtifactEntry>, Vec<ArtifactEntry>) {
-        let cell = Cell {
-            band: ScaleBand::new("hi"),
-            x: 0,
-            y: 0,
-        };
-
-        let layer_a_key = key::layer_key(&LayerId::new("layer_a"), &cell, "a");
-        let layer_b_key = key::layer_key(&LayerId::new("layer_b"), &cell, "b");
-        let source_a_key = key::source_key("src_a", &cell, "sa");
-        let source_b_key = key::source_key("src_b", &cell, "sb");
-
-        let hash_a = store.put(&layer_a_key, layer_artifact("src_a")).await.unwrap();
-        let hash_b = store.put(&layer_b_key, layer_artifact("src_b")).await.unwrap();
-        let hash_sa = store.put(&source_a_key, source_artifact()).await.unwrap();
-        let hash_sb = store.put(&source_b_key, source_artifact()).await.unwrap();
-
-        let layer_entries = vec![
-            ArtifactEntry {
-                key: layer_a_key,
-                hash: hash_a,
-                size_bytes: 0,
-            },
-            ArtifactEntry {
-                key: layer_b_key,
-                hash: hash_b,
-                size_bytes: 0,
-            },
-        ];
-        let source_entries = vec![
-            ArtifactEntry {
-                key: source_a_key,
-                hash: hash_sa,
-                size_bytes: 0,
-            },
-            ArtifactEntry {
-                key: source_b_key,
-                hash: hash_sb,
-                size_bytes: 0,
-            },
-        ];
-
-        let mut config = minimal_config();
-        config.layers = vec![
-            Layer {
-                name: LayerId::new("layer_a"),
-                title: String::new(),
-                abstract_: String::new(),
-                kind: "point".into(),
-                scale: None,
-                group: None,
-                enable_get_feature_info: false,
-                bbox: None,
-                sources: vec![mars_config::SourceBinding {
-                    scale: None,
-                    band: Some("hi".into()),
-                    from: "src_a".into(),
-                    geometry_column: "geom".into(),
-                    id_column: None,
-                    attributes: vec![],
-                }],
-                classes: vec![Class {
-                    name: "default".into(),
-                    title: String::new(),
-                    when: None,
-                    style: ClassStyle::Ref { name: "red".into() },
-                }],
-                label: None,
-            },
-            Layer {
-                name: LayerId::new("layer_b"),
-                title: String::new(),
-                abstract_: String::new(),
-                kind: "point".into(),
-                scale: None,
-                group: None,
-                enable_get_feature_info: false,
-                bbox: None,
-                sources: vec![mars_config::SourceBinding {
-                    scale: None,
-                    band: Some("hi".into()),
-                    from: "src_b".into(),
-                    geometry_column: "geom".into(),
-                    id_column: None,
-                    attributes: vec![],
-                }],
-                classes: vec![Class {
-                    name: "default".into(),
-                    title: String::new(),
-                    when: None,
-                    style: ClassStyle::Ref { name: "red".into() },
-                }],
-                label: None,
-            },
-        ];
-
-        let mut stylesheet = Stylesheet::default();
-        stylesheet.geometry.insert(
-            "red".into(),
-            Arc::new(Style {
-                fill: Some(Colour::rgb(255, 0, 0)),
-                ..Default::default()
-            }),
-        );
-
-        let manifest = Manifest::new(1, "t", source_entries.clone(), layer_entries.clone(), None, vec![]);
-
-        let state = RuntimeState::from_config_and_manifest(&config, stylesheet, manifest).unwrap();
-        (state, layer_entries, source_entries)
-    }
-
-    #[tokio::test]
-    async fn render_preserves_plan_order_with_inverted_latencies() {
-        let inner_store = InMemoryStore::new();
-        let (state, layer_entries, _source_entries) = build_state_with_two_layers(&inner_store).await;
-
-        // delay first layer (layer_a) longer than second (layer_b)
-        let mut delays = HashMap::new();
-        delays.insert(layer_entries[0].key.clone(), Duration::from_millis(100));
-        delays.insert(layer_entries[1].key.clone(), Duration::from_millis(10));
-
-        let store = Arc::new(DelayingStore {
-            delays,
-            inner: inner_store,
-        });
-        let cache: Arc<dyn LocalCache> = Arc::new(InMemoryCache::new());
-        let renderer = Arc::new(RecordingRenderer::default());
-
-        let runtime = Runtime::from_state(
-            Arc::new(state),
-            Deps {
-                store,
-                cache,
-                renderer: renderer.clone(),
-                encoder: Arc::new(NoopEncoder),
-                metrics: mars_observability::Metrics::new().unwrap(),
-                fonts: std::sync::Arc::new(crate::Fonts::with_default()),
-            },
-        );
-
-        let plan = RenderPlan {
-            layers: vec![LayerId::new("layer_a"), LayerId::new("layer_b")],
-            bbox: Bbox::new(0.0, 0.0, 10.0, 10.0),
-            width: 100,
-            height: 100,
-            crs: CrsCode::new("EPSG:25832"),
-            format: ImageFormat::Png,
-        };
-
-        let _ = runtime.render(&plan).await.unwrap();
-
-        let ops = renderer.ops.lock().unwrap().clone();
-        // each layer emits one DrawOp::Path for its point feature
-        assert_eq!(ops.len(), 2, "expected two draw ops");
-        match &ops[0] {
-            DrawOp::Path { path, .. } => {
-                // layer_a point at (5,5) projected to pixel space
-                assert_eq!(path.subpaths[0].points[0], (50.0, 50.0));
-            }
-            other => panic!("expected Path, got {other:?}"),
-        }
-        match &ops[1] {
-            DrawOp::Path { path, .. } => {
-                assert_eq!(path.subpaths[0].points[0], (50.0, 50.0));
-            }
-            other => panic!("expected Path, got {other:?}"),
-        }
-    }
-}
+// brief idle to keep tokio in scope for the runtime-reload loop helpers
+// future-proofing — phase-d adds warm-allowlist prefetches that need a
+// timeout window. exposed as a const so tests can match.
+#[doc(hidden)]
+pub const PHASE_B_IDLE_HINT: Duration = Duration::from_secs(5);
