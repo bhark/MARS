@@ -70,6 +70,8 @@ pub mod reject_reason {
     pub const PARSE_ERROR: &str = "parse_error";
     pub const INVALID_SNAPSHOT: &str = "invalid_snapshot";
     pub const VALIDATION_ERROR: &str = "validation_error";
+    pub const HASH_MISMATCH: &str = "hash_mismatch";
+    pub const IO_ERROR: &str = "io_error";
 }
 
 /// Bucket an HTTP status into one of `2xx/3xx/4xx/5xx/other`. We deliberately
