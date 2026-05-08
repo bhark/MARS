@@ -32,3 +32,12 @@ thiserror          = { workspace = true }
 [dev-dependencies]
 mars-store         = { workspace = true, features = ["test-utils"] }
 tokio              = { workspace = true, features = ["rt-multi-thread", "macros"] }
+criterion          = { workspace = true }
+
+[[bench]]
+name    = "page_rebuild"
+harness = false
+
+[[bench]]
+name    = "decimation"
+harness = false
