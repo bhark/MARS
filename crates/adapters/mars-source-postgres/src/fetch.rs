@@ -8,6 +8,9 @@
 #![allow(dead_code)]
 
 use bytes::Bytes;
+use deadpool_postgres::Pool;
+use futures_core::stream::BoxStream;
+use futures_util::StreamExt;
 use mars_expr::Expr;
 use mars_source::{AttrValue, RowBytes, SourceBinding, SourceError};
 use mars_types::Bbox;
@@ -16,6 +19,78 @@ use tokio_postgres::types::{ToSql, Type};
 use crate::SqlParam;
 use crate::lower::lower_to_sql;
 use crate::quote::quote_ident;
+
+/// Stream every row of `binding`'s table in pg-table order. The producer runs
+/// on a spawned task so the returned stream owns nothing borrowed from the
+/// pool checkout; back-pressure flows through a bounded mpsc channel.
+pub(crate) async fn fetch_full_table_streaming(
+    pool: Pool,
+    binding: SourceBinding,
+) -> Result<BoxStream<'static, Result<RowBytes, SourceError>>, SourceError> {
+    // build the SQL up front so we surface bad identifiers as InvalidBinding /
+    // backend errors before the producer task is spawned.
+    let sql = build_full_table_query(&binding)?;
+
+    // bounded channel so a slow consumer back-pressures the producer rather
+    // than letting an unbounded queue grow during a 50M-row bootstrap.
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<RowBytes, SourceError>>(64);
+
+    tokio::spawn(async move {
+        let send_err = |e: SourceError, tx: &tokio::sync::mpsc::Sender<_>| {
+            let tx = tx.clone();
+            async move {
+                let _ = tx.send(Err(e)).await;
+            }
+        };
+
+        let client = match pool.get().await {
+            Ok(c) => c,
+            Err(e) => {
+                send_err(SourceError::backend("pool checkout", e), &tx).await;
+                return;
+            }
+        };
+        // empty params slice; query_raw still needs the iterator type fixed.
+        let no_params: [&(dyn ToSql + Sync); 0] = [];
+        let row_stream = match client.query_raw(&sql, no_params).await {
+            Ok(s) => s,
+            Err(e) => {
+                send_err(SourceError::backend("query_raw full_table", e), &tx).await;
+                return;
+            }
+        };
+        tokio::pin!(row_stream);
+        while let Some(item) = row_stream.next().await {
+            let decoded = match item {
+                Ok(row) => decode_row(&row, &binding),
+                Err(e) => Err(SourceError::backend("row stream", e)),
+            };
+            if tx.send(decoded).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    let stream = futures_util::stream::unfold(rx, |mut rx| async move { rx.recv().await.map(|item| (item, rx)) });
+    Ok(Box::pin(stream))
+}
+
+/// `SELECT id, ST_AsBinary(geom), attrs... FROM s.t` -- no spatial filter, no
+/// ORDER BY. Used by snapshot bootstrap.
+fn build_full_table_query(binding: &SourceBinding) -> Result<String, SourceError> {
+    let id_q = quote_ident(&binding.id_column)?;
+    let geom_q = quote_ident(&binding.geometry_column)?;
+    let schema_q = quote_ident(&binding.from_schema)?;
+    let table_q = quote_ident(&binding.from_table)?;
+
+    let mut select = format!("{id_q}, ST_AsBinary({geom_q}) AS geom");
+    for a in &binding.attributes {
+        let q = quote_ident(a)?;
+        select.push_str(", ");
+        select.push_str(&q);
+    }
+    Ok(format!("SELECT {select} FROM {schema_q}.{table_q}"))
+}
 
 /// SRID extraction: only EPSG codes are supported in v1.
 fn parse_srid(crs: &str) -> Result<i32, SourceError> {

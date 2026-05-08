@@ -17,7 +17,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use deadpool_postgres::{Hook, HookError, Pool, Runtime};
-use mars_source::{ChangeFeed, ChangeSubscription, Source, SourceError};
+use futures_core::stream::BoxStream;
+use mars_source::{ChangeFeed, ChangeSubscription, RowBytes, Source, SourceBinding, SourceError};
 use tokio_postgres::NoTls;
 
 mod fetch;
@@ -219,10 +220,15 @@ impl PgSource {
     }
 }
 
-// LAZARUS Phase B: cell-keyed fetch_cell/fetch_cells were retired with the
-// v3 substrate cut. Phase C reintroduces a page-keyed surface
-// (fetch_full_table_streaming + fetch_by_feature_ids) on the trait.
-impl Source for PgSource {}
+#[async_trait]
+impl Source for PgSource {
+    async fn fetch_full_table_streaming<'a>(
+        &'a self,
+        binding: &'a SourceBinding,
+    ) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError> {
+        fetch::fetch_full_table_streaming(self.pool.clone(), binding.clone()).await
+    }
+}
 
 #[async_trait]
 impl ChangeFeed for PgSource {

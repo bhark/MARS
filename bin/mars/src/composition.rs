@@ -188,6 +188,8 @@ mod tests {
                     geometry_column: geom.into(),
                     id_column: None,
                     attributes: vec![],
+                    levels: None,
+                    page_size_target_bytes: None,
                 })
                 .collect(),
             classes: vec![Class {

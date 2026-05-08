@@ -18,6 +18,7 @@ pub mod access;
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use futures_core::stream::BoxStream;
 use mars_types::CrsCode;
 pub use mars_types::SourceCollectionId;
 
@@ -223,14 +224,21 @@ pub enum AttrValue {
     String(String),
 }
 
-/// Read-side port. Phase B is a marker bound only — the cell-keyed
-/// `fetch_cell` / `fetch_cells` were retired with the v3 substrate cut.
-/// Phase C reintroduces page-keyed accessors:
-/// - `fetch_full_table_streaming(table)` for bootstrap, and
-/// - `fetch_by_feature_ids(table, ids)` for incremental page rebuilds
-///   (PK-indexed, `WHERE id = ANY($1)`).
+/// Read-side port. Phase C surface (LAZARUS):
+/// - `fetch_full_table_streaming(binding)` for snapshot bootstrap, and
+/// - `fetch_by_feature_ids(binding, ids)` for incremental page rebuilds
+///   (PK-indexed, `WHERE id = ANY($1)`) — added in Phase C.2.
 #[async_trait]
-pub trait Source: Send + Sync + 'static {}
+pub trait Source: Send + Sync + 'static {
+    /// Stream every row of `binding`'s table in undefined order. Cursor /
+    /// pipelined under the hood so the compiler can sort externally without
+    /// pulling the full result set into RAM. Adapters that have not yet
+    /// implemented this surface return `SourceError::NotImplemented`.
+    async fn fetch_full_table_streaming<'a>(
+        &'a self,
+        binding: &'a SourceBinding,
+    ) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError>;
+}
 
 /// Per-row record returned by `Source`. Geometry is opaque adapter-native
 /// bytes (typically WKB); attributes are decoded into `(name, AttrValue)`
@@ -248,14 +256,24 @@ pub struct RowBytes {
 /// Phase-0 stub adapters that satisfy the port traits with `NotImplemented`.
 /// Lets bins and tests compose the surface without naming a real backend.
 pub mod stub {
-    use super::{ChangeFeed, ChangeSubscription, Source, SourceError};
+    use super::{BoxStream, ChangeFeed, ChangeSubscription, RowBytes, Source, SourceBinding, SourceError};
     use async_trait::async_trait;
 
     /// `Source` + `ChangeFeed` impl that always returns `NotImplemented`.
     #[derive(Debug, Default)]
     pub struct NotImplementedSource;
 
-    impl Source for NotImplementedSource {}
+    #[async_trait]
+    impl Source for NotImplementedSource {
+        async fn fetch_full_table_streaming<'a>(
+            &'a self,
+            _binding: &'a SourceBinding,
+        ) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError> {
+            Err(SourceError::NotImplemented {
+                what: "fetch_full_table_streaming",
+            })
+        }
+    }
 
     #[async_trait]
     impl ChangeFeed for NotImplementedSource {
