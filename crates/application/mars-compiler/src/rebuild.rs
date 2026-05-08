@@ -23,7 +23,7 @@
 //! `tracing::warn!` plus a metric counter to surface LAZARUS bailout 4
 //! (`REPLICA IDENTITY FULL` mandate) without blocking the cycle.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -39,7 +39,8 @@ use crate::decimate::{passes_min_size, simplify};
 use crate::external_sort::WorkingSetGuard;
 use crate::hilbert::key_from_centroid;
 use crate::incremental::{BindingDirty, DirtyPages};
-use crate::plan::{BootstrapPlan, LevelPlan};
+use crate::plan::{BootstrapPlan, LayerPlan, LevelPlan};
+use crate::rebalance::RebalanceOp;
 use crate::sidecar::{SidecarReader, encode_sidecar};
 use crate::snapshot::{
     BindingOutput, KeyedRow, binding_schema, binding_table, emit_layer_sidecars, flush_page,
@@ -369,6 +370,306 @@ async fn rebuild_binding_incremental(
     });
     outcome.refreshed_bindings.push(refreshed);
     Ok(())
+}
+
+/// Apply a list of [`RebalanceOp`]s, fetching the affected feature ids via
+/// `Source::fetch_by_feature_ids` and emitting fresh page artifacts plus
+/// class / label sidecars. Source pages are dropped; replacement pages are
+/// allocated fresh `PageId`s above the existing maximum at the affected
+/// (binding, level). The page-membership sidecar is left untouched -- a
+/// rebalance preserves every feature_id and its hilbert key.
+pub async fn execute_rebalance(
+    deps: &Deps,
+    plan: &BootstrapPlan,
+    prior: &Manifest,
+    sidecars: &HashMap<BindingId, SidecarReader<'_>>,
+    ops: Vec<RebalanceOp>,
+    working_set_bytes: u64,
+) -> Result<RebuildOutcome, CompilerError> {
+    let mut outcome = RebuildOutcome::default();
+    let mut by_binding: BTreeMap<BindingId, Vec<RebalanceOp>> = BTreeMap::new();
+    for op in ops {
+        let bid = match &op {
+            RebalanceOp::Split { page, .. } => page.binding_id.clone(),
+            RebalanceOp::Merge { left, .. } => left.binding_id.clone(),
+        };
+        by_binding.entry(bid).or_default().push(op);
+    }
+    for (bid, binding_ops) in by_binding {
+        execute_rebalance_one_binding(
+            deps,
+            plan,
+            prior,
+            sidecars.get(&bid),
+            &bid,
+            binding_ops,
+            working_set_bytes,
+            &mut outcome,
+        )
+        .await?;
+    }
+    Ok(outcome)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn execute_rebalance_one_binding(
+    deps: &Deps,
+    plan: &BootstrapPlan,
+    prior: &Manifest,
+    sidecar: Option<&SidecarReader<'_>>,
+    binding_id: &BindingId,
+    ops: Vec<RebalanceOp>,
+    working_set_bytes: u64,
+    outcome: &mut RebuildOutcome,
+) -> Result<(), CompilerError> {
+    let binding_plan = plan
+        .bindings
+        .iter()
+        .find(|b| b.binding_id == *binding_id)
+        .ok_or(CompilerError::LegacySubstrateRetired {
+            what: "rebalance: unknown binding",
+        })?;
+    let prior_binding = prior
+        .bindings
+        .iter()
+        .find(|m| m.binding_id == *binding_id)
+        .ok_or(CompilerError::LegacySubstrateRetired {
+            what: "rebalance: missing prior binding metadata",
+        })?;
+    let combined_bbox = prior_binding
+        .levels
+        .first()
+        .map(|l| l.combined_bbox)
+        .ok_or(CompilerError::LegacySubstrateRetired {
+            what: "rebalance: prior binding has no level metadata",
+        })?;
+    let sc = sidecar.ok_or(CompilerError::LegacySubstrateRetired {
+        what: "rebalance: missing page-membership sidecar",
+    })?;
+
+    // resolve every page key targeted by these ops, dedup'd.
+    let mut source_keys: HashSet<mars_types::PageKey> = HashSet::new();
+    for op in &ops {
+        match op {
+            RebalanceOp::Split { page, .. } => {
+                source_keys.insert(page.clone());
+            }
+            RebalanceOp::Merge { left, right } => {
+                source_keys.insert(left.clone());
+                source_keys.insert(right.clone());
+            }
+        }
+    }
+    let mut source_pages: HashMap<mars_types::PageKey, PageEntry> = HashMap::new();
+    for k in &source_keys {
+        let entry = prior
+            .pages
+            .iter()
+            .find(|p| &p.key == k)
+            .ok_or(CompilerError::LegacySubstrateRetired {
+                what: "rebalance: source page missing from prior manifest",
+            })?
+            .clone();
+        source_pages.insert(k.clone(), entry);
+    }
+
+    // union of hilbert ranges; sidecar lookup gives us the feature id set.
+    let union_ranges: Vec<(HilbertKey, HilbertKey)> = source_pages.values().map(|p| p.hilbert_range).collect();
+    let feature_ids = sc.feature_ids_in_ranges(&union_ranges);
+
+    // fetch rows.
+    let port_binding = PortBinding::new(
+        SourceCollectionId::new(binding_plan.binding_id.as_str()),
+        binding_schema(&binding_plan.source_table),
+        binding_table(&binding_plan.source_table),
+        binding_plan.geometry_column.clone(),
+        binding_plan.id_column.as_deref().unwrap_or("id"),
+        binding_plan.attributes.clone(),
+        binding_plan.native_crs.clone(),
+    )?;
+    let ids: Vec<i64> = feature_ids
+        .iter()
+        .map(|f| i64::try_from(*f).unwrap_or(i64::MAX))
+        .collect();
+    let mut stream = deps.source.fetch_by_feature_ids(&port_binding, &ids).await?;
+    let mut guard = WorkingSetGuard::new(working_set_bytes);
+    let mut rows: Vec<KeyedRow> = Vec::new();
+    while let Some(item) = stream.next().await {
+        let row: RowBytes = item?;
+        let geom_bytes_estimate = row.geometry.len() as u64;
+        let feature =
+            wkb_to_feature_geom(&row.geometry, row.feature_id).map_err(|e| CompilerError::LegacySubstrateRetired {
+                what: stringify_wkb_err(&e),
+            })?;
+        let attr_bytes: u64 = row.attributes.iter().map(|(k, _)| (k.len() + 16) as u64).sum();
+        if let Err(observed) = guard.add(geom_bytes_estimate.saturating_add(attr_bytes).saturating_add(64)) {
+            return Err(CompilerError::WorkingSetExceeded {
+                binding: binding_plan.binding_id.as_str().to_string(),
+                observed_bytes: observed,
+                ceiling_bytes: working_set_bytes,
+            });
+        }
+        let cx = (f64::from(feature.bbox[0]) + f64::from(feature.bbox[2])) / 2.0;
+        let cy = (f64::from(feature.bbox[1]) + f64::from(feature.bbox[3])) / 2.0;
+        let key = key_from_centroid(cx, cy, combined_bbox);
+        rows.push(KeyedRow {
+            feature,
+            attrs: Arc::new(row.attributes),
+            geom_bytes_estimate,
+            key,
+        });
+    }
+    rows.sort_by_key(|r| r.key);
+
+    // fresh PageId allocator per affected level.
+    let mut next_page_id: HashMap<DecimationLevel, u64> = HashMap::new();
+    for level in &prior_binding.levels {
+        let max_id = prior
+            .pages
+            .iter()
+            .filter(|p| p.key.binding_id == *binding_id && p.key.level == level.level)
+            .map(|p| p.key.page_id.get())
+            .max()
+            .unwrap_or(0);
+        next_page_id.insert(level.level, max_id + 1);
+    }
+
+    let layer_plans: Vec<&LayerPlan> = plan.layers_for(binding_id).collect();
+
+    for op in ops {
+        match op {
+            RebalanceOp::Split { page, into } => {
+                let src = source_pages
+                    .get(&page)
+                    .cloned()
+                    .ok_or(CompilerError::LegacySubstrateRetired {
+                        what: "rebalance: split source page missing",
+                    })?;
+                let level_plan = binding_plan
+                    .levels
+                    .iter()
+                    .find(|l| l.level == page.level)
+                    .ok_or(CompilerError::LegacySubstrateRetired {
+                        what: "rebalance: split level plan missing",
+                    })?;
+                let (lo, hi) = src.hilbert_range;
+                let in_range: Vec<KeyedRow> =
+                    rows.iter().filter(|r| r.key >= lo && r.key <= hi).cloned().collect();
+                drop_page_with_sidecars(&page, &layer_plans, outcome);
+                if in_range.is_empty() || into == 0 {
+                    continue;
+                }
+                let n = in_range.len();
+                let into_usize = into as usize;
+                let chunk = n.div_ceil(into_usize);
+                for k in 0..into_usize {
+                    let start = k * chunk;
+                    if start >= n {
+                        break;
+                    }
+                    let end = ((k + 1) * chunk).min(n);
+                    let slice: Vec<KeyedRow> = in_range[start..end].to_vec();
+                    if slice.is_empty() {
+                        continue;
+                    }
+                    let new_page_id = bump_page_id(&mut next_page_id, page.level);
+                    let entry = flush_page(deps, binding_plan, page.level, PageId::new(new_page_id), &slice).await?;
+                    let mut class_acc = Vec::new();
+                    let mut label_acc = Vec::new();
+                    emit_layer_sidecars(
+                        deps,
+                        level_plan,
+                        &entry,
+                        &slice,
+                        &layer_plans,
+                        &mut class_acc,
+                        &mut label_acc,
+                    )
+                    .await?;
+                    outcome.replacement_pages.push(entry);
+                    outcome.replacement_class_sidecars.append(&mut class_acc);
+                    outcome.replacement_label_sidecars.append(&mut label_acc);
+                }
+            }
+            RebalanceOp::Merge { left, right } => {
+                let src_l = source_pages
+                    .get(&left)
+                    .cloned()
+                    .ok_or(CompilerError::LegacySubstrateRetired {
+                        what: "rebalance: merge left source missing",
+                    })?;
+                let src_r = source_pages
+                    .get(&right)
+                    .cloned()
+                    .ok_or(CompilerError::LegacySubstrateRetired {
+                        what: "rebalance: merge right source missing",
+                    })?;
+                let level_plan = binding_plan
+                    .levels
+                    .iter()
+                    .find(|l| l.level == left.level)
+                    .ok_or(CompilerError::LegacySubstrateRetired {
+                        what: "rebalance: merge level plan missing",
+                    })?;
+                let (l_lo, l_hi) = src_l.hilbert_range;
+                let (r_lo, r_hi) = src_r.hilbert_range;
+                let merged: Vec<KeyedRow> = rows
+                    .iter()
+                    .filter(|r| (r.key >= l_lo && r.key <= l_hi) || (r.key >= r_lo && r.key <= r_hi))
+                    .cloned()
+                    .collect();
+                drop_page_with_sidecars(&left, &layer_plans, outcome);
+                drop_page_with_sidecars(&right, &layer_plans, outcome);
+                if merged.is_empty() {
+                    continue;
+                }
+                let new_page_id = bump_page_id(&mut next_page_id, left.level);
+                let entry = flush_page(deps, binding_plan, left.level, PageId::new(new_page_id), &merged).await?;
+                let mut class_acc = Vec::new();
+                let mut label_acc = Vec::new();
+                emit_layer_sidecars(
+                    deps,
+                    level_plan,
+                    &entry,
+                    &merged,
+                    &layer_plans,
+                    &mut class_acc,
+                    &mut label_acc,
+                )
+                .await?;
+                outcome.replacement_pages.push(entry);
+                outcome.replacement_class_sidecars.append(&mut class_acc);
+                outcome.replacement_label_sidecars.append(&mut label_acc);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn drop_page_with_sidecars(
+    page: &mars_types::PageKey,
+    layer_plans: &[&LayerPlan],
+    outcome: &mut RebuildOutcome,
+) {
+    outcome.dropped_pages.push(page.clone());
+    for layer in layer_plans {
+        outcome
+            .dropped_class_sidecars
+            .push((layer.layer_id.clone(), page.clone()));
+        if layer.label.is_some() {
+            outcome
+                .dropped_label_sidecars
+                .push((layer.layer_id.clone(), page.clone()));
+        }
+    }
+}
+
+fn bump_page_id(map: &mut HashMap<DecimationLevel, u64>, level: DecimationLevel) -> u64 {
+    let next = map.entry(level).or_insert(0);
+    let id = *next;
+    *next = next.saturating_add(1);
+    id
 }
 
 /// Recompute level metadata after pages were replaced or dropped. Pure;

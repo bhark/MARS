@@ -16,6 +16,7 @@ pub mod external_sort;
 pub mod hilbert;
 pub mod incremental;
 pub mod plan;
+pub mod rebalance;
 pub mod rebuild;
 pub mod sidecar;
 pub mod snapshot;
@@ -270,6 +271,95 @@ impl Compiler {
         let next_version = prior.version + 1;
         let new_manifest = merge_manifest(&prior, &outcome, next_version, last_source_version);
         publish_with_retry(self.deps.manifest.as_ref(), &new_manifest, &self.deps.metrics, shutdown).await
+    }
+
+    /// Run one opportunistic rebalance pass over the current manifest.
+    /// Identifies pages outside the size band or with dilated bboxes via
+    /// [`crate::rebalance::rebalance_candidates`] and rewrites them through
+    /// [`crate::rebuild::execute_rebalance`]. No-op when the manifest is
+    /// already balanced.
+    ///
+    /// LAZARUS Phase C.2.d. The daily rebalance window driven from
+    /// [`Self::run`] is a follow-up; here we only expose the executor.
+    pub async fn run_rebalance_once(&self) -> Result<u64, CompilerError> {
+        let _guard = self.acquire_leader().await?;
+        let prior = self
+            .deps
+            .manifest
+            .current()
+            .await?
+            .ok_or(CompilerError::LegacySubstrateRetired {
+                what: "run_rebalance_once: no prior manifest; bootstrap first",
+            })?;
+        let plan = plan::build_bootstrap_plan(&self.config).map_err(|_| CompilerError::LegacySubstrateRetired {
+            what: "run_rebalance_once: build_bootstrap_plan",
+        })?;
+
+        // collect candidate ops across every (binding, level).
+        let mut ops: Vec<rebalance::RebalanceOp> = Vec::new();
+        for binding_meta in &prior.bindings {
+            let Some(binding_plan) = plan.bindings.iter().find(|b| b.binding_id == binding_meta.binding_id) else {
+                continue;
+            };
+            for level in &binding_meta.levels {
+                let level_pages: Vec<PageEntry> = prior
+                    .pages
+                    .iter()
+                    .filter(|p| p.key.binding_id == binding_meta.binding_id && p.key.level == level.level)
+                    .cloned()
+                    .collect();
+                ops.extend(rebalance::rebalance_candidates(
+                    level,
+                    &level_pages,
+                    binding_plan.page_size_target_bytes,
+                ));
+            }
+        }
+        if ops.is_empty() {
+            // already balanced; bump version so cursors advance.
+            let next_version = prior.version + 1;
+            let mut next = prior.clone();
+            next.version = next_version;
+            next.epoch = next_version;
+            next.created_at = std::time::SystemTime::now();
+            return publish_with_retry(
+                self.deps.manifest.as_ref(),
+                &next,
+                &self.deps.metrics,
+                &CancellationToken::new(),
+            )
+            .await;
+        }
+
+        // mmap each binding's page-membership sidecar so the executor can
+        // resolve feature-id sets per source page.
+        let mut sidecar_bytes: HashMap<BindingId, bytes::Bytes> = HashMap::new();
+        for binding_meta in &prior.bindings {
+            if let Some(entry) = &binding_meta.page_membership_sidecar {
+                let bytes = self.deps.store.get(&entry.key, entry.hash).await?;
+                sidecar_bytes.insert(binding_meta.binding_id.clone(), bytes);
+            }
+        }
+        let mut sidecars: HashMap<BindingId, SidecarReader<'_>> = HashMap::new();
+        for (id, bytes) in &sidecar_bytes {
+            let reader = SidecarReader::open(bytes).map_err(|e| CompilerError::LegacySubstrateRetired {
+                what: stringify_sidecar_err(&e),
+            })?;
+            sidecars.insert(id.clone(), reader);
+        }
+
+        let working_set_bytes = self.config.compiler.bootstrap_working_set()?;
+        let outcome =
+            rebuild::execute_rebalance(&self.deps, &plan, &prior, &sidecars, ops, working_set_bytes).await?;
+        let next_version = prior.version + 1;
+        let new_manifest = merge_manifest(&prior, &outcome, next_version, prior.source_version.clone());
+        publish_with_retry(
+            self.deps.manifest.as_ref(),
+            &new_manifest,
+            &self.deps.metrics,
+            &CancellationToken::new(),
+        )
+        .await
     }
 
     /// Long-running service mode. Bootstraps from an empty manifest, then
