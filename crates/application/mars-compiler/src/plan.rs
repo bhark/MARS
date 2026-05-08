@@ -407,6 +407,8 @@ mod tests {
             attributes: vec!["name".into()],
             levels: None,
             page_size_target_bytes: None,
+            reconcile_every_cycles: None,
+            sidecar_size_warn_bytes: None,
         }
     }
 

@@ -65,6 +65,16 @@ pub struct Compiler {
     /// source-side connection pool). `NonZeroUsize` rejects 0 at deserialise.
     #[serde(default)]
     pub parallel_cells: Option<NonZeroUsize>,
+    /// Working-set ceiling for the bootstrap external sort. Above this, the
+    /// snapshot path spills Hilbert-prefix buckets to temp files instead of
+    /// keeping rows in memory. Unit-suffixed byte literal (`4GiB`).
+    /// LAZARUS Phase C bootstrap.
+    #[serde(default = "default_bootstrap_working_set")]
+    pub bootstrap_working_set_bytes: String,
+    /// Opportunistic rebalance settings (split / merge under size or
+    /// bbox-dilation drift).
+    #[serde(default)]
+    pub rebalance: Rebalance,
 }
 
 impl Default for Compiler {
@@ -72,6 +82,8 @@ impl Default for Compiler {
         Self {
             window: default_compiler_window(),
             parallel_cells: None,
+            bootstrap_working_set_bytes: default_bootstrap_working_set(),
+            rebalance: Rebalance::default(),
         }
     }
 }
@@ -81,10 +93,53 @@ impl Compiler {
     pub fn window_dur(&self) -> Result<Duration, ConfigError> {
         units::parse_duration(&self.window)
     }
+
+    /// Resolve `bootstrap_working_set_bytes` to bytes.
+    pub fn bootstrap_working_set(&self) -> Result<u64, ConfigError> {
+        units::parse_bytes(&self.bootstrap_working_set_bytes)
+    }
 }
 
 fn default_compiler_window() -> String {
     "5min".to_owned()
+}
+
+fn default_bootstrap_working_set() -> String {
+    "4GiB".to_owned()
+}
+
+/// Opportunistic rebalance settings. LAZARUS §Rebalance: rebalance is
+/// decoupled from the hot edit path; it runs at most once per binding per
+/// maintenance window or on operator command.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Rebalance {
+    /// Whether the periodic rebalance window is active. Off by default
+    /// (opportunistic-only; operator command path remains usable).
+    #[serde(default)]
+    pub enabled: bool,
+    /// Cadence of the rebalance window. Unit-suffixed duration (`1d`, `12h`).
+    #[serde(default = "default_rebalance_window")]
+    pub window: String,
+}
+
+impl Default for Rebalance {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            window: default_rebalance_window(),
+        }
+    }
+}
+
+impl Rebalance {
+    /// Resolve `window` to a `Duration`.
+    pub fn window_dur(&self) -> Result<Duration, ConfigError> {
+        units::parse_duration(&self.window)
+    }
+}
+
+fn default_rebalance_window() -> String {
+    "1d".to_owned()
 }
 
 /// PNG deflate level. Mirrors `png::Compression` so the adapter can map it
@@ -659,10 +714,30 @@ pub struct SourceBinding {
     /// default (~5 MiB).
     #[serde(default)]
     pub page_size_target_bytes: Option<u64>,
+    /// Cadence (in incremental cycles) of the full-source feature-id
+    /// reconciliation pass that heals drift from missed change events
+    /// (slot rewinds, pgoutput gaps). LAZARUS §Page-membership sidecar.
+    /// `None` resolves to the substrate default (24).
+    #[serde(default)]
+    pub reconcile_every_cycles: Option<u32>,
+    /// Sidecar size threshold past which `REPLICA IDENTITY FULL` should be
+    /// mandated for this binding. Operators see a runbook-pointing warning
+    /// when the encoded sidecar exceeds this size. Unit-suffixed byte
+    /// literal (`8GiB`). `None` resolves to the substrate default.
+    /// LAZARUS §Bailout 4.
+    #[serde(default)]
+    pub sidecar_size_warn_bytes: Option<String>,
 }
 
 /// Default byte-budget target per page artifact (~5 MiB).
 pub const DEFAULT_PAGE_SIZE_TARGET_BYTES: u64 = 5 * 1024 * 1024;
+
+/// Default cadence (in cycles) of the page-membership reconciliation pass.
+pub const DEFAULT_RECONCILE_EVERY_CYCLES: u32 = 24;
+
+/// Default sidecar size warning threshold (`8 GiB`). Above this the bailout
+/// in LAZARUS recommends switching the binding to `REPLICA IDENTITY FULL`.
+pub const DEFAULT_SIDECAR_SIZE_WARN_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 
 impl SourceBinding {
     /// Split `from` into `(schema, table)`. Single-segment names route to
@@ -679,6 +754,21 @@ impl SourceBinding {
     #[must_use]
     pub fn resolved_page_size_target(&self) -> u64 {
         self.page_size_target_bytes.unwrap_or(DEFAULT_PAGE_SIZE_TARGET_BYTES)
+    }
+
+    /// Resolve `reconcile_every_cycles` against the substrate default.
+    #[must_use]
+    pub fn resolved_reconcile_every_cycles(&self) -> u32 {
+        self.reconcile_every_cycles.unwrap_or(DEFAULT_RECONCILE_EVERY_CYCLES)
+    }
+
+    /// Resolve `sidecar_size_warn_bytes` against the substrate default. Errors
+    /// if the literal cannot be parsed.
+    pub fn resolved_sidecar_size_warn_bytes(&self) -> Result<u64, ConfigError> {
+        match &self.sidecar_size_warn_bytes {
+            Some(s) => units::parse_bytes(s),
+            None => Ok(DEFAULT_SIDECAR_SIZE_WARN_BYTES),
+        }
     }
 }
 

@@ -110,6 +110,16 @@ pub fn validate(config: &Config, config_dir: &Path) -> Result<(), ConfigError> {
     if config.service.name.trim().is_empty() {
         return Err(ConfigError::Invalid("service.name must not be empty".into()));
     }
+
+    // compiler size/duration literals — fail early on bad operator config.
+    let _ = config.compiler.window_dur()?;
+    let working_set = config.compiler.bootstrap_working_set()?;
+    if working_set == 0 {
+        return Err(ConfigError::Invalid(
+            "compiler.bootstrap_working_set_bytes must be > 0".into(),
+        ));
+    }
+    let _ = config.compiler.rebalance.window_dur()?;
     if config.service.name.contains(' ') {
         return Err(ConfigError::Invalid(format!(
             "service.name {:?} must not contain spaces",
@@ -334,6 +344,23 @@ fn validate_binding_levels(layer: &LayerId, idx: usize, binding: &SourceBinding)
             "layer {layer} source[{idx}] page_size_target_bytes must be > 0"
         )));
     }
+    if let Some(cycles) = binding.reconcile_every_cycles
+        && cycles == 0
+    {
+        return Err(ConfigError::Invalid(format!(
+            "layer {layer} source[{idx}] reconcile_every_cycles must be > 0"
+        )));
+    }
+    let warn_bytes = binding.resolved_sidecar_size_warn_bytes().map_err(|e| {
+        ConfigError::Invalid(format!(
+            "layer {layer} source[{idx}] sidecar_size_warn_bytes: {e}"
+        ))
+    })?;
+    if warn_bytes == 0 {
+        return Err(ConfigError::Invalid(format!(
+            "layer {layer} source[{idx}] sidecar_size_warn_bytes must be > 0"
+        )));
+    }
     let Some(levels) = &binding.levels else {
         return Ok(());
     };
@@ -519,6 +546,8 @@ mod tests {
                 attributes: vec!["name".into()],
                 levels: None,
                 page_size_target_bytes: None,
+                reconcile_every_cycles: None,
+                sidecar_size_warn_bytes: None,
             }],
             classes: vec![crate::model::Class {
                 name: "primary".into(),
@@ -557,6 +586,8 @@ mod tests {
                 attributes: vec!["name".into()],
                 levels: None,
                 page_size_target_bytes: None,
+                reconcile_every_cycles: None,
+                sidecar_size_warn_bytes: None,
             }],
             classes: vec![],
             label: Some(LayerLabel {
@@ -827,6 +858,8 @@ label_survival: follow_geometry
             attributes: vec![],
             levels: None,
             page_size_target_bytes: None,
+            reconcile_every_cycles: None,
+            sidecar_size_warn_bytes: None,
         }
     }
 
@@ -930,6 +963,79 @@ label_survival: follow_geometry
         let mut b2 = binding("x");
         b2.page_size_target_bytes = Some(1234);
         assert_eq!(b2.resolved_page_size_target(), 1234);
+    }
+
+    #[test]
+    fn rejects_zero_reconcile_every_cycles() {
+        let mut cfg = minimal_config();
+        let mut b = binding("buildings");
+        b.reconcile_every_cycles = Some(0);
+        cfg.layers = vec![layer_with_binding(b)];
+        let err = validate(&cfg, Path::new("."));
+        assert!(matches!(&err, Err(ConfigError::Invalid(s)) if s.contains("reconcile_every_cycles")));
+    }
+
+    #[test]
+    fn reconcile_every_cycles_resolves_to_default() {
+        let b = binding("buildings");
+        assert_eq!(
+            b.resolved_reconcile_every_cycles(),
+            DEFAULT_RECONCILE_EVERY_CYCLES
+        );
+        let mut b2 = binding("x");
+        b2.reconcile_every_cycles = Some(7);
+        assert_eq!(b2.resolved_reconcile_every_cycles(), 7);
+    }
+
+    #[test]
+    fn rejects_unparsable_sidecar_size_warn_bytes() {
+        let mut cfg = minimal_config();
+        let mut b = binding("buildings");
+        b.sidecar_size_warn_bytes = Some("twelve gigs".into());
+        cfg.layers = vec![layer_with_binding(b)];
+        let err = validate(&cfg, Path::new("."));
+        assert!(matches!(&err, Err(ConfigError::Invalid(s)) if s.contains("sidecar_size_warn_bytes")));
+    }
+
+    #[test]
+    fn sidecar_size_warn_bytes_resolves_to_default() {
+        let b = binding("buildings");
+        assert_eq!(
+            b.resolved_sidecar_size_warn_bytes().unwrap(),
+            DEFAULT_SIDECAR_SIZE_WARN_BYTES
+        );
+        let mut b2 = binding("x");
+        b2.sidecar_size_warn_bytes = Some("12GiB".into());
+        assert_eq!(
+            b2.resolved_sidecar_size_warn_bytes().unwrap(),
+            12 * 1024 * 1024 * 1024
+        );
+    }
+
+    #[test]
+    fn rejects_zero_bootstrap_working_set() {
+        let mut cfg = minimal_config();
+        cfg.compiler.bootstrap_working_set_bytes = "0".into();
+        let err = validate(&cfg, Path::new("."));
+        assert!(matches!(&err, Err(ConfigError::Invalid(s)) if s.contains("bootstrap_working_set_bytes")));
+    }
+
+    #[test]
+    fn rejects_unparsable_rebalance_window() {
+        let mut cfg = minimal_config();
+        cfg.compiler.rebalance.window = "every other Sunday".into();
+        let err = validate(&cfg, Path::new("."));
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn compiler_defaults_round_trip() {
+        let yaml = "window: 5min\nbootstrap_working_set_bytes: 4GiB\nrebalance:\n  enabled: false\n  window: 1d\n";
+        let parsed: crate::model::Compiler = serde_yaml_ng::from_str(yaml).unwrap();
+        assert_eq!(parsed.window_dur().unwrap().as_secs(), 300);
+        assert_eq!(parsed.bootstrap_working_set().unwrap(), 4 * 1024 * 1024 * 1024);
+        assert!(!parsed.rebalance.enabled);
+        assert_eq!(parsed.rebalance.window_dur().unwrap().as_secs(), 24 * 3600);
     }
 
     #[test]
