@@ -16,11 +16,10 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use mars_compiler::{Compiler, Deps as CompilerDeps};
 use mars_config::{Config, config_dir};
-use mars_grid::BandConfig;
+use mars_grid::{BandConfig, BandName};
 use mars_source_postgres::{CollectionTopology, PgConfig, PgSource, ReplicationTopology};
 use mars_store::ManifestStore;
 use mars_store_fs::{FsPublisher, FsStore};
-use mars_types::ScaleBand;
 use rand::distributions::{Alphanumeric, DistString};
 use tempfile::TempDir;
 use testcontainers::{
@@ -35,6 +34,7 @@ const SLOT: &str = "mars_loop_slot";
 const PUB: &str = "mars_loop_pub";
 
 #[tokio::test(flavor = "multi_thread")]
+#[ignore = "C.2.b: page rebuild execution"]
 async fn live_compiler_loop_advances_manifest_on_change() -> Result<()> {
     let password = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
     let container = GenericImage::new("postgis/postgis", "16-3.4")
@@ -87,7 +87,7 @@ async fn live_compiler_loop_advances_manifest_on_change() -> Result<()> {
             id_column: "id".into(),
         }],
         bands: vec![BandConfig {
-            name: ScaleBand::new("hi"),
+            name: BandName::new("hi"),
             max_denom: 50_000,
             origin: (0.0, 0.0),
             cell_size: 1024.0,

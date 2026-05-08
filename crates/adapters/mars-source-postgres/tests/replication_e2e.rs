@@ -14,10 +14,9 @@
 
 use std::time::Duration;
 
-use mars_grid::BandConfig;
+use mars_grid::{BandConfig, BandName};
 use mars_source::{ChangeEvent, ChangeFeed, SourceError};
 use mars_source_postgres::{CollectionTopology, PgConfig, PgSource, ReplicationTopology};
-use mars_types::ScaleBand;
 use rand::distributions::{Alphanumeric, DistString};
 use testcontainers::{
     ContainerAsync, GenericImage, ImageExt,
@@ -110,11 +109,11 @@ fn topology_for(collections: &[(&str, &str)]) -> ReplicationTopology {
                 schema: "public".into(),
                 table: (*table).into(),
                 geometry_column: "geom".into(),
-                id_column: "id".into(),
+                id_column: "gid".into(),
             })
             .collect(),
         bands: vec![BandConfig {
-            name: ScaleBand::new("hi"),
+            name: BandName::new("hi"),
             max_denom: 25_000,
             origin: (0.0, 0.0),
             cell_size: 1024.0,
@@ -165,28 +164,52 @@ async fn insert_update_delete_round_trip() {
     assert!(batch.source_version.is_some(), "insert batch must carry LSN");
     assert_eq!(batch.events.len(), 1);
     match &batch.events[0] {
-        ChangeEvent::Insert { collection, cells } => {
+        ChangeEvent::Insert {
+            collection,
+            feature_id,
+            new_envelope,
+        } => {
             assert_eq!(collection.as_str(), "roads_c");
-            assert_eq!(cells.len(), 1);
+            assert_eq!(*feature_id, 1);
+            assert_eq!(new_envelope.centroid, [50.0, 50.0]);
         }
         other => panic!("expected Insert, got {other:?}"),
     }
 
-    // UPDATE moving the geometry: cells = old ∪ new.
+    // update moving the geometry: old and new envelopes are both present.
     client
         .batch_execute("UPDATE roads SET geom = ST_SetSRID(ST_MakePoint(2000, 2000), 25832) WHERE gid = 1;")
         .await
         .unwrap();
     let batch = next_batch_or_timeout(&mut sub).await.unwrap();
     match &batch.events[0] {
-        ChangeEvent::Update { cells, .. } => assert_eq!(cells.len(), 2),
+        ChangeEvent::Update {
+            feature_id,
+            new_envelope,
+            old_envelope,
+            ..
+        } => {
+            assert_eq!(*feature_id, 1);
+            assert_eq!(old_envelope.as_ref().unwrap().centroid, [50.0, 50.0]);
+            assert_eq!(new_envelope.centroid, [2000.0, 2000.0]);
+        }
         other => panic!("expected Update, got {other:?}"),
     }
 
-    // DELETE.
+    // delete.
     client.batch_execute("DELETE FROM roads WHERE gid = 1;").await.unwrap();
     let batch = next_batch_or_timeout(&mut sub).await.unwrap();
-    assert!(matches!(batch.events[0], ChangeEvent::Delete { .. }));
+    match &batch.events[0] {
+        ChangeEvent::Delete {
+            feature_id,
+            old_envelope,
+            ..
+        } => {
+            assert_eq!(*feature_id, 1);
+            assert_eq!(old_envelope.as_ref().unwrap().centroid, [2000.0, 2000.0]);
+        }
+        other => panic!("expected Delete, got {other:?}"),
+    }
 }
 
 #[tokio::test]
