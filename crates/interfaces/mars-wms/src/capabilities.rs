@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::io::Cursor;
 
 use mars_config::Config;
-use mars_types::{Bbox, ImageFormat, LayerId, Manifest, ParsedArtifactKey};
+use mars_types::{Bbox, ImageFormat, LayerId, Manifest};
 use quick_xml::Writer;
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 
@@ -115,29 +115,11 @@ pub fn capabilities_xml(cfg: &Config, manifest: &Manifest) -> Result<String, Wms
     })
 }
 
-/// derive a per-layer bbox by unioning the cells materialised in the manifest.
-/// falls back to the layer's configured bbox when no artifact entry exists.
-fn derive_layer_bboxes(cfg: &Config, manifest: &Manifest) -> HashMap<LayerId, Bbox> {
-    let cell_sizes = cfg.cells.size_per_band_m().unwrap_or_default();
-    let origin = (cfg.cells.origin[0], cfg.cells.origin[1]);
-
+/// per-layer bbox from config. phase-b drops the cell-walking unioner with the
+/// substrate cut; phase-d re-derives bboxes from the v3 page entries via the
+/// per-binding `combined_bbox` summary plus the layer-to-binding mapping.
+fn derive_layer_bboxes(cfg: &Config, _manifest: &Manifest) -> HashMap<LayerId, Bbox> {
     let mut out: HashMap<LayerId, Bbox> = HashMap::new();
-    for entry in &manifest.layer_artifacts {
-        let Ok(ParsedArtifactKey::Layer { layer, cell }) = entry.key.parse() else {
-            continue;
-        };
-        let Some(size) = cell_sizes.get(cell.band.as_str()).copied() else {
-            continue;
-        };
-        // bbox of cell (x, y) at given band size, anchored at the grid origin.
-        let min_x = origin.0 + (cell.x as f64) * size;
-        let min_y = origin.1 + (cell.y as f64) * size;
-        let bbox = Bbox::new(min_x, min_y, min_x + size, min_y + size);
-        out.entry(layer)
-            .and_modify(|b| *b = union_bbox(*b, bbox))
-            .or_insert(bbox);
-    }
-
     for layer in &cfg.layers {
         if let Some(bbox) = layer.bbox {
             out.entry(layer.name.clone()).or_insert(bbox);
@@ -212,7 +194,6 @@ fn xml_err(e: std::io::Error) -> WmsError {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use mars_types::{ArtifactEntry, ArtifactKey, Cell, ContentHash, ScaleBand};
     use quick_xml::Reader;
 
     fn minimal_cfg() -> Config {
@@ -245,7 +226,7 @@ layers:
     #[test]
     fn parses_clean() {
         let cfg = minimal_cfg();
-        let m = Manifest::new(1, cfg.service.name.clone(), vec![], vec![], None, vec![]);
+        let m = Manifest::empty(1, cfg.service.name.clone());
         let xml = capabilities_xml(&cfg, &m).unwrap();
         assert!(xml.contains("WMS_Capabilities"));
         assert!(xml.contains("EPSG:25832"));
@@ -271,7 +252,7 @@ layers:
     fn escapes_xml_special_chars() {
         let mut cfg = minimal_cfg();
         cfg.layers[0].title = "A & B <C>".into();
-        let m = Manifest::new(1, cfg.service.name.clone(), vec![], vec![], None, vec![]);
+        let m = Manifest::empty(1, cfg.service.name.clone());
         let xml = capabilities_xml(&cfg, &m).unwrap();
         // special chars must be escaped, not raw
         assert!(!xml.contains("A & B <C>"), "raw unescaped special chars found");
@@ -282,7 +263,7 @@ layers:
     fn empty_layers_produces_valid_xml() {
         let mut cfg = minimal_cfg();
         cfg.layers.clear();
-        let m = Manifest::new(1, cfg.service.name.clone(), vec![], vec![], None, vec![]);
+        let m = Manifest::empty(1, cfg.service.name.clone());
         let xml = capabilities_xml(&cfg, &m).unwrap();
         assert!(xml.contains("<Layer>"));
         assert!(xml.contains("</Layer>"));
@@ -305,7 +286,7 @@ layers:
     #[test]
     fn advertises_only_canonical_crs() {
         let cfg = minimal_cfg();
-        let m = Manifest::new(1, cfg.service.name.clone(), vec![], vec![], None, vec![]);
+        let m = Manifest::empty(1, cfg.service.name.clone());
         let xml = capabilities_xml(&cfg, &m).unwrap();
         // we only emit values in the canonical crs, so the advertised CRS
         // list and BoundingBox CRS must reflect only that.
@@ -318,7 +299,7 @@ layers:
     fn omits_contact_when_email_empty() {
         let mut cfg = minimal_cfg();
         cfg.service.contact_email = String::new();
-        let m = Manifest::new(1, cfg.service.name.clone(), vec![], vec![], None, vec![]);
+        let m = Manifest::empty(1, cfg.service.name.clone());
         let xml = capabilities_xml(&cfg, &m).unwrap();
         assert!(
             !xml.contains("ContactInformation"),
@@ -350,53 +331,13 @@ layers:
   - { name: a, title: A, type: polygon, sources: [{ from: t, geometry_column: g }] }
 "#;
         let cfg: Config = serde_yaml_ng::from_str(yaml).unwrap();
-        let m = Manifest::new(1, cfg.service.name.clone(), vec![], vec![], None, vec![]);
+        let m = Manifest::empty(1, cfg.service.name.clone());
         let xml = capabilities_xml(&cfg, &m).unwrap();
         assert!(xml.contains("<Format>image/png</Format>"));
         assert!(xml.contains("<Format>image/jpeg</Format>"));
     }
 
-    #[test]
-    fn emits_canonical_bbox_only() {
-        let cfg = minimal_cfg();
-        let layer = LayerId::new("a");
-        let cell = Cell {
-            band: ScaleBand::new("hi"),
-            x: 0,
-            y: 0,
-        };
-        let key = ArtifactKey::try_build_layer(&layer, &cell, ContentHash::zero()).unwrap();
-        let entry = ArtifactEntry {
-            key,
-            hash: ContentHash::zero(),
-            size_bytes: 0,
-        };
-        let m = Manifest::new(1, cfg.service.name.clone(), vec![], vec![entry], None, vec![]);
-        let xml = capabilities_xml(&cfg, &m).unwrap();
-        // root + child layer = 2 BoundingBox elements, both in canonical crs.
-        assert_eq!(xml.matches(r#"CRS="EPSG:25832""#).count(), 2, "{xml}");
-        assert_eq!(xml.matches(r#"CRS="EPSG:4326""#).count(), 0, "{xml}");
-    }
-
-    #[test]
-    fn derives_layer_bbox_from_manifest_cells() {
-        let cfg = minimal_cfg();
-        let layer = LayerId::new("a");
-        let cell = Cell {
-            band: ScaleBand::new("hi"),
-            x: 0,
-            y: 0,
-        };
-        let key = ArtifactKey::try_build_layer(&layer, &cell, ContentHash::zero()).unwrap();
-        let entry = ArtifactEntry {
-            key,
-            hash: ContentHash::zero(),
-            size_bytes: 0,
-        };
-        let m = Manifest::new(1, cfg.service.name.clone(), vec![], vec![entry], None, vec![]);
-        let xml = capabilities_xml(&cfg, &m).unwrap();
-        // cell (0,0) at 1024m should produce a bbox of (0,0,1024,1024).
-        assert!(xml.contains("minx=\"0\""), "missing minx=0: {xml}");
-        assert!(xml.contains("maxx=\"1024\""), "missing maxx=1024: {xml}");
-    }
+    // phase-d: re-add `emits_canonical_bbox_only` and `derives_layer_bbox_from_manifest_cells`
+    // once the v3 page entries surface per-binding bboxes that the wms builder
+    // can union by binding-to-layer mapping.
 }
