@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::io::Cursor;
 
 use mars_config::{Config, TileMatrixSet};
-use mars_types::{Bbox, ImageFormat, LayerId, Manifest, ParsedArtifactKey};
+use mars_types::{Bbox, ImageFormat, LayerId, Manifest};
 use quick_xml::Writer;
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 
@@ -265,41 +265,16 @@ fn configured_formats(cfg: &Config) -> Vec<ImageFormat> {
     }
 }
 
-fn derive_layer_bboxes(cfg: &Config, manifest: &Manifest) -> HashMap<LayerId, Bbox> {
-    let cell_sizes = cfg.cells.size_per_band_m().unwrap_or_default();
-    let origin = (cfg.cells.origin[0], cfg.cells.origin[1]);
-
+fn derive_layer_bboxes(cfg: &Config, _manifest: &Manifest) -> HashMap<LayerId, Bbox> {
+    // phase-b: cell-walk replaced by config-only fallback. phase-d will union
+    // per-binding `combined_bbox` summaries from the v3 page entries.
     let mut out: HashMap<LayerId, Bbox> = HashMap::new();
-    for entry in &manifest.layer_artifacts {
-        let Ok(ParsedArtifactKey::Layer { layer, cell }) = entry.key.parse() else {
-            continue;
-        };
-        let Some(size) = cell_sizes.get(cell.band.as_str()).copied() else {
-            continue;
-        };
-        let min_x = origin.0 + (cell.x as f64) * size;
-        let min_y = origin.1 + (cell.y as f64) * size;
-        let bbox = Bbox::new(min_x, min_y, min_x + size, min_y + size);
-        out.entry(layer)
-            .and_modify(|b| *b = union_bbox(*b, bbox))
-            .or_insert(bbox);
-    }
-
     for layer in &cfg.layers {
         if let Some(bbox) = layer.bbox {
             out.entry(layer.name.clone()).or_insert(bbox);
         }
     }
     out
-}
-
-fn union_bbox(a: Bbox, b: Bbox) -> Bbox {
-    Bbox::new(
-        a.min_x.min(b.min_x),
-        a.min_y.min(b.min_y),
-        a.max_x.max(b.max_x),
-        a.max_y.max(b.max_y),
-    )
 }
 
 #[cfg(test)]
@@ -347,7 +322,7 @@ layers:
     }
 
     fn empty_manifest(cfg: &Config) -> Manifest {
-        Manifest::new(1, cfg.service.name.clone(), vec![], vec![], None, vec![])
+        Manifest::empty(1, cfg.service.name.clone())
     }
 
     fn parses_balanced(xml: &str) {
@@ -435,24 +410,6 @@ layers:
         assert!(xml.contains("</Contents>"));
     }
 
-    #[test]
-    fn derives_layer_bbox_from_manifest_cells() {
-        use mars_types::{ArtifactEntry, ArtifactKey, Cell, ContentHash, ScaleBand};
-        let cfg = minimal_cfg();
-        let cell = Cell {
-            band: ScaleBand::new("hi"),
-            x: 0,
-            y: 0,
-        };
-        let key = ArtifactKey::try_build_layer(&LayerId::new("a"), &cell, ContentHash::zero()).unwrap();
-        let entry = ArtifactEntry {
-            key,
-            hash: ContentHash::zero(),
-            size_bytes: 0,
-        };
-        let m = Manifest::new(1, cfg.service.name.clone(), vec![], vec![entry], None, vec![]);
-        let xml = capabilities_xml(&cfg, &m).unwrap();
-        assert!(xml.contains("<ows:LowerCorner>0 0</ows:LowerCorner>"));
-        assert!(xml.contains("<ows:UpperCorner>1024 1024</ows:UpperCorner>"));
-    }
+    // phase-d: re-add `derives_layer_bbox_from_manifest_cells` once v3 page
+    // entries surface per-binding bboxes the wmts builder can union.
 }
