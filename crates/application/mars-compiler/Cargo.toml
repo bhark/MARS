@@ -13,7 +13,9 @@ workspace = true
 
 [dependencies]
 mars-types         = { workspace = true }
+mars-artifact      = { workspace = true }
 mars-source        = { workspace = true }
+bytes              = { workspace = true }
 mars-store         = { workspace = true }
 mars-config        = { workspace = true }
 mars-observability = { workspace = true }

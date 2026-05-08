@@ -2242,6 +2242,8 @@ dependencies = [
 name = "mars-compiler"
 version = "0.0.1"
 dependencies = [
+ "bytes",
+ "mars-artifact",
  "mars-config",
  "mars-observability",
  "mars-source",

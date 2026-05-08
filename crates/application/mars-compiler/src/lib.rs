@@ -12,6 +12,7 @@
 
 pub mod hilbert;
 pub mod plan;
+pub mod sidecar;
 
 use std::sync::Arc;
 use std::time::Duration;
