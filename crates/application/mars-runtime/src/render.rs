@@ -12,15 +12,18 @@ use std::sync::Arc;
 use bytes::Bytes;
 use futures_util::StreamExt;
 use futures_util::stream::FuturesUnordered;
-use mars_artifact::{ArtifactReader, GeomKind, SectionKind, SpatialIndex, decode_geometry_at_slots};
+use mars_artifact::{
+    ArtifactReader, GeomKind, SectionKind, SpatialIndex, decode_class_assignment, decode_geometry_at_slots,
+    decode_style_refs,
+};
 use mars_config::Layer;
 use mars_render_port::{Canvas, DrawOp, Path, Subpath};
-use mars_style::{Colour, Style};
+use mars_style::{Colour, Style, Stylesheet};
 use mars_types::{Bbox, BindingMetadata, LayerId, PageEntry};
 
 use crate::state::RuntimeState;
 use crate::{Deps, RenderPlan, RuntimeError};
-use crate::{fetch::fetch_page, plan as planning};
+use crate::{fetch::fetch_page, fetch::fetch_sidecar, plan as planning};
 
 /// fallback style used until D5 wires the class-sidecar join. blue fill +
 /// dark stroke so the spine is clearly visible against the white default
@@ -60,7 +63,7 @@ pub(crate) async fn render_plan(
         background: None,
     };
     let mut all_ops: Vec<DrawOp> = Vec::new();
-    let style = fallback_style();
+    let fallback = fallback_style();
     for layer_id in &plan.layers {
         let layer_cfg = lookup_layer(config, layer_id)?;
         let denom = crate::denom_from_plan(plan.bbox.width(), plan.width);
@@ -82,7 +85,7 @@ pub(crate) async fn render_plan(
         if pages.is_empty() {
             continue;
         }
-        let layer_ops = render_layer_pages(deps, binding, &pages, plan, &style).await?;
+        let layer_ops = render_layer_pages(deps, state, layer_id, binding, &pages, plan, &fallback).await?;
         all_ops.extend(layer_ops);
     }
 
@@ -103,34 +106,97 @@ fn lookup_layer<'c>(config: &'c mars_config::Config, layer_id: &LayerId) -> Resu
 
 async fn render_layer_pages(
     deps: &Deps,
+    state: &RuntimeState,
+    layer_id: &LayerId,
     binding: &BindingMetadata,
     pages: &[&PageEntry],
     plan: &RenderPlan,
-    style: &Arc<Style>,
+    fallback: &Arc<Style>,
 ) -> Result<Vec<DrawOp>, RuntimeError> {
     let mut futs = FuturesUnordered::new();
     for page in pages {
         let store = deps.store.clone();
         let cache = deps.cache.clone();
         let entry = (*page).clone();
-        futs.push(async move { fetch_page(&cache, &store, &entry).await.map(|b| (entry, b)) });
+        let class_entry = state
+            .index
+            .class_sidecar(&state.manifest, layer_id, &entry.key)
+            .cloned();
+        futs.push(async move {
+            let page_bytes = fetch_page(&cache, &store, &entry).await?;
+            let class_bytes = match &class_entry {
+                Some(e) => Some(fetch_sidecar(&cache, &store, e).await?),
+                None => None,
+            };
+            Ok::<_, RuntimeError>((entry, page_bytes, class_bytes))
+        });
     }
     let mut all_ops: Vec<DrawOp> = Vec::new();
     let same_crs = binding.native_crs.as_str() == plan.crs.as_str();
     while let Some(res) = futs.next().await {
-        let (entry, bytes) = res?;
-        let mut page_ops = decode_page_to_ops(bytes, &entry, plan, binding, style, same_crs)?;
+        let (entry, page_bytes, class_bytes) = res?;
+        let class = match class_bytes {
+            Some(b) => Some(ClassResolver::open(b)?),
+            None => None,
+        };
+        let mut page_ops = decode_page_to_ops(
+            page_bytes,
+            &entry,
+            plan,
+            binding,
+            class.as_ref(),
+            &state.stylesheet,
+            fallback,
+            same_crs,
+        )?;
         all_ops.append(&mut page_ops);
     }
     Ok(all_ops)
 }
 
+/// resolves `feature_id -> Style` by binary-searching the class assignment
+/// table and looking the resulting style ref up in the active stylesheet.
+struct ClassResolver {
+    /// `(feature_id, class_index)` pairs sorted ascending by feature_id.
+    assignments: Vec<(u64, u16)>,
+    /// `class_index` indexes into this list to get a stylesheet ref name.
+    style_refs: Vec<String>,
+}
+
+impl ClassResolver {
+    fn open(bytes: Bytes) -> Result<Self, RuntimeError> {
+        let reader = ArtifactReader::open(bytes).map_err(map_artifact_err)?;
+        let class_bytes = reader
+            .section(SectionKind::ClassAssignment)
+            .map_err(map_artifact_err)?;
+        let style_refs_bytes = reader.section(SectionKind::StyleRefs).map_err(map_artifact_err)?;
+        let assignments = decode_class_assignment(&class_bytes).map_err(map_artifact_err)?;
+        let style_refs = decode_style_refs(&style_refs_bytes).map_err(map_artifact_err)?;
+        Ok(Self {
+            assignments,
+            style_refs,
+        })
+    }
+
+    fn style_ref_for(&self, feature_id: u64) -> Option<&str> {
+        let pos = self
+            .assignments
+            .binary_search_by_key(&feature_id, |&(id, _)| id)
+            .ok()?;
+        let cls = self.assignments[pos].1 as usize;
+        self.style_refs.get(cls).map(String::as_str)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn decode_page_to_ops(
     bytes: Bytes,
     page: &PageEntry,
     plan: &RenderPlan,
     binding: &BindingMetadata,
-    style: &Arc<Style>,
+    class: Option<&ClassResolver>,
+    stylesheet: &Stylesheet,
+    fallback: &Arc<Style>,
     same_crs: bool,
 ) -> Result<Vec<DrawOp>, RuntimeError> {
     let reader = ArtifactReader::open(bytes).map_err(map_artifact_err)?;
@@ -150,14 +216,18 @@ fn decode_page_to_ops(
         return Ok(Vec::new());
     }
     let features = decode_geometry_at_slots(&geom_bytes, &slots).map_err(map_artifact_err)?;
-    let mut ops = Vec::with_capacity(features.len());
     let projected = if same_crs {
         features
     } else {
         project_features(features, &binding.native_crs, &plan.crs)?
     };
+    let mut ops = Vec::with_capacity(projected.len());
     for f in projected {
-        if let Some(op) = feature_to_drawop(&f.geom, plan.bbox, plan.width, plan.height, style.clone()) {
+        let style = class
+            .and_then(|c| c.style_ref_for(f.id))
+            .and_then(|name| stylesheet.geometry.get(name).cloned())
+            .unwrap_or_else(|| fallback.clone());
+        if let Some(op) = feature_to_drawop(&f.geom, plan.bbox, plan.width, plan.height, style) {
             ops.push(op);
         }
     }
