@@ -22,9 +22,11 @@ pub use mars_text::Fonts;
 use mars_types::{Bbox, CrsCode, ImageFormat, LayerId};
 use tokio::sync::Semaphore;
 
+mod fetch;
 mod plan;
 mod state;
 
+pub use fetch::{fetch_page, fetch_sidecar};
 pub use plan::{pick_binding_and_level, reproject_viewport, resolve_pages};
 pub use state::{IndexError, PageIndex, RuntimeState};
 
