@@ -46,6 +46,11 @@ pub(crate) fn bbox_of(wkb: &[u8]) -> Result<Bbox, WkbBboxError> {
     acc.finish()
 }
 
+pub(crate) fn centroid_of(wkb: &[u8]) -> Result<[f64; 2], WkbBboxError> {
+    let bbox = bbox_of(wkb)?;
+    Ok([(bbox.min_x + bbox.max_x) * 0.5, (bbox.min_y + bbox.max_y) * 0.5])
+}
+
 struct BboxAcc {
     min_x: f64,
     min_y: f64,
@@ -232,6 +237,32 @@ mod tests {
         v
     }
 
+    fn multi_le(gtype: u32, geoms: &[Vec<u8>]) -> Vec<u8> {
+        let mut v = vec![1u8];
+        v.extend_from_slice(&gtype.to_le_bytes());
+        v.extend_from_slice(&(geoms.len() as u32).to_le_bytes());
+        for geom in geoms {
+            v.extend_from_slice(geom);
+        }
+        v
+    }
+
+    fn ewkb_point_zm_le(x: f64, y: f64, z: f64, m: f64) -> Vec<u8> {
+        let mut v = vec![1u8];
+        v.extend_from_slice(&(WKB_POINT | EWKB_Z_FLAG | EWKB_M_FLAG).to_le_bytes());
+        v.extend_from_slice(&x.to_le_bytes());
+        v.extend_from_slice(&y.to_le_bytes());
+        v.extend_from_slice(&z.to_le_bytes());
+        v.extend_from_slice(&m.to_le_bytes());
+        v
+    }
+
+    fn assert_centroid_matches_bbox_midpoint(wkb: &[u8]) {
+        let bb = bbox_of(wkb).unwrap();
+        let centroid = centroid_of(wkb).unwrap();
+        assert_eq!(centroid, [(bb.min_x + bb.max_x) * 0.5, (bb.min_y + bb.max_y) * 0.5]);
+    }
+
     #[test]
     fn point_bbox() {
         let bb = bbox_of(&point_le(1.5, 2.5)).unwrap();
@@ -261,6 +292,32 @@ mod tests {
         ]]))
         .unwrap();
         assert_eq!((bb.min_x, bb.min_y, bb.max_x, bb.max_y), (0.0, 0.0, 5.0, 5.0));
+    }
+
+    #[test]
+    fn centroid_matches_bbox_midpoint_for_supported_types() {
+        let point = point_le(1.0, 2.0);
+        let line = linestring_le(&[(0.0, 0.0), (10.0, 4.0)]);
+        let poly = polygon_le(&[&[(0.0, 0.0), (3.0, 0.0), (3.0, 8.0), (0.0, 0.0)]]);
+        let multipoint = multi_le(WKB_MULTIPOINT, &[point_le(-1.0, -2.0), point_le(3.0, 4.0)]);
+        let multiline = multi_le(
+            WKB_MULTILINESTRING,
+            &[
+                linestring_le(&[(0.0, 1.0), (2.0, 3.0)]),
+                linestring_le(&[(-5.0, -6.0), (7.0, 8.0)]),
+            ],
+        );
+        let multipolygon = multi_le(WKB_MULTIPOLYGON, &[poly.clone()]);
+
+        for wkb in [point, line, poly, multipoint, multiline, multipolygon] {
+            assert_centroid_matches_bbox_midpoint(&wkb);
+        }
+    }
+
+    #[test]
+    fn centroid_skips_zm_and_handles_degenerate_geometry() {
+        assert_eq!(centroid_of(&ewkb_point_zm_le(4.0, 5.0, 9.0, 10.0)).unwrap(), [4.0, 5.0]);
+        assert_eq!(centroid_of(&point_le(7.0, 7.0)).unwrap(), [7.0, 7.0]);
     }
 
     #[test]
