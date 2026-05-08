@@ -10,8 +10,12 @@
 //! the planner does NOT walk source rows or talk to postgres -- it only
 //! decides what set of (binding, level) slices the snapshot has to emit.
 
-use mars_config::{Config, DEFAULT_PAGE_SIZE_TARGET_BYTES, DecimationLevelConfig};
-use mars_types::{BindingId, BindingIdError, CrsCode, DecimationLevel};
+use mars_config::{
+    Config, DEFAULT_PAGE_SIZE_TARGET_BYTES, DecimationLevelConfig, LabelStyleAttach, Layer as CfgLayer,
+};
+use mars_expr::{Expr, Template, parse, parse_template};
+use mars_style::{LabelStyle, LabelSurvival, Placement, default_placement};
+use mars_types::{BindingId, BindingIdError, CrsCode, DecimationLevel, LayerId};
 
 /// Errors emitted while building a [`BootstrapPlan`].
 #[derive(Debug, thiserror::Error)]
@@ -39,6 +43,27 @@ pub enum PlanError {
         /// short description of which field disagrees
         detail: &'static str,
     },
+    /// A class's `when:` failed to parse. config validation usually catches
+    /// this; surfaced here in case a config bypasses validate.
+    #[error("layer {layer} class {class:?} when: parse error: {source}")]
+    ClassWhenParse {
+        /// layer name
+        layer: LayerId,
+        /// class name within the layer
+        class: String,
+        /// underlying expr error
+        #[source]
+        source: mars_expr::ExprError,
+    },
+    /// A label's `text:` template failed to parse.
+    #[error("layer {layer} label text: parse error: {source}")]
+    LabelTemplateParse {
+        /// layer name
+        layer: LayerId,
+        /// underlying expr error
+        #[source]
+        source: mars_expr::ExprError,
+    },
 }
 
 /// One (level, decimation rules) entry on a [`BindingPlan`].
@@ -63,11 +88,58 @@ pub struct BindingPlan {
     pub page_size_target_bytes: u64,
 }
 
+/// One pre-parsed class entry on a [`LayerPlan`]. `when` parses once at
+/// plan-build time so the per-feature evaluator never reaches for the parser.
+/// `style_ref` is the canonical name written into the page's StyleRefs
+/// section: a `ClassStyle::Ref { name }` keeps the operator's name; an
+/// inline style synthesises `<layer>__<class>` so the runtime can dereference
+/// it through the published style artifact.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClassPlan {
+    pub name: String,
+    pub when: Option<Expr>,
+    pub style_ref: String,
+}
+
+/// Pre-parsed label spec. `text` is the parsed template; `placement` is the
+/// resolved placement (the layer's `placement:` block when set, else the
+/// per-geom-kind default from [`default_placement`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LayerLabelPlan {
+    pub style_ref: String,
+    pub style: LabelStyle,
+    pub text: Template,
+    pub placement: Placement,
+}
+
+/// One layer's compile-time plan. Parsed once so snapshot/rebuild can run
+/// per-feature evaluation without reparsing on every page.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LayerPlan {
+    pub layer_id: LayerId,
+    pub binding_id: BindingId,
+    pub kind: String,
+    pub classes: Vec<ClassPlan>,
+    pub label: Option<LayerLabelPlan>,
+    pub label_survival: LabelSurvival,
+}
+
 /// Full snapshot work plan: the deduplicated set of bindings the compiler
-/// has to emit.
+/// has to emit, plus the per-layer compile state used to fan out class /
+/// label sidecar emission per page.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct BootstrapPlan {
     pub bindings: Vec<BindingPlan>,
+    pub layers: Vec<LayerPlan>,
+}
+
+impl BootstrapPlan {
+    /// every layer plan that targets `binding_id`. snapshot iterates this for
+    /// each (binding, level, page) so it knows which sidecars to emit.
+    pub fn layers_for<'a>(&'a self, binding_id: &BindingId) -> impl Iterator<Item = &'a LayerPlan> + 'a {
+        let needle = binding_id.clone();
+        self.layers.iter().filter(move |l| l.binding_id == needle)
+    }
 }
 
 /// Build a [`BootstrapPlan`] from a validated config. dedup key is
@@ -77,11 +149,11 @@ pub struct BootstrapPlan {
 pub fn build_bootstrap_plan(cfg: &Config) -> Result<BootstrapPlan, PlanError> {
     let native_crs = cfg.source.native_crs.clone();
     let mut bindings: Vec<BindingPlan> = Vec::new();
+    let mut layers: Vec<LayerPlan> = Vec::new();
 
     for layer in &cfg.layers {
         for binding in &layer.sources {
             let id = binding_id_for(&binding.from)?;
-            let levels = level_plans(binding.levels.as_deref());
             let plan = BindingPlan {
                 binding_id: id.clone(),
                 source_table: binding.from.clone(),
@@ -89,19 +161,110 @@ pub fn build_bootstrap_plan(cfg: &Config) -> Result<BootstrapPlan, PlanError> {
                 id_column: binding.id_column.clone(),
                 attributes: binding.attributes.clone(),
                 native_crs: native_crs.clone(),
-                levels,
+                levels: level_plans(binding.levels.as_deref()),
                 page_size_target_bytes: binding.resolved_page_size_target(),
             };
 
             if let Some(existing) = bindings.iter().find(|b| b.binding_id == id) {
                 ensure_consistent(existing, &plan)?;
-                continue;
+            } else {
+                bindings.push(plan);
             }
-            bindings.push(plan);
+
+            layers.push(build_layer_plan(cfg, layer, &id)?);
         }
     }
 
-    Ok(BootstrapPlan { bindings })
+    Ok(BootstrapPlan { bindings, layers })
+}
+
+fn build_layer_plan(cfg: &Config, layer: &CfgLayer, binding_id: &BindingId) -> Result<LayerPlan, PlanError> {
+    let mut classes: Vec<ClassPlan> = Vec::with_capacity(layer.classes.len());
+    for class in &layer.classes {
+        let when = match &class.when {
+            Some(s) => Some(parse(s).map_err(|source| PlanError::ClassWhenParse {
+                layer: layer.name.clone(),
+                class: class.name.clone(),
+                source,
+            })?),
+            None => None,
+        };
+        let style_ref = match &class.style {
+            mars_config::ClassStyle::Ref { name } => name.clone(),
+            mars_config::ClassStyle::Inline(_) => format!("{layer}__{class}", layer = layer.name, class = class.name),
+        };
+        classes.push(ClassPlan {
+            name: class.name.clone(),
+            when,
+            style_ref,
+        });
+    }
+
+    let label = layer
+        .label
+        .as_ref()
+        .map(|l| build_label_plan(cfg, layer, l))
+        .transpose()?;
+
+    Ok(LayerPlan {
+        layer_id: layer.name.clone(),
+        binding_id: binding_id.clone(),
+        kind: layer.kind.clone(),
+        classes,
+        label,
+        label_survival: layer.label_survival,
+    })
+}
+
+fn build_label_plan(
+    cfg: &Config,
+    layer: &CfgLayer,
+    label: &mars_config::LayerLabel,
+) -> Result<LayerLabelPlan, PlanError> {
+    let template = parse_template(&label.text).map_err(|source| PlanError::LabelTemplateParse {
+        layer: layer.name.clone(),
+        source,
+    })?;
+    let (style_ref, style) = resolve_label_style(cfg, layer, &label.style);
+    let placement = label.placement.clone().unwrap_or_else(|| {
+        let kind = mars_style::LayerGeomKind::parse(layer.kind.as_str()).unwrap_or(mars_style::LayerGeomKind::Point);
+        default_placement(kind)
+    });
+    Ok(LayerLabelPlan {
+        style_ref,
+        style,
+        text: template,
+        placement,
+    })
+}
+
+fn resolve_label_style(cfg: &Config, layer: &CfgLayer, attach: &LabelStyleAttach) -> (String, LabelStyle) {
+    match attach {
+        LabelStyleAttach::Ref { name } => {
+            let style = cfg.styles.get(name).and_then(|e| e.as_label().cloned()).unwrap_or_else(
+                // config validation should reject unknown refs; fall back to a
+                // safe default rather than panic if a malformed config slips
+                // through.
+                placeholder_label_style,
+            );
+            (name.clone(), style)
+        }
+        LabelStyleAttach::Inline(style) => (
+            format!("{layer}__label", layer = layer.name),
+            style.clone(),
+        ),
+    }
+}
+
+fn placeholder_label_style() -> LabelStyle {
+    LabelStyle {
+        font_family: "DejaVu Sans".into(),
+        font_size: 12.0,
+        fill: mars_style::Colour::rgb(0, 0, 0),
+        halo: None,
+        priority: 0,
+        min_distance: 0.0,
+    }
 }
 
 /// Stable level plan list. an absent `levels:` config collapses to a single
@@ -332,6 +495,62 @@ mod tests {
         assert_eq!(plan.bindings.len(), 2);
         assert_eq!(plan.bindings[0].levels.len(), 3);
         assert_eq!(plan.bindings[1].levels.len(), 1);
+    }
+
+    #[test]
+    fn layer_plan_parses_when_clauses_and_resolves_inline_style_ref() {
+        let mut b = binding("buildings");
+        b.attributes = vec!["kind".into()];
+        let l = mars_config::Layer {
+            name: LayerId::new("bygning"),
+            title: String::new(),
+            abstract_: String::new(),
+            kind: "polygon".into(),
+            scale: None,
+            group: None,
+            enable_get_feature_info: false,
+            bbox: None,
+            sources: vec![b],
+            classes: vec![
+                mars_config::Class {
+                    name: "main".into(),
+                    title: String::new(),
+                    when: Some("kind = 'main'".into()),
+                    style: ClassStyle::Inline(Default::default()),
+                },
+                mars_config::Class {
+                    name: "default".into(),
+                    title: String::new(),
+                    when: None,
+                    style: ClassStyle::Inline(Default::default()),
+                },
+            ],
+            label: None,
+            label_survival: mars_config::LabelSurvival::Independent,
+        };
+        let cfg = config_with(vec![l]);
+        let plan = build_bootstrap_plan(&cfg).unwrap();
+        assert_eq!(plan.layers.len(), 1);
+        let layer = &plan.layers[0];
+        assert_eq!(layer.layer_id.as_str(), "bygning");
+        assert_eq!(layer.binding_id.as_str(), "buildings");
+        assert_eq!(layer.classes.len(), 2);
+        assert!(layer.classes[0].when.is_some());
+        assert!(layer.classes[1].when.is_none());
+        assert_eq!(layer.classes[0].style_ref, "bygning__main");
+        assert_eq!(layer.classes[1].style_ref, "bygning__default");
+    }
+
+    #[test]
+    fn layers_for_filters_to_target_binding() {
+        let cfg = config_with(vec![
+            layer("a", vec![binding("parcels")]),
+            layer("b", vec![binding("buildings")]),
+        ]);
+        let plan = build_bootstrap_plan(&cfg).unwrap();
+        let parcels = BindingId::try_new("parcels").unwrap();
+        let collected: Vec<_> = plan.layers_for(&parcels).map(|l| l.layer_id.as_str().to_string()).collect();
+        assert_eq!(collected, vec!["a".to_string()]);
     }
 
     #[test]

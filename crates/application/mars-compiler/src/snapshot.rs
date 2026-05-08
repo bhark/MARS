@@ -597,6 +597,7 @@ mod tests {
             .collect();
         let (deps, store) = make_deps(rows);
         let plan = BootstrapPlan {
+            layers: Vec::new(),
             bindings: vec![binding_plan("points", 5 * 1024 * 1024)],
         };
 
@@ -641,6 +642,7 @@ mod tests {
             .collect();
         let (deps, _store) = make_deps(rows);
         let plan = BootstrapPlan {
+            layers: Vec::new(),
             bindings: vec![binding_plan("pts", 16 * 1024)],
         };
         let manifest = run_snapshot(&deps, &plan, "test".into(), 1).await.unwrap();
