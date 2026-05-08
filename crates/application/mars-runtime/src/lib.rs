@@ -24,6 +24,7 @@ use tokio::sync::Semaphore;
 
 mod fetch;
 mod plan;
+mod render;
 mod state;
 
 pub use fetch::{fetch_page, fetch_sidecar};
@@ -271,23 +272,32 @@ impl Runtime {
     }
 
     /// Execute one render plan and return encoded image bytes.
-    ///
-    /// Phase B stub: the cell-keyed plan resolution + decoder + draw pipeline
-    /// is retired; phase-d reintroduces the page-keyed render path. Until
-    /// then this returns `RuntimeError::NotImplemented`.
-    pub async fn render(&self, _plan: &RenderPlan) -> Result<Vec<u8>, RuntimeError> {
-        let _state = self.current_state().ok_or(RuntimeError::NotReady)?;
-        // touch fields to silence unused warnings until phase-d wires them up.
-        let _ = (
-            &self.deps,
-            &self.render_sem,
-            self.pixel_budget,
-            &self.decoded_cache,
-            &self.parallel_emit,
-        );
-        Err(RuntimeError::NotImplemented {
-            what: "mars-runtime::render (phase-d)",
-        })
+    pub async fn render(&self, plan: &RenderPlan) -> Result<Vec<u8>, RuntimeError> {
+        let state = self.current_state().ok_or(RuntimeError::NotReady)?;
+        let pixels = u64::from(plan.width).saturating_mul(u64::from(plan.height));
+        if pixels > u64::from(self.pixel_budget) {
+            return Err(RuntimeError::PixelBudgetExceeded {
+                requested: pixels,
+                budget: self.pixel_budget,
+            });
+        }
+        // gate concurrent renders against the configured pixel budget. permits
+        // are u32; we already verified pixels fits below.
+        let permits = u32::try_from(pixels).map_err(|_| RuntimeError::PixelBudgetExceeded {
+            requested: pixels,
+            budget: self.pixel_budget,
+        })?;
+        let _permit = self
+            .render_sem
+            .acquire_many(permits)
+            .await
+            .map_err(|_| RuntimeError::Render(mars_render_port::RenderError::Backend(
+                "render semaphore closed".into(),
+            )))?;
+        // decoded-geometry cache and parallel-emit knobs are wired here so
+        // future commits can reach them without changing the surface.
+        let _ = (&self.decoded_cache, &self.parallel_emit);
+        render::render_plan(&state, &self.deps, plan).await
     }
 
     fn record_reject(&self, reason: String) {

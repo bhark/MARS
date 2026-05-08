@@ -230,6 +230,7 @@ mod tests {
         RuntimeState {
             manifest,
             stylesheet: Stylesheet::default(),
+            config: None,
             index,
         }
     }

@@ -12,6 +12,7 @@
 
 use std::collections::HashMap;
 use std::ops::Range;
+use std::sync::Arc;
 
 use mars_config::Config;
 use mars_style::Stylesheet;
@@ -237,13 +238,19 @@ fn build_sidecar_index(
 /// loaded snapshot of the active manifest plus the derived [`PageIndex`].
 ///
 /// the index is the hot-path-friendly view of the same manifest; readers that
-/// only need the on-disk fields can reach for `state.manifest` directly.
+/// only need the on-disk fields can reach for `state.manifest` directly. the
+/// `config` is the service config the manifest validated against — render
+/// uses it to look up per-layer bindings, classes, and label policy.
 #[derive(Debug)]
 pub struct RuntimeState {
     /// the active manifest snapshot.
     pub manifest: Manifest,
     /// active stylesheet (passed through unchanged).
     pub stylesheet: Stylesheet,
+    /// service config the manifest was validated against. `None` only on
+    /// `RuntimeState::empty` (readiness stand-ins); render uses
+    /// [`Self::config_or_err`] to fail closed when absent.
+    pub config: Option<Arc<Config>>,
     /// derived view over `manifest` pre-computed at swap time.
     pub index: PageIndex,
 }
@@ -265,12 +272,15 @@ impl RuntimeState {
         Ok(Self {
             manifest,
             stylesheet,
+            config: Some(Arc::new(config.clone())),
             index,
         })
     }
 
     /// build the smallest runtime state that satisfies `is_ready()`. used by
     /// http-layer tests and any code that needs a manifest-empty stand-in.
+    /// renders against this state fail with `RuntimeError::NotReady` because
+    /// no config is present.
     #[must_use]
     pub fn empty(version: u64, service: impl Into<String>) -> Self {
         let manifest = Manifest::empty(version, service);
@@ -278,8 +288,15 @@ impl RuntimeState {
         Self {
             manifest,
             stylesheet: Stylesheet::default(),
+            config: None,
             index,
         }
+    }
+
+    /// borrow the active config or return `RuntimeError::NotReady`. the empty
+    /// state has no config; production paths always do.
+    pub fn config_or_err(&self) -> Result<&Config, RuntimeError> {
+        self.config.as_deref().ok_or(RuntimeError::NotReady)
     }
 }
 
