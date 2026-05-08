@@ -8,9 +8,8 @@ use std::collections::BTreeMap;
 
 use anyhow::{Context, Result, anyhow};
 use mars_config::Config;
-use mars_grid::BandConfig;
+use mars_grid::{BandConfig, BandName};
 use mars_source_postgres::{CollectionTopology, ReplicationTopology, SourceCollectionId};
-use mars_types::ScaleBand;
 
 /// Hard ceiling on cells emitted per row by the change-feed translator.
 /// Mirrors the planner's per-band limit; both ends keep the runtime cost of a
@@ -31,7 +30,7 @@ pub(crate) fn build_replication_topology(cfg: &Config) -> Result<ReplicationTopo
             .copied()
             .ok_or_else(|| anyhow!("cells.size_per_band missing entry for band '{}'", band.name))?;
         bands.push(BandConfig {
-            name: ScaleBand::new(band.name.as_str()),
+            name: BandName::new(band.name.as_str()),
             max_denom: u32::try_from(band.max_denom).unwrap_or(u32::MAX),
             origin,
             cell_size,

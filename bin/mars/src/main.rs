@@ -479,7 +479,7 @@ fn build_cache(cfg: &Config) -> Result<Arc<dyn LocalCache>> {
 }
 
 fn empty_manifest(cfg: &Config) -> Manifest {
-    Manifest::new(0, cfg.service.name.clone(), vec![], vec![], None, vec![])
+    Manifest::empty(0, cfg.service.name.clone())
 }
 
 const DEFAULT_LISTEN_ADDR: &str = "0.0.0.0:8080";
