@@ -160,6 +160,15 @@ impl ArtifactWriter {
             self.sections.push((SectionKind::Attributes, bytes));
         }
 
+        // v3 writers must not emit the legacy GeometryIndex section; the
+        // forensic reader still decodes it for pre-LAZARUS blobs but new
+        // artifacts ship SpatialIndex instead.
+        if self.sections.iter().any(|(k, _)| *k == SectionKind::GeometryIndex) {
+            return Err(ArtifactError::InvalidWriterState(
+                "v3 writers must not emit GeometryIndex; use SpatialIndex",
+            ));
+        }
+
         // reject duplicate sections (e.g. caller staged geometry via
         // add_geometry_payload and also pre-encoded one through add_section).
         // ArtifactReader::open already errors on duplicates; catching it here

@@ -442,7 +442,10 @@ async fn tool_inspect(path: &Path) -> Result<()> {
     }
     println!("sections:");
     for kind in [
+        // GeometryIndex listed first so legacy pre-LAZARUS artifacts still
+        // surface their feature-index size during forensic inspect.
         mars_artifact::SectionKind::GeometryIndex,
+        mars_artifact::SectionKind::SpatialIndex,
         mars_artifact::SectionKind::GeometryPayload,
         mars_artifact::SectionKind::Attributes,
         mars_artifact::SectionKind::LabelCandidates,

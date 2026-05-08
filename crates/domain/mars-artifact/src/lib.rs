@@ -85,6 +85,10 @@ pub enum ArtifactError {
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SectionKind {
+    /// flat 33-byte-stride feature index. retained as a kind so the v1
+    /// forensic reader path can still decode pre-LAZARUS artifacts. v3
+    /// writers must not emit this; new artifacts use [`Self::SpatialIndex`]
+    /// (the packed Hilbert R-tree) instead.
     GeometryIndex = 0x01,
     GeometryPayload = 0x02,
     Attributes = 0x03,
