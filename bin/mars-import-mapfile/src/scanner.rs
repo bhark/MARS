@@ -43,6 +43,7 @@ const BLOCK_OPENERS: &[&str] = &[
     "CONFIG",
     "SCALETOKEN",
     "VALUES",
+    "POINTS",
 ];
 
 #[derive(Debug, thiserror::Error)]
@@ -131,13 +132,36 @@ pub(crate) fn scan(src: &str) -> Vec<Token> {
             continue;
         }
         let mut iter = parts.into_iter();
-        let keyword = iter.next().unwrap_or_default();
-        let args: Vec<String> = iter.collect();
-        toks.push(Token {
-            line: line_no,
-            keyword,
-            args,
-        });
+        let mut keyword = iter.next().unwrap_or_default();
+        let mut args: Vec<String> = Vec::new();
+        let mut pending = true;
+        for arg in iter {
+            if arg.eq_ignore_ascii_case("END") {
+                // flush pending keyword+args, then emit END as its own token
+                if pending && (!args.is_empty() || !keyword.is_empty()) {
+                    toks.push(Token {
+                        line: line_no,
+                        keyword: std::mem::take(&mut keyword),
+                        args: std::mem::take(&mut args),
+                    });
+                    pending = false;
+                }
+                toks.push(Token {
+                    line: line_no,
+                    keyword: arg,
+                    args: Vec::new(),
+                });
+            } else {
+                args.push(arg);
+            }
+        }
+        if pending && (!keyword.is_empty() || !args.is_empty()) {
+            toks.push(Token {
+                line: line_no,
+                keyword,
+                args,
+            });
+        }
     }
     toks
 }

@@ -214,6 +214,20 @@ impl<'a> Lexer<'a> {
     }
 }
 
+// mapfile values like `12-` / `2.5-12` / `0-2.5` are bareword string literals,
+// not numbers. fall back to a string when the token doesn't parse cleanly.
+fn number_or_string(s: &str) -> Literal {
+    if let Ok(n) = s.parse::<i64>() {
+        Literal::Int(n)
+    } else if let Ok(f) = s.parse::<f64>()
+        && f.is_finite()
+    {
+        Literal::Float(f)
+    } else {
+        Literal::String(s.to_string())
+    }
+}
+
 // ---------------------------------------------------------------- parser
 
 struct Parser<'a> {
@@ -337,23 +351,7 @@ impl<'a> Parser<'a> {
             }
             Some(Token::Number(s)) => {
                 self.pos += 1;
-                if let Ok(n) = s.parse::<i64>() {
-                    Ok(Expr::Literal(Literal::Int(n)))
-                } else if let Ok(f) = s.parse::<f64>() {
-                    if f.is_finite() {
-                        Ok(Expr::Literal(Literal::Float(f)))
-                    } else {
-                        Err(ExpressionError::Parse {
-                            msg: format!("non-finite number {s}"),
-                            line: self.line,
-                        })
-                    }
-                } else {
-                    Err(ExpressionError::Parse {
-                        msg: format!("invalid number {s}"),
-                        line: self.line,
-                    })
-                }
+                Ok(Expr::Literal(number_or_string(&s)))
             }
             Some(ref t) => Err(ExpressionError::Parse {
                 msg: format!("unexpected token {t:?}"),
@@ -374,23 +372,7 @@ impl<'a> Parser<'a> {
             }
             Some(Token::Number(s)) => {
                 self.pos += 1;
-                if let Ok(n) = s.parse::<i64>() {
-                    Ok(Literal::Int(n))
-                } else if let Ok(f) = s.parse::<f64>() {
-                    if f.is_finite() {
-                        Ok(Literal::Float(f))
-                    } else {
-                        Err(ExpressionError::Parse {
-                            msg: format!("non-finite number {s}"),
-                            line: self.line,
-                        })
-                    }
-                } else {
-                    Err(ExpressionError::Parse {
-                        msg: format!("invalid number {s}"),
-                        line: self.line,
-                    })
-                }
+                Ok(number_or_string(&s))
             }
             Some(ref t) => Err(ExpressionError::Parse {
                 msg: format!("expected literal, got {t:?}"),

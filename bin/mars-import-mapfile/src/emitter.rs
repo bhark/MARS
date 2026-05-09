@@ -105,7 +105,10 @@ fn derive_bands(layers: &[LayerSkeleton]) -> Vec<(String, u64)> {
     let names = ["detail", "hi", "mid", "lo", "overview"];
     let mut bands = Vec::new();
     for (i, &d) in sorted.iter().enumerate() {
-        let name = names.get(i).copied().unwrap_or("extra").to_string();
+        let name = match names.get(i) {
+            Some(n) => (*n).to_string(),
+            None => format!("extra{}", i - names.len() + 1),
+        };
         bands.push((name, d));
     }
     bands

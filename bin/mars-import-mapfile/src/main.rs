@@ -41,6 +41,9 @@ struct Cli {
     /// exit non-zero (code 2) if any warnings were emitted.
     #[arg(long)]
     strict: bool,
+    /// include only layers whose NAME matches one of these values (repeatable).
+    #[arg(long = "include-layer")]
+    include_layers: Vec<String>,
 }
 
 /// keywords whose presence we don't translate yet. some are block openers,
@@ -98,7 +101,12 @@ fn main() -> Result<()> {
     install_tracing(warn_count.clone());
 
     let tokens = scan_file(&cli.input).with_context(|| format!("scanning {}", cli.input.display()))?;
-    let skeleton = translate_tokens(&tokens);
+    let include_layers: Option<std::collections::HashSet<String>> = if cli.include_layers.is_empty() {
+        None
+    } else {
+        Some(cli.include_layers.into_iter().map(|s| s.to_lowercase()).collect())
+    };
+    let skeleton = translate_tokens(&tokens, include_layers.as_ref());
     let yaml = emitter::render(&skeleton);
 
     match &cli.output {
@@ -120,10 +128,10 @@ fn main() -> Result<()> {
 #[allow(dead_code)]
 pub(crate) fn translate(src: &str) -> Skeleton {
     let tokens = scan(src);
-    translate_tokens(&tokens)
+    translate_tokens(&tokens, None)
 }
 
-fn translate_tokens(tokens: &[Token]) -> Skeleton {
+fn translate_tokens(tokens: &[Token], include_layers: Option<&std::collections::HashSet<String>>) -> Skeleton {
     let mut skel = Skeleton::default();
 
     let map_slice: &[Token] = match tokens
@@ -135,11 +143,11 @@ fn translate_tokens(tokens: &[Token]) -> Skeleton {
         None => tokens,
     };
 
-    walk(map_slice, &mut skel);
+    walk(map_slice, &mut skel, include_layers);
     skel
 }
 
-fn walk(tokens: &[Token], skel: &mut Skeleton) {
+fn walk(tokens: &[Token], skel: &mut Skeleton, include_layers: Option<&std::collections::HashSet<String>>) {
     let mut i = 0;
     while i < tokens.len() {
         let t = &tokens[i];
@@ -167,7 +175,7 @@ fn walk(tokens: &[Token], skel: &mut Skeleton) {
             } else {
                 &[]
             };
-            handle_layer(body, t.line, skel);
+            handle_layer(body, t.line, skel, include_layers);
             i = range.end;
             continue;
         }
@@ -185,7 +193,12 @@ fn walk(tokens: &[Token], skel: &mut Skeleton) {
     }
 }
 
-fn handle_layer(body: &[Token], layer_line: usize, skel: &mut Skeleton) {
+fn handle_layer(
+    body: &[Token],
+    layer_line: usize,
+    skel: &mut Skeleton,
+    include_layers: Option<&std::collections::HashSet<String>>,
+) {
     let mut name: Option<String> = None;
     let mut title: Option<String> = None;
     let mut layer_type: Option<String> = None;
@@ -196,6 +209,23 @@ fn handle_layer(body: &[Token], layer_line: usize, skel: &mut Skeleton) {
     let mut processing_items: Option<String> = None;
     let mut classes: Vec<ClassSkeleton> = Vec::new();
     let mut label: Option<LabelSkeleton> = None;
+
+    // peek name first for filtering
+    for t in body {
+        if t.keyword.eq_ignore_ascii_case("NAME") {
+            if let Some(n) = t.args.first() {
+                name = Some(n.clone());
+            }
+            break;
+        }
+    }
+
+    if let Some(set) = include_layers {
+        let keep = name.as_ref().is_some_and(|n| set.contains(&n.to_lowercase()));
+        if !keep {
+            return;
+        }
+    }
 
     let mut i = 0;
     while i < body.len() {
@@ -218,7 +248,7 @@ fn handle_layer(body: &[Token], layer_line: usize, skel: &mut Skeleton) {
                 continue;
             }
             "DATA" if data.is_none() => {
-                data = t.args.first().cloned();
+                data = Some(t.args.join(" "));
                 i += 1;
                 continue;
             }
@@ -388,14 +418,19 @@ fn mapfile_type_to_geom(t: &str) -> Option<&str> {
     }
 }
 
+/// strip a trailing ` USING ...` clause from a mapfile DATA / SCALETOKEN value.
+fn strip_using(s: &str) -> &str {
+    let upper = s.to_ascii_uppercase();
+    if let Some(pos) = upper.find(" USING ") {
+        &s[..pos]
+    } else {
+        s
+    }
+}
+
 fn parse_data(data: Option<&str>) -> (Option<String>, Option<String>) {
     let Some(d) = data else { return (None, None) };
-    let upper = d.to_ascii_uppercase();
-    let cleaned = if let Some(pos) = upper.find(" USING ") {
-        &d[..pos]
-    } else {
-        d
-    };
+    let cleaned = strip_using(d);
     let cleaned = cleaned.trim().trim_matches('"');
     let cleaned_upper = cleaned.to_ascii_uppercase();
     if let Some(pos) = cleaned_upper.find(" FROM ") {
@@ -429,7 +464,10 @@ fn parse_scale_token(body: &[Token]) -> Vec<(u64, String)> {
             _ => continue,
         };
         if let Some(table) = t.args.first() {
-            out.push((min, table.clone()));
+            let cleaned = strip_using(table).trim().trim_matches('"').to_string();
+            if !cleaned.is_empty() {
+                out.push((min, cleaned));
+            }
         }
     }
     out
@@ -502,7 +540,8 @@ fn parse_class(
 
     let title = name.clone();
     let class_name = slugify(&name.unwrap_or_else(|| format!("class_l{class_line}")));
-    let style_name = format!("{}_{}_{}", geom_kind, slugify(layer_name), class_name);
+    let style_prefix = if geom_kind == "polygon" { "poly" } else { geom_kind };
+    let style_name = format!("{}_{}_{}", style_prefix, slugify(layer_name), class_name);
 
     let (fill, stroke, stroke_width, dasharray) = collapse_styles(&styles, class_line);
 
