@@ -123,12 +123,11 @@ fn bench_brute_force_baseline(c: &mut Criterion) {
     group.finish();
 }
 
-/// the actual baseline the substrate pivot replaces: iterate the legacy
-/// 33-byte-stride GeometryIndex and bbox-filter inline. This is what the
-/// runtime today walks for every per-cell viewport intersection, and it is
-/// the comparator the lazarus phase a gate names.
-fn bench_legacy_geometry_index_walk(c: &mut Criterion) {
-    let mut group = c.benchmark_group("spatial_index_legacy_geometry_index_walk");
+/// linear bbox-filter walk over the GeometryPayload feature index.
+/// SpatialIndex's R-tree is the substitute; this is the comparator the
+/// LAZARUS Phase A gate measures against.
+fn bench_geometry_payload_linear_walk(c: &mut Criterion) {
+    let mut group = c.benchmark_group("spatial_index_geometry_payload_linear_walk");
     let n = SMALL;
     let ring_len = 16;
     let features: Vec<FeatureGeom> = (0..n)
@@ -305,7 +304,7 @@ criterion_group!(
     bench_build,
     bench_query,
     bench_brute_force_baseline,
-    bench_legacy_geometry_index_walk,
+    bench_geometry_payload_linear_walk,
     bench_query_dilated_bbox,
     bench_feature_prep_combined,
 );

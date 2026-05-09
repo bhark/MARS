@@ -437,22 +437,6 @@ fn magic_constant_matches_spec() {
 }
 
 #[test]
-fn writer_rejects_legacy_geometry_index_section() {
-    // v3 writers must not emit GeometryIndex; the forensic reader still
-    // accepts it for pre-LAZARUS blobs.
-    let payload = encode_geometry_payload(&[]).unwrap();
-    let mut w = ArtifactWriter::new(ArtifactKind::Source);
-    w.add_section(SectionKind::GeometryIndex, payload)
-        .set_bbox(Bbox::new(0.0, 0.0, 1.0, 1.0))
-        .set_feature_count(0);
-    let err = w.finish().unwrap_err();
-    assert!(
-        matches!(err, ArtifactError::InvalidWriterState(msg) if msg.contains("GeometryIndex")),
-        "got {err:?}"
-    );
-}
-
-#[test]
 fn writer_requires_bbox() {
     let mut w = ArtifactWriter::new(ArtifactKind::Source);
     w.set_feature_count(0);

@@ -9,12 +9,12 @@
 All multi-byte integers are little-endian.
 
 ## Section kinds (existing enum — extend if needed)
-- 0x01 GeometryIndex (deferred to Phase 1)
 - 0x02 GeometryPayload
-- 0x03 Attributes (deferred to Phase 1)
-- 0x04 LabelCandidates (deferred to Phase 2)
+- 0x03 Attributes
+- 0x04 LabelCandidates
 - 0x05 ClassAssignment
 - 0x06 StyleRefs
+- 0x07 SpatialIndex
 
 ## Geometry payload v1
 Endian: little-endian. All deltas zigzag-varint. Coordinates quantized to integer millimetres ((x * 1000.0).round() as i64).
