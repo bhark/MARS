@@ -20,10 +20,14 @@ fn produces_expected_skeleton() {
     let s = String::from_utf8(out.stdout).expect("utf8");
     assert!(s.contains("service:"), "missing service: -- {s}");
     assert!(s.contains("name: \"test\""), "missing service name -- {s}");
+    assert!(
+        s.contains("experimental scaffold") && s.contains("not a production config"),
+        "output must self-identify as a non-production scaffold -- {s}"
+    );
     for layer in ["roads", "buildings", "labels"] {
         assert!(
-            s.contains(&format!("# TODO: layer {layer}")),
-            "missing TODO for {layer} -- {s}"
+            s.contains(&format!("hand-tune layer {layer}")),
+            "missing per-layer hand-tune marker for {layer} -- {s}"
         );
     }
 }

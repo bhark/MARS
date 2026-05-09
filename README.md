@@ -35,7 +35,7 @@ object store (shared, source of truth)
          -> bounded in-process cache (decoded hot structures only)
 ```
 
-Artifacts are partitioned by `(source_collection, scale_band, cell)` so a render touches only the cells in the viewport at the right zoom. Geometry is stored once, in the source's native CRS; reprojection happens at render time against an allowlist. Styles and class assignments live separately from geometry, so changing a colour does not multiply storage. Updates flow through PostgreSQL logical decoding (`pgoutput`), translated into a set of dirty cells, batched into an incremental recompile window, and published as a new manifest.
+Artifacts are page-keyed: each binding's features are partitioned per decimation level into Hilbert-ordered pages sized to a byte-budget target, so a render fetches only the pages whose Hilbert range overlaps the viewport at the requested zoom. Geometry is stored once, in the source's native CRS; reprojection happens at render time against an allowlist. Styles and class assignments live separately from geometry, so changing a colour does not multiply storage. Updates flow through PostgreSQL logical decoding (`pgoutput`), translated into per-row change events that locate the affected pages via a per-binding membership sidecar, batched into an incremental recompile window, and published as a new manifest.
 
 The renderer is CPU-only (`tiny-skia` + `rustybuzz` + `cosmic-text`), the binary is statically linked, and the container image is `FROM scratch`. Observability (Prometheus, structured JSON logs, OpenTelemetry traces) is built in, not bolted on.
 

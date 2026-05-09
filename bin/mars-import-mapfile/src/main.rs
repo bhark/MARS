@@ -1,5 +1,8 @@
-//! mars-import-mapfile: translate a MapServer mapfile into a MARS YAML config.
-//! Phase 0 scaffolder. Synchronous; no tokio.
+//! mars-import-mapfile: experimental scaffolder that emits a partial MARS
+//! YAML skeleton from a MapServer mapfile. Not a production translator —
+//! coverage is intentionally narrow (service/layer name and scale window),
+//! and every layer emits a warning that hand-tuning is required. Synchronous;
+//! no tokio.
 
 mod emitter;
 mod scanner;
@@ -165,7 +168,7 @@ fn walk(tokens: &[Token], skel: &mut Skeleton) {
         }
 
         if is_unsupported(&kw) {
-            warn!(line = t.line, keyword = %kw, "phase-0: unsupported mapfile construct");
+            warn!(line = t.line, keyword = %kw, "scaffolder: unsupported mapfile construct");
             // skip block contents so we don't double-warn on nested tokens
             if is_block_opener(&kw)
                 && let Some(r) = block_range(tokens, i)
@@ -213,7 +216,7 @@ fn handle_layer(body: &[Token], layer_line: usize, skel: &mut Skeleton) {
             continue;
         }
         if is_unsupported(&kw) {
-            warn!(line = t.line, keyword = %kw, "phase-0: unsupported mapfile construct");
+            warn!(line = t.line, keyword = %kw, "scaffolder: unsupported mapfile construct");
             if is_block_opener(&kw)
                 && let Some(r) = block_range(body, i)
             {
@@ -230,7 +233,7 @@ fn handle_layer(body: &[Token], layer_line: usize, skel: &mut Skeleton) {
     warn!(
         line = layer_line,
         layer = %resolved,
-        "phase-0: layer translation is a scaffold (name only); hand-tune required"
+        "scaffolder: layer translation is a name-only scaffold (name only); hand-tune required"
     );
     skel.layers.push(LayerSkeleton {
         name: resolved,
