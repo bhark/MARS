@@ -17,7 +17,7 @@ use mars_types::{Bbox, BindingId};
 
 use crate::plan::BindingPlan;
 use crate::sidecar::SidecarReader;
-use crate::snapshot::{binding_schema, binding_table, stringify_wkb_err};
+use crate::snapshot::{binding_schema, binding_table};
 use crate::{CompilerError, Deps};
 
 /// summary of one reconciliation pass over a binding.
@@ -118,12 +118,8 @@ pub async fn reconcile_binding(
 }
 
 fn envelope_from_wkb(wkb: &[u8], feature_id: u64) -> Result<GeometryEnvelope, CompilerError> {
-    let centroid = wkb_centroid(wkb).map_err(|e| CompilerError::LegacySubstrateRetired {
-        what: stringify_wkb_err(&e),
-    })?;
-    let feature = wkb_to_feature_geom(wkb, feature_id).map_err(|e| CompilerError::LegacySubstrateRetired {
-        what: stringify_wkb_err(&e),
-    })?;
+    let centroid = wkb_centroid(wkb)?;
+    let feature = wkb_to_feature_geom(wkb, feature_id)?;
     Ok(GeometryEnvelope {
         centroid,
         bbox: Bbox::new(

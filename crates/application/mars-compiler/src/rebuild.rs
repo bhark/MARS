@@ -44,7 +44,7 @@ use crate::rebalance::RebalanceOp;
 use crate::sidecar::{SidecarReader, encode_sidecar};
 use crate::snapshot::{
     BindingOutput, KeyedRow, binding_schema, binding_table, emit_layer_sidecars, flush_page,
-    membership_sidecar_object_key, snapshot_one_binding, stringify_sidecar_err, stringify_wkb_err,
+    membership_sidecar_object_key, snapshot_one_binding,
 };
 use crate::{CompilerError, Deps};
 
@@ -123,7 +123,7 @@ async fn rebuild_binding_truncate(
         plan.bindings
             .iter()
             .find(|b| b.binding_id == *binding_id)
-            .ok_or(CompilerError::LegacySubstrateRetired {
+            .ok_or(CompilerError::InvariantViolation {
                 what: "rebuild: unknown binding for truncate",
             })?;
     let bo: BindingOutput = snapshot_one_binding(deps, binding, plan, working_set_bytes).await?;
@@ -150,7 +150,7 @@ async fn rebuild_binding_incremental(
         plan.bindings
             .iter()
             .find(|b| b.binding_id == *binding_id)
-            .ok_or(CompilerError::LegacySubstrateRetired {
+            .ok_or(CompilerError::InvariantViolation {
                 what: "rebuild: unknown binding for incremental cycle",
             })?;
     let prior_binding =
@@ -158,7 +158,7 @@ async fn rebuild_binding_incremental(
             .bindings
             .iter()
             .find(|m| m.binding_id == *binding_id)
-            .ok_or(CompilerError::LegacySubstrateRetired {
+            .ok_or(CompilerError::InvariantViolation {
                 what: "rebuild: missing prior binding metadata",
             })?;
     let combined_bbox =
@@ -166,7 +166,7 @@ async fn rebuild_binding_incremental(
             .levels
             .first()
             .map(|l| l.combined_bbox)
-            .ok_or(CompilerError::LegacySubstrateRetired {
+            .ok_or(CompilerError::InvariantViolation {
                 what: "rebuild: prior binding has no level metadata",
             })?;
 
@@ -181,7 +181,7 @@ async fn rebuild_binding_incremental(
                 .levels
                 .iter()
                 .find(|m| m.level == *level)
-                .ok_or(CompilerError::LegacySubstrateRetired {
+                .ok_or(CompilerError::InvariantViolation {
                     what: "rebuild: missing prior level metadata",
                 })?;
         for page_id in page_ids {
@@ -227,10 +227,7 @@ async fn rebuild_binding_incremental(
         let row: RowBytes = item?;
         returned.insert(row.feature_id);
         let geom_bytes_estimate = row.geometry.len() as u64;
-        let feature =
-            wkb_to_feature_geom(&row.geometry, row.feature_id).map_err(|e| CompilerError::LegacySubstrateRetired {
-                what: stringify_wkb_err(&e),
-            })?;
+        let feature = wkb_to_feature_geom(&row.geometry, row.feature_id)?;
         let attr_bytes: u64 = row.attributes.iter().map(|(k, _)| (k.len() + 16) as u64).sum();
         if let Err(observed) = guard.add(geom_bytes_estimate.saturating_add(attr_bytes).saturating_add(64)) {
             return Err(CompilerError::WorkingSetExceeded {
@@ -336,9 +333,7 @@ async fn rebuild_binding_incremental(
             new_entries.push((r.feature.id, r.key));
         }
     }
-    let sidecar_bytes: Bytes = encode_sidecar(&mut new_entries).map_err(|e| CompilerError::LegacySubstrateRetired {
-        what: stringify_sidecar_err(&e),
-    })?;
+    let sidecar_bytes: Bytes = encode_sidecar(&mut new_entries)?;
     let sidecar_size = sidecar_bytes.len() as u64;
     if sidecar_size > sidecar_warn_bytes {
         tracing::warn!(
@@ -425,7 +420,7 @@ async fn execute_rebalance_one_binding(
         plan.bindings
             .iter()
             .find(|b| b.binding_id == *binding_id)
-            .ok_or(CompilerError::LegacySubstrateRetired {
+            .ok_or(CompilerError::InvariantViolation {
                 what: "rebalance: unknown binding",
             })?;
     let prior_binding =
@@ -433,7 +428,7 @@ async fn execute_rebalance_one_binding(
             .bindings
             .iter()
             .find(|m| m.binding_id == *binding_id)
-            .ok_or(CompilerError::LegacySubstrateRetired {
+            .ok_or(CompilerError::InvariantViolation {
                 what: "rebalance: missing prior binding metadata",
             })?;
     let combined_bbox =
@@ -441,10 +436,10 @@ async fn execute_rebalance_one_binding(
             .levels
             .first()
             .map(|l| l.combined_bbox)
-            .ok_or(CompilerError::LegacySubstrateRetired {
+            .ok_or(CompilerError::InvariantViolation {
                 what: "rebalance: prior binding has no level metadata",
             })?;
-    let sc = sidecar.ok_or(CompilerError::LegacySubstrateRetired {
+    let sc = sidecar.ok_or(CompilerError::InvariantViolation {
         what: "rebalance: missing page-membership sidecar",
     })?;
 
@@ -467,7 +462,7 @@ async fn execute_rebalance_one_binding(
             .pages
             .iter()
             .find(|p| &p.key == k)
-            .ok_or(CompilerError::LegacySubstrateRetired {
+            .ok_or(CompilerError::InvariantViolation {
                 what: "rebalance: source page missing from prior manifest",
             })?
             .clone();
@@ -498,10 +493,7 @@ async fn execute_rebalance_one_binding(
     while let Some(item) = stream.next().await {
         let row: RowBytes = item?;
         let geom_bytes_estimate = row.geometry.len() as u64;
-        let feature =
-            wkb_to_feature_geom(&row.geometry, row.feature_id).map_err(|e| CompilerError::LegacySubstrateRetired {
-                what: stringify_wkb_err(&e),
-            })?;
+        let feature = wkb_to_feature_geom(&row.geometry, row.feature_id)?;
         let attr_bytes: u64 = row.attributes.iter().map(|(k, _)| (k.len() + 16) as u64).sum();
         if let Err(observed) = guard.add(geom_bytes_estimate.saturating_add(attr_bytes).saturating_add(64)) {
             return Err(CompilerError::WorkingSetExceeded {
@@ -543,11 +535,11 @@ async fn execute_rebalance_one_binding(
                 let src = source_pages
                     .get(&page)
                     .cloned()
-                    .ok_or(CompilerError::LegacySubstrateRetired {
+                    .ok_or(CompilerError::InvariantViolation {
                         what: "rebalance: split source page missing",
                     })?;
                 let level_plan = binding_plan.levels.iter().find(|l| l.level == page.level).ok_or(
-                    CompilerError::LegacySubstrateRetired {
+                    CompilerError::InvariantViolation {
                         what: "rebalance: split level plan missing",
                     },
                 )?;
@@ -593,17 +585,17 @@ async fn execute_rebalance_one_binding(
                 let src_l = source_pages
                     .get(&left)
                     .cloned()
-                    .ok_or(CompilerError::LegacySubstrateRetired {
+                    .ok_or(CompilerError::InvariantViolation {
                         what: "rebalance: merge left source missing",
                     })?;
                 let src_r = source_pages
                     .get(&right)
                     .cloned()
-                    .ok_or(CompilerError::LegacySubstrateRetired {
+                    .ok_or(CompilerError::InvariantViolation {
                         what: "rebalance: merge right source missing",
                     })?;
                 let level_plan = binding_plan.levels.iter().find(|l| l.level == left.level).ok_or(
-                    CompilerError::LegacySubstrateRetired {
+                    CompilerError::InvariantViolation {
                         what: "rebalance: merge level plan missing",
                     },
                 )?;

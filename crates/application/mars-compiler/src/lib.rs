@@ -34,7 +34,6 @@ use mars_types::{BindingId, LevelMetadata, Manifest, PageEntry};
 use tokio_util::sync::CancellationToken;
 
 use crate::sidecar::SidecarReader;
-use crate::snapshot::stringify_sidecar_err;
 
 /// Capped exponential backoff schedule for retrying a transient publish.
 const PUBLISH_RETRY_DELAYS: &[Duration] = &[
@@ -74,6 +73,25 @@ pub enum CompilerError {
     /// incremental dirty-page identification failed.
     #[error(transparent)]
     Incremental(#[from] incremental::IncrementalError),
+    /// Bootstrap plan construction rejected the config.
+    #[error(transparent)]
+    Plan(#[from] plan::PlanError),
+    /// Page-membership sidecar codec failure.
+    #[error(transparent)]
+    Sidecar(#[from] sidecar::SidecarError),
+    /// WKB decode failed for a feature row.
+    #[error(transparent)]
+    Wkb(#[from] mars_artifact::WkbError),
+    /// Per-row attribute codec failed.
+    #[error(transparent)]
+    Attr(#[from] mars_artifact::AttrError),
+    /// mars-artifact writer/reader error during page or sidecar assembly.
+    #[error(transparent)]
+    Artifact(#[from] mars_artifact::ArtifactError),
+    /// `PageKey` / `LayerSidecarEntry` object-key construction rejected
+    /// component characters.
+    #[error(transparent)]
+    ArtifactKey(#[from] mars_types::ArtifactKeyError),
     /// Another compiler instance holds the leader lock; this process should
     /// exit cleanly without producing output.
     #[error("another compiler instance is the leader")]
@@ -84,13 +102,36 @@ pub enum CompilerError {
         #[source]
         source: mars_source::SourceError,
     },
-    /// Phase-C: substrate-bearing logic was retired with the v3 cut and is
-    /// awaiting reimplementation. Carries a stable label naming the missing
-    /// surface so callers and tests can match on it.
-    #[error("legacy substrate retired: {what}")]
-    LegacySubstrateRetired {
-        /// Stable short label naming the unimplemented surface.
+    /// No prior manifest exists; the operator must run the snapshot
+    /// bootstrap once before incremental cycles or rebalance can proceed.
+    #[error("no prior manifest; run snapshot bootstrap first ({context})")]
+    NoPriorManifest {
+        /// Stable label naming the call site that needed a prior manifest.
+        context: &'static str,
+    },
+    /// Internal invariant violated mid-cycle: state expected in plan or
+    /// manifest was absent. Indicates a code bug or out-of-sync manifest;
+    /// not user-recoverable.
+    #[error("internal invariant: {what}")]
+    InvariantViolation {
+        /// Stable short label naming the violated invariant.
         what: &'static str,
+    },
+    /// A row's attribute payload exceeds the per-row codec's maximum.
+    #[error("row attributes too large: feature {feature_id} = {bytes} bytes (max {max} bytes)")]
+    RowAttributesTooLarge {
+        /// Offending feature id.
+        feature_id: u64,
+        /// Encoded attribute byte length.
+        bytes: usize,
+        /// Codec maximum.
+        max: usize,
+    },
+    /// Binding identifier contains characters that would break object keys.
+    #[error("binding id contains forbidden characters (/ or NUL): {binding}")]
+    InvalidBindingId {
+        /// Offending binding identifier.
+        binding: String,
     },
     /// Bootstrap accumulated row bytes exceeded the configured working-set
     /// ceiling. Hits the LAZARUS bailout protocol: lift
@@ -155,9 +196,7 @@ impl Compiler {
     /// the resulting v3 manifest.
     pub async fn run_snapshot_once(&self, shutdown: CancellationToken) -> Result<u64, CompilerError> {
         let _guard = self.acquire_leader().await?;
-        let plan = plan::build_bootstrap_plan(&self.config).map_err(|_| CompilerError::LegacySubstrateRetired {
-            what: "snapshot: build_bootstrap_plan",
-        })?;
+        let plan = plan::build_bootstrap_plan(&self.config)?;
         let prev_version = self.deps.manifest.current().await?.map_or(0, |m| m.version);
         let next_version = prev_version + 1;
         let working_set_bytes = self.config.compiler.bootstrap_working_set()?;
@@ -198,12 +237,10 @@ impl Compiler {
             .manifest
             .current()
             .await?
-            .ok_or(CompilerError::LegacySubstrateRetired {
-                what: "run_cycle_once: no prior manifest; bootstrap first",
+            .ok_or(CompilerError::NoPriorManifest {
+                context: "run_cycle_once",
             })?;
-        let plan = plan::build_bootstrap_plan(&self.config).map_err(|_| CompilerError::LegacySubstrateRetired {
-            what: "run_cycle_once: build_bootstrap_plan",
-        })?;
+        let plan = plan::build_bootstrap_plan(&self.config)?;
 
         // mmap each binding's page-membership sidecar.
         let mut sidecar_bytes: HashMap<BindingId, bytes::Bytes> = HashMap::new();
@@ -215,9 +252,7 @@ impl Compiler {
         }
         let mut sidecars: HashMap<BindingId, SidecarReader<'_>> = HashMap::new();
         for (id, bytes) in &sidecar_bytes {
-            let reader = SidecarReader::open(bytes).map_err(|e| CompilerError::LegacySubstrateRetired {
-                what: stringify_sidecar_err(&e),
-            })?;
+            let reader = SidecarReader::open(bytes)?;
             sidecars.insert(id.clone(), reader);
         }
 
@@ -331,12 +366,10 @@ impl Compiler {
             .manifest
             .current()
             .await?
-            .ok_or(CompilerError::LegacySubstrateRetired {
-                what: "run_rebalance_once: no prior manifest; bootstrap first",
+            .ok_or(CompilerError::NoPriorManifest {
+                context: "run_rebalance_once",
             })?;
-        let plan = plan::build_bootstrap_plan(&self.config).map_err(|_| CompilerError::LegacySubstrateRetired {
-            what: "run_rebalance_once: build_bootstrap_plan",
-        })?;
+        let plan = plan::build_bootstrap_plan(&self.config)?;
 
         // collect candidate ops across every (binding, level).
         let mut ops: Vec<rebalance::RebalanceOp> = Vec::new();
@@ -385,9 +418,7 @@ impl Compiler {
         }
         let mut sidecars: HashMap<BindingId, SidecarReader<'_>> = HashMap::new();
         for (id, bytes) in &sidecar_bytes {
-            let reader = SidecarReader::open(bytes).map_err(|e| CompilerError::LegacySubstrateRetired {
-                what: stringify_sidecar_err(&e),
-            })?;
+            let reader = SidecarReader::open(bytes)?;
             sidecars.insert(id.clone(), reader);
         }
 

@@ -445,9 +445,7 @@ async fn run_one_rebuild_cycle(
         .as_ref()
         .unwrap();
     let bytes = deps.store.get(&sidecar_ref.key, sidecar_ref.hash).await?;
-    let sidecar = SidecarReader::open(&bytes).map_err(|_| mars_compiler::CompilerError::LegacySubstrateRetired {
-        what: "atomicity-test: sidecar open",
-    })?;
+    let sidecar = SidecarReader::open(&bytes)?;
     let sidecars = HashMap::from([(binding_id.clone(), sidecar)]);
     let level_meta = HashMap::from([(
         binding_id.clone(),

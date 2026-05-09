@@ -167,9 +167,7 @@ pub(crate) async fn snapshot_one_binding(
     }
 
     // page-membership sidecar.
-    let sidecar_bytes = encode_sidecar(&mut sidecar_entries).map_err(|e| CompilerError::LegacySubstrateRetired {
-        what: stringify_sidecar_err(&e),
-    })?;
+    let sidecar_bytes = encode_sidecar(&mut sidecar_entries)?;
     let sidecar_hash = compute_content_hash(&sidecar_bytes);
     let sidecar_key = membership_sidecar_object_key(binding.binding_id.as_str(), &sidecar_hash)?;
     let sidecar_size = sidecar_bytes.len() as u64;
@@ -316,10 +314,7 @@ async fn collect_binding_rows(
     while let Some(item) = stream.next().await {
         let row: RowBytes = item?;
         let geom_bytes_estimate = row.geometry.len() as u64;
-        let feature =
-            wkb_to_feature_geom(&row.geometry, row.feature_id).map_err(|e| CompilerError::LegacySubstrateRetired {
-                what: stringify_wkb_err(&e),
-            })?;
+        let feature = wkb_to_feature_geom(&row.geometry, row.feature_id)?;
         let attr_bytes: u64 = row.attributes.iter().map(|(k, _)| (k.len() + 16) as u64).sum();
         if let Err(observed) = guard.add(geom_bytes_estimate.saturating_add(attr_bytes).saturating_add(64)) {
             return Err(CompilerError::WorkingSetExceeded {
@@ -380,11 +375,7 @@ pub(crate) async fn flush_page(
     let mut max_x = f64::NEG_INFINITY;
     let mut max_y = f64::NEG_INFINITY;
 
-    let mut spatial_index = SpatialIndexBuilder::new(mars_artifact::DEFAULT_NODE_SIZE).map_err(|e| {
-        CompilerError::LegacySubstrateRetired {
-            what: stringify_artifact_err(&e),
-        }
-    })?;
+    let mut spatial_index = SpatialIndexBuilder::new(mars_artifact::DEFAULT_NODE_SIZE)?;
     let mut features: Vec<FeatureGeom> = Vec::with_capacity(rows.len());
     let mut attrs_pairs: Vec<(u64, Vec<u8>)> = Vec::with_capacity(rows.len());
 
@@ -413,23 +404,19 @@ pub(crate) async fn flush_page(
             .iter()
             .map(|(k, v)| (k.clone(), attr_value_to_artifact(v)))
             .collect();
-        let row_bytes = encode_row(&pairs).map_err(|e| CompilerError::LegacySubstrateRetired {
-            what: stringify_attr_err(&e),
-        })?;
+        let row_bytes = encode_row(&pairs)?;
         if row_bytes.len() > MAX_ROW_BYTES {
-            return Err(CompilerError::LegacySubstrateRetired {
-                what: "snapshot: row attributes exceed MAX_ROW_BYTES",
+            return Err(CompilerError::RowAttributesTooLarge {
+                feature_id: r.feature.id,
+                bytes: row_bytes.len(),
+                max: MAX_ROW_BYTES,
             });
         }
         attrs_pairs.push((r.feature.id, row_bytes.to_vec()));
     }
 
     let page_bbox = Bbox::new(min_x, min_y, max_x, max_y);
-    let spatial_index_bytes = spatial_index
-        .finish()
-        .map_err(|e| CompilerError::LegacySubstrateRetired {
-            what: stringify_artifact_err(&e),
-        })?;
+    let spatial_index_bytes = spatial_index.finish()?;
 
     let mut writer = ArtifactWriter::new(ArtifactKind::Source);
     writer
@@ -438,9 +425,7 @@ pub(crate) async fn flush_page(
         .add_attributes(attrs_pairs)
         .set_bbox(page_bbox)
         .set_feature_count(rows.len() as u64);
-    let artifact_bytes: Bytes = writer.finish().map_err(|e| CompilerError::LegacySubstrateRetired {
-        what: stringify_artifact_err(&e),
-    })?;
+    let artifact_bytes: Bytes = writer.finish()?;
     let hash = compute_content_hash(&artifact_bytes);
 
     let page_key = PageKey {
@@ -448,11 +433,7 @@ pub(crate) async fn flush_page(
         level,
         page_id,
     };
-    let object_key = page_key
-        .object_key(&hash)
-        .map_err(|_| CompilerError::LegacySubstrateRetired {
-            what: "snapshot: page key construction",
-        })?;
+    let object_key = page_key.object_key(&hash)?;
     let size_bytes = artifact_bytes.len() as u64;
     deps.store.put(&object_key, artifact_bytes).await?;
 
@@ -533,11 +514,7 @@ pub(crate) async fn emit_layer_sidecars(
             size_bytes: class_size,
             kind: LayerSidecarKind::Class,
         };
-        let class_obj = class_entry
-            .object_key()
-            .map_err(|_| CompilerError::LegacySubstrateRetired {
-                what: "snapshot: class sidecar key",
-            })?;
+        let class_obj = class_entry.object_key()?;
         deps.store.put(&class_obj, class_bytes).await?;
         out_class.push(class_entry);
 
@@ -552,11 +529,7 @@ pub(crate) async fn emit_layer_sidecars(
                 size_bytes: label_size,
                 kind: LayerSidecarKind::Label,
             };
-            let label_obj = label_entry
-                .object_key()
-                .map_err(|_| CompilerError::LegacySubstrateRetired {
-                    what: "snapshot: label sidecar key",
-                })?;
+            let label_obj = label_entry.object_key()?;
             deps.store.put(&label_obj, label_bytes).await?;
             out_label.push(label_entry);
         }
@@ -575,9 +548,7 @@ fn build_class_artifact(
         .add_style_refs(style_refs)
         .set_bbox(page_bbox)
         .set_feature_count(assignments.len() as u64);
-    writer.finish().map_err(|e| CompilerError::LegacySubstrateRetired {
-        what: stringify_artifact_err(&e),
-    })
+    writer.finish().map_err(CompilerError::from)
 }
 
 fn build_label_artifact(labels: &[LabelCandidate], page_bbox: Bbox) -> Result<Bytes, CompilerError> {
@@ -586,9 +557,7 @@ fn build_label_artifact(labels: &[LabelCandidate], page_bbox: Bbox) -> Result<By
         .add_label_candidates(labels)
         .set_bbox(page_bbox)
         .set_feature_count(labels.len() as u64);
-    writer.finish().map_err(|e| CompilerError::LegacySubstrateRetired {
-        what: stringify_artifact_err(&e),
-    })
+    writer.finish().map_err(CompilerError::from)
 }
 
 pub(crate) fn empty_level_metadata(level: &LevelPlan) -> LevelMetadata {
@@ -613,8 +582,8 @@ pub(crate) fn binding_table(from: &str) -> &str {
 
 pub(crate) fn membership_sidecar_object_key(binding: &str, hash: &ContentHash) -> Result<ArtifactKey, CompilerError> {
     if binding.contains('/') || binding.contains('\0') {
-        return Err(CompilerError::LegacySubstrateRetired {
-            what: "snapshot: sidecar key sanitisation",
+        return Err(CompilerError::InvalidBindingId {
+            binding: binding.to_string(),
         });
     }
     Ok(ArtifactKey::new(format!(
@@ -631,21 +600,6 @@ fn attr_value_to_artifact(v: &AttrValue) -> ArtAttrValue {
         AttrValue::Float(f) => ArtAttrValue::Float(*f),
         AttrValue::String(s) => ArtAttrValue::String(s.clone()),
     }
-}
-
-// stringify_* helpers fold typed errors into LegacySubstrateRetired until the
-// compiler error taxonomy is filled in alongside C.2.c rebuild paths.
-pub(crate) fn stringify_wkb_err(_e: &mars_artifact::WkbError) -> &'static str {
-    "snapshot: WKB decode"
-}
-fn stringify_attr_err(_e: &mars_artifact::AttrError) -> &'static str {
-    "snapshot: attr encode"
-}
-fn stringify_artifact_err(_e: &mars_artifact::ArtifactError) -> &'static str {
-    "snapshot: artifact assembly"
-}
-pub(crate) fn stringify_sidecar_err(_e: &crate::sidecar::SidecarError) -> &'static str {
-    "snapshot: sidecar encode"
 }
 
 #[allow(dead_code)]
