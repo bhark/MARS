@@ -7,6 +7,7 @@ use clap::Parser;
 
 mod dp;
 mod graph;
+mod imagediff;
 mod ingest;
 mod reassemble;
 mod timing;
@@ -36,6 +37,14 @@ struct Args {
     /// max acceptable degenerate-reassembly fraction (per gate)
     #[arg(long, default_value_t = 0.001)]
     degenerate_threshold: f64,
+
+    /// canvas size (px on the long axis) for the informational image cross-check
+    #[arg(long, default_value_t = 4096)]
+    image_canvas_px: u32,
+
+    /// disable the image cross-check entirely (useful on huge fixtures)
+    #[arg(long, default_value_t = false)]
+    no_image: bool,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -75,13 +84,15 @@ fn main() -> anyhow::Result<()> {
         gstats.island_arc_count,
     );
 
+    std::fs::create_dir_all(&args.out)?;
+
     for (i, tol) in args.tolerance_m.iter().enumerate() {
-        let level_label = format!("level{}", i + 1);
-        let simp = t.record(&format!("dp_{level_label}"), || dp::simplify_arcs(&topo, *tol));
-        let (out, rstats) = t.record(&format!("reassemble_{level_label}"), || {
+        let level_label = format!("{}", i + 1);
+        let simp = t.record(&format!("dp_l{level_label}"), || dp::simplify_arcs(&topo, *tol));
+        let (out, rstats) = t.record(&format!("reassemble_l{level_label}"), || {
             reassemble::reassemble(&geoms, &topo, &simp)
         });
-        let sstats = t.record(&format!("verify_{level_label}"), || {
+        let sstats = t.record(&format!("verify_l{level_label}"), || {
             verify::verify_seams(&topo, &simp, &out)
         });
         eprintln!(
@@ -97,6 +108,22 @@ fn main() -> anyhow::Result<()> {
             sstats.shared_arc_count,
             sstats.seam_violation_count,
         );
+        if !args.no_image {
+            let report = t.record(&format!("imagediff_l{level_label}"), || {
+                imagediff::render_and_diff(&geoms, &out, args.image_canvas_px, &args.out, &level_label)
+            })?;
+            eprintln!(
+                "  imagediff: {}/{} differing pixels ({:.4}%) - {}",
+                report.differing_pixels,
+                report.total_pixels,
+                if report.total_pixels == 0 {
+                    0.0
+                } else {
+                    100.0 * (report.differing_pixels as f64) / (report.total_pixels as f64)
+                },
+                report.diff_path.display(),
+            );
+        }
     }
 
     eprintln!();
@@ -110,6 +137,6 @@ fn main() -> anyhow::Result<()> {
         None => eprintln!("peak RSS: n/a (non-linux or /proc/self/status read failed)"),
     }
 
-    eprintln!("(image cross-check + gate write-up land in subsequent commits)");
+    eprintln!("(gate write-up lands in next commit)");
     Ok(())
 }
