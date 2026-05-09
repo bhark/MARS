@@ -1231,12 +1231,20 @@ pub(crate) async fn emit_layer_sidecars(
 
         let when_clauses: Vec<Option<mars_expr::Expr>> = layer.classes.iter().map(|c| c.when.clone()).collect();
         let style_refs: Vec<String> = layer.classes.iter().map(|c| c.style_ref.clone()).collect();
-        let label_spec = layer.label.as_ref().map(|l| LabelSpec {
-            priority: l.style.priority,
-            text: &l.text,
-            placement: &l.placement,
-            style_ref_idx: u16::try_from(style_refs.len()).unwrap_or(u16::MAX),
-        });
+        // config validation enforces classes.len() <= u16::MAX so the label's
+        // style_ref_idx (which sits at position style_refs.len()) fits in u16
+        // without saturation. fail loud if that invariant ever breaks.
+        let label_spec = match layer.label.as_ref() {
+            Some(l) => Some(LabelSpec {
+                priority: l.style.priority,
+                text: &l.text,
+                placement: &l.placement,
+                style_ref_idx: u16::try_from(style_refs.len()).map_err(|_| CompilerError::InvariantViolation {
+                    what: "layer class count exceeds u16::MAX (config validation should have rejected this)",
+                })?,
+            }),
+            None => None,
+        };
 
         for (slot, r) in rows.iter().enumerate() {
             let slot_u32 = u32::try_from(slot).map_err(|_| CompilerError::InvariantViolation {

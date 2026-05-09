@@ -198,6 +198,21 @@ pub fn validate(config: &mut Config, config_dir: &Path) -> Result<(), ConfigErro
             }
         }
 
+        // class count fits in u16: class assignments are u16-indexed in the
+        // sidecar artifact and the optional label's style_ref_idx is appended
+        // immediately after the class style refs, so classes.len() must
+        // itself fit in u16. without this check, assign_class silently
+        // returns None past u16::MAX and the label style_ref_idx saturates,
+        // dropping matches and aliasing styles at compile time.
+        if layer.classes.len() > u16::MAX as usize {
+            return Err(ConfigError::Invalid(format!(
+                "layer {} declares {} classes; the per-layer limit is {}",
+                layer.name,
+                layer.classes.len(),
+                u16::MAX
+            )));
+        }
+
         for (i, binding) in layer.sources.iter().enumerate() {
             if let Some(band) = &binding.band
                 && !band_names.contains(band.as_str())
@@ -812,6 +827,41 @@ label_survival: follow_geometry
             validate(&mut cfg, Path::new(".")),
             Err(ConfigError::Invalid(ref s)) if s.contains("more than once") && s.contains("default")
         ));
+    }
+
+    #[test]
+    fn rejects_layer_with_more_than_u16_max_classes() {
+        let mut cfg = minimal_config();
+        let classes: Vec<_> = (0..(u16::MAX as usize + 1))
+            .map(|i| crate::model::Class {
+                name: format!("c{i}"),
+                title: String::new(),
+                when: None,
+                style: ClassStyle::Inline(Default::default()),
+            })
+            .collect();
+        cfg.layers = vec![Layer {
+            name: mars_types::LayerId::new("big"),
+            title: String::new(),
+            abstract_: String::new(),
+            kind: "line".into(),
+            scale: None,
+            group: None,
+            enable_get_feature_info: false,
+            bbox: None,
+            sources: vec![],
+            classes,
+            label: None,
+            label_survival: mars_style::LabelSurvival::Independent,
+        }];
+        let err = validate(&mut cfg, Path::new(".")).unwrap_err();
+        match err {
+            ConfigError::Invalid(s) => {
+                assert!(s.contains("classes"), "got: {s}");
+                assert!(s.contains("65535"), "got: {s}");
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
     }
 
     #[test]
