@@ -6,6 +6,11 @@
 //! exposes. features whose class chain resolves to no stylesheet entry are
 //! dropped (counted via `mars_render_feature_unstyled_total`); a class that
 //! names a missing stylesheet entry surfaces as `RuntimeError::StylesheetDrift`.
+//!
+//! tracing target: `mars_runtime::render`. spans: `render.plan`,
+//! `render.layer`, `render.layer.fetch`, `render.layer.decode`,
+//! `render.collide`, `render.paint`, `render.encode`. enable with
+//! `RUST_LOG=mars_runtime::render=info`.
 
 use std::sync::Arc;
 
@@ -19,6 +24,7 @@ use mars_config::Layer;
 use mars_render_port::{Canvas, DrawOp, Path, Renderer, Subpath};
 use mars_style::{LabelStyle, LabelSurvival, Style, Stylesheet};
 use mars_types::{Bbox, BindingMetadata, LayerId, PageEntry};
+use tracing::{Instrument, info_span};
 
 use crate::state::RuntimeState;
 use crate::{Deps, RenderPlan, RuntimeError};
@@ -27,62 +33,82 @@ use crate::{fetch::fetch_page, fetch::fetch_sidecar, plan as planning};
 /// drive one render plan end-to-end. produces encoded image bytes ready to
 /// hand back to the WMS / WMTS interface.
 pub(crate) async fn render_plan(state: &RuntimeState, deps: &Deps, plan: &RenderPlan) -> Result<Vec<u8>, RuntimeError> {
-    let config = state.config_or_err()?;
-    let page_fetch_concurrency = config.render.page_fetch_concurrency.max(1);
-    let canvas = Canvas {
-        width: plan.width,
-        height: plan.height,
-        background: None,
-    };
-    let mut all_ops: Vec<DrawOp> = Vec::new();
-    let mut all_labels: Vec<PreparedLabel> = Vec::new();
-    for layer_id in &plan.layers {
-        let layer_cfg = lookup_layer(config, layer_id)?;
-        let denom = crate::denom_from_plan(plan.bbox.width(), plan.width);
-        let Some((binding_id, level)) = planning::pick_binding_and_level(layer_cfg, denom, state) else {
-            // no binding covers this layer at this scale; render nothing.
-            continue;
+    let span = info_span!(
+        "render.plan",
+        width = plan.width,
+        height = plan.height,
+        layers = plan.layers.len(),
+    );
+    async move {
+        let config = state.config_or_err()?;
+        let page_fetch_concurrency = config.render.page_fetch_concurrency.max(1);
+        let canvas = Canvas {
+            width: plan.width,
+            height: plan.height,
+            background: None,
         };
-        let binding =
-            state
-                .index
-                .binding(&state.manifest, &binding_id)
-                .ok_or_else(|| RuntimeError::InvalidManifest {
-                    reason: format!(
-                        "selected binding `{binding_id}` for layer `{layer}` is not in manifest",
-                        layer = layer_id
-                    ),
-                })?;
-        let native_viewport = planning::reproject_viewport(plan.bbox, &plan.crs, &binding.native_crs)?;
-        let pages = planning::resolve_pages(state, &binding_id, level, native_viewport);
-        if pages.is_empty() {
-            continue;
+        let mut all_ops: Vec<DrawOp> = Vec::new();
+        let mut all_labels: Vec<PreparedLabel> = Vec::new();
+        for layer_id in &plan.layers {
+            let layer_span = info_span!("render.layer", name = %layer_id);
+            let layer_out =
+                async {
+                    let layer_cfg = lookup_layer(config, layer_id)?;
+                    let denom = crate::denom_from_plan(plan.bbox.width(), plan.width);
+                    let Some((binding_id, level)) = planning::pick_binding_and_level(layer_cfg, denom, state) else {
+                        // no binding covers this layer at this scale; render nothing.
+                        return Ok::<Option<LayerOutput>, RuntimeError>(None);
+                    };
+                    let binding = state.index.binding(&state.manifest, &binding_id).ok_or_else(|| {
+                        RuntimeError::InvalidManifest {
+                            reason: format!(
+                                "selected binding `{binding_id}` for layer `{layer}` is not in manifest",
+                                layer = layer_id
+                            ),
+                        }
+                    })?;
+                    let native_viewport = planning::reproject_viewport(plan.bbox, &plan.crs, &binding.native_crs)?;
+                    let pages = planning::resolve_pages(state, &binding_id, level, native_viewport);
+                    if pages.is_empty() {
+                        return Ok(None);
+                    }
+                    let out = render_layer_pages(
+                        deps,
+                        state,
+                        layer_id,
+                        binding,
+                        &pages,
+                        plan,
+                        layer_cfg.label_survival,
+                        deps.renderer.as_ref(),
+                        page_fetch_concurrency,
+                    )
+                    .await?;
+                    Ok(Some(out))
+                }
+                .instrument(layer_span)
+                .await?;
+            if let Some(layer_out) = layer_out {
+                all_ops.extend(layer_out.ops);
+                all_labels.extend(layer_out.labels);
+            }
         }
-        let layer_out = render_layer_pages(
-            deps,
-            state,
-            layer_id,
-            binding,
-            &pages,
-            plan,
-            layer_cfg.label_survival,
-            deps.renderer.as_ref(),
-            page_fetch_concurrency,
-        )
-        .await?;
-        all_ops.extend(layer_out.ops);
-        all_labels.extend(layer_out.labels);
+
+        // greedy collision over the accumulated label set: sort by priority
+        // descending, place survivors that don't collide with already-placed
+        // labels' approximate text bbox.
+        let label_ops = info_span!("render.collide", n = all_labels.len())
+            .in_scope(|| collide_and_emit_labels(all_labels, plan.width, plan.height));
+        all_ops.extend(label_ops);
+
+        let pixmap =
+            info_span!("render.paint", ops = all_ops.len()).in_scope(|| deps.renderer.render(canvas, &all_ops))?;
+        let bytes = info_span!("render.encode", format = ?plan.format)
+            .in_scope(|| deps.encoder.encode(&pixmap, plan.format))?;
+        Ok(bytes)
     }
-
-    // greedy collision over the accumulated label set: sort by priority
-    // descending, place survivors that don't collide with already-placed
-    // labels' approximate text bbox.
-    let label_ops = collide_and_emit_labels(all_labels, plan.width, plan.height);
-    all_ops.extend(label_ops);
-
-    let pixmap = deps.renderer.render(canvas, &all_ops)?;
-    let bytes = deps.encoder.encode(&pixmap, plan.format)?;
-    Ok(bytes)
+    .instrument(span)
+    .await
 }
 
 fn lookup_layer<'c>(config: &'c mars_config::Config, layer_id: &LayerId) -> Result<&'c Layer, RuntimeError> {
@@ -137,6 +163,11 @@ async fn render_layer_pages(
     let fetches = contexts.into_iter().map(move |(entry, class_entry, label_entry)| {
         let store = store.clone();
         let cache = cache.clone();
+        let fetch_span = info_span!(
+            "render.layer.fetch",
+            name = %layer_id,
+            page = %entry.key.page_id,
+        );
         async move {
             let page_bytes = fetch_page(&cache, &store, &entry).await?;
             let class_bytes = match &class_entry {
@@ -149,6 +180,7 @@ async fn render_layer_pages(
             };
             Ok::<_, RuntimeError>((entry, page_bytes, class_bytes, label_bytes))
         }
+        .instrument(fetch_span)
     });
     let mut stream = futures_util::stream::iter(fetches).buffered(page_fetch_concurrency);
 
@@ -159,6 +191,12 @@ async fn render_layer_pages(
     let same_crs = binding.native_crs.as_str() == plan.crs.as_str();
     while let Some(res) = stream.next().await {
         let (entry, page_bytes, class_bytes, label_bytes) = res?;
+        let decode_span = info_span!(
+            "render.layer.decode",
+            name = %layer_id,
+            page = %entry.key.page_id,
+        );
+        let _decode_enter = decode_span.enter();
         let DecodedPage {
             ops: mut page_ops,
             rendered_slots,
@@ -678,7 +716,12 @@ mod tests {
 
     fn test_style() -> Arc<Style> {
         Arc::new(Style {
-            fill: Some(Colour { r: 0, g: 0, b: 0, a: 255 }),
+            fill: Some(Colour {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 255,
+            }),
             stroke: None,
             stroke_width: None,
             stroke_dasharray: None,
