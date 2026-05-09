@@ -17,11 +17,19 @@ use mars_config::SimplifierKind;
 /// changing what the renderer draws.
 #[must_use]
 pub fn passes_min_size(feature: &FeatureGeom, min_size_m: f64) -> bool {
+    passes_min_size_bbox(feature.bbox, min_size_m)
+}
+
+/// bbox-only variant of [`passes_min_size`]. shares the diagonal-length
+/// formulation so pass-1 page planning (which only sees row bboxes) and
+/// pass-2 page rendering (which sees decoded geometries) prune identically.
+#[must_use]
+pub fn passes_min_size_bbox(bbox: [f32; 4], min_size_m: f64) -> bool {
     if min_size_m <= 0.0 {
         return true;
     }
-    let dx = f64::from(feature.bbox[2]) - f64::from(feature.bbox[0]);
-    let dy = f64::from(feature.bbox[3]) - f64::from(feature.bbox[1]);
+    let dx = f64::from(bbox[2]) - f64::from(bbox[0]);
+    let dy = f64::from(bbox[3]) - f64::from(bbox[1]);
     (dx * dx + dy * dy).sqrt() >= min_size_m
 }
 

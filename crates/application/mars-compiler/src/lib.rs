@@ -15,6 +15,7 @@ pub mod decimate;
 pub mod external_sort;
 pub mod hilbert;
 pub mod incremental;
+pub mod page_plan;
 pub mod plan;
 pub mod rebalance;
 pub mod rebuild;
@@ -167,6 +168,25 @@ pub enum CompilerError {
     /// surfaces here.
     #[error(transparent)]
     Spill(spill::SpillError),
+    /// Pass-1 page planning observed more rows than the in-memory plan
+    /// budget allows. Trips before the planner allocates beyond its
+    /// configured ceiling so the operator gets a clean ceiling rather than
+    /// an OOM. Resolution: split the binding, lift the budget, or add a
+    /// fixed-record pass-1 spill primitive (planned follow-up — track via
+    /// repository issue tracker once landed).
+    #[error(
+        "bootstrap plan exceeds plan budget: binding {binding} observed {observed_rows} rows, \
+         which would exceed plan budget {budget_bytes} bytes. resolution: split the binding, \
+         lift compiler.compile_plan_budget_bytes, or add a fixed-record pass-1 spill primitive."
+    )]
+    BootstrapPlanTooLarge {
+        /// Affected binding id.
+        binding: String,
+        /// Number of rows observed at the point the budget was crossed.
+        observed_rows: u64,
+        /// Configured plan budget (bytes).
+        budget_bytes: u64,
+    },
 }
 
 impl From<spill::SpillError> for CompilerError {
