@@ -325,10 +325,7 @@ impl Metrics {
     /// run returns an error. Use the constants in
     /// [`rebalance_outcome`] to keep label cardinality bounded.
     pub fn inc_compiler_rebalance_run(&self, outcome: &str) {
-        self.inner
-            .compiler_rebalance_runs
-            .with_label_values(&[outcome])
-            .inc();
+        self.inner.compiler_rebalance_runs.with_label_values(&[outcome]).inc();
     }
 
     /// Increment the capabilities rebuild failure counter.
@@ -345,10 +342,7 @@ impl Metrics {
     /// feature's class chain resolves to no stylesheet entry; the runtime
     /// drops the feature rather than painting a diagnostic colour.
     pub fn inc_render_feature_unstyled(&self, layer: &str, n: u64) {
-        self.inner
-            .render_feature_unstyled
-            .with_label_values(&[layer])
-            .inc_by(n);
+        self.inner.render_feature_unstyled.with_label_values(&[layer]).inc_by(n);
     }
 
     /// Encode the current registry as Prometheus text exposition format.
