@@ -24,8 +24,9 @@ use crate::fetch::decode_row_pub;
 use crate::quote::quote_ident;
 
 /// One compile-time session against a single binding. Owns a pooled
-/// connection in `REPEATABLE READ` until `close` (or drop, which fires a
-/// best-effort `ROLLBACK`).
+/// connection in `REPEATABLE READ` until the caller invokes `commit` or
+/// `rollback`. `Drop` performs no I/O; the pool's `pre_recycle` hook
+/// rolls back any leftover transaction before the connection is reused.
 pub(crate) struct PgCompileSession {
     object: Option<Object>,
     binding: SourceBinding,
@@ -105,7 +106,7 @@ impl CompileSession for PgCompileSession {
         md5_first_u64_be(geometry)
     }
 
-    async fn close(mut self: Box<Self>) -> Result<(), SourceError> {
+    async fn commit(mut self: Box<Self>) -> Result<(), SourceError> {
         if let Some(object) = self.object.take() {
             self.closed = true;
             object
@@ -115,19 +116,30 @@ impl CompileSession for PgCompileSession {
         }
         Ok(())
     }
+
+    async fn rollback(mut self: Box<Self>) -> Result<(), SourceError> {
+        if let Some(object) = self.object.take() {
+            self.closed = true;
+            object
+                .batch_execute("ROLLBACK")
+                .await
+                .map_err(|e| SourceError::backend("rollback compile session", e))?;
+        }
+        Ok(())
+    }
 }
 
 impl Drop for PgCompileSession {
     fn drop(&mut self) {
-        // best-effort rollback when the caller didn't close cleanly. fire-
-        // and-forget on a tokio task so we don't hold the pool checkout open
-        // for the rest of the runtime — and so drop stays sync.
-        if !self.closed
-            && let Some(object) = self.object.take()
-        {
-            tokio::spawn(async move {
-                let _ = object.batch_execute("ROLLBACK").await;
-            });
+        // sync, no I/O. correctness comes from the pool's pre_recycle hook,
+        // which rolls back any leftover transaction before next checkout.
+        // a warn here surfaces missing explicit commit/rollback as a hygiene
+        // signal without making drop runtime-dependent.
+        if !self.closed {
+            tracing::warn!(
+                collection = %self.binding.collection.as_str(),
+                "compile session dropped without commit/rollback; pool recycle will abort the transaction",
+            );
         }
     }
 }

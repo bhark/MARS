@@ -57,7 +57,11 @@ impl<'a> CompileSession for FullScanCompileSession<'a> {
         fnv1a64(geometry)
     }
 
-    async fn close(self: Box<Self>) -> Result<(), SourceError> {
+    async fn commit(self: Box<Self>) -> Result<(), SourceError> {
+        Ok(())
+    }
+
+    async fn rollback(self: Box<Self>) -> Result<(), SourceError> {
         Ok(())
     }
 }

@@ -346,9 +346,15 @@ pub trait CompileSession: Send + Sync {
     /// must match what pass 1 saw for the same row.
     fn geom_fingerprint(&self, geometry: &[u8]) -> u64;
 
-    /// Cleanly close the session (e.g. COMMIT the snapshot transaction).
-    /// Callers MUST invoke `close` on success paths; `Drop` is best-effort.
-    async fn close(self: Box<Self>) -> Result<(), SourceError>;
+    /// Commit the snapshot transaction. Call on the success path of a
+    /// compile session.
+    async fn commit(self: Box<Self>) -> Result<(), SourceError>;
+
+    /// Roll back the snapshot transaction. Call on the error path of a
+    /// compile session. `Drop` does not perform I/O — adapters rely on
+    /// pool-level recycling for safety, so callers should still invoke
+    /// `commit` or `rollback` explicitly.
+    async fn rollback(self: Box<Self>) -> Result<(), SourceError>;
 }
 
 /// Per-row record returned by `Source`. Geometry is opaque adapter-native

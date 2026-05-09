@@ -289,7 +289,10 @@ mod tests {
         fn geom_fingerprint(&self, _geometry: &[u8]) -> u64 {
             0
         }
-        async fn close(self: Box<Self>) -> Result<(), SourceError> {
+        async fn commit(self: Box<Self>) -> Result<(), SourceError> {
+            Ok(())
+        }
+        async fn rollback(self: Box<Self>) -> Result<(), SourceError> {
             Ok(())
         }
     }

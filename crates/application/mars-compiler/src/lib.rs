@@ -538,17 +538,31 @@ pub async fn run_snapshot_from_plan(
             binding_plan.native_crs.clone(),
         )?;
         let mut session = deps.source.open_compile_session(&port_binding).await?;
-        let page_plan = page_plan::compute_page_plan(session.as_mut(), binding_plan, plan_budget_bytes).await?;
-        let mut out = rebuild::rebuild_binding_from_plan(
-            deps,
-            bootstrap,
-            binding_plan,
-            &page_plan,
-            session.as_mut(),
-            working_set_bytes,
-        )
-        .await?;
-        session.close().await?;
+        let work = async {
+            let page_plan = page_plan::compute_page_plan(session.as_mut(), binding_plan, plan_budget_bytes).await?;
+            rebuild::rebuild_binding_from_plan(
+                deps,
+                bootstrap,
+                binding_plan,
+                &page_plan,
+                session.as_mut(),
+                working_set_bytes,
+            )
+            .await
+        }
+        .await;
+        let mut out = match work {
+            Ok(out) => {
+                session.commit().await?;
+                out
+            }
+            Err(err) => {
+                if let Err(rb) = session.rollback().await {
+                    tracing::warn!(error = %rb, "compile session rollback failed");
+                }
+                return Err(err);
+            }
+        };
         bindings_meta.push(out.meta);
         pages_meta.append(&mut out.pages);
         class_sidecars.append(&mut out.class_sidecars);
