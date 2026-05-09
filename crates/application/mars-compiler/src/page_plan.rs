@@ -3,7 +3,7 @@
 //! boundaries by accumulated WKB byte length.
 //!
 //! The output [`PagePlan`] carries per-level page boundaries plus the
-//! member feature ids. Pass 2 (`rebuild::rebuild_pages` driven by
+//! member feature ids. Pass 2 (`render::rebuild_pages` driven by
 //! `BindingWork::FromPlan`) hydrates each planned page via
 //! [`mars_source::CompileSession::fetch_by_feature_ids`] and re-emits the
 //! artifact + sidecars, exactly as the incremental rebuild path does

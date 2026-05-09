@@ -17,7 +17,7 @@ use futures_core::stream::BoxStream;
 use futures_util::stream;
 use mars_compiler::plan::{BindingPlan, BootstrapPlan, LevelPlan};
 use mars_compiler::rebalance::{RebalanceOp, SIZE_HI_FACTOR, SIZE_LO_FACTOR, rebalance_candidates};
-use mars_compiler::rebuild::execute_rebalance;
+use mars_compiler::render::execute_rebalance;
 use mars_compiler::sidecar::SidecarReader;
 use mars_compiler::testing::FullScanCompileSession;
 use mars_compiler::{Deps, run_snapshot_from_plan};

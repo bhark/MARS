@@ -15,7 +15,7 @@ use futures_core::stream::BoxStream;
 use futures_util::stream;
 use mars_compiler::incremental::IncrementalCycle;
 use mars_compiler::plan::{BindingPlan, BootstrapPlan, LevelPlan};
-use mars_compiler::rebuild::rebuild_pages;
+use mars_compiler::render::rebuild_pages;
 use mars_compiler::sidecar::SidecarReader;
 use mars_compiler::testing::FullScanCompileSession;
 use mars_compiler::{Deps, run_snapshot_from_plan};

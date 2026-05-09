@@ -16,7 +16,7 @@ use mars_source::{ChangeEvent, GeometryEnvelope, SourceBinding as PortBinding, S
 use mars_types::{Bbox, BindingId};
 
 use crate::plan::BindingPlan;
-use crate::rebuild::{binding_schema, binding_table};
+use crate::render::{binding_schema, binding_table};
 use crate::sidecar::SidecarReader;
 use crate::{CompilerError, Deps};
 

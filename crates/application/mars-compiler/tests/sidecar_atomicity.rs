@@ -22,7 +22,7 @@ use futures_core::stream::BoxStream;
 use futures_util::stream;
 use mars_compiler::incremental::IncrementalCycle;
 use mars_compiler::plan::{BindingPlan, BootstrapPlan, LevelPlan};
-use mars_compiler::rebuild::rebuild_pages;
+use mars_compiler::render::rebuild_pages;
 use mars_compiler::sidecar::SidecarReader;
 use mars_compiler::testing::FullScanCompileSession;
 use mars_compiler::{Deps, run_snapshot_from_plan};
@@ -242,7 +242,7 @@ fn make_deps(source: Arc<FakeSource>, store: Arc<dyn ObjectStore>, manifest_stor
 /// merge a rebuild outcome into the prior manifest in the same shape the
 /// compiler's cycle entry point uses; inlined here so the test can avoid
 /// pulling in a private `merge_manifest` symbol.
-fn merge(prior: &Manifest, outcome: &mars_compiler::rebuild::RebuildOutcome, next_version: u64) -> Manifest {
+fn merge(prior: &Manifest, outcome: &mars_compiler::render::RebuildOutcome, next_version: u64) -> Manifest {
     let replacement_pages: std::collections::HashSet<_> =
         outcome.replacement_pages.iter().map(|p| p.key.clone()).collect();
     let dropped_pages: std::collections::HashSet<_> = outcome.dropped_pages.iter().cloned().collect();

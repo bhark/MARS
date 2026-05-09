@@ -1,27 +1,29 @@
-//! Phase C.2.c page rebuild executor.
+//! Page emission and rebalance executor for the unified compile pipeline.
 //!
-//! Given the dirty set produced by [`crate::incremental::IncrementalCycle`]
-//! and the prior manifest, this module fetches the affected feature ids
-//! through `Source::fetch_by_feature_ids`, re-decimates per level, and
-//! re-emits page artifacts plus class / label sidecars. It also refreshes
-//! the per-binding page-membership sidecar to absorb inserts, updates, and
-//! deletes from the cycle so the next incremental cycle's old-side lookups
-//! resolve correctly.
+//! This module is pass 2 of the unified compile flow. Bootstrap and
+//! incremental cycles both land here: bootstrap drives it via
+//! [`rebuild_binding_from_plan`] using a [`crate::page_plan::PagePlan`]
+//! produced from a freshly opened compile session, while the incremental
+//! cycle drives it via [`rebuild_pages`] against the dirty set produced by
+//! [`crate::incremental::IncrementalCycle`] and the prior manifest. Both
+//! paths fetch member feature ids through
+//! [`mars_source::CompileSession::fetch_by_feature_ids`], re-decimate per
+//! level, and re-emit page artifacts plus class / label sidecars; the
+//! incremental path additionally refreshes the per-binding page-membership
+//! sidecar so the next cycle's old-side lookups resolve correctly.
 //!
-//! Truncate fall-back: when a binding is marked truncated the rebuild
-//! delegates to the snapshot path for that binding only, so the same
-//! [`RebuildOutcome`] shape carries both incremental and bootstrap-class
-//! work into the manifest commit.
+//! Truncate fall-back: when a binding is marked truncated the executor
+//! delegates to the bootstrap path for that binding only, so a single
+//! [`RebuildOutcome`] carries incremental and bootstrap-class work alike
+//! into the manifest commit.
 //!
-//! Concurrency: this function processes bindings serially. Per-binding
-//! parallelism (the LAZARUS "single writer lane per binding") is the cycle
-//! entry point's responsibility; here we only require that one rebuild
-//! call runs at a time per binding.
+//! Concurrency: each entry point processes one binding at a time. Per-
+//! binding parallelism is the cycle entry point's responsibility; here we
+//! only require that one call runs at a time per binding.
 //!
 //! Sidecar threshold: the encoded page-membership sidecar is checked
 //! against the binding's `sidecar_size_warn_bytes`; an exceedance fires a
-//! `tracing::warn!` plus a metric counter to surface LAZARUS bailout 4
-//! (`REPLICA IDENTITY FULL` mandate) without blocking the cycle.
+//! `tracing::warn!` plus a metric counter without blocking the cycle.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;

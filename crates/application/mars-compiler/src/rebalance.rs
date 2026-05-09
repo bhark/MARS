@@ -5,9 +5,9 @@
 //! distribution back inside `[SIZE_LO_FACTOR, SIZE_HI_FACTOR] × target` and
 //! prevents bbox dilation from drifting past `BBOX_DILATION_FACTOR`.
 //!
-//! the executor lives in [`crate::rebuild`] -- it reuses
+//! the executor lives in [`crate::render`] -- it reuses
 //! `flush_page` / `emit_layer_sidecars` so split/merge results commit through
-//! the same [`crate::rebuild::RebuildOutcome`] shape as a regular cycle.
+//! the same [`crate::render::RebuildOutcome`] shape as a regular cycle.
 //!
 //! LAZARUS: opportunistic, not tightly tuned. the goal is to keep page sizes
 //! within an order of magnitude of target without the heuristics ever

@@ -16,8 +16,8 @@ pub mod incremental;
 pub mod page_plan;
 pub mod plan;
 pub mod rebalance;
-pub mod rebuild;
 pub mod reconcile;
+pub mod render;
 pub mod sidecar;
 pub mod testing;
 
@@ -369,7 +369,7 @@ impl Compiler {
         let working_set_bytes = self.config.compiler.compile_page_working_set()?;
         let plan_budget_bytes = self.config.compiler.compile_plan_budget()?;
         let started = std::time::Instant::now();
-        let outcome = rebuild::rebuild_pages(
+        let outcome = render::rebuild_pages(
             &self.deps,
             &plan,
             &prior,
@@ -390,7 +390,7 @@ impl Compiler {
     /// Run one opportunistic rebalance pass over the current manifest.
     /// Identifies pages outside the size band or with dilated bboxes via
     /// [`crate::rebalance::rebalance_candidates`] and rewrites them through
-    /// [`crate::rebuild::execute_rebalance`]. No-op when the manifest is
+    /// [`crate::render::execute_rebalance`]. No-op when the manifest is
     /// already balanced.
     ///
     /// LAZARUS Phase C.2.d. The daily rebalance window driven from
@@ -459,7 +459,7 @@ impl Compiler {
         }
 
         let working_set_bytes = self.config.compiler.compile_page_working_set()?;
-        let outcome = rebuild::execute_rebalance(&self.deps, &plan, &prior, &sidecars, ops, working_set_bytes).await?;
+        let outcome = render::execute_rebalance(&self.deps, &plan, &prior, &sidecars, ops, working_set_bytes).await?;
         let next_version = prior.version + 1;
         let new_manifest = merge_manifest(&prior, &outcome, next_version, prior.source_version.clone());
         publish_with_retry(
@@ -547,7 +547,7 @@ impl Compiler {
 /// Snapshot orchestrator built on the unified compile pipeline:
 /// per binding, open a `CompileSession`, run [`crate::page_plan::compute_page_plan`]
 /// for pass 1, hand the resulting `PagePlan` to
-/// [`crate::rebuild::rebuild_binding_from_plan`] for pass 2, fold the
+/// [`crate::render::rebuild_binding_from_plan`] for pass 2, fold the
 /// emitted artifacts into a fresh `Manifest`. Returns the manifest for
 /// the caller to publish.
 pub async fn run_snapshot_from_plan(
@@ -561,7 +561,7 @@ pub async fn run_snapshot_from_plan(
     use mars_source::{SourceBinding as PortBinding, SourceCollectionId};
     use mars_types::{LayerSidecarEntry, MANIFEST_FORMAT_VERSION, PageEntry};
 
-    use crate::rebuild::{binding_schema, binding_table};
+    use crate::render::{binding_schema, binding_table};
 
     let mut bindings_meta: Vec<mars_types::BindingMetadata> = Vec::with_capacity(bootstrap.bindings.len());
     let mut pages_meta: Vec<PageEntry> = Vec::new();
@@ -581,7 +581,7 @@ pub async fn run_snapshot_from_plan(
         let mut session = deps.source.open_compile_session(&port_binding).await?;
         let work = async {
             let page_plan = page_plan::compute_page_plan(session.as_mut(), binding_plan, plan_budget_bytes).await?;
-            rebuild::rebuild_binding_from_plan(
+            render::rebuild_binding_from_plan(
                 deps,
                 bootstrap,
                 binding_plan,
@@ -634,11 +634,11 @@ pub async fn run_snapshot_from_plan(
     })
 }
 
-/// Merge a [`rebuild::RebuildOutcome`] into the prior manifest to produce
+/// Merge a [`render::RebuildOutcome`] into the prior manifest to produce
 /// the next version. Pure; safe to test in isolation.
 fn merge_manifest(
     prior: &Manifest,
-    outcome: &rebuild::RebuildOutcome,
+    outcome: &render::RebuildOutcome,
     next_version: u64,
     source_version: Option<String>,
 ) -> Manifest {
@@ -704,7 +704,7 @@ fn merge_manifest(
     label_sidecars.extend(outcome.replacement_label_sidecars.iter().cloned());
 
     // bindings: replace touched ones, then refresh hilbert_range_table per
-    // level via rebuild::recompute_level_metadata.
+    // level via render::recompute_level_metadata.
     let refreshed_ids: std::collections::HashSet<BindingId> = outcome
         .refreshed_bindings
         .iter()
@@ -719,7 +719,7 @@ fn merge_manifest(
     bindings.extend(outcome.refreshed_bindings.iter().cloned());
     for b in &mut bindings {
         for lm in &mut b.levels {
-            *lm = rebuild::recompute_level_metadata(lm, &pages, &b.binding_id);
+            *lm = render::recompute_level_metadata(lm, &pages, &b.binding_id);
         }
     }
     bindings.sort_by(|a, b| a.binding_id.as_str().cmp(b.binding_id.as_str()));
