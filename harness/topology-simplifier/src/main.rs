@@ -1,7 +1,8 @@
 //! topology-simplifier harness entrypoint.
 //!
-//! workspace-excluded operator tool; see README. successive commits add the
-//! image cross-check and the gate write-up.
+//! workspace-excluded operator tool. see README.md for usage and
+//! PHASE0_GATE.md for the pass/fail criteria the trailing summary line
+//! evaluates.
 
 use clap::Parser;
 
@@ -56,8 +57,6 @@ fn main() -> anyhow::Result<()> {
         args.quantise_mm,
         args.tolerance_m,
     );
-    let _ = args.degenerate_threshold;
-
     let mut t = StageTimings::default();
 
     let (geoms, ingest_stats) = t.record("ingest", || ingest::load_fixture(&args.fixture))?;
@@ -85,6 +84,12 @@ fn main() -> anyhow::Result<()> {
     );
 
     std::fs::create_dir_all(&args.out)?;
+
+    // gate-decision accumulators: levels 1+2 must hold zero seam violations,
+    // every level must keep degenerate fraction below the threshold.
+    let mut seam_violations_at_fine_levels: u64 = 0;
+    let mut over_degenerate_threshold = false;
+    let mut per_level_summary: Vec<(usize, u64, u64, u64)> = Vec::new();
 
     for (i, tol) in args.tolerance_m.iter().enumerate() {
         let level_label = format!("{}", i + 1);
@@ -124,6 +129,19 @@ fn main() -> anyhow::Result<()> {
                 report.diff_path.display(),
             );
         }
+
+        // gate accumulators
+        if i < 2 {
+            seam_violations_at_fine_levels += sstats.seam_violation_count;
+        }
+        let degenerate = rstats.collapsed_ring_count + rstats.invalid_reassembly_count + rstats.self_intersection_count;
+        if ingest_stats.kept > 0 {
+            let frac = (degenerate as f64) / (ingest_stats.kept as f64);
+            if frac > args.degenerate_threshold {
+                over_degenerate_threshold = true;
+            }
+        }
+        per_level_summary.push((i + 1, sstats.seam_violation_count, degenerate, ingest_stats.kept));
     }
 
     eprintln!();
@@ -137,6 +155,40 @@ fn main() -> anyhow::Result<()> {
         None => eprintln!("peak RSS: n/a (non-linux or /proc/self/status read failed)"),
     }
 
-    eprintln!("(gate write-up lands in next commit)");
+    eprintln!();
+    eprintln!("gate (see PHASE0_GATE.md):");
+    for (lvl, viol, degen, kept) in &per_level_summary {
+        eprintln!(
+            "  level {}: seam_violations={} degenerate={}/{} ({:.4}%)",
+            lvl,
+            viol,
+            degen,
+            kept,
+            if *kept == 0 {
+                0.0
+            } else {
+                100.0 * (*degen as f64) / (*kept as f64)
+            },
+        );
+    }
+    let pass = seam_violations_at_fine_levels == 0 && !over_degenerate_threshold;
+    if pass {
+        eprintln!("GATE: PASS (no seam violations at levels 1-2; degenerate fraction within threshold)");
+    } else {
+        let mut reasons: Vec<String> = Vec::new();
+        if seam_violations_at_fine_levels > 0 {
+            reasons.push(format!(
+                "{} seam violation(s) at levels 1-2",
+                seam_violations_at_fine_levels
+            ));
+        }
+        if over_degenerate_threshold {
+            reasons.push(format!(
+                "degenerate fraction exceeded {:.3}% threshold",
+                args.degenerate_threshold * 100.0
+            ));
+        }
+        eprintln!("GATE: FAIL ({})", reasons.join("; "));
+    }
     Ok(())
 }

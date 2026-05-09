@@ -49,4 +49,7 @@ Anything other than Polygon / MultiPolygon is logged and skipped.
 
 The gate passes if `seam_violation_count == 0` at levels 1 and 2 and
 the degenerate-reassembly counters stay below the configured threshold
-(default < 0.1% of features).
+(default < 0.1% of features). See `PHASE0_GATE.md` for the full
+criteria, the fields the operator captures into the running-notes
+entry, and the open questions the integration follow-up must address
+(notably filtered-binding semantics).
