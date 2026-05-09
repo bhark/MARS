@@ -18,9 +18,10 @@ use std::time::Duration;
 use async_trait::async_trait;
 use deadpool_postgres::{Hook, HookError, Pool, Runtime};
 use futures_core::stream::BoxStream;
-use mars_source::{ChangeFeed, ChangeSubscription, RowBytes, Source, SourceBinding, SourceError};
+use mars_source::{ChangeFeed, ChangeSubscription, CompileSession, RowBytes, Source, SourceBinding, SourceError};
 use tokio_postgres::NoTls;
 
+mod compile_session;
 mod fetch;
 mod leader;
 mod lower;
@@ -242,6 +243,14 @@ impl Source for PgSource {
         binding: &'a SourceBinding,
     ) -> Result<BoxStream<'a, Result<i64, SourceError>>, SourceError> {
         fetch::stream_feature_ids(self.pool.clone(), binding.clone()).await
+    }
+
+    async fn open_compile_session<'a>(
+        &'a self,
+        binding: &'a SourceBinding,
+    ) -> Result<Box<dyn CompileSession + 'a>, SourceError> {
+        let session = compile_session::PgCompileSession::open(self.pool.clone(), binding.clone()).await?;
+        Ok(Box::new(session))
     }
 }
 

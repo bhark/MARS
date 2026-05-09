@@ -2468,6 +2468,7 @@ dependencies = [
  "mars-grid",
  "mars-source",
  "mars-types",
+ "md-5 0.11.0",
  "pgwire-replication",
  "rand 0.8.6",
  "rustls",

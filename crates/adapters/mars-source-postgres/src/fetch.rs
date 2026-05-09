@@ -287,6 +287,12 @@ pub(crate) fn build_query(
     Ok((sql, params))
 }
 
+/// pub-crate alias so the compile-session module can reuse the row decoder
+/// without re-deriving it.
+pub(crate) fn decode_row_pub(row: &tokio_postgres::Row, binding: &SourceBinding) -> Result<RowBytes, SourceError> {
+    decode_row(row, binding)
+}
+
 fn decode_row(row: &tokio_postgres::Row, binding: &SourceBinding) -> Result<RowBytes, SourceError> {
     // col 0 = id, col 1 = wkb geom, col 2.. = attrs in binding order. NULL ids
     // would silently coerce to 0 in some pg type paths; reject them up front so
