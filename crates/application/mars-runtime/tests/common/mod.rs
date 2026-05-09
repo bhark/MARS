@@ -28,7 +28,7 @@ use mars_render_port::{Canvas, DrawOp, EncodeError, Encoder, ImageFormat, Pixmap
 use mars_runtime::{Deps, Fonts, RenderPlan, Runtime, RuntimeState};
 use mars_store::mem::{InMemoryCache, InMemoryStore};
 use mars_store::{LocalCache, ObjectStore};
-use mars_style::{Colour, LabelStyle, Style, Stylesheet};
+use mars_style::{Colour, LabelStyle, LabelSurvival, Style, Stylesheet};
 use mars_types::{
     Bbox, BindingId, BindingMetadata, CrsCode, DecimationLevel, HilbertKey, ImageFormat as TImageFormat, LayerId,
     LayerSidecarEntry, LayerSidecarKind, MANIFEST_FORMAT_VERSION, Manifest, PageEntry, PageId, PageKey,
@@ -104,6 +104,12 @@ pub async fn build_fixture() -> Fixture {
 pub struct FixtureOptions {
     pub manifest_version: u64,
     pub feature_count: u64,
+    /// label survival policy stamped onto the synthesised layer config.
+    pub label_survival: LabelSurvival,
+    /// extra label_candidates whose `feature_id` does NOT appear in the
+    /// page's geometry section. used to exercise the FollowGeometry filter
+    /// without having to manipulate viewport intersection.
+    pub orphan_label_feature_ids: Vec<u64>,
 }
 
 impl Default for FixtureOptions {
@@ -111,6 +117,8 @@ impl Default for FixtureOptions {
         Self {
             manifest_version: 1,
             feature_count: 3,
+            label_survival: LabelSurvival::Independent,
+            orphan_label_feature_ids: Vec::new(),
         }
     }
 }
@@ -179,7 +187,7 @@ pub async fn build_fixture_with(opts: FixtureOptions) -> Fixture {
 
     // label sidecar: one label per feature, point anchor at the feature
     // centroid, style_ref_idx = 1 (the appended label style ref).
-    let labels: Vec<LabelCandidate> = features
+    let mut labels: Vec<LabelCandidate> = features
         .iter()
         .map(|f| LabelCandidate {
             feature_id: f.id,
@@ -193,6 +201,25 @@ pub async fn build_fixture_with(opts: FixtureOptions) -> Fixture {
             text: format!("L{}", f.id),
         })
         .collect();
+    // orphan labels: synthetic candidates whose feature_id is absent from
+    // the page geometry. anchored inside the page bbox so they survive
+    // canvas clipping; the only thing that should drop them is the
+    // FollowGeometry filter on the runtime label path.
+    for &orphan_id in &opts.orphan_label_feature_ids {
+        labels.push(LabelCandidate {
+            feature_id: orphan_id,
+            foreign_origin: false,
+            priority: 100,
+            style_ref_idx: 1,
+            // anchored well clear of any feature-label position so greedy
+            // collision can't be the reason an orphan disappears - any
+            // missing orphan must have been dropped by the survival filter.
+            shape: LabelShape::Point { x: 50.0, y: 50.0 },
+            text: format!("ORPH{orphan_id}"),
+        });
+    }
+    // wire format requires ascending feature_id ordering.
+    labels.sort_by_key(|c| c.feature_id);
     let mut writer = ArtifactWriter::new(ArtifactKind::Layer);
     writer.add_label_candidates(&labels).set_bbox(page_bbox);
     let label_bytes = writer.finish().unwrap();
@@ -263,7 +290,7 @@ pub async fn build_fixture_with(opts: FixtureOptions) -> Fixture {
         epoch: 0,
     };
 
-    let config = build_minimal_config(&layer_id, &binding_id);
+    let config = build_minimal_config(&layer_id, &binding_id, opts.label_survival);
     let stylesheet = build_minimal_stylesheet();
     let state = RuntimeState::from_config_and_manifest(&config, stylesheet, manifest.clone()).unwrap();
 
@@ -298,7 +325,7 @@ pub async fn build_fixture_with(opts: FixtureOptions) -> Fixture {
     }
 }
 
-fn build_minimal_config(layer_id: &LayerId, binding_id: &BindingId) -> Config {
+fn build_minimal_config(layer_id: &LayerId, binding_id: &BindingId, label_survival: LabelSurvival) -> Config {
     let mut size_per_band = BTreeMap::new();
     size_per_band.insert("hi".into(), "1024m".into());
 
@@ -375,7 +402,7 @@ fn build_minimal_config(layer_id: &LayerId, binding_id: &BindingId) -> Config {
                 style: ClassStyle::Inline(default_style()),
             }],
             label: None,
-            label_survival: Default::default(),
+            label_survival,
         }],
         observability: Observability::default(),
         render: Render::default(),

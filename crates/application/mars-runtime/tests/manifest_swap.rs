@@ -44,6 +44,7 @@ async fn swap_to_5_feature_state(fix: &Fixture) {
     let new_fix = build_fixture_with(common::FixtureOptions {
         manifest_version: 99,
         feature_count: 5,
+        ..common::FixtureOptions::default()
     })
     .await;
     // graft the new manifest's bytes into our existing store so the runtime

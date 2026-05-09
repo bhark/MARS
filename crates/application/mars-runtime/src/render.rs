@@ -7,6 +7,7 @@
 //! path stops at "raw geometry, fallback style" so the spine is verifiable
 //! in isolation.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -18,7 +19,7 @@ use mars_artifact::{
 };
 use mars_config::Layer;
 use mars_render_port::{Canvas, DrawOp, Path, Subpath};
-use mars_style::{Colour, LabelStyle, Style, Stylesheet};
+use mars_style::{Colour, LabelStyle, LabelSurvival, Style, Stylesheet};
 use mars_types::{Bbox, BindingMetadata, LayerId, PageEntry};
 
 use crate::state::RuntimeState;
@@ -86,7 +87,9 @@ pub(crate) async fn render_plan(
         if pages.is_empty() {
             continue;
         }
-        let layer_out = render_layer_pages(deps, state, layer_id, binding, &pages, plan, &fallback).await?;
+        let layer_out =
+            render_layer_pages(deps, state, layer_id, binding, &pages, plan, &fallback, layer_cfg.label_survival)
+                .await?;
         all_ops.extend(layer_out.ops);
         all_labels.extend(layer_out.labels);
     }
@@ -117,6 +120,7 @@ struct LayerOutput {
     labels: Vec<PreparedLabel>,
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn render_layer_pages(
     deps: &Deps,
     state: &RuntimeState,
@@ -125,6 +129,7 @@ async fn render_layer_pages(
     pages: &[&PageEntry],
     plan: &RenderPlan,
     fallback: &Arc<Style>,
+    label_survival: LabelSurvival,
 ) -> Result<LayerOutput, RuntimeError> {
     let mut futs = FuturesUnordered::new();
     for page in pages {
@@ -163,7 +168,7 @@ async fn render_layer_pages(
             Some(b) => Some(ClassResolver::open(b)?),
             None => None,
         };
-        let mut page_ops = decode_page_to_ops(
+        let DecodedPage { ops: mut page_ops, rendered_feature_ids } = decode_page_to_ops(
             page_bytes,
             &entry,
             plan,
@@ -175,12 +180,32 @@ async fn render_layer_pages(
         )?;
         out.ops.append(&mut page_ops);
         if let Some(bytes) = label_bytes {
-            let mut prepared =
-                prepare_labels(bytes, plan, binding, class.as_ref(), &state.stylesheet, same_crs)?;
+            let survival_filter = match label_survival {
+                LabelSurvival::Independent => None,
+                LabelSurvival::FollowGeometry => Some(&rendered_feature_ids),
+            };
+            let mut prepared = prepare_labels(
+                bytes,
+                plan,
+                binding,
+                class.as_ref(),
+                &state.stylesheet,
+                same_crs,
+                survival_filter,
+            )?;
             out.labels.append(&mut prepared);
         }
     }
     Ok(out)
+}
+
+/// per-page render output. `rendered_feature_ids` is the set of ids whose
+/// geometry survived the spatial-index hit-test for this page; the runtime
+/// uses it as the FollowGeometry survival filter, defending the label path
+/// against compiler drift between geometry and label sidecar.
+struct DecodedPage {
+    ops: Vec<DrawOp>,
+    rendered_feature_ids: BTreeSet<u64>,
 }
 
 /// resolves `feature_id -> Style` by binary-searching the class assignment
@@ -227,13 +252,16 @@ fn decode_page_to_ops(
     stylesheet: &Stylesheet,
     fallback: &Arc<Style>,
     same_crs: bool,
-) -> Result<Vec<DrawOp>, RuntimeError> {
+) -> Result<DecodedPage, RuntimeError> {
     let reader = ArtifactReader::open(bytes).map_err(map_artifact_err)?;
     let spatial_bytes = reader.section(SectionKind::SpatialIndex).map_err(map_artifact_err)?;
     let geom_bytes = reader.section(SectionKind::GeometryPayload).map_err(map_artifact_err)?;
     let idx = SpatialIndex::open(spatial_bytes).map_err(map_artifact_err)?;
     if idx.is_empty() {
-        return Ok(Vec::new());
+        return Ok(DecodedPage {
+            ops: Vec::new(),
+            rendered_feature_ids: BTreeSet::new(),
+        });
     }
     let qbb = bbox_native(plan.bbox, &plan.crs, &binding.native_crs)?;
     let qbb_f32 = bbox_to_f32(qbb);
@@ -242,7 +270,10 @@ fn decode_page_to_ops(
     if slots.is_empty() {
         // page bbox claimed intersection but the R-tree disagrees; bail out.
         let _ = page;
-        return Ok(Vec::new());
+        return Ok(DecodedPage {
+            ops: Vec::new(),
+            rendered_feature_ids: BTreeSet::new(),
+        });
     }
     let features = decode_geometry_at_slots(&geom_bytes, &slots).map_err(map_artifact_err)?;
     let projected = if same_crs {
@@ -251,7 +282,9 @@ fn decode_page_to_ops(
         project_features(features, &binding.native_crs, &plan.crs)?
     };
     let mut ops = Vec::with_capacity(projected.len());
+    let mut rendered_feature_ids = BTreeSet::new();
     for f in projected {
+        rendered_feature_ids.insert(f.id);
         let style = class
             .and_then(|c| c.style_ref_for(f.id))
             .and_then(|name| stylesheet.geometry.get(name).cloned())
@@ -260,7 +293,10 @@ fn decode_page_to_ops(
             ops.push(op);
         }
     }
-    Ok(ops)
+    Ok(DecodedPage {
+        ops,
+        rendered_feature_ids,
+    })
 }
 
 fn bbox_native(viewport: Bbox, from: &mars_types::CrsCode, to: &mars_types::CrsCode) -> Result<Bbox, RuntimeError> {
@@ -416,6 +452,7 @@ struct PreparedLabel {
     bbox_px: (f32, f32, f32, f32),
 }
 
+#[allow(clippy::too_many_arguments)]
 fn prepare_labels(
     bytes: Bytes,
     plan: &RenderPlan,
@@ -423,6 +460,7 @@ fn prepare_labels(
     class: Option<&ClassResolver>,
     stylesheet: &Stylesheet,
     same_crs: bool,
+    survival_filter: Option<&BTreeSet<u64>>,
 ) -> Result<Vec<PreparedLabel>, RuntimeError> {
     let reader = ArtifactReader::open(bytes).map_err(map_artifact_err)?;
     let label_bytes = reader.section(SectionKind::LabelCandidates).map_err(map_artifact_err)?;
@@ -437,6 +475,14 @@ fn prepare_labels(
         Some(mars_proj::cached_transformer(&binding.native_crs, &plan.crs).map_err(map_proj_err)?)
     };
     for c in candidates {
+        // FollowGeometry: drop candidates whose feature was pruned at this
+        // level. compiler is the primary enforcer; runtime stays defensive
+        // against drift (eg. older sidecar epoch left over after a swap).
+        if let Some(allow) = survival_filter
+            && !allow.contains(&c.feature_id)
+        {
+            continue;
+        }
         let anchor_world = match label_anchor_world(&c, xform.as_deref()) {
             Some(a) => a,
             None => continue,
