@@ -301,13 +301,9 @@ impl Runtime {
             requested: pixels,
             budget: self.pixel_budget,
         })?;
-        let _permit = self
-            .render_sem
-            .acquire_many(permits)
-            .await
-            .map_err(|_| RuntimeError::Render(mars_render_port::RenderError::Backend(
-                "render semaphore closed".into(),
-            )))?;
+        let _permit = self.render_sem.acquire_many(permits).await.map_err(|_| {
+            RuntimeError::Render(mars_render_port::RenderError::Backend("render semaphore closed".into()))
+        })?;
         // decoded-geometry cache and parallel-emit knobs are wired here so
         // future commits can reach them without changing the surface.
         let _ = (&self.decoded_cache, &self.parallel_emit);

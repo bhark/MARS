@@ -52,11 +52,7 @@ fn fallback_style() -> Arc<Style> {
 
 /// drive one render plan end-to-end. produces encoded image bytes ready to
 /// hand back to the WMS / WMTS interface.
-pub(crate) async fn render_plan(
-    state: &RuntimeState,
-    deps: &Deps,
-    plan: &RenderPlan,
-) -> Result<Vec<u8>, RuntimeError> {
+pub(crate) async fn render_plan(state: &RuntimeState, deps: &Deps, plan: &RenderPlan) -> Result<Vec<u8>, RuntimeError> {
     let config = state.config_or_err()?;
     let canvas = Canvas {
         width: plan.width,
@@ -73,23 +69,32 @@ pub(crate) async fn render_plan(
             // no binding covers this layer at this scale; render nothing.
             continue;
         };
-        let binding = state
-            .index
-            .binding(&state.manifest, &binding_id)
-            .ok_or_else(|| RuntimeError::InvalidManifest {
-                reason: format!(
-                    "selected binding `{binding_id}` for layer `{layer}` is not in manifest",
-                    layer = layer_id
-                ),
-            })?;
+        let binding =
+            state
+                .index
+                .binding(&state.manifest, &binding_id)
+                .ok_or_else(|| RuntimeError::InvalidManifest {
+                    reason: format!(
+                        "selected binding `{binding_id}` for layer `{layer}` is not in manifest",
+                        layer = layer_id
+                    ),
+                })?;
         let native_viewport = planning::reproject_viewport(plan.bbox, &plan.crs, &binding.native_crs)?;
         let pages = planning::resolve_pages(state, &binding_id, level, native_viewport);
         if pages.is_empty() {
             continue;
         }
-        let layer_out =
-            render_layer_pages(deps, state, layer_id, binding, &pages, plan, &fallback, layer_cfg.label_survival)
-                .await?;
+        let layer_out = render_layer_pages(
+            deps,
+            state,
+            layer_id,
+            binding,
+            &pages,
+            plan,
+            &fallback,
+            layer_cfg.label_survival,
+        )
+        .await?;
         all_ops.extend(layer_out.ops);
         all_labels.extend(layer_out.labels);
     }
@@ -168,7 +173,10 @@ async fn render_layer_pages(
             Some(b) => Some(ClassResolver::open(b)?),
             None => None,
         };
-        let DecodedPage { ops: mut page_ops, rendered_feature_ids } = decode_page_to_ops(
+        let DecodedPage {
+            ops: mut page_ops,
+            rendered_feature_ids,
+        } = decode_page_to_ops(
             page_bytes,
             &entry,
             plan,
@@ -220,9 +228,7 @@ struct ClassResolver {
 impl ClassResolver {
     fn open(bytes: Bytes) -> Result<Self, RuntimeError> {
         let reader = ArtifactReader::open(bytes).map_err(map_artifact_err)?;
-        let class_bytes = reader
-            .section(SectionKind::ClassAssignment)
-            .map_err(map_artifact_err)?;
+        let class_bytes = reader.section(SectionKind::ClassAssignment).map_err(map_artifact_err)?;
         let style_refs_bytes = reader.section(SectionKind::StyleRefs).map_err(map_artifact_err)?;
         let assignments = decode_class_assignment(&class_bytes).map_err(map_artifact_err)?;
         let style_refs = decode_style_refs(&style_refs_bytes).map_err(map_artifact_err)?;
@@ -233,10 +239,7 @@ impl ClassResolver {
     }
 
     fn style_ref_for(&self, feature_id: u64) -> Option<&str> {
-        let pos = self
-            .assignments
-            .binary_search_by_key(&feature_id, |&(id, _)| id)
-            .ok()?;
+        let pos = self.assignments.binary_search_by_key(&feature_id, |&(id, _)| id).ok()?;
         let cls = self.assignments[pos].1 as usize;
         self.style_refs.get(cls).map(String::as_str)
     }
@@ -379,10 +382,7 @@ fn feature_to_drawop(g: &GeomKind, viewport: Bbox, w: u32, h: u32, style: Arc<St
             subpaths: vec![ring_to_subpath(coords, viewport, w, h, false)],
         },
         GeomKind::Polygon(rings) => Path {
-            subpaths: rings
-                .iter()
-                .map(|r| ring_to_subpath(r, viewport, w, h, true))
-                .collect(),
+            subpaths: rings.iter().map(|r| ring_to_subpath(r, viewport, w, h, true)).collect(),
         },
         GeomKind::MultiPoint(coords) => Path {
             subpaths: coords
@@ -509,10 +509,7 @@ fn prepare_labels(
     Ok(out)
 }
 
-fn label_anchor_world(
-    c: &LabelCandidate,
-    xform: Option<&mars_proj::Transformer>,
-) -> Option<(f64, f64)> {
+fn label_anchor_world(c: &LabelCandidate, xform: Option<&mars_proj::Transformer>) -> Option<(f64, f64)> {
     let (wx, wy) = match &c.shape {
         LabelShape::Point { x, y } | LabelShape::PolygonAnchor { x, y } => (f64::from(*x), f64::from(*y)),
         // polyline labels: take the midpoint of the polyline. naive but
@@ -545,7 +542,12 @@ fn approximate_text_bbox(text: &str, anchor: (f32, f32), style: &LabelStyle) -> 
     let chars = text.chars().count().max(1) as f32;
     let half_w = (chars * 0.55 * font_size) * 0.5;
     let half_h = (font_size * 1.2) * 0.5;
-    (anchor.0 - half_w, anchor.1 - half_h, anchor.0 + half_w, anchor.1 + half_h)
+    (
+        anchor.0 - half_w,
+        anchor.1 - half_h,
+        anchor.0 + half_w,
+        anchor.1 + half_h,
+    )
 }
 
 /// run a greedy collision pass over the accumulated label set and return
@@ -617,7 +619,13 @@ mod tests {
 
     #[test]
     fn feature_to_drawop_polygon_rings_closed() {
-        let geom = GeomKind::Polygon(vec![vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (0.0, 0.0)]]);
+        let geom = GeomKind::Polygon(vec![vec![
+            (0.0, 0.0),
+            (10.0, 0.0),
+            (10.0, 10.0),
+            (0.0, 10.0),
+            (0.0, 0.0),
+        ]]);
         let v = Bbox::new(0.0, 0.0, 10.0, 10.0);
         let op = feature_to_drawop(&geom, v, 100, 100, fallback_style()).unwrap();
         match op {

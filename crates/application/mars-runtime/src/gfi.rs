@@ -61,12 +61,13 @@ pub(crate) async fn get_feature_info(
         let Some((binding_id, level)) = planning::pick_binding_and_level(layer_cfg, denom, state) else {
             continue;
         };
-        let binding = state
-            .index
-            .binding(&state.manifest, &binding_id)
-            .ok_or_else(|| RuntimeError::InvalidManifest {
-                reason: format!("gfi: binding `{binding_id}` not in manifest"),
-            })?;
+        let binding =
+            state
+                .index
+                .binding(&state.manifest, &binding_id)
+                .ok_or_else(|| RuntimeError::InvalidManifest {
+                    reason: format!("gfi: binding `{binding_id}` not in manifest"),
+                })?;
         let native_bbox = planning::reproject_viewport(request_bbox, &plan.crs, &binding.native_crs)?;
         let pages = planning::resolve_pages(state, &binding_id, level, native_bbox);
         if pages.is_empty() {
@@ -183,8 +184,16 @@ fn pixel_to_world(point_px: (u32, u32), viewport: Bbox, w: u32, h: u32) -> (f64,
 }
 
 fn pixel_buffered_bbox(world: (f64, f64), viewport: Bbox, w: u32, h: u32) -> Bbox {
-    let pixel_size_x = if w == 0 { viewport.width() } else { viewport.width() / f64::from(w) };
-    let pixel_size_y = if h == 0 { viewport.height() } else { viewport.height() / f64::from(h) };
+    let pixel_size_x = if w == 0 {
+        viewport.width()
+    } else {
+        viewport.width() / f64::from(w)
+    };
+    let pixel_size_y = if h == 0 {
+        viewport.height()
+    } else {
+        viewport.height() / f64::from(h)
+    };
     let hx = pixel_size_x * 0.5;
     let hy = pixel_size_y * 0.5;
     Bbox::new(world.0 - hx, world.1 - hy, world.0 + hx, world.1 + hy)

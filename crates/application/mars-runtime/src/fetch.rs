@@ -31,9 +31,7 @@ pub async fn fetch_page(
         .map_err(|e| RuntimeError::InvalidManifest {
             reason: format!("malformed page object key for {:?}: {e}", page.key),
         })?;
-    let bytes = cache
-        .get_or_fetch(&key, page.content_hash, origin.as_ref())
-        .await?;
+    let bytes = cache.get_or_fetch(&key, page.content_hash, origin.as_ref()).await?;
     Ok(bytes)
 }
 
@@ -51,9 +49,7 @@ pub async fn fetch_sidecar(
             entry.layer_id, entry.page_key
         ),
     })?;
-    let bytes = cache
-        .get_or_fetch(&key, entry.content_hash, origin.as_ref())
-        .await?;
+    let bytes = cache.get_or_fetch(&key, entry.content_hash, origin.as_ref()).await?;
     Ok(bytes)
 }
 
@@ -66,8 +62,8 @@ mod tests {
     use mars_store::mem::{InMemoryCache, InMemoryStore};
     use mars_store::{LocalCache, ObjectStore};
     use mars_types::{
-        Bbox, BindingId, ContentHash, DecimationLevel, HilbertKey, LayerId, LayerSidecarKind,
-        PageEntry, PageId, PageKey,
+        Bbox, BindingId, ContentHash, DecimationLevel, HilbertKey, LayerId, LayerSidecarKind, PageEntry, PageId,
+        PageKey,
     };
 
     use super::*;
@@ -117,10 +113,7 @@ mod tests {
         // overwrite with the canonical key the helper derives:
         let entry = page_for("a", 0, 1, hash);
         let real_key = entry.key.object_key(&entry.content_hash).unwrap();
-        store
-            .put(&real_key, Bytes::copy_from_slice(body))
-            .await
-            .unwrap();
+        store.put(&real_key, Bytes::copy_from_slice(body)).await.unwrap();
         let got = fetch_page(&cache, &store, &entry).await.unwrap();
         assert_eq!(got.as_ref(), body);
     }
@@ -138,16 +131,10 @@ mod tests {
         };
         let placeholder = class_sidecar("layer-a", page_key.clone(), ContentHash::zero());
         let real_key = placeholder.object_key().unwrap();
-        let hash = store
-            .put(&real_key, Bytes::copy_from_slice(body))
-            .await
-            .unwrap();
+        let hash = store.put(&real_key, Bytes::copy_from_slice(body)).await.unwrap();
         let entry = class_sidecar("layer-a", page_key, hash);
         let real_key = entry.object_key().unwrap();
-        store
-            .put(&real_key, Bytes::copy_from_slice(body))
-            .await
-            .unwrap();
+        store.put(&real_key, Bytes::copy_from_slice(body)).await.unwrap();
         let got = fetch_sidecar(&cache, &store, &entry).await.unwrap();
         assert_eq!(got.as_ref(), body);
     }
@@ -161,10 +148,7 @@ mod tests {
         // pointing somewhere else; the cache must fail closed.
         let entry = page_for("a", 0, 2, ContentHash([1u8; 32]));
         let real_key = entry.key.object_key(&entry.content_hash).unwrap();
-        store
-            .put(&real_key, Bytes::copy_from_slice(body))
-            .await
-            .unwrap();
+        store.put(&real_key, Bytes::copy_from_slice(body)).await.unwrap();
         let err = fetch_page(&cache, &store, &entry).await.unwrap_err();
         match err {
             RuntimeError::Store(mars_store::StoreError::HashMismatch { .. }) => {}

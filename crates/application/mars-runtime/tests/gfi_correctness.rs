@@ -17,18 +17,10 @@ async fn gfi_returns_feature_attrs_for_known_pixel_click() {
     // world (0,0)..(10,10). pixel-space top-left, so y=0..10 world -> y=64
     // .. y≈57 px (pixel y is flipped). a click near (3, 60) px lands
     // squarely inside feature 1000.
-    let hits = fix
-        .runtime
-        .get_feature_info(&plan, (3, 60))
-        .await
-        .expect("gfi");
+    let hits = fix.runtime.get_feature_info(&plan, (3, 60)).await.expect("gfi");
     assert!(!hits.is_empty(), "expected at least one hit, got none");
     let first = hits.iter().find(|h| h.feature_id == 1000).expect("feature 1000");
-    let name_attr = first
-        .attrs
-        .iter()
-        .find(|(k, _)| k == "name")
-        .expect("name attr");
+    let name_attr = first.attrs.iter().find(|(k, _)| k == "name").expect("name attr");
     match &name_attr.1 {
         AttrValue::String(s) => assert_eq!(s, "feat-1000"),
         other => panic!("expected string attr, got {other:?}"),

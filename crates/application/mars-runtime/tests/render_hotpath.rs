@@ -16,20 +16,17 @@ async fn render_emits_one_path_per_feature_and_one_label_per_feature() {
     assert!(!bytes.is_empty(), "encoder produced empty output");
 
     let log = fix.render_log.lock().unwrap();
-    let path_count = log
-        .iter()
-        .filter(|op| matches!(op, DrawOp::Path { .. }))
-        .count();
-    let label_count = log
-        .iter()
-        .filter(|op| matches!(op, DrawOp::Label { .. }))
-        .count();
+    let path_count = log.iter().filter(|op| matches!(op, DrawOp::Path { .. })).count();
+    let label_count = log.iter().filter(|op| matches!(op, DrawOp::Label { .. })).count();
 
     // fixture seeds three polygon features. paths are emitted once per
     // feature; labels go through collision so the count is "at least one"
     // (greedy collision drops conflicts at this fixture's small viewport).
     assert_eq!(path_count, 3, "expected one DrawOp::Path per feature");
-    assert!(label_count >= 1, "expected at least one DrawOp::Label, got {label_count}");
+    assert!(
+        label_count >= 1,
+        "expected at least one DrawOp::Label, got {label_count}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

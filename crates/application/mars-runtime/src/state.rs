@@ -17,8 +17,8 @@ use std::sync::Arc;
 use mars_config::Config;
 use mars_style::Stylesheet;
 use mars_types::{
-    BindingId, BindingMetadata, DecimationLevel, LayerId, LayerSidecarEntry, LayerSidecarKind,
-    Manifest, PageEntry, PageKey,
+    BindingId, BindingMetadata, DecimationLevel, LayerId, LayerSidecarEntry, LayerSidecarKind, Manifest, PageEntry,
+    PageKey,
 };
 
 use crate::RuntimeError;
@@ -95,10 +95,8 @@ impl PageIndex {
             .map(|(i, b)| (b.binding_id.clone(), i))
             .collect();
 
-        let class_sidecar_index =
-            build_sidecar_index(&manifest.class_sidecars, LayerSidecarKind::Class, &page_slices)?;
-        let label_sidecar_index =
-            build_sidecar_index(&manifest.label_sidecars, LayerSidecarKind::Label, &page_slices)?;
+        let class_sidecar_index = build_sidecar_index(&manifest.class_sidecars, LayerSidecarKind::Class, &page_slices)?;
+        let label_sidecar_index = build_sidecar_index(&manifest.label_sidecars, LayerSidecarKind::Label, &page_slices)?;
 
         Ok(Self {
             page_slices,
@@ -127,9 +125,7 @@ impl PageIndex {
     /// borrow `BindingMetadata` for `binding_id` if present.
     #[must_use]
     pub fn binding<'m>(&self, manifest: &'m Manifest, binding_id: &BindingId) -> Option<&'m BindingMetadata> {
-        self.binding_index
-            .get(binding_id)
-            .map(|&i| &manifest.bindings[i])
+        self.binding_index.get(binding_id).map(|&i| &manifest.bindings[i])
     }
 
     /// borrow the class sidecar entry covering `(layer, page_key)` if any.
@@ -171,9 +167,7 @@ impl PageIndex {
     }
 }
 
-fn build_page_slices(
-    pages: &[PageEntry],
-) -> Result<HashMap<(BindingId, DecimationLevel), Range<usize>>, IndexError> {
+fn build_page_slices(pages: &[PageEntry]) -> Result<HashMap<(BindingId, DecimationLevel), Range<usize>>, IndexError> {
     let mut out: HashMap<(BindingId, DecimationLevel), Range<usize>> = HashMap::new();
     if pages.is_empty() {
         return Ok(out);
@@ -221,10 +215,7 @@ fn build_sidecar_index(
                 level: sc.page_key.level.get(),
             });
         }
-        if out
-            .insert((sc.layer_id.clone(), sc.page_key.clone()), i)
-            .is_some()
-        {
+        if out.insert((sc.layer_id.clone(), sc.page_key.clone()), i).is_some() {
             return Err(IndexError::DuplicateSidecar {
                 layer: sc.layer_id.clone(),
                 page_key: sc.page_key.clone(),
@@ -350,9 +341,7 @@ fn validate_config_against_manifest(
 mod tests {
     use std::time::SystemTime;
 
-    use mars_types::{
-        Bbox, ContentHash, HilbertKey, LayerId, MANIFEST_FORMAT_VERSION, PageId,
-    };
+    use mars_types::{Bbox, ContentHash, HilbertKey, LayerId, MANIFEST_FORMAT_VERSION, PageId};
 
     use super::*;
 
@@ -487,8 +476,7 @@ mod tests {
         let key = pages[0].key.clone();
         m.label_sidecars
             .push(sidecar("layer-a", key.clone(), LayerSidecarKind::Label));
-        m.label_sidecars
-            .push(sidecar("layer-a", key, LayerSidecarKind::Label));
+        m.label_sidecars.push(sidecar("layer-a", key, LayerSidecarKind::Label));
         match PageIndex::build(&m) {
             Err(IndexError::DuplicateSidecar { kind, .. }) => assert_eq!(kind, LayerSidecarKind::Label),
             other => panic!("unexpected: {other:?}"),

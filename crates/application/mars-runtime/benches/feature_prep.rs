@@ -74,7 +74,12 @@ fn page_extent(n: usize) -> f64 {
 
 fn page_bbox(n: usize) -> Bbox {
     let extent = page_extent(n);
-    Bbox::new(ORIGIN_X - 1.0, ORIGIN_Y - 1.0, ORIGIN_X + extent + 1.0, ORIGIN_Y + extent + 1.0)
+    Bbox::new(
+        ORIGIN_X - 1.0,
+        ORIGIN_Y - 1.0,
+        ORIGIN_X + extent + 1.0,
+        ORIGIN_Y + extent + 1.0,
+    )
 }
 
 /// query bbox sized so the area ≈ target_hits feature centres.
@@ -193,10 +198,7 @@ impl ClassJoin {
     }
 
     fn style_ref_for(&self, feature_id: u64) -> Option<&str> {
-        let pos = self
-            .assignments
-            .binary_search_by_key(&feature_id, |&(id, _)| id)
-            .ok()?;
+        let pos = self.assignments.binary_search_by_key(&feature_id, |&(id, _)| id).ok()?;
         let cls = self.assignments[pos].1 as usize;
         self.style_refs.get(cls).map(String::as_str)
     }
@@ -265,9 +267,18 @@ struct Case {
 }
 
 const CASES: &[Case] = &[
-    Case { n: SMALL, target_hits: 500 },   // gate point
-    Case { n: SMALL, target_hits: 2000 },  // denser viewport
-    Case { n: LARGE, target_hits: 500 },   // cadastral large page
+    Case {
+        n: SMALL,
+        target_hits: 500,
+    }, // gate point
+    Case {
+        n: SMALL,
+        target_hits: 2000,
+    }, // denser viewport
+    Case {
+        n: LARGE,
+        target_hits: 500,
+    }, // cadastral large page
 ];
 
 fn bench_feature_prep_same_crs(c: &mut Criterion) {
@@ -317,7 +328,10 @@ fn bench_feature_prep_cross_crs(c: &mut Criterion) {
     let fallback = fallback_style();
     let from = CrsCode::new("EPSG:25832");
     let to = CrsCode::new("EPSG:3857");
-    let case = Case { n: SMALL, target_hits: 500 };
+    let case = Case {
+        n: SMALL,
+        target_hits: 500,
+    };
     let features = make_features(case.n);
     let page = build_page(&features);
     let sidecar = build_class_sidecar(case.n);

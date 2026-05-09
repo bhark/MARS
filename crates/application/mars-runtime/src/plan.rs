@@ -168,8 +168,7 @@ mod tests {
     use mars_config::{Class, LabelSurvival, ScaleWindow, SourceBinding};
     use mars_style::Stylesheet;
     use mars_types::{
-        BindingMetadata, ContentHash, CrsCode, HilbertKey, LayerId, MANIFEST_FORMAT_VERSION,
-        Manifest, PageId, PageKey,
+        BindingMetadata, ContentHash, CrsCode, HilbertKey, LayerId, MANIFEST_FORMAT_VERSION, Manifest, PageId, PageKey,
     };
 
     use super::*;

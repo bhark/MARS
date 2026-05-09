@@ -37,7 +37,10 @@ async fn render_observes_swap_after_complete() {
         .iter()
         .filter(|op| matches!(op, DrawOp::Path { .. }))
         .count();
-    assert_eq!(path_count, 5, "expected 5 paths after swap, baseline was {baseline_count}");
+    assert_eq!(
+        path_count, 5,
+        "expected 5 paths after swap, baseline was {baseline_count}"
+    );
 }
 
 async fn swap_to_5_feature_state(fix: &Fixture) {
@@ -55,19 +58,19 @@ async fn swap_to_5_feature_state(fix: &Fixture) {
         let bytes = new_fix.store.get(&key, page.content_hash).await.unwrap();
         fix.store.put(&key, bytes).await.unwrap();
     }
-    for sc in new_fix.manifest.class_sidecars.iter().chain(new_fix.manifest.label_sidecars.iter()) {
+    for sc in new_fix
+        .manifest
+        .class_sidecars
+        .iter()
+        .chain(new_fix.manifest.label_sidecars.iter())
+    {
         let key = sc.object_key().unwrap();
         let bytes = new_fix.store.get(&key, sc.content_hash).await.unwrap();
         fix.store.put(&key, bytes).await.unwrap();
     }
 
     let cfg = (*fix.config).clone();
-    let stylesheet = fix
-        .runtime
-        .current_state()
-        .expect("state")
-        .stylesheet
-        .clone();
+    let stylesheet = fix.runtime.current_state().expect("state").stylesheet.clone();
     let state = mars_runtime::RuntimeState::from_config_and_manifest(&cfg, stylesheet, new_fix.manifest.clone())
         .expect("rebuild state");
     fix.runtime.swap_state(Arc::new(state));

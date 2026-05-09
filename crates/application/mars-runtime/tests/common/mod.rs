@@ -147,7 +147,12 @@ pub async fn build_fixture_with(opts: FixtureOptions) -> Fixture {
         })
         .collect();
 
-    let page_bbox = Bbox::new(0.0, 0.0, opts.feature_count as f64 * 10.0 + 10.0, opts.feature_count as f64 * 10.0 + 10.0);
+    let page_bbox = Bbox::new(
+        0.0,
+        0.0,
+        opts.feature_count as f64 * 10.0 + 10.0,
+        opts.feature_count as f64 * 10.0 + 10.0,
+    );
 
     // page artifact: spatial index + geometry payload + attributes.
     let mut spatial = SpatialIndexBuilder::new(mars_artifact::DEFAULT_NODE_SIZE).unwrap();
@@ -254,9 +259,18 @@ pub async fn build_fixture_with(opts: FixtureOptions) -> Fixture {
     };
 
     let store: Arc<dyn ObjectStore> = Arc::new(InMemoryStore::new());
-    store.put(&page_key.object_key(&page_hash).unwrap(), page_bytes).await.unwrap();
-    store.put(&class_entry.object_key().unwrap(), class_bytes).await.unwrap();
-    store.put(&label_entry.object_key().unwrap(), label_bytes).await.unwrap();
+    store
+        .put(&page_key.object_key(&page_hash).unwrap(), page_bytes)
+        .await
+        .unwrap();
+    store
+        .put(&class_entry.object_key().unwrap(), class_bytes)
+        .await
+        .unwrap();
+    store
+        .put(&label_entry.object_key().unwrap(), label_bytes)
+        .await
+        .unwrap();
     let cache: Arc<dyn LocalCache> = Arc::new(InMemoryCache::new());
 
     let binding_meta = BindingMetadata {
@@ -412,8 +426,7 @@ fn build_minimal_config(layer_id: &LayerId, binding_id: &BindingId, label_surviv
 
 fn build_minimal_stylesheet() -> Stylesheet {
     let mut ss = Stylesheet::default();
-    ss.geometry
-        .insert("buildings__main".into(), Arc::new(default_style()));
+    ss.geometry.insert("buildings__main".into(), Arc::new(default_style()));
     ss.labels.insert(
         "buildings__label".into(),
         Arc::new(LabelStyle {
