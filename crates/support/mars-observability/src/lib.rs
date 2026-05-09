@@ -38,6 +38,9 @@ pub mod metrics {
     pub const COMPILER_WINDOW_LAG: &str = "mars_compiler_window_lag_seconds";
     pub const COMPILER_PUBLISH_RETRIES: &str = "mars_compiler_publish_retries_total";
     pub const COMPILER_SIDECAR_THRESHOLD_WARNINGS: &str = "mars_compiler_sidecar_threshold_warnings_total";
+    /// Counter labelled by `outcome` ("ok" | "error") tracking opportunistic
+    /// rebalance ticks driven by `compiler.rebalance.window`.
+    pub const COMPILER_REBALANCE_RUNS: &str = "mars_compiler_rebalance_runs_total";
     pub const CAPABILITIES_REBUILD_FAILURES: &str = "mars_capabilities_rebuild_failures_total";
     pub const MANIFEST_VERSION: &str = "mars_manifest_version";
     pub const MANIFEST_REJECT_TOTAL: &str = "mars_manifest_reject_total";
@@ -73,6 +76,12 @@ pub mod reject_reason {
     pub const VALIDATION_ERROR: &str = "validation_error";
     pub const HASH_MISMATCH: &str = "hash_mismatch";
     pub const IO_ERROR: &str = "io_error";
+}
+
+/// Bounded label values for `mars_compiler_rebalance_runs_total{outcome}`.
+pub mod rebalance_outcome {
+    pub const OK: &str = "ok";
+    pub const ERROR: &str = "error";
 }
 
 /// Bucket an HTTP status into one of `2xx/3xx/4xx/5xx/other`. We deliberately
@@ -119,6 +128,7 @@ struct MetricsInner {
     compiler_window_lag: Gauge,
     compiler_publish_retries: IntCounter,
     compiler_sidecar_threshold_warnings: IntCounterVec,
+    compiler_rebalance_runs: IntCounterVec,
     capabilities_rebuild_failures: IntCounter,
     label_seconds: Histogram,
 }
@@ -183,6 +193,13 @@ impl Metrics {
             ),
             &["binding"],
         )?;
+        let compiler_rebalance_runs = IntCounterVec::new(
+            Opts::new(
+                metrics::COMPILER_REBALANCE_RUNS,
+                "total opportunistic rebalance ticks, labeled by outcome",
+            ),
+            &["outcome"],
+        )?;
         let capabilities_rebuild_failures = IntCounter::new(
             metrics::CAPABILITIES_REBUILD_FAILURES,
             "total failures rebuilding the cached WMS capabilities document",
@@ -203,6 +220,7 @@ impl Metrics {
         registry.register(Box::new(compiler_window_lag.clone()))?;
         registry.register(Box::new(compiler_publish_retries.clone()))?;
         registry.register(Box::new(compiler_sidecar_threshold_warnings.clone()))?;
+        registry.register(Box::new(compiler_rebalance_runs.clone()))?;
         registry.register(Box::new(capabilities_rebuild_failures.clone()))?;
         registry.register(Box::new(label_seconds.clone()))?;
 
@@ -219,6 +237,7 @@ impl Metrics {
                 compiler_window_lag,
                 compiler_publish_retries,
                 compiler_sidecar_threshold_warnings,
+                compiler_rebalance_runs,
                 capabilities_rebuild_failures,
                 label_seconds,
             }),
@@ -283,6 +302,17 @@ impl Metrics {
         self.inner
             .compiler_sidecar_threshold_warnings
             .with_label_values(&[binding])
+            .inc();
+    }
+
+    /// Increment the opportunistic-rebalance run counter. `outcome` is
+    /// `"ok"` on success (including no-op publishes) and `"error"` when the
+    /// run returns an error. Use the constants in
+    /// [`rebalance_outcome`] to keep label cardinality bounded.
+    pub fn inc_compiler_rebalance_run(&self, outcome: &str) {
+        self.inner
+            .compiler_rebalance_runs
+            .with_label_values(&[outcome])
             .inc();
     }
 

@@ -26,7 +26,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use mars_config::Config;
-use mars_observability::Metrics;
+use mars_observability::{Metrics, rebalance_outcome};
 use mars_source::{ChangeBatch, ChangeEvent, ChangeFeed, ChangeSubscription, LeaderLock, LeaderLockGuard, Source};
 use mars_store::{ManifestStore, ObjectStore, StoreError};
 use mars_types::{BindingId, LevelMetadata, Manifest, PageEntry};
@@ -393,19 +393,26 @@ impl Compiler {
     /// Identifies pages outside the size band or with dilated bboxes via
     /// [`crate::rebalance::rebalance_candidates`] and rewrites them through
     /// [`crate::render::execute_rebalance`]. No-op when the manifest is
-    /// already balanced.
-    ///
-    /// LAZARUS Phase C.2.d. The daily rebalance window driven from
-    /// [`Self::run`] is a follow-up; here we only expose the executor.
+    /// already balanced. Acquires the leader lock; intended for operator-
+    /// driven invocation. The periodic dispatch in [`Self::run`] calls
+    /// [`Self::rebalance_locked`] directly because it already holds the lock.
     pub async fn run_rebalance_once(&self) -> Result<u64, CompilerError> {
         let _guard = self.acquire_leader().await?;
+        self.rebalance_locked().await
+    }
+
+    /// Body of one rebalance pass without leader-lock acquisition. Caller
+    /// must already hold the lock (operator path acquires in
+    /// [`Self::run_rebalance_once`]; service path holds it for the lifetime
+    /// of [`Self::run`]).
+    async fn rebalance_locked(&self) -> Result<u64, CompilerError> {
         let prior = self
             .deps
             .manifest
             .current()
             .await?
             .ok_or(CompilerError::NoPriorManifest {
-                context: "run_rebalance_once",
+                context: "rebalance_locked",
             })?;
         let plan = plan::build_bootstrap_plan(&self.config)?;
 
@@ -496,6 +503,13 @@ impl Compiler {
 
         let window = self.config.compiler.window_dur()?;
 
+        // opportunistic rebalance schedule. checked between cycles; we already
+        // hold the leader lock for the lifetime of run() so rebalance_locked()
+        // is the right entry point (acquire_leader is non-reentrant).
+        let rebalance_enabled = self.config.compiler.rebalance.enabled;
+        let rebalance_period = self.config.compiler.rebalance.window_dur()?;
+        let mut next_rebalance = tokio::time::Instant::now() + rebalance_period;
+
         loop {
             let batches = match collect_batches(&mut *sub, window, &shutdown).await? {
                 CollectOutcome::Shutdown => {
@@ -510,16 +524,28 @@ impl Compiler {
                 CollectOutcome::Batches(b) => b,
             };
 
-            if batches.is_empty() {
-                continue;
+            if !batches.is_empty() {
+                let last_version = batches.iter().rev().find_map(|b| b.source_version.clone());
+                let v = self.apply_cycle(batches, &shutdown).await?;
+                sub.acknowledge(last_version.as_deref())
+                    .await
+                    .map_err(CompilerError::Source)?;
+                tracing::info!(version = v, "compiler: cycle manifest published");
             }
 
-            let last_version = batches.iter().rev().find_map(|b| b.source_version.clone());
-            let v = self.apply_cycle(batches, &shutdown).await?;
-            sub.acknowledge(last_version.as_deref())
-                .await
-                .map_err(CompilerError::Source)?;
-            tracing::info!(version = v, "compiler: cycle manifest published");
+            if rebalance_enabled && tokio::time::Instant::now() >= next_rebalance {
+                match self.rebalance_locked().await {
+                    Ok(v) => {
+                        tracing::info!(version = v, "compiler: rebalance completed");
+                        self.deps.metrics.inc_compiler_rebalance_run(rebalance_outcome::OK);
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "compiler: rebalance failed");
+                        self.deps.metrics.inc_compiler_rebalance_run(rebalance_outcome::ERROR);
+                    }
+                }
+                next_rebalance = tokio::time::Instant::now() + rebalance_period;
+            }
 
             if shutdown.is_cancelled() {
                 let _ = sub.shutdown().await;
