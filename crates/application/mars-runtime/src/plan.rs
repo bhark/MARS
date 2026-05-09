@@ -14,8 +14,7 @@ use crate::state::RuntimeState;
 /// fraction of a pixel below which a feature is not worth carrying through
 /// the render pipeline. multiplied by the request's pixel-size-on-ground to
 /// derive the "max acceptable `geometry_min_size_m`" cutoff during level
-/// pick. K=0.5 is the LAZARUS Phase D starting point and is subject to
-/// image-diff tuning in Phase E.
+/// pick.
 const PIXEL_SUBSAMPLE_K: f64 = 0.5;
 
 /// OGC reference: 0.00028 m/pixel at 90 dpi (matches `denom_from_plan`).

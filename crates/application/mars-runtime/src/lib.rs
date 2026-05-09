@@ -1,11 +1,10 @@
 //! mars runtime use-case: per-request render pipeline.
 //!
-//! Phase B (LAZARUS): the cell-keyed substrate is retired with the v3
-//! manifest cut, and the page-keyed render path lands in Phase D. The
-//! crate's public API surface stays in place so the bins, the WMS / WMTS
-//! interfaces, and the HTTP layer keep compiling; `Runtime::render`
-//! short-circuits to `RuntimeError::NotImplemented` and the manifest
-//! reload loop simply mirrors empty `RuntimeState`s into the swap slot.
+//! Renders WMS / WMTS responses directly from versioned page artifacts
+//! resolved through the active manifest. The reload loop polls the
+//! manifest store and atomically swaps a fresh `RuntimeState` (manifest +
+//! derived `PageIndex` + stylesheet) into a lock-free slot; render and
+//! GFI use whatever snapshot was current when the request arrived.
 
 #![forbid(unsafe_code)]
 
@@ -103,7 +102,7 @@ pub enum RuntimeError {
         /// Layer that the request asked for.
         layer: String,
     },
-    /// Phase-D: page-keyed render pipeline is not yet implemented.
+    /// A surface the runtime exposes but does not yet implement.
     #[error("not implemented: {what}")]
     NotImplemented {
         /// Stable label naming the missing surface.
@@ -320,15 +319,14 @@ impl Runtime {
 }
 
 /// Compute the rendered image's denominator at the configured viewport.
-/// Phase B keeps the helper exposed for the WMS / WMTS interface code; the
-/// formula is pure and unaffected by the substrate cut.
+/// Pure helper; exposed so the WMS / WMTS interface code can resolve
+/// `<scaleHint>` style decisions without going through `Runtime`.
 #[must_use]
 pub fn denom_from_plan(bbox_width: f64, width_px: u32) -> u32 {
     if !bbox_width.is_finite() || bbox_width <= 0.0 || width_px == 0 {
         return u32::MAX;
     }
-    // 0.00028 m/pixel is the OGC reference at 90 dpi; phase-d will revisit
-    // dpi when it integrates the configurable pixel-density knob.
+    // 0.00028 m/pixel is the OGC reference at 90 dpi.
     let denom = bbox_width / (f64::from(width_px) * 0.000_28);
     if !denom.is_finite() || denom < 0.0 || denom > f64::from(u32::MAX) {
         u32::MAX
@@ -413,8 +411,6 @@ fn classify_store_error(e: &StoreError) -> &'static str {
     }
 }
 
-// brief idle to keep tokio in scope for the runtime-reload loop helpers
-// future-proofing — phase-d adds warm-allowlist prefetches that need a
-// timeout window. exposed as a const so tests can match.
+// idle hint for reload-loop helpers; exposed so tests can match.
 #[doc(hidden)]
-pub const PHASE_B_IDLE_HINT: Duration = Duration::from_secs(5);
+pub const RELOAD_IDLE_HINT: Duration = Duration::from_secs(5);

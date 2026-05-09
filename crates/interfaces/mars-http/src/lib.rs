@@ -424,9 +424,6 @@ fn log_render_failure(e: &RuntimeError, plan: &RenderPlan) {
     }
 }
 
-// phase-b: the runtime stub only surfaces a handful of variants; phase-d will
-// reintroduce `Proj`, `Grid`, `SourceMissing`, `BadKey`, `Artifact` and the
-// per-variant edge-exception mapping along with the page-keyed render path.
 fn map_runtime_error(e: &RuntimeError) -> EdgeException {
     match e {
         RuntimeError::NotReady => EdgeException {
@@ -694,9 +691,6 @@ mod tests {
         assert!(!body.contains("ServiceExceptionReport"));
     }
 
-    // phase-d: re-add `wmts_get_tile_renders_through_runtime` once the stub
-    // render() returns successful pixel bytes for a configured layer.
-
     #[tokio::test]
     async fn wmts_invalid_tms_is_400_with_locator() {
         let app = empty_router();
@@ -826,9 +820,6 @@ mod tests {
         assert!(body_str(resp).await.contains("v2"));
     }
 
-    // phase-d: restore `ready_state_with_band` once `RuntimeState` carries the
-    // per-band / per-layer / per-source indices the render path needs.
-
     #[tokio::test]
     async fn wms_invalid_400() {
         let app = empty_router();
@@ -868,11 +859,6 @@ mod tests {
         assert!(body.contains("ServiceExceptionReport"));
         assert!(!body.contains("code="));
     }
-
-    // phase-d: re-add `wms_unknown_layer_returns_layer_not_defined` and
-    // `wms_layer_without_band_binding_renders_empty` once the runtime knows
-    // about the configured layer set and surfaces `LayerNotDefined` ahead of
-    // the page-keyed render path.
 
     #[tokio::test]
     async fn wms_bad_request_records_semantic_400_in_metrics() {

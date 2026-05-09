@@ -6,9 +6,9 @@
 //! for the lifetime of a [`RuntimeState`]; readers borrow into it.
 //!
 //! the manifest invariant is that `pages` is sorted by
-//! `(binding_id, level, hilbert_range.0)` (LAZARUS §Manifest, mars-types
-//! `Manifest::pages` doc). build-time validation re-checks the invariant and
-//! rejects malformed manifests at swap time rather than at first request.
+//! `(binding_id, level, hilbert_range.0)` (see `mars_types::Manifest::pages`
+//! and SPEC §7). build-time validation re-checks the invariant and rejects
+//! malformed manifests at swap time rather than at first request.
 
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;

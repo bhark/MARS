@@ -1,9 +1,8 @@
 //! tag-prefixed binary encoding for a row's attribute block.
 //!
-//! TODO: replace with apache arrow ipc per SPEC §9.3. this informal codec
-//! is a phase-0 stub used by tests only; it lives here next to the geometry
-//! codec because both encode artifact-side payloads. moving it later is
-//! purely a port-vocabulary change.
+//! TODO: replace with apache arrow ipc per SPEC §9.3. lives next to the
+//! geometry codec because both encode artifact-side payloads; moving it
+//! later is purely a port-vocabulary change.
 //!
 //! on-disk contract (little-endian, lengths as `u32`):
 //!   block := count:u32, entry*
@@ -20,7 +19,7 @@
 
 use bytes::Bytes;
 
-/// on-disk attribute value vocabulary for the phase-0 codec. uses
+/// on-disk attribute value vocabulary. uses
 /// [`mars_expr::Literal`] directly so the artifact codec, the expression
 /// layer, and adapter conversions all speak the same shape — there used to
 /// be a parallel `AttrValue` enum here that drifted (no `serde` derive) and

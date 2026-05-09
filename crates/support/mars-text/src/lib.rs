@@ -8,8 +8,8 @@
 //! - [`rasterise`] returns an alpha mask covering the shaped run; the caller
 //!   composites halo + fill (the renderer adapter handles colour).
 //!
-//! No async, no I/O outside font loading. Multi-line / cosmic-text path is
-//! deferred to v1.1; rustybuzz on a single line is enough for v1 placement.
+//! No async, no I/O outside font loading. Multi-line shaping is deferred
+//! to v1.1; rustybuzz on a single line is enough for v1 placement.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
