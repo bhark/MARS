@@ -65,10 +65,7 @@ pub fn wkb_bbox(wkb: &[u8]) -> Result<Bbox, WkbError> {
 /// envelope, not an area-weighted true centroid. LAZARUS Phase C.
 pub fn wkb_centroid(wkb: &[u8]) -> Result<[f64; 2], WkbError> {
     let bbox = wkb_bbox(wkb)?;
-    Ok([
-        (bbox.min_x + bbox.max_x) * 0.5,
-        (bbox.min_y + bbox.max_y) * 0.5,
-    ])
+    Ok([(bbox.min_x + bbox.max_x) * 0.5, (bbox.min_y + bbox.max_y) * 0.5])
 }
 
 /// Decode a WKB / EWKB geometry into a [`FeatureGeom`] keyed by `id`. Bbox

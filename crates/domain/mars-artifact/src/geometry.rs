@@ -856,10 +856,7 @@ where
 ///
 /// `slots` need not be sorted or deduped. The function sorts a local copy
 /// and walks the index once.
-pub fn decode_geometry_at_slots(
-    bytes: &[u8],
-    slots: &[u32],
-) -> Result<Vec<FeatureGeom>, ArtifactError> {
+pub fn decode_geometry_at_slots(bytes: &[u8], slots: &[u32]) -> Result<Vec<FeatureGeom>, ArtifactError> {
     if slots.is_empty() {
         return Ok(Vec::new());
     }
