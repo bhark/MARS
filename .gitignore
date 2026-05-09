@@ -40,6 +40,12 @@ fuzz/artifacts
 fuzz/coverage
 fuzz/target
 
+# topology-simplifier spike: source is committed, runtime artefacts and
+# operator fixtures stay local
+harness/topology-simplifier/target
+harness/topology-simplifier/out
+harness/topology-simplifier/**/*.tsv
+
 # OS junk
 .DS_Store
 Thumbs.db
