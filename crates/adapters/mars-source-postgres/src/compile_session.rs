@@ -5,19 +5,17 @@
 //! the unified compile pipeline see the same row set. Adapter side of the
 //! `mars_source::CompileSession` port.
 //!
-//! The geometry digest is `md5(ST_AsBinary(geom))` truncated to the first
-//! 8 bytes interpreted big-endian. md5 ships with every Postgres install
-//! (no extension dependency); the digest is a sort tiebreaker, not a
-//! security boundary, so md5's collision profile is more than sufficient.
-//! Pass 2 calls [`PgCompileSession::geom_fingerprint`] on hydrated WKB to
-//! reproduce the same value off-database.
+//! Pass-1 embeds a `md5(ST_AsBinary(geom))`-derived u64 digest in
+//! `RowSummary::geom_digest` server-side. md5 ships with every Postgres
+//! install (no extension dependency); the digest is a page-planner sort
+//! tiebreaker, not a security boundary, so md5's collision profile is
+//! more than sufficient.
 
 use async_trait::async_trait;
 use deadpool_postgres::Object;
 use futures_core::stream::BoxStream;
 use futures_util::StreamExt;
 use mars_source::{CompileSession, RowBytes, RowSummary, SourceBinding, SourceError};
-use md5::{Digest, Md5};
 use tokio_postgres::types::ToSql;
 
 use crate::fetch::decode_row_pub;
@@ -100,10 +98,6 @@ impl CompileSession for PgCompileSession {
             Err(e) => Err(SourceError::backend("row stream feature_ids", e)),
         });
         Ok(Box::pin(mapped))
-    }
-
-    fn geom_fingerprint(&self, geometry: &[u8]) -> u64 {
-        md5_first_u64_be(geometry)
     }
 
     async fn commit(mut self: Box<Self>) -> Result<(), SourceError> {
@@ -213,28 +207,10 @@ fn build_feature_ids_query(binding: &SourceBinding) -> Result<String, SourceErro
     ))
 }
 
-/// md5 of `bytes`, first 8 octets read as big-endian u64. Mirrors postgres
-/// `(('x' || substr(md5(_), 1, 16))::bit(64))::bigint as u64`.
-fn md5_first_u64_be(bytes: &[u8]) -> u64 {
-    let mut hasher = Md5::new();
-    hasher.update(bytes);
-    let digest = hasher.finalize();
-    // safe: md5 is 16 bytes, slice [0..8] is in bounds.
-    let arr: [u8; 8] = digest[..8].try_into().unwrap_or([0u8; 8]);
-    u64::from_be_bytes(arr)
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn md5_be64_matches_known_vector() {
-        // md5("") = d41d8cd98f00b204e9800998ecf8427e
-        // first 8 BE = 0xd41d8cd98f00b204
-        assert_eq!(md5_first_u64_be(b""), 0xd41d_8cd9_8f00_b204);
-    }
 
     #[test]
     fn summary_sql_is_well_formed() {

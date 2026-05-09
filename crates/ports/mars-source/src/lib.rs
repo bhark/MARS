@@ -320,10 +320,10 @@ pub struct RowSummary {
 /// `&mut self` on the streaming methods enforces one stream at a time:
 /// callers drain (or drop) one stream before opening the next.
 ///
-/// `geom_fingerprint` is the stable hash function the session uses to
-/// derive `RowSummary::geom_digest` from geometry bytes server-side; pass 2
-/// calls it to recompute the same fingerprint on hydrated `RowBytes`
-/// geometry, so the two passes agree on boundary-edge tiebreakers.
+/// `RowSummary::geom_digest` is produced by pass 1 server-side and consumed
+/// by the page planner for boundary-edge tiebreaking. Pass 2 hashes hydrated
+/// geometry independently for its own bookkeeping; the two digests are not
+/// expected to match.
 #[async_trait]
 pub trait CompileSession: Send + Sync {
     /// Stream a per-row geometry summary across the bound table. Pass 1
@@ -339,12 +339,6 @@ pub trait CompileSession: Send + Sync {
         &'a mut self,
         ids: &'a [i64],
     ) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError>;
-
-    /// Compute the same stable u64 digest the session embeds in
-    /// `RowSummary::geom_digest`, given hydrated geometry bytes. Pass 2
-    /// calls this to assign a fingerprint to `RowBytes` rows; the result
-    /// must match what pass 1 saw for the same row.
-    fn geom_fingerprint(&self, geometry: &[u8]) -> u64;
 
     /// Commit the snapshot transaction. Call on the success path of a
     /// compile session.

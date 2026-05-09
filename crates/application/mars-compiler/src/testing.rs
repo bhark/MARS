@@ -53,10 +53,6 @@ impl<'a> CompileSession for FullScanCompileSession<'a> {
         self.source.fetch_by_feature_ids(self.binding, ids).await
     }
 
-    fn geom_fingerprint(&self, geometry: &[u8]) -> u64 {
-        fnv1a64(geometry)
-    }
-
     async fn commit(self: Box<Self>) -> Result<(), SourceError> {
         Ok(())
     }

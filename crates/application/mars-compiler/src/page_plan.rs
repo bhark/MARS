@@ -286,9 +286,6 @@ mod tests {
         ) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError> {
             Ok(Box::pin(stream::empty()))
         }
-        fn geom_fingerprint(&self, _geometry: &[u8]) -> u64 {
-            0
-        }
         async fn commit(self: Box<Self>) -> Result<(), SourceError> {
             Ok(())
         }
