@@ -169,10 +169,10 @@ async fn unified_compile_is_deterministic_across_runs() {
         layers: vec![],
     };
 
-    let m_a = run_snapshot_from_plan(&deps_a, &plan, "test".into(), 1, WORKING_SET, PLAN_BUDGET)
+    let m_a = run_snapshot_from_plan(&deps_a, &plan, "test".into(), 1, WORKING_SET, PLAN_BUDGET, 1)
         .await
         .unwrap();
-    let m_b = run_snapshot_from_plan(&deps_b, &plan, "test".into(), 1, WORKING_SET, PLAN_BUDGET)
+    let m_b = run_snapshot_from_plan(&deps_b, &plan, "test".into(), 1, WORKING_SET, PLAN_BUDGET, 1)
         .await
         .unwrap();
 
@@ -218,7 +218,7 @@ async fn rows_with_identical_geometry_but_different_attrs_are_slot_equivalent() 
         bindings: vec![binding_plan("points", 64 * 1024)],
         layers: vec![],
     };
-    let manifest = run_snapshot_from_plan(&deps, &plan, "test".into(), 1, WORKING_SET, PLAN_BUDGET)
+    let manifest = run_snapshot_from_plan(&deps, &plan, "test".into(), 1, WORKING_SET, PLAN_BUDGET, 1)
         .await
         .unwrap();
     let total: u64 = manifest.pages.iter().map(|p| p.feature_count).sum();
@@ -232,7 +232,7 @@ async fn unified_compile_against_empty_source_yields_zero_pages() {
         bindings: vec![binding_plan("points", 4 * 1024)],
         layers: vec![],
     };
-    let manifest = run_snapshot_from_plan(&deps, &plan, "test".into(), 1, WORKING_SET, PLAN_BUDGET)
+    let manifest = run_snapshot_from_plan(&deps, &plan, "test".into(), 1, WORKING_SET, PLAN_BUDGET, 1)
         .await
         .unwrap();
     assert_eq!(manifest.pages.len(), 0);

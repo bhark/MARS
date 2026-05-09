@@ -167,7 +167,7 @@ async fn build_fixture(n_features: usize, page_size: u64) -> Fixture {
         bindings: vec![binding_plan("points", page_size)],
         layers: vec![],
     };
-    let prior = run_snapshot_from_plan(&deps, &plan, "bench".into(), 1, BENCH_WORKING_SET, BENCH_PLAN_BUDGET)
+    let prior = run_snapshot_from_plan(&deps, &plan, "bench".into(), 1, BENCH_WORKING_SET, BENCH_PLAN_BUDGET, 1)
         .await
         .unwrap();
     let binding_id = BindingId::try_new("points").unwrap();

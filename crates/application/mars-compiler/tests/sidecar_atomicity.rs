@@ -374,7 +374,7 @@ async fn rebuild_cycle_is_atomic_under_put_fault_injection() {
             bindings: vec![binding_plan("points", 1024)],
             layers: vec![],
         };
-        let bootstrap = run_snapshot_from_plan(&deps, &plan, "test".into(), 1, TEST_WORKING_SET, TEST_PLAN_BUDGET)
+        let bootstrap = run_snapshot_from_plan(&deps, &plan, "test".into(), 1, TEST_WORKING_SET, TEST_PLAN_BUDGET, 1)
             .await
             .unwrap();
         manifest_store.publish(&bootstrap).await.unwrap();
@@ -408,6 +408,7 @@ async fn rebuild_cycle_is_atomic_under_put_fault_injection() {
             1,
             TEST_WORKING_SET,
             TEST_PLAN_BUDGET,
+            1,
         )
         .await
         .unwrap();

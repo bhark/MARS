@@ -171,7 +171,7 @@ async fn rebalance_candidates_flags_oversize_page() {
         bindings: vec![binding_plan("points", 100 * 1024 * 1024)],
         layers: vec![],
     };
-    let manifest = run_snapshot_from_plan(&deps, &plan, "test".into(), 1, TEST_WORKING_SET, TEST_PLAN_BUDGET)
+    let manifest = run_snapshot_from_plan(&deps, &plan, "test".into(), 1, TEST_WORKING_SET, TEST_PLAN_BUDGET, 1)
         .await
         .unwrap();
     let binding_id = BindingId::try_new("points").unwrap();
@@ -210,7 +210,7 @@ async fn execute_rebalance_split_preserves_feature_ids_and_balances_sizes() {
         bindings: vec![binding_plan("points", 100 * 1024 * 1024)],
         layers: vec![],
     };
-    let manifest = run_snapshot_from_plan(&deps, &plan, "test".into(), 1, TEST_WORKING_SET, TEST_PLAN_BUDGET)
+    let manifest = run_snapshot_from_plan(&deps, &plan, "test".into(), 1, TEST_WORKING_SET, TEST_PLAN_BUDGET, 1)
         .await
         .unwrap();
     let binding_id = BindingId::try_new("points").unwrap();

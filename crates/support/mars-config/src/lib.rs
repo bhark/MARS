@@ -134,6 +134,20 @@ pub fn validate(config: &mut Config, config_dir: &Path) -> Result<(), ConfigErro
             "compiler.compile_plan_budget_bytes must be > 0".into(),
         ));
     }
+    let parallelism = config.compiler.compile_binding_parallelism;
+    if parallelism == 0 {
+        return Err(ConfigError::Invalid(
+            "compiler.compile_binding_parallelism must be > 0".into(),
+        ));
+    }
+    if let Some(pool_max) = config.source.pool.max_size
+        && parallelism > pool_max
+    {
+        return Err(ConfigError::Invalid(format!(
+            "compiler.compile_binding_parallelism ({parallelism}) exceeds source.pool.max_size ({pool_max}); \
+             raise the pool size or lower the parallelism"
+        )));
+    }
     let _ = config.compiler.rebalance.window_dur()?;
     if config.service.name.contains(' ') {
         return Err(ConfigError::Invalid(format!(

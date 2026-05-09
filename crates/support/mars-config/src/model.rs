@@ -83,6 +83,13 @@ pub struct Compiler {
     /// [`CompilerError::BootstrapPlanTooLarge`]: https://docs.rs/mars-compiler
     #[serde(default = "default_compile_plan_budget")]
     pub compile_plan_budget_bytes: String,
+    /// Number of bindings the snapshot pipeline compiles concurrently.
+    /// Each in-flight binding holds one `CompileSession` (one pooled
+    /// connection in `REPEATABLE READ`), so `source.pool.max_size` must
+    /// allow at least this many concurrent checkouts plus headroom for
+    /// sidecar / object-store I/O.
+    #[serde(default = "default_compile_binding_parallelism")]
+    pub compile_binding_parallelism: usize,
     /// Opportunistic rebalance settings (split / merge under size or
     /// bbox-dilation drift).
     #[serde(default)]
@@ -96,6 +103,7 @@ impl Default for Compiler {
             parallel_cells: None,
             compile_page_working_set_bytes: default_compile_page_working_set(),
             compile_plan_budget_bytes: default_compile_plan_budget(),
+            compile_binding_parallelism: default_compile_binding_parallelism(),
             rebalance: Rebalance::default(),
         }
     }
@@ -128,6 +136,10 @@ fn default_compile_page_working_set() -> String {
 
 fn default_compile_plan_budget() -> String {
     "8GiB".to_owned()
+}
+
+fn default_compile_binding_parallelism() -> usize {
+    4
 }
 
 /// Opportunistic rebalance settings. LAZARUS §Rebalance: rebalance is

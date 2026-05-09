@@ -233,7 +233,7 @@ async fn multi_band_same_binding_emits_one_class_sidecar_per_page() {
         metrics: Metrics::new().unwrap(),
     };
 
-    let m = run_snapshot_from_plan(&deps, &plan, "test".into(), 1, WORKING_SET, PLAN_BUDGET)
+    let m = run_snapshot_from_plan(&deps, &plan, "test".into(), 1, WORKING_SET, PLAN_BUDGET, 1)
         .await
         .expect("snapshot");
 

@@ -201,7 +201,7 @@ async fn surgical_invalidation_rebuilds_only_dirty_pages() {
     };
 
     // bootstrap
-    let bootstrap = run_snapshot_from_plan(&deps, &plan, "test".into(), 1, TEST_WORKING_SET, TEST_PLAN_BUDGET)
+    let bootstrap = run_snapshot_from_plan(&deps, &plan, "test".into(), 1, TEST_WORKING_SET, TEST_PLAN_BUDGET, 1)
         .await
         .unwrap();
     assert!(

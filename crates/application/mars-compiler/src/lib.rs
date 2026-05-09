@@ -225,6 +225,7 @@ impl Compiler {
         let next_version = prev_version + 1;
         let working_set_bytes = self.config.compiler.compile_page_working_set()?;
         let plan_budget_bytes = self.config.compiler.compile_plan_budget()?;
+        let binding_parallelism = self.config.compiler.compile_binding_parallelism;
         let manifest = run_snapshot_from_plan(
             &self.deps,
             &plan,
@@ -232,6 +233,7 @@ impl Compiler {
             next_version,
             working_set_bytes,
             plan_budget_bytes,
+            binding_parallelism,
         )
         .await?;
         let v = publish_with_retry(self.deps.manifest.as_ref(), &manifest, &self.deps.metrics, shutdown).await?;
@@ -548,8 +550,10 @@ impl Compiler {
 /// per binding, open a `CompileSession`, run [`crate::page_plan::compute_page_plan`]
 /// for pass 1, hand the resulting `PagePlan` to
 /// [`crate::render::rebuild_binding_from_plan`] for pass 2, fold the
-/// emitted artifacts into a fresh `Manifest`. Returns the manifest for
-/// the caller to publish.
+/// emitted artifacts into a fresh `Manifest`. Bindings compile concurrently
+/// up to `binding_parallelism` (each holds one pooled connection in
+/// `REPEATABLE READ`); the operator must size `source.pool.max_size`
+/// accordingly. Returns the manifest for the caller to publish.
 pub async fn run_snapshot_from_plan(
     deps: &Deps,
     bootstrap: &plan::BootstrapPlan,
@@ -557,18 +561,23 @@ pub async fn run_snapshot_from_plan(
     manifest_version: u64,
     working_set_bytes: u64,
     plan_budget_bytes: u64,
+    binding_parallelism: usize,
 ) -> Result<Manifest, CompilerError> {
+    use futures_util::StreamExt;
     use mars_source::{SourceBinding as PortBinding, SourceCollectionId};
     use mars_types::{LayerSidecarEntry, MANIFEST_FORMAT_VERSION, PageEntry};
 
-    use crate::render::{binding_schema, binding_table};
+    use crate::render::{BindingOutput, binding_schema, binding_table};
 
-    let mut bindings_meta: Vec<mars_types::BindingMetadata> = Vec::with_capacity(bootstrap.bindings.len());
-    let mut pages_meta: Vec<PageEntry> = Vec::new();
-    let mut class_sidecars: Vec<LayerSidecarEntry> = Vec::new();
-    let mut label_sidecars: Vec<LayerSidecarEntry> = Vec::new();
+    let parallelism = binding_parallelism.max(1);
 
-    for binding_plan in &bootstrap.bindings {
+    async fn compile_one(
+        deps: &Deps,
+        bootstrap: &plan::BootstrapPlan,
+        binding_plan: &plan::BindingPlan,
+        working_set_bytes: u64,
+        plan_budget_bytes: u64,
+    ) -> Result<BindingOutput, CompilerError> {
         let port_binding = PortBinding::new(
             SourceCollectionId::new(binding_plan.binding_id.as_str()),
             binding_schema(&binding_plan.source_table),
@@ -592,24 +601,56 @@ pub async fn run_snapshot_from_plan(
             .await
         }
         .await;
-        let mut out = match work {
+        match work {
             Ok(out) => {
                 session.commit().await?;
-                out
+                Ok(out)
             }
             Err(err) => {
                 if let Err(rb) = session.rollback().await {
                     tracing::warn!(error = %rb, "compile session rollback failed");
                 }
-                return Err(err);
+                Err(err)
             }
-        };
+        }
+    }
+
+    let mut pending = futures_util::stream::FuturesUnordered::new();
+    let mut iter = bootstrap.bindings.iter();
+    let mut outputs: Vec<BindingOutput> = Vec::with_capacity(bootstrap.bindings.len());
+    loop {
+        while pending.len() < parallelism
+            && let Some(binding_plan) = iter.next()
+        {
+            pending.push(compile_one(
+                deps,
+                bootstrap,
+                binding_plan,
+                working_set_bytes,
+                plan_budget_bytes,
+            ));
+        }
+        match pending.next().await {
+            Some(Ok(out)) => outputs.push(out),
+            Some(Err(err)) => return Err(err),
+            None => break,
+        }
+    }
+
+    let mut bindings_meta: Vec<mars_types::BindingMetadata> = Vec::with_capacity(outputs.len());
+    let mut pages_meta: Vec<PageEntry> = Vec::new();
+    let mut class_sidecars: Vec<LayerSidecarEntry> = Vec::new();
+    let mut label_sidecars: Vec<LayerSidecarEntry> = Vec::new();
+
+    for mut out in outputs {
         bindings_meta.push(out.meta);
         pages_meta.append(&mut out.pages);
         class_sidecars.append(&mut out.class_sidecars);
         label_sidecars.append(&mut out.label_sidecars);
     }
 
+    // stable manifest ordering under concurrent binding compilation.
+    bindings_meta.sort_by(|a, b| a.binding_id.as_str().cmp(b.binding_id.as_str()));
     pages_meta.sort_by(|a, b| {
         a.key
             .binding_id
@@ -618,6 +659,16 @@ pub async fn run_snapshot_from_plan(
             .then_with(|| a.key.level.cmp(&b.key.level))
             .then_with(|| a.hilbert_range.0.cmp(&b.hilbert_range.0))
     });
+    let sidecar_cmp = |a: &LayerSidecarEntry, b: &LayerSidecarEntry| {
+        a.layer_id
+            .as_str()
+            .cmp(b.layer_id.as_str())
+            .then_with(|| a.page_key.binding_id.as_str().cmp(b.page_key.binding_id.as_str()))
+            .then_with(|| a.page_key.level.cmp(&b.page_key.level))
+            .then_with(|| a.page_key.page_id.cmp(&b.page_key.page_id))
+    };
+    class_sidecars.sort_by(sidecar_cmp);
+    label_sidecars.sort_by(sidecar_cmp);
 
     Ok(Manifest {
         format_version: MANIFEST_FORMAT_VERSION,
