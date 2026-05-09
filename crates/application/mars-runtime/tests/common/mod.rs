@@ -24,7 +24,7 @@ use mars_config::model::{
     ArtifactCache, ArtifactStore, Artifacts, Band, Cells, Class, ClassStyle, Compiler, Config, Interfaces, Layer,
     Observability, Render, Scales, ServiceMeta, Source, SourceBinding,
 };
-use mars_render_port::{Canvas, DrawOp, EncodeError, Encoder, ImageFormat, Pixmap, RenderError, Renderer};
+use mars_render_port::{Canvas, DrawOp, EncodeError, Encoder, ImageFormat, Pixmap, RenderError, Renderer, TextMetrics};
 use mars_runtime::{Deps, Fonts, RenderPlan, Runtime, RuntimeState};
 use mars_store::mem::{InMemoryCache, InMemoryStore};
 use mars_store::{LocalCache, ObjectStore};
@@ -53,6 +53,18 @@ impl Renderer for CapturingRenderer {
             width: canvas.width,
             height: canvas.height,
             premultiplied_rgba: vec![0u8; n],
+        })
+    }
+
+    fn measure_text(&self, text: &str, style: &LabelStyle) -> Result<TextMetrics, RenderError> {
+        // tests inspect ops rather than collision; coarse stub matches the
+        // pre-Phase-F approximation so existing layout assertions are stable.
+        let chars = text.chars().count().max(1) as f32;
+        let fs = style.font_size.max(1.0);
+        Ok(TextMetrics {
+            advance_x: chars * 0.55 * fs,
+            ascent: fs * 0.8,
+            descent: fs * 0.2,
         })
     }
 }

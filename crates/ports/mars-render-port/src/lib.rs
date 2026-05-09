@@ -102,6 +102,20 @@ pub struct Pixmap {
     pub premultiplied_rgba: Vec<u8>,
 }
 
+/// Shaped-text metrics in pixel space. Returned by [`Renderer::measure_text`]
+/// so the application layer can size collision bboxes against the same font
+/// path the renderer will later use to rasterise the run.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextMetrics {
+    /// Horizontal advance of the shaped run in pixels (sum of glyph
+    /// advances). Pre-cluster, post-shaping.
+    pub advance_x: f32,
+    /// Distance from baseline to the run's top in pixels (positive).
+    pub ascent: f32,
+    /// Distance from baseline to the run's bottom in pixels (positive).
+    pub descent: f32,
+}
+
 /// Renderer port. Implementations may keep internal scratch buffers across
 /// calls and must remain `Send + Sync` for use from the runtime task pool.
 ///
@@ -111,6 +125,12 @@ pub trait Renderer: Send + Sync + 'static {
     /// Rasterise `ops` onto `canvas`. Returns the raw pixmap; encoding is
     /// the caller's responsibility (see [`Encoder`]).
     fn render(&self, canvas: Canvas, ops: &[DrawOp]) -> Result<Pixmap, RenderError>;
+
+    /// Shape `text` under `style` and return font-aware pixel metrics. The
+    /// label collision pass uses the result to size each candidate's bbox so
+    /// it agrees with what `render` will later paint, avoiding the
+    /// fudge-factor drift of a chars-times-font-size approximation.
+    fn measure_text(&self, text: &str, style: &LabelStyle) -> Result<TextMetrics, RenderError>;
 }
 
 /// Encoder port. Splits image-format encoding from rasterisation so the two

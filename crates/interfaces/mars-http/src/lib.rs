@@ -496,6 +496,21 @@ mod tests {
                 premultiplied_rgba: Vec::new(),
             })
         }
+
+        fn measure_text(
+            &self,
+            text: &str,
+            style: &mars_style::LabelStyle,
+        ) -> Result<mars_render_port::TextMetrics, RenderError> {
+            // endpoint tests don't exercise the collision pass; coarse stub.
+            let chars = text.chars().count().max(1) as f32;
+            let fs = style.font_size.max(1.0);
+            Ok(mars_render_port::TextMetrics {
+                advance_x: chars * 0.55 * fs,
+                ascent: fs * 0.8,
+                descent: fs * 0.2,
+            })
+        }
     }
 
     #[derive(Debug)]

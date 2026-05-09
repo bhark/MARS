@@ -7,8 +7,9 @@ mod raster;
 
 use std::sync::Arc;
 
-use mars_render_port::{Canvas, DrawOp, EncodeError, Encoder, ImageFormat, Pixmap, RenderError, Renderer};
-use mars_text::Fonts;
+use mars_render_port::{Canvas, DrawOp, EncodeError, Encoder, ImageFormat, Pixmap, RenderError, Renderer, TextMetrics};
+use mars_style::LabelStyle;
+use mars_text::{FontError, Fonts};
 use tiny_skia::Pixmap as SkPixmap;
 
 /// CPU rasteriser. Stamps geometry via tiny-skia and shapes / rasterises
@@ -58,6 +59,19 @@ impl Renderer for TinySkiaRenderer {
             premultiplied_rgba: pm.take(),
         })
     }
+
+    fn measure_text(&self, text: &str, style: &LabelStyle) -> Result<TextMetrics, RenderError> {
+        let run = mars_text::measure(text, style, &self.fonts).map_err(font_err_to_render)?;
+        Ok(TextMetrics {
+            advance_x: run.advance_x,
+            ascent: run.ascent,
+            descent: run.descent,
+        })
+    }
+}
+
+fn font_err_to_render(e: FontError) -> RenderError {
+    RenderError::Backend(format!("font: {e}"))
 }
 
 /// PNG deflate level used by [`TinySkiaEncoder`]. Variants intentionally
@@ -184,6 +198,49 @@ mod tests {
         let info = reader.next_frame(&mut buf).unwrap();
         buf.truncate(info.buffer_size());
         (info.width, info.height, buf)
+    }
+
+    #[test]
+    fn measure_text_returns_font_aware_metrics() {
+        let r = TinySkiaRenderer::new(Arc::new(mars_text::Fonts::with_default()));
+        let style = mars_style::LabelStyle {
+            font_family: "DejaVu Sans".into(),
+            font_size: 12.0,
+            fill: mars_style::Colour::rgba(0, 0, 0, 255),
+            halo: None,
+            priority: 0,
+            min_distance: 0.0,
+        };
+        let m = r.measure_text("hello", &style).unwrap();
+        // shaped advance of "hello" at 12px is well over the chars*0.55*fs
+        // approximation's lower bound but still far below a worst-case glyph
+        // run; just sanity-check the metric is finite and positive.
+        assert!(m.advance_x.is_finite() && m.advance_x > 0.0);
+        assert!(m.ascent.is_finite() && m.ascent > 0.0);
+        assert!(m.descent.is_finite() && m.descent >= 0.0);
+        // empty text shapes to a zero-width run.
+        let zero = r.measure_text("", &style).unwrap();
+        assert_eq!(zero.advance_x, 0.0);
+        // ascent + descent depend only on the font, not the text.
+        assert!((m.ascent - zero.ascent).abs() < 1e-3);
+    }
+
+    #[test]
+    fn measure_text_unknown_font_falls_back_to_default() {
+        // mars_text::Fonts::select falls back to DejaVu Sans / sans-serif on
+        // unknown family rather than erroring; the measure_text path inherits
+        // that contract so labels render with a sane default.
+        let r = TinySkiaRenderer::new(Arc::new(mars_text::Fonts::with_default()));
+        let style = mars_style::LabelStyle {
+            font_family: "no-such-font-12345".into(),
+            font_size: 12.0,
+            fill: mars_style::Colour::rgba(0, 0, 0, 255),
+            halo: None,
+            priority: 0,
+            min_distance: 0.0,
+        };
+        let m = r.measure_text("x", &style).unwrap();
+        assert!(m.advance_x > 0.0 && m.ascent > 0.0);
     }
 
     #[test]
