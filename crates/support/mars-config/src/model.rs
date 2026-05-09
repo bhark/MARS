@@ -65,12 +65,33 @@ pub struct Compiler {
     /// source-side connection pool). `NonZeroUsize` rejects 0 at deserialise.
     #[serde(default)]
     pub parallel_cells: Option<NonZeroUsize>,
-    /// Working-set ceiling for the bootstrap external sort. Above this, the
-    /// snapshot path spills Hilbert-prefix buckets to temp files instead of
-    /// keeping rows in memory. Unit-suffixed byte literal (`4GiB`).
-    /// LAZARUS Phase C bootstrap.
+    /// Working-set ceiling for the bootstrap external sort's in-memory
+    /// accumulator. The disk-backed bucketed sort drains in-RAM rows into
+    /// per-bucket spill files when accumulated estimate crosses
+    /// `bootstrap_working_set_bytes * bootstrap_spill_threshold_fraction`.
+    /// Unit-suffixed byte literal (`4GiB`).
     #[serde(default = "default_bootstrap_working_set")]
     pub bootstrap_working_set_bytes: String,
+    /// Scratch directory for bootstrap spill files (one per Hilbert-prefix
+    /// bucket per binding under compile). `None` resolves to
+    /// `std::env::temp_dir()` at use time. Operators should point this at the
+    /// node-local SSD.
+    #[serde(default)]
+    pub bootstrap_scratch_dir: Option<String>,
+    /// Hard upper bound on accumulated spill bytes per binding. The bootstrap
+    /// path fails with [`ScratchBudgetExceeded`] when total bucket-file size
+    /// crosses this. Unit-suffixed byte literal (`64GiB`).
+    ///
+    /// [`ScratchBudgetExceeded`]: https://docs.rs/mars-compiler
+    #[serde(default = "default_bootstrap_scratch_budget")]
+    pub bootstrap_scratch_budget_bytes: String,
+    /// Fraction of `bootstrap_working_set_bytes` at which the bootstrap
+    /// accumulator drains its in-memory tail to spill files and routes
+    /// subsequent rows directly to disk. `0.0` forces always-spill (useful for
+    /// parity tests); `1.0` keeps rows in memory until the working-set
+    /// ceiling is reached. Default `0.5`.
+    #[serde(default = "default_bootstrap_spill_threshold_fraction")]
+    pub bootstrap_spill_threshold_fraction: f32,
     /// Opportunistic rebalance settings (split / merge under size or
     /// bbox-dilation drift).
     #[serde(default)]
@@ -83,6 +104,9 @@ impl Default for Compiler {
             window: default_compiler_window(),
             parallel_cells: None,
             bootstrap_working_set_bytes: default_bootstrap_working_set(),
+            bootstrap_scratch_dir: None,
+            bootstrap_scratch_budget_bytes: default_bootstrap_scratch_budget(),
+            bootstrap_spill_threshold_fraction: default_bootstrap_spill_threshold_fraction(),
             rebalance: Rebalance::default(),
         }
     }
@@ -98,6 +122,19 @@ impl Compiler {
     pub fn bootstrap_working_set(&self) -> Result<u64, ConfigError> {
         units::parse_bytes(&self.bootstrap_working_set_bytes)
     }
+
+    /// Resolve `bootstrap_scratch_budget_bytes` to bytes.
+    pub fn bootstrap_scratch_budget(&self) -> Result<u64, ConfigError> {
+        units::parse_bytes(&self.bootstrap_scratch_budget_bytes)
+    }
+
+    /// Resolve the configured scratch directory or the system temp dir.
+    pub fn bootstrap_scratch_dir_path(&self) -> std::path::PathBuf {
+        self.bootstrap_scratch_dir
+            .as_deref()
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+    }
 }
 
 fn default_compiler_window() -> String {
@@ -106,6 +143,14 @@ fn default_compiler_window() -> String {
 
 fn default_bootstrap_working_set() -> String {
     "4GiB".to_owned()
+}
+
+fn default_bootstrap_scratch_budget() -> String {
+    "64GiB".to_owned()
+}
+
+fn default_bootstrap_spill_threshold_fraction() -> f32 {
+    0.5
 }
 
 /// Opportunistic rebalance settings. LAZARUS §Rebalance: rebalance is

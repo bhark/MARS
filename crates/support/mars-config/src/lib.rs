@@ -119,6 +119,18 @@ pub fn validate(config: &Config, config_dir: &Path) -> Result<(), ConfigError> {
             "compiler.bootstrap_working_set_bytes must be > 0".into(),
         ));
     }
+    let scratch_budget = config.compiler.bootstrap_scratch_budget()?;
+    if scratch_budget == 0 {
+        return Err(ConfigError::Invalid(
+            "compiler.bootstrap_scratch_budget_bytes must be > 0".into(),
+        ));
+    }
+    let frac = config.compiler.bootstrap_spill_threshold_fraction;
+    if !(frac.is_finite() && (0.0..=1.0).contains(&frac)) {
+        return Err(ConfigError::Invalid(format!(
+            "compiler.bootstrap_spill_threshold_fraction must be in [0.0, 1.0]; got {frac}"
+        )));
+    }
     let _ = config.compiler.rebalance.window_dur()?;
     if config.service.name.contains(' ') {
         return Err(ConfigError::Invalid(format!(
@@ -1164,6 +1176,56 @@ label_survival: follow_geometry
     }
 
     #[test]
+    fn rejects_zero_bootstrap_scratch_budget() {
+        let mut cfg = minimal_config();
+        cfg.compiler.bootstrap_scratch_budget_bytes = "0".into();
+        let err = validate(&cfg, Path::new("."));
+        assert!(matches!(&err, Err(ConfigError::Invalid(s)) if s.contains("bootstrap_scratch_budget_bytes")));
+    }
+
+    #[test]
+    fn rejects_unparsable_bootstrap_scratch_budget() {
+        let mut cfg = minimal_config();
+        cfg.compiler.bootstrap_scratch_budget_bytes = "lots".into();
+        let err = validate(&cfg, Path::new("."));
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn rejects_out_of_range_spill_threshold() {
+        let mut cfg = minimal_config();
+        cfg.compiler.bootstrap_spill_threshold_fraction = 1.5;
+        let err = validate(&cfg, Path::new("."));
+        assert!(matches!(&err, Err(ConfigError::Invalid(s)) if s.contains("bootstrap_spill_threshold_fraction")));
+
+        let mut cfg = minimal_config();
+        cfg.compiler.bootstrap_spill_threshold_fraction = -0.1;
+        let err = validate(&cfg, Path::new("."));
+        assert!(matches!(&err, Err(ConfigError::Invalid(s)) if s.contains("bootstrap_spill_threshold_fraction")));
+
+        let mut cfg = minimal_config();
+        cfg.compiler.bootstrap_spill_threshold_fraction = f32::NAN;
+        let err = validate(&cfg, Path::new("."));
+        assert!(matches!(&err, Err(ConfigError::Invalid(s)) if s.contains("bootstrap_spill_threshold_fraction")));
+    }
+
+    #[test]
+    fn bootstrap_scratch_dir_resolves_to_temp_when_unset() {
+        let cfg = minimal_config();
+        assert_eq!(cfg.compiler.bootstrap_scratch_dir_path(), std::env::temp_dir());
+    }
+
+    #[test]
+    fn bootstrap_scratch_dir_resolves_to_configured_path() {
+        let mut cfg = minimal_config();
+        cfg.compiler.bootstrap_scratch_dir = Some("/var/lib/mars/scratch".into());
+        assert_eq!(
+            cfg.compiler.bootstrap_scratch_dir_path(),
+            std::path::PathBuf::from("/var/lib/mars/scratch")
+        );
+    }
+
+    #[test]
     fn rejects_unparsable_rebalance_window() {
         let mut cfg = minimal_config();
         cfg.compiler.rebalance.window = "every other Sunday".into();
@@ -1177,6 +1239,11 @@ label_survival: follow_geometry
         let parsed: crate::model::Compiler = serde_yaml_ng::from_str(yaml).unwrap();
         assert_eq!(parsed.window_dur().unwrap().as_secs(), 300);
         assert_eq!(parsed.bootstrap_working_set().unwrap(), 4 * 1024 * 1024 * 1024);
+        // unset spill fields fall back to defaults (64GiB budget, 0.5 threshold,
+        // None scratch dir → system temp).
+        assert_eq!(parsed.bootstrap_scratch_budget().unwrap(), 64u64 * 1024 * 1024 * 1024);
+        assert!((parsed.bootstrap_spill_threshold_fraction - 0.5).abs() < f32::EPSILON);
+        assert!(parsed.bootstrap_scratch_dir.is_none());
         assert!(!parsed.rebalance.enabled);
         assert_eq!(parsed.rebalance.window_dur().unwrap().as_secs(), 24 * 3600);
     }
