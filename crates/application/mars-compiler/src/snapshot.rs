@@ -359,10 +359,10 @@ async fn collect_binding_rows(
         let feature = wkb_to_feature_geom(&row.geometry, row.feature_id)?;
         let attr_bytes: u64 = row.attributes.iter().map(|(k, _)| (k.len() + 16) as u64).sum();
         if let Err(observed) = guard.add(geom_bytes_estimate.saturating_add(attr_bytes).saturating_add(64)) {
-            return Err(CompilerError::WorkingSetExceeded {
+            return Err(CompilerError::ScratchBudgetExceeded {
                 binding: binding.binding_id.as_str().to_string(),
                 observed_bytes: observed,
-                ceiling_bytes: working_set_bytes,
+                budget_bytes: working_set_bytes,
             });
         }
         rows.push(KeyedRow {
@@ -1273,16 +1273,16 @@ mod tests {
         };
         let err = run_snapshot(&deps, &plan, "test".into(), 1, 64).await.unwrap_err();
         match err {
-            CompilerError::WorkingSetExceeded {
+            CompilerError::ScratchBudgetExceeded {
                 binding,
                 observed_bytes,
-                ceiling_bytes,
+                budget_bytes,
             } => {
                 assert_eq!(binding, "pts");
-                assert!(observed_bytes > ceiling_bytes);
-                assert_eq!(ceiling_bytes, 64);
+                assert!(observed_bytes > budget_bytes);
+                assert_eq!(budget_bytes, 64);
             }
-            other => panic!("expected WorkingSetExceeded, got {other:?}"),
+            other => panic!("expected ScratchBudgetExceeded, got {other:?}"),
         }
     }
 }

@@ -2,9 +2,9 @@
 //!
 //! Two responsibilities:
 //!
-//! 1. enforce a configurable working-set ceiling so a binding whose row
-//!    accumulation outgrows operator-allocated RAM hits a clear, named
-//!    [`crate::CompilerError::WorkingSetExceeded`] instead of OOM-ing the
+//! 1. enforce a configurable scratch budget so a binding whose row
+//!    accumulation outgrows operator-allocated scratch hits a clear, named
+//!    [`crate::CompilerError::ScratchBudgetExceeded`] instead of OOM-ing the
 //!    pod (LAZARUS bailout 5);
 //! 2. sort rows by `HilbertKey` using a top-bit bucket pass followed by
 //!    in-bucket comparison sort. The bucket structure is the same the
@@ -25,9 +25,10 @@ use mars_types::HilbertKey;
 /// Configuration for [`bucketed_sort_in_place`] and [`WorkingSetGuard`].
 #[derive(Debug, Clone, Copy)]
 pub struct ExternalSortConfig {
-    /// Working-set ceiling in bytes. Above this, the bootstrap path is
-    /// expected to fail with [`crate::CompilerError::WorkingSetExceeded`]
-    /// rather than continue to allocate.
+    /// Working-set ceiling in bytes. The bootstrap accumulator drains its
+    /// in-memory tail to per-bucket spill files when crossed; the rebuild
+    /// path (which does not spill) fails with
+    /// [`crate::CompilerError::ScratchBudgetExceeded`] on overflow.
     pub working_set_bytes: u64,
     /// Number of leading bits of the Hilbert key used for the bucket pass.
     /// Higher → more, smaller buckets; default 12 → 4096 buckets is well

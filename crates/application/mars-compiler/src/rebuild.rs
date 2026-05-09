@@ -231,10 +231,10 @@ async fn rebuild_binding_incremental(
         let feature = wkb_to_feature_geom(&row.geometry, row.feature_id)?;
         let attr_bytes: u64 = row.attributes.iter().map(|(k, _)| (k.len() + 16) as u64).sum();
         if let Err(observed) = guard.add(geom_bytes_estimate.saturating_add(attr_bytes).saturating_add(64)) {
-            return Err(CompilerError::WorkingSetExceeded {
+            return Err(CompilerError::ScratchBudgetExceeded {
                 binding: binding_plan.binding_id.as_str().to_string(),
                 observed_bytes: observed,
-                ceiling_bytes: working_set_bytes,
+                budget_bytes: working_set_bytes,
             });
         }
         let cx = (f64::from(feature.bbox[0]) + f64::from(feature.bbox[2])) / 2.0;
@@ -524,10 +524,10 @@ async fn execute_rebalance_one_binding(
         let feature = wkb_to_feature_geom(&row.geometry, row.feature_id)?;
         let attr_bytes: u64 = row.attributes.iter().map(|(k, _)| (k.len() + 16) as u64).sum();
         if let Err(observed) = guard.add(geom_bytes_estimate.saturating_add(attr_bytes).saturating_add(64)) {
-            return Err(CompilerError::WorkingSetExceeded {
+            return Err(CompilerError::ScratchBudgetExceeded {
                 binding: binding_plan.binding_id.as_str().to_string(),
                 observed_bytes: observed,
-                ceiling_bytes: working_set_bytes,
+                budget_bytes: working_set_bytes,
             });
         }
         let cx = (f64::from(feature.bbox[0]) + f64::from(feature.bbox[2])) / 2.0;

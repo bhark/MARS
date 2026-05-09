@@ -133,23 +133,27 @@ pub enum CompilerError {
         /// Offending binding identifier.
         binding: String,
     },
-    /// Bootstrap accumulated row bytes exceeded the configured working-set
-    /// ceiling. Hits the LAZARUS bailout protocol: lift
-    /// `compiler.bootstrap_working_set_bytes` once measurement justifies it,
-    /// or split the binding. The disk-spilled external sort that lifts this
-    /// limit altogether is a tracked carry-over.
+    /// Bootstrap accumulated bytes exceeded the configured scratch budget.
+    /// Bootstrap streams source rows through a bucketed external sort whose
+    /// in-memory accumulator drains to per-bucket spill files when it crosses
+    /// `bootstrap_working_set_bytes * bootstrap_spill_threshold_fraction`.
+    /// This error fires when total spill bytes (or the in-memory accumulator
+    /// in the rebuild path, which keeps the same shape but does not spill)
+    /// cross `compiler.bootstrap_scratch_budget_bytes`. LAZARUS bailout 5:
+    /// lift the budget, point the scratch dir at a larger volume, or split
+    /// the binding.
     #[error(
-        "bootstrap working set exceeded: binding {binding} accumulated {observed_bytes} bytes \
-         (ceiling {ceiling_bytes}). lift compiler.bootstrap_working_set_bytes or split the binding."
+        "bootstrap scratch budget exceeded: binding {binding} accumulated {observed_bytes} bytes \
+         (budget {budget_bytes}). lift compiler.bootstrap_scratch_budget_bytes, point \
+         bootstrap_scratch_dir at a larger volume, or split the binding."
     )]
-    WorkingSetExceeded {
+    ScratchBudgetExceeded {
         /// Affected binding id.
         binding: String,
-        /// Observed accumulated row-byte estimate at the point the ceiling
-        /// was crossed.
+        /// Observed accumulated bytes at the point the budget was crossed.
         observed_bytes: u64,
-        /// Configured working-set ceiling.
-        ceiling_bytes: u64,
+        /// Configured scratch budget.
+        budget_bytes: u64,
     },
 }
 
