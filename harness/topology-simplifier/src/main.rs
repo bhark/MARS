@@ -10,6 +10,7 @@ mod dp;
 mod graph;
 mod ingest;
 mod reassemble;
+mod verify;
 
 #[derive(Debug, Parser)]
 #[command(name = "topology-simplifier", about = "Phase 0 topology-aware simplification spike")]
@@ -70,9 +71,11 @@ fn main() -> anyhow::Result<()> {
     );
     for (i, tol) in args.tolerance_m.iter().enumerate() {
         let simp = dp::simplify_arcs(&topo, *tol);
-        let (_out, rstats) = reassemble::reassemble(&geoms, &topo, &simp);
+        let (out, rstats) = reassemble::reassemble(&geoms, &topo, &simp);
+        let sstats = verify::verify_seams(&topo, &simp, &out);
         eprintln!(
-            "level {} (tolerance {} m): rings={} collapsed_ring={} collapsed_arc={} invalid_hole={} self_isect={}",
+            "level {} (tol {} m): rings={} collapsed_ring={} collapsed_arc={} invalid_hole={} self_isect={} \
+             shared_arcs={} seam_violations={}",
             i + 1,
             tol,
             rstats.rings_total,
@@ -80,8 +83,10 @@ fn main() -> anyhow::Result<()> {
             rstats.collapsed_arc_count,
             rstats.invalid_reassembly_count,
             rstats.self_intersection_count,
+            sstats.shared_arc_count,
+            sstats.seam_violation_count,
         );
     }
-    eprintln!("(verify module lands in next commit)");
+    eprintln!("(timing + image + gate write-up land in subsequent commits)");
     Ok(())
 }
