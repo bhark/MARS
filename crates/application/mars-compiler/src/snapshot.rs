@@ -1474,4 +1474,100 @@ mod tests {
             other => panic!("expected ScratchBudgetExceeded, got {other:?}"),
         }
     }
+
+    /// Same fixture compiled with `spill_threshold_fraction = 1.0` (in-memory)
+    /// and `0.0` (forced spill); the resulting manifest content (page hashes,
+    /// sidecar hashes, bindings, level metadata) must be byte-identical.
+    /// Guards the parity contract the disk-backed path commits to.
+    #[tokio::test]
+    async fn in_memory_and_spilled_paths_produce_identical_manifests() {
+        // Mix point geometries spread across a wide bbox so the Hilbert
+        // sort differentiates them. Use enough rows that the spill path
+        // populates multiple buckets but few enough that the in-memory
+        // path stays well under the working-set ceiling.
+        let rows: Vec<RowBytes> = (0..256)
+            .map(|i| {
+                let x = (i as f64) * 37.0;
+                let y = (i as f64) * 19.0 + 1000.0;
+                RowBytes {
+                    feature_id: i,
+                    geometry: point_wkb(x, y),
+                    attributes: vec![("name".into(), AttrValue::String(format!("p{i:03}")))],
+                }
+            })
+            .collect();
+
+        async fn run_with_spill(rows: Vec<RowBytes>, spill: SpillConfig) -> Manifest {
+            let (deps, _store) = make_deps(rows);
+            let plan = BootstrapPlan {
+                bindings: vec![binding_plan("points", 64 * 1024)],
+                layers: vec![layer_plan("dots", "points", false)],
+            };
+            run_snapshot(&deps, &plan, "test".into(), 1, &spill).await.unwrap()
+        }
+
+        let scratch = tempfile::TempDir::new().unwrap();
+        let in_memory_spill = SpillConfig::test_with(
+            4 * 1024 * 1024 * 1024,
+            scratch.path().to_path_buf(),
+            u64::MAX,
+            1.0, // never spill
+        );
+        let forced_spill = SpillConfig::test_with(
+            4 * 1024 * 1024 * 1024,
+            scratch.path().to_path_buf(),
+            u64::MAX,
+            0.0, // spill from row 1
+        );
+
+        let in_memory = run_with_spill(rows.clone(), in_memory_spill).await;
+        let spilled = run_with_spill(rows.clone(), forced_spill).await;
+
+        assert_eq!(in_memory.bindings.len(), 1);
+        assert_eq!(in_memory.bindings, spilled.bindings);
+        assert_eq!(in_memory.pages.len(), spilled.pages.len(), "page count mismatch");
+        for (a, b) in in_memory.pages.iter().zip(spilled.pages.iter()) {
+            assert_eq!(a.key, b.key, "page key mismatch");
+            assert_eq!(a.content_hash, b.content_hash, "page content hash differs");
+            assert_eq!(a.size_bytes, b.size_bytes);
+            assert_eq!(a.hilbert_range, b.hilbert_range);
+            assert_eq!(a.feature_count, b.feature_count);
+        }
+        assert_eq!(in_memory.class_sidecars.len(), spilled.class_sidecars.len());
+        for (a, b) in in_memory.class_sidecars.iter().zip(spilled.class_sidecars.iter()) {
+            assert_eq!(a.content_hash, b.content_hash, "class sidecar hash differs");
+        }
+        // sanity: the scratch dir is empty after the spilled run, since all
+        // bucket TempPath instances dropped at end of run_snapshot.
+        let leftover: Vec<_> = std::fs::read_dir(scratch.path()).unwrap().flatten().collect();
+        assert!(leftover.is_empty(), "spill files leaked: {leftover:?}");
+    }
+
+    /// `BootstrapAccumulator` activates the linear spill exactly once when
+    /// the threshold is crossed. Verified by inspecting `SortedRows` shape
+    /// after `finalize`.
+    #[tokio::test]
+    async fn forced_spill_returns_spilled_sorted_rows() {
+        use crate::spill::SortedRows;
+
+        let rows: Vec<RowBytes> = (0..32)
+            .map(|i| RowBytes {
+                feature_id: i,
+                geometry: point_wkb(f64::from(i as i32), f64::from(i as i32)),
+                attributes: vec![("name".into(), AttrValue::String(format!("p{i}")))],
+            })
+            .collect();
+        let (deps, _store) = make_deps(rows);
+        let scratch = tempfile::TempDir::new().unwrap();
+        let plan = BootstrapPlan {
+            bindings: vec![binding_plan("pts", 8 * 1024)],
+            layers: vec![],
+        };
+        let binding = &plan.bindings[0];
+        let spill = SpillConfig::test_with(4 * 1024 * 1024 * 1024, scratch.path().to_path_buf(), u64::MAX, 0.0);
+        let collected = collect_binding_rows(&deps, binding, &spill).await.unwrap();
+        assert!(matches!(collected.sorted, SortedRows::Spilled(_)));
+        assert_eq!(collected.total_features, 32);
+        assert_eq!(collected.sidecar_entries.len(), 32);
+    }
 }
