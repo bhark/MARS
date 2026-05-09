@@ -21,7 +21,11 @@ use mars_compiler::incremental::IncrementalCycle;
 use mars_compiler::plan::{BindingPlan, BootstrapPlan, LevelPlan};
 use mars_compiler::rebuild::rebuild_pages;
 use mars_compiler::sidecar::SidecarReader;
-use mars_compiler::snapshot::run_snapshot;
+use mars_compiler::snapshot::{SpillConfig, run_snapshot};
+
+fn test_spill(working_set: u64) -> SpillConfig {
+    SpillConfig::test_with(working_set, std::env::temp_dir(), u64::MAX, 1.0)
+}
 use mars_observability::Metrics;
 use mars_source::{
     AttrValue, ChangeEvent, ChangeFeed, ChangeSubscription, GeometryEnvelope, LeaderLock, LeaderLockGuard, RowBytes,
@@ -191,7 +195,7 @@ async fn surgical_invalidation_rebuilds_only_dirty_pages() {
     };
 
     // bootstrap
-    let bootstrap = run_snapshot(&deps, &plan, "test".into(), 1, 4 * 1024 * 1024 * 1024)
+    let bootstrap = run_snapshot(&deps, &plan, "test".into(), 1, &test_spill(4 * 1024 * 1024 * 1024))
         .await
         .unwrap();
     assert!(
@@ -340,9 +344,16 @@ async fn surgical_invalidation_rebuilds_only_dirty_pages() {
     let dirty = cycle.finish();
     assert!(dirty.warnings.is_empty(), "no warnings expected: {:?}", dirty.warnings);
 
-    let outcome = rebuild_pages(&deps, &plan, &bootstrap, &sidecars, dirty, 4 * 1024 * 1024 * 1024)
-        .await
-        .unwrap();
+    let outcome = rebuild_pages(
+        &deps,
+        &plan,
+        &bootstrap,
+        &sidecars,
+        dirty,
+        &test_spill(4 * 1024 * 1024 * 1024),
+    )
+    .await
+    .unwrap();
 
     // pages outside the touched set (A, B, C) must be untouched: not present
     // in replacement_pages and not in dropped_pages.

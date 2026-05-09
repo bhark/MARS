@@ -25,7 +25,11 @@ use mars_compiler::incremental::IncrementalCycle;
 use mars_compiler::plan::{BindingPlan, BootstrapPlan, LevelPlan};
 use mars_compiler::rebuild::rebuild_pages;
 use mars_compiler::sidecar::SidecarReader;
-use mars_compiler::snapshot::run_snapshot;
+use mars_compiler::snapshot::{SpillConfig, run_snapshot};
+
+fn test_spill(working_set: u64) -> SpillConfig {
+    SpillConfig::test_with(working_set, std::env::temp_dir(), u64::MAX, 1.0)
+}
 use mars_observability::Metrics;
 use mars_source::{
     AttrValue, ChangeEvent, ChangeFeed, ChangeSubscription, GeometryEnvelope, LeaderLock, LeaderLockGuard, RowBytes,
@@ -364,7 +368,7 @@ async fn rebuild_cycle_is_atomic_under_put_fault_injection() {
             bindings: vec![binding_plan("points", 1024)],
             layers: vec![],
         };
-        let bootstrap = run_snapshot(&deps, &plan, "test".into(), 1, 4 * 1024 * 1024 * 1024)
+        let bootstrap = run_snapshot(&deps, &plan, "test".into(), 1, &test_spill(4 * 1024 * 1024 * 1024))
             .await
             .unwrap();
         manifest_store.publish(&bootstrap).await.unwrap();
@@ -391,9 +395,15 @@ async fn rebuild_cycle_is_atomic_under_put_fault_injection() {
             bindings: vec![binding_plan("points", 1024)],
             layers: vec![],
         };
-        let bootstrap = run_snapshot(&bootstrap_deps, &plan, "test".into(), 1, 4 * 1024 * 1024 * 1024)
-            .await
-            .unwrap();
+        let bootstrap = run_snapshot(
+            &bootstrap_deps,
+            &plan,
+            "test".into(),
+            1,
+            &test_spill(4 * 1024 * 1024 * 1024),
+        )
+        .await
+        .unwrap();
         manifest_store.publish(&bootstrap).await.unwrap();
 
         // now switch to a fault-injecting store for the cycle: this puts the
@@ -465,6 +475,6 @@ async fn run_one_rebuild_cycle(
     })?;
     let dirty = cycle.finish();
 
-    let outcome = rebuild_pages(deps, plan, prior, &sidecars, dirty, 4 * 1024 * 1024 * 1024).await?;
+    let outcome = rebuild_pages(deps, plan, prior, &sidecars, dirty, &test_spill(4 * 1024 * 1024 * 1024)).await?;
     Ok(merge(prior, &outcome, prior.version + 1))
 }

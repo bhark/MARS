@@ -20,7 +20,11 @@ use mars_compiler::plan::{BindingPlan, BootstrapPlan, LevelPlan};
 use mars_compiler::rebalance::{RebalanceOp, SIZE_HI_FACTOR, SIZE_LO_FACTOR, rebalance_candidates};
 use mars_compiler::rebuild::execute_rebalance;
 use mars_compiler::sidecar::SidecarReader;
-use mars_compiler::snapshot::run_snapshot;
+use mars_compiler::snapshot::{SpillConfig, run_snapshot};
+
+fn test_spill(working_set: u64) -> SpillConfig {
+    SpillConfig::test_with(working_set, std::env::temp_dir(), u64::MAX, 1.0)
+}
 use mars_observability::Metrics;
 use mars_source::{
     AttrValue, ChangeFeed, ChangeSubscription, LeaderLock, LeaderLockGuard, RowBytes, Source,
@@ -161,7 +165,7 @@ async fn rebalance_candidates_flags_oversize_page() {
         bindings: vec![binding_plan("points", 100 * 1024 * 1024)],
         layers: vec![],
     };
-    let manifest = run_snapshot(&deps, &plan, "test".into(), 1, 4 * 1024 * 1024 * 1024)
+    let manifest = run_snapshot(&deps, &plan, "test".into(), 1, &test_spill(4 * 1024 * 1024 * 1024))
         .await
         .unwrap();
     let binding_id = BindingId::try_new("points").unwrap();
@@ -200,7 +204,7 @@ async fn execute_rebalance_split_preserves_feature_ids_and_balances_sizes() {
         bindings: vec![binding_plan("points", 100 * 1024 * 1024)],
         layers: vec![],
     };
-    let manifest = run_snapshot(&deps, &plan, "test".into(), 1, 4 * 1024 * 1024 * 1024)
+    let manifest = run_snapshot(&deps, &plan, "test".into(), 1, &test_spill(4 * 1024 * 1024 * 1024))
         .await
         .unwrap();
     let binding_id = BindingId::try_new("points").unwrap();

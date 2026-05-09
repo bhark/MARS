@@ -18,7 +18,11 @@ use mars_compiler::incremental::IncrementalCycle;
 use mars_compiler::plan::{BindingPlan, BootstrapPlan, LevelPlan};
 use mars_compiler::rebuild::rebuild_pages;
 use mars_compiler::sidecar::SidecarReader;
-use mars_compiler::snapshot::run_snapshot;
+use mars_compiler::snapshot::{SpillConfig, run_snapshot};
+
+fn test_spill(working_set: u64) -> SpillConfig {
+    SpillConfig::test_with(working_set, std::env::temp_dir(), u64::MAX, 1.0)
+}
 use mars_observability::Metrics;
 use mars_source::{
     AttrValue, ChangeEvent, ChangeFeed, ChangeSubscription, GeometryEnvelope, LeaderLock, LeaderLockGuard, RowBytes,
@@ -157,7 +161,7 @@ async fn build_fixture(n_features: usize, page_size: u64) -> Fixture {
         bindings: vec![binding_plan("points", page_size)],
         layers: vec![],
     };
-    let prior = run_snapshot(&deps, &plan, "bench".into(), 1, 8 * 1024 * 1024 * 1024)
+    let prior = run_snapshot(&deps, &plan, "bench".into(), 1, &test_spill(8 * 1024 * 1024 * 1024))
         .await
         .unwrap();
     let binding_id = BindingId::try_new("points").unwrap();
@@ -236,7 +240,7 @@ fn bench_page_rebuild(c: &mut Criterion) {
                         &fixture.prior,
                         &sidecars,
                         dirty,
-                        8 * 1024 * 1024 * 1024,
+                        &test_spill(8 * 1024 * 1024 * 1024),
                     )
                     .await
                     .unwrap();

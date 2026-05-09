@@ -82,12 +82,13 @@ pub async fn rebuild_pages(
     prior: &Manifest,
     sidecars: &HashMap<BindingId, SidecarReader<'_>>,
     dirty: DirtyPages,
-    working_set_bytes: u64,
+    spill: &crate::snapshot::SpillConfig,
 ) -> Result<RebuildOutcome, CompilerError> {
     let mut outcome = RebuildOutcome::default();
+    let working_set_bytes = spill.working_set_bytes;
     for (binding_id, binding_dirty) in dirty.per_binding {
         if binding_dirty.truncated {
-            rebuild_binding_truncate(deps, plan, &binding_id, working_set_bytes, &mut outcome).await?;
+            rebuild_binding_truncate(deps, plan, &binding_id, spill, &mut outcome).await?;
             continue;
         }
         let sidecar_warn = plan
@@ -116,7 +117,7 @@ async fn rebuild_binding_truncate(
     deps: &Deps,
     plan: &BootstrapPlan,
     binding_id: &BindingId,
-    working_set_bytes: u64,
+    spill: &crate::snapshot::SpillConfig,
     outcome: &mut RebuildOutcome,
 ) -> Result<(), CompilerError> {
     let binding =
@@ -126,7 +127,7 @@ async fn rebuild_binding_truncate(
             .ok_or(CompilerError::InvariantViolation {
                 what: "rebuild: unknown binding for truncate",
             })?;
-    let bo: BindingOutput = snapshot_one_binding(deps, binding, plan, working_set_bytes).await?;
+    let bo: BindingOutput = snapshot_one_binding(deps, binding, plan, spill).await?;
     outcome.refreshed_bindings.push(bo.meta);
     outcome.replacement_pages.extend(bo.pages);
     outcome.replacement_class_sidecars.extend(bo.class_sidecars);

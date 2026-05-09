@@ -21,6 +21,7 @@ pub mod rebuild;
 pub mod reconcile;
 pub mod sidecar;
 pub mod snapshot;
+pub mod spill;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -155,6 +156,30 @@ pub enum CompilerError {
         /// Configured scratch budget.
         budget_bytes: u64,
     },
+    /// Disk-backed bootstrap external-sort spill failed (I/O error, codec
+    /// roundtrip mismatch, malformed frame). The
+    /// [`spill::SpillError::BudgetExceeded`] variant is mapped to
+    /// [`CompilerError::ScratchBudgetExceeded`] separately; everything else
+    /// surfaces here.
+    #[error(transparent)]
+    Spill(spill::SpillError),
+}
+
+impl From<spill::SpillError> for CompilerError {
+    fn from(err: spill::SpillError) -> Self {
+        match err {
+            spill::SpillError::BudgetExceeded {
+                binding,
+                observed_bytes,
+                budget_bytes,
+            } => CompilerError::ScratchBudgetExceeded {
+                binding,
+                observed_bytes,
+                budget_bytes,
+            },
+            other => CompilerError::Spill(other),
+        }
+    }
 }
 
 /// All ports the compiler depends on, bundled for easy composition by the bin.
@@ -203,13 +228,13 @@ impl Compiler {
         let plan = plan::build_bootstrap_plan(&self.config)?;
         let prev_version = self.deps.manifest.current().await?.map_or(0, |m| m.version);
         let next_version = prev_version + 1;
-        let working_set_bytes = self.config.compiler.bootstrap_working_set()?;
+        let spill = snapshot::SpillConfig::from_compiler(&self.config.compiler)?;
         let manifest = snapshot::run_snapshot(
             &self.deps,
             &plan,
             self.config.service.name.clone(),
             next_version,
-            working_set_bytes,
+            &spill,
         )
         .await?;
         let v = publish_with_retry(self.deps.manifest.as_ref(), &manifest, &self.deps.metrics, &shutdown).await?;
@@ -344,9 +369,9 @@ impl Compiler {
         }
 
         // rebuild dirty pages.
-        let working_set_bytes = self.config.compiler.bootstrap_working_set()?;
+        let spill = snapshot::SpillConfig::from_compiler(&self.config.compiler)?;
         let started = std::time::Instant::now();
-        let outcome = rebuild::rebuild_pages(&self.deps, &plan, &prior, &sidecars, dirty, working_set_bytes).await?;
+        let outcome = rebuild::rebuild_pages(&self.deps, &plan, &prior, &sidecars, dirty, &spill).await?;
         self.deps.metrics.observe_compiler_rebuild_duration(started.elapsed());
 
         // merge outcome into prior to produce the new manifest.

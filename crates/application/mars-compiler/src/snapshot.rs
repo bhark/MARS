@@ -46,11 +46,68 @@ use mars_types::{
 
 use crate::class_eval::{LabelSpec, RowAttrs, assign_class, emit_label_candidate};
 use crate::decimate::{passes_min_size, simplify};
-use crate::external_sort::{ExternalSortConfig, WorkingSetGuard, bucketed_sort_in_place};
 use crate::hilbert::key_from_centroid;
 use crate::plan::{BindingPlan, BootstrapPlan, LayerPlan, LevelPlan};
 use crate::sidecar::encode_sidecar;
+use crate::spill::{BootstrapAccumulator, SortedRows};
 use crate::{CompilerError, Deps};
+
+/// Bootstrap-time spill knobs threaded through the snapshot pipeline.
+/// Mirrors the subset of [`mars_config::Compiler`] the bucketed external
+/// sort actually consumes; bundling it keeps `run_snapshot` and friends
+/// from growing per-knob arguments.
+#[derive(Debug, Clone)]
+pub struct SpillConfig {
+    /// In-memory accumulator ceiling. Crossing
+    /// `working_set_bytes * spill_threshold_fraction` activates the
+    /// disk-backed external sort for a binding.
+    pub working_set_bytes: u64,
+    /// Scratch directory hosting per-bucket spill files. Operators should
+    /// point this at node-local SSD.
+    pub scratch_dir: std::path::PathBuf,
+    /// Hard cap on per-binding spill bytes. Trips
+    /// [`CompilerError::ScratchBudgetExceeded`].
+    pub scratch_budget_bytes: u64,
+    /// Fraction of `working_set_bytes` at which the in-memory tail drains
+    /// to bucket spill files and subsequent rows route directly to disk.
+    pub spill_threshold_fraction: f32,
+}
+
+impl SpillConfig {
+    /// Derive a SpillConfig from a [`mars_config::Compiler`]. Returns the
+    /// config error verbatim when a unit-suffixed scalar fails to parse.
+    pub fn from_compiler(c: &mars_config::Compiler) -> Result<Self, mars_config::ConfigError> {
+        Ok(Self {
+            working_set_bytes: c.bootstrap_working_set()?,
+            scratch_dir: c.bootstrap_scratch_dir_path(),
+            scratch_budget_bytes: c.bootstrap_scratch_budget()?,
+            spill_threshold_fraction: c.bootstrap_spill_threshold_fraction,
+        })
+    }
+
+    /// Threshold byte count at which in-memory rows drain to spill.
+    pub(crate) fn spill_threshold_bytes(&self) -> u64 {
+        let frac = self.spill_threshold_fraction.clamp(0.0, 1.0) as f64;
+        ((self.working_set_bytes as f64) * frac) as u64
+    }
+
+    /// Constructor with explicit fields; primarily a test/bench convenience
+    /// (the operator path goes through [`Self::from_compiler`]).
+    #[doc(hidden)]
+    pub fn test_with(
+        working_set_bytes: u64,
+        scratch_dir: std::path::PathBuf,
+        scratch_budget_bytes: u64,
+        spill_threshold_fraction: f32,
+    ) -> Self {
+        Self {
+            working_set_bytes,
+            scratch_dir,
+            scratch_budget_bytes,
+            spill_threshold_fraction,
+        }
+    }
+}
 
 /// Run a single snapshot pass against the bindings in `plan`. Writes every
 /// page artifact + sidecar + manifest body via `deps`, returns the manifest
@@ -60,7 +117,7 @@ pub async fn run_snapshot(
     plan: &BootstrapPlan,
     service_name: String,
     manifest_version: u64,
-    working_set_bytes: u64,
+    spill: &SpillConfig,
 ) -> Result<Manifest, CompilerError> {
     let mut bindings_meta: Vec<BindingMetadata> = Vec::with_capacity(plan.bindings.len());
     let mut pages_meta: Vec<PageEntry> = Vec::new();
@@ -68,7 +125,7 @@ pub async fn run_snapshot(
     let mut label_sidecars: Vec<LayerSidecarEntry> = Vec::new();
 
     for binding in &plan.bindings {
-        let mut out = snapshot_one_binding(deps, binding, plan, working_set_bytes).await?;
+        let mut out = snapshot_one_binding(deps, binding, plan, spill).await?;
         bindings_meta.push(out.meta);
         pages_meta.append(&mut out.pages);
         class_sidecars.append(&mut out.class_sidecars);
@@ -110,12 +167,12 @@ pub(crate) async fn snapshot_one_binding(
     deps: &Deps,
     binding: &BindingPlan,
     plan: &BootstrapPlan,
-    working_set_bytes: u64,
+    spill: &SpillConfig,
 ) -> Result<BindingOutput, CompilerError> {
-    let rows = collect_binding_rows(deps, binding, working_set_bytes).await?;
-    let total_features = rows.len() as u64;
+    let collected = collect_binding_rows(deps, binding, spill).await?;
+    let total_features = collected.total_features;
 
-    if rows.is_empty() {
+    if total_features == 0 {
         let meta = BindingMetadata {
             binding_id: binding.binding_id.clone(),
             source_table: binding.source_table.clone(),
@@ -132,32 +189,9 @@ pub(crate) async fn snapshot_one_binding(
         });
     }
 
-    let combined_bbox = combined_bbox_of(&rows);
-
-    let mut keyed: Vec<KeyedRow> = rows
-        .into_iter()
-        .map(|r| {
-            let cx = (f64::from(r.feature.bbox[0]) + f64::from(r.feature.bbox[2])) / 2.0;
-            let cy = (f64::from(r.feature.bbox[1]) + f64::from(r.feature.bbox[3])) / 2.0;
-            let key = key_from_centroid(cx, cy, combined_bbox);
-            KeyedRow { key, ..r }
-        })
-        .collect();
-    bucketed_sort_in_place(&mut keyed, ExternalSortConfig::DEFAULT.bucket_bits, |r| r.key);
-    // hilbert order is stable only within a bucket; the legacy id sort was
-    // the de facto tiebreaker and is gone now that user_id is allowed to
-    // repeat. fall back to (hilbert, user_id, row_fingerprint) so two
-    // compile passes over the same input produce byte-identical output.
-    keyed.sort_by(|a, b| {
-        a.key
-            .cmp(&b.key)
-            .then_with(|| a.feature.user_id.cmp(&b.feature.user_id))
-            .then_with(|| a.row_fingerprint.cmp(&b.row_fingerprint))
-    });
-
-    // page-membership sidecar is computed once per binding (level-independent
-    // multimap user_id -> hilbert key; non-unique on user_id by design).
-    let mut sidecar_entries: Vec<(u64, HilbertKey)> = keyed.iter().map(|r| (r.feature.user_id, r.key)).collect();
+    let combined_bbox = collected.combined_bbox;
+    let sorted = collected.sorted;
+    let mut sidecar_entries = collected.sidecar_entries;
 
     let layer_plans: Vec<&LayerPlan> = plan.layers_for(&binding.binding_id).collect();
 
@@ -172,7 +206,7 @@ pub(crate) async fn snapshot_one_binding(
             binding,
             level,
             combined_bbox,
-            &keyed,
+            &sorted,
             &layer_plans,
             &mut all_pages,
             &mut class_sidecars,
@@ -210,32 +244,137 @@ pub(crate) async fn snapshot_one_binding(
     })
 }
 
+/// Per-binding page-sweep state. The sweep filters rows into leveled
+/// (paged + simplified) and pruned (label-only); each completed page
+/// drains pruned rows whose Hilbert key falls inside the page's range.
+/// Spans bucket boundaries when the spilled path feeds rows in chunks.
+struct LevelSweep {
+    next_page_id: u64,
+    current: Vec<KeyedRow>,
+    current_bytes: u64,
+    pruned: Vec<KeyedRow>,
+    pruned_idx: usize,
+    pages_in_level: Vec<PageEntry>,
+}
+
+impl LevelSweep {
+    fn new() -> Self {
+        Self {
+            next_page_id: 0,
+            current: Vec::new(),
+            current_bytes: 0,
+            pruned: Vec::new(),
+            pruned_idx: 0,
+            pages_in_level: Vec::new(),
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn emit_level(
     deps: &Deps,
     binding: &BindingPlan,
     level: &LevelPlan,
     combined_bbox: Bbox,
-    keyed: &[KeyedRow],
+    sorted: &SortedRows,
     layers: &[&LayerPlan],
     out_pages: &mut Vec<PageEntry>,
     out_class_sidecars: &mut Vec<LayerSidecarEntry>,
     out_label_sidecars: &mut Vec<LayerSidecarEntry>,
 ) -> Result<LevelMetadata, CompilerError> {
-    // pre-filter + simplify per the level's rules. rows that fail the size
-    // filter aren't paged, but their (feature, attrs) are retained so
-    // emit_layer_sidecars can produce Independent label candidates for them.
-    // pruned ordering follows `keyed`'s Hilbert ordering, so the page sweep
-    // below can attribute each pruned row to the right page in one pass.
-    let mut leveled: Vec<KeyedRow> = Vec::with_capacity(keyed.len());
-    let mut pruned: Vec<KeyedRow> = Vec::new();
-    for r in keyed {
+    let mut sweep = LevelSweep::new();
+    match sorted {
+        SortedRows::InMemory(rows) => {
+            feed_chunk(
+                deps,
+                binding,
+                level,
+                layers,
+                rows,
+                &mut sweep,
+                out_class_sidecars,
+                out_label_sidecars,
+            )
+            .await?;
+        }
+        SortedRows::Spilled(reader) => {
+            for idx in 0..reader.bucket_count() {
+                if reader.bucket_rows(idx) == 0 {
+                    continue;
+                }
+                let chunk = reader.take_bucket(idx)?;
+                feed_chunk(
+                    deps,
+                    binding,
+                    level,
+                    layers,
+                    &chunk,
+                    &mut sweep,
+                    out_class_sidecars,
+                    out_label_sidecars,
+                )
+                .await?;
+            }
+        }
+    }
+
+    if !sweep.current.is_empty() {
+        // trailing page absorbs every remaining pruned row, including those
+        // past the last leveled key.
+        let pruned_chunk = drain_pruned_through(&sweep.pruned, &mut sweep.pruned_idx, HilbertKey::max());
+        let page = flush_page(
+            deps,
+            binding,
+            level.level,
+            PageId::new(sweep.next_page_id),
+            &sweep.current,
+        )
+        .await?;
+        emit_layer_sidecars(
+            deps,
+            level,
+            &page,
+            &sweep.current,
+            pruned_chunk,
+            layers,
+            out_class_sidecars,
+            out_label_sidecars,
+        )
+        .await?;
+        sweep.pages_in_level.push(page);
+    }
+
+    let level_meta = LevelMetadata {
+        level: level.level,
+        vertex_tolerance_m: level.vertex_tolerance_m,
+        geometry_min_size_m: level.geometry_min_size_m,
+        label_min_priority: level.label_min_priority,
+        page_count: sweep.pages_in_level.len() as u32,
+        combined_bbox,
+        hilbert_range_table: sweep.pages_in_level.iter().map(|p| p.hilbert_range).collect(),
+    };
+    out_pages.append(&mut sweep.pages_in_level);
+    Ok(level_meta)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn feed_chunk(
+    deps: &Deps,
+    binding: &BindingPlan,
+    level: &LevelPlan,
+    layers: &[&LayerPlan],
+    chunk: &[KeyedRow],
+    sweep: &mut LevelSweep,
+    out_class_sidecars: &mut Vec<LayerSidecarEntry>,
+    out_label_sidecars: &mut Vec<LayerSidecarEntry>,
+) -> Result<(), CompilerError> {
+    for r in chunk {
         if !passes_min_size(&r.feature, level.geometry_min_size_m) {
-            pruned.push(r.clone());
+            sweep.pruned.push(r.clone());
             continue;
         }
         let geom = simplify(&r.feature.geom, level.vertex_tolerance_m, binding.simplifier);
-        leveled.push(KeyedRow {
+        let leveled = KeyedRow {
             feature: FeatureGeom {
                 user_id: r.feature.user_id,
                 bbox: r.feature.bbox,
@@ -245,73 +384,42 @@ async fn emit_level(
             geom_bytes_estimate: r.geom_bytes_estimate,
             key: r.key,
             row_fingerprint: r.row_fingerprint,
-        });
-    }
-
-    let mut pages_in_level: Vec<PageEntry> = Vec::new();
-    let mut next_page_id: u64 = 0;
-    let mut current: Vec<KeyedRow> = Vec::new();
-    let mut current_bytes: u64 = 0;
-    let mut pruned_idx: usize = 0;
-
-    for r in leveled {
-        let est = estimate_row_size(&r);
-        if !current.is_empty() && current_bytes.saturating_add(est) > binding.page_size_target_bytes {
+        };
+        let est = estimate_row_size(&leveled);
+        if !sweep.current.is_empty() && sweep.current_bytes.saturating_add(est) > binding.page_size_target_bytes {
             // attribute pruned rows up to (and including) this page's max
             // hilbert key; the final page absorbs anything past the last
             // leveled key.
-            let page_max_key = current.last().map(|x| x.key).unwrap_or(HilbertKey::min());
-            let pruned_chunk = drain_pruned_through(&pruned, &mut pruned_idx, page_max_key);
-            let page = flush_page(deps, binding, level.level, PageId::new(next_page_id), &current).await?;
+            let page_max_key = sweep.current.last().map(|x| x.key).unwrap_or(HilbertKey::min());
+            let pruned_chunk = drain_pruned_through(&sweep.pruned, &mut sweep.pruned_idx, page_max_key);
+            let page = flush_page(
+                deps,
+                binding,
+                level.level,
+                PageId::new(sweep.next_page_id),
+                &sweep.current,
+            )
+            .await?;
             emit_layer_sidecars(
                 deps,
                 level,
                 &page,
-                &current,
+                &sweep.current,
                 pruned_chunk,
                 layers,
                 out_class_sidecars,
                 out_label_sidecars,
             )
             .await?;
-            pages_in_level.push(page);
-            next_page_id += 1;
-            current = Vec::new();
-            current_bytes = 0;
+            sweep.pages_in_level.push(page);
+            sweep.next_page_id += 1;
+            sweep.current.clear();
+            sweep.current_bytes = 0;
         }
-        current_bytes = current_bytes.saturating_add(est);
-        current.push(r);
+        sweep.current_bytes = sweep.current_bytes.saturating_add(est);
+        sweep.current.push(leveled);
     }
-    if !current.is_empty() {
-        // trailing page absorbs every remaining pruned row, including those
-        // past the last leveled key.
-        let pruned_chunk = drain_pruned_through(&pruned, &mut pruned_idx, HilbertKey::max());
-        let page = flush_page(deps, binding, level.level, PageId::new(next_page_id), &current).await?;
-        emit_layer_sidecars(
-            deps,
-            level,
-            &page,
-            &current,
-            pruned_chunk,
-            layers,
-            out_class_sidecars,
-            out_label_sidecars,
-        )
-        .await?;
-        pages_in_level.push(page);
-    }
-
-    let level_meta = LevelMetadata {
-        level: level.level,
-        vertex_tolerance_m: level.vertex_tolerance_m,
-        geometry_min_size_m: level.geometry_min_size_m,
-        label_min_priority: level.label_min_priority,
-        page_count: pages_in_level.len() as u32,
-        combined_bbox,
-        hilbert_range_table: pages_in_level.iter().map(|p| p.hilbert_range).collect(),
-    };
-    out_pages.append(&mut pages_in_level);
-    Ok(level_meta)
+    Ok(())
 }
 
 /// One source row decoded into a feature, with attrs preserved for class /
@@ -334,11 +442,21 @@ pub(crate) struct KeyedRow {
     pub(crate) row_fingerprint: u64,
 }
 
+/// Output of [`collect_binding_rows`]: the deterministic-ordered row set
+/// (in-memory or spilled), the binding's combined bbox, the
+/// page-membership sidecar entries, and the total feature count.
+pub(crate) struct CollectedRows {
+    pub(crate) sorted: SortedRows,
+    pub(crate) combined_bbox: Bbox,
+    pub(crate) sidecar_entries: Vec<(u64, HilbertKey)>,
+    pub(crate) total_features: u64,
+}
+
 async fn collect_binding_rows(
     deps: &Deps,
     binding: &BindingPlan,
-    working_set_bytes: u64,
-) -> Result<Vec<KeyedRow>, CompilerError> {
+    spill: &SpillConfig,
+) -> Result<CollectedRows, CompilerError> {
     let port_binding = PortBinding::new(
         SourceCollectionId::new(binding.binding_id.as_str()),
         binding_schema(&binding.source_table),
@@ -350,30 +468,115 @@ async fn collect_binding_rows(
     )?;
     let mut stream = deps.source.fetch_full_table_streaming(&port_binding).await?;
 
-    let mut guard = WorkingSetGuard::new(working_set_bytes);
-    let mut rows: Vec<KeyedRow> = Vec::new();
+    let mut accumulator = BootstrapAccumulator::new(
+        binding.binding_id.as_str().to_string(),
+        spill.scratch_dir.clone(),
+        spill.scratch_budget_bytes,
+        spill.spill_threshold_bytes(),
+    );
+    let mut bbox_acc = BboxAcc::default();
+    let mut total_features: u64 = 0;
     while let Some(item) = stream.next().await {
         let row: RowBytes = item?;
         let geom_bytes_estimate = row.geometry.len() as u64;
         let row_fingerprint = compute_row_fingerprint(&row);
         let feature = wkb_to_feature_geom(&row.geometry, row.feature_id)?;
+        bbox_acc.fold(feature.bbox);
         let attr_bytes: u64 = row.attributes.iter().map(|(k, _)| (k.len() + 16) as u64).sum();
-        if let Err(observed) = guard.add(geom_bytes_estimate.saturating_add(attr_bytes).saturating_add(64)) {
-            return Err(CompilerError::ScratchBudgetExceeded {
-                binding: binding.binding_id.as_str().to_string(),
-                observed_bytes: observed,
-                budget_bytes: working_set_bytes,
-            });
-        }
-        rows.push(KeyedRow {
+        let est = geom_bytes_estimate.saturating_add(attr_bytes).saturating_add(64);
+        let pre_keyed = KeyedRow {
             feature,
             attrs: Arc::new(row.attributes),
             geom_bytes_estimate,
+            // pre-key sentinel: the proper Hilbert key is assigned in
+            // BootstrapAccumulator::finalize once combined_bbox is known.
             key: HilbertKey::min(),
             row_fingerprint,
-        });
+        };
+        accumulator.push(pre_keyed, est)?;
+        total_features = total_features.saturating_add(1);
     }
-    Ok(rows)
+    let combined_bbox = bbox_acc.into_bbox();
+
+    let sorted = accumulator.finalize(|r| {
+        let cx = (f64::from(r.feature.bbox[0]) + f64::from(r.feature.bbox[2])) / 2.0;
+        let cy = (f64::from(r.feature.bbox[1]) + f64::from(r.feature.bbox[3])) / 2.0;
+        key_from_centroid(cx, cy, combined_bbox)
+    })?;
+
+    // page-membership sidecar entries are derived after sort: walking buckets
+    // in order yields rows in `(key, user_id, fp)` order, same as in-memory.
+    let mut sidecar_entries: Vec<(u64, HilbertKey)> = Vec::with_capacity(total_features as usize);
+    match &sorted {
+        SortedRows::InMemory(rows) => {
+            for r in rows {
+                sidecar_entries.push((r.feature.user_id, r.key));
+            }
+        }
+        SortedRows::Spilled(reader) => {
+            for idx in 0..reader.bucket_count() {
+                if reader.bucket_rows(idx) == 0 {
+                    continue;
+                }
+                let chunk = reader.take_bucket(idx)?;
+                for r in chunk {
+                    sidecar_entries.push((r.feature.user_id, r.key));
+                }
+            }
+        }
+    }
+
+    Ok(CollectedRows {
+        sorted,
+        combined_bbox,
+        sidecar_entries,
+        total_features,
+    })
+}
+
+#[derive(Default)]
+struct BboxAcc {
+    seen: bool,
+    min_x: f64,
+    min_y: f64,
+    max_x: f64,
+    max_y: f64,
+}
+
+impl BboxAcc {
+    fn fold(&mut self, bb: [f32; 4]) {
+        let lx = f64::from(bb[0]);
+        let ly = f64::from(bb[1]);
+        let hx = f64::from(bb[2]);
+        let hy = f64::from(bb[3]);
+        if !self.seen {
+            self.min_x = lx;
+            self.min_y = ly;
+            self.max_x = hx;
+            self.max_y = hy;
+            self.seen = true;
+            return;
+        }
+        if lx < self.min_x {
+            self.min_x = lx;
+        }
+        if ly < self.min_y {
+            self.min_y = ly;
+        }
+        if hx > self.max_x {
+            self.max_x = hx;
+        }
+        if hy > self.max_y {
+            self.max_y = hy;
+        }
+    }
+
+    fn into_bbox(self) -> Bbox {
+        if !self.seen {
+            return Bbox::new(0.0, 0.0, 0.0, 0.0);
+        }
+        Bbox::new(self.min_x, self.min_y, self.max_x, self.max_y)
+    }
 }
 
 /// Stable per-row tiebreaker for the final substrate slot order. BLAKE3 over
@@ -420,30 +623,6 @@ fn hash_attr_value(hasher: &mut blake3::Hasher, v: &AttrValue) {
             hasher.update(s.as_bytes())
         }
     };
-}
-
-fn combined_bbox_of(rows: &[KeyedRow]) -> Bbox {
-    let first = &rows[0].feature.bbox;
-    let mut min_x = f64::from(first[0]);
-    let mut min_y = f64::from(first[1]);
-    let mut max_x = f64::from(first[2]);
-    let mut max_y = f64::from(first[3]);
-    for r in &rows[1..] {
-        let bb = r.feature.bbox;
-        if (bb[0] as f64) < min_x {
-            min_x = bb[0] as f64;
-        }
-        if (bb[1] as f64) < min_y {
-            min_y = bb[1] as f64;
-        }
-        if (bb[2] as f64) > max_x {
-            max_x = bb[2] as f64;
-        }
-        if (bb[3] as f64) > max_y {
-            max_y = bb[3] as f64;
-        }
-    }
-    Bbox::new(min_x, min_y, max_x, max_y)
 }
 
 /// Pull pruned rows whose hilbert key is `<= cap` off the head of the
@@ -932,6 +1111,13 @@ mod tests {
         }
     }
 
+    fn test_spill(working_set: u64) -> SpillConfig {
+        // Default to threshold = 1.0 so the in-memory path runs by default and
+        // existing test invariants are preserved. Tests that exercise the
+        // spill path opt in explicitly.
+        SpillConfig::test_with(working_set, std::env::temp_dir(), u64::MAX, 1.0)
+    }
+
     #[tokio::test]
     async fn single_page_bootstrap_decodes_back_with_class_sidecar() {
         let rows: Vec<RowBytes> = (0..100)
@@ -947,7 +1133,7 @@ mod tests {
             layers: vec![layer_plan("dots", "points", true)],
         };
 
-        let manifest = run_snapshot(&deps, &plan, "test".into(), 1, 4 * 1024 * 1024 * 1024)
+        let manifest = run_snapshot(&deps, &plan, "test".into(), 1, &test_spill(4 * 1024 * 1024 * 1024))
             .await
             .unwrap();
         assert_eq!(manifest.bindings.len(), 1);
@@ -1037,7 +1223,7 @@ mod tests {
             bindings: vec![bp],
             layers: vec![layer_plan("dots", "points", false)],
         };
-        let manifest = run_snapshot(&deps, &plan, "test".into(), 1, 4 * 1024 * 1024 * 1024)
+        let manifest = run_snapshot(&deps, &plan, "test".into(), 1, &test_spill(4 * 1024 * 1024 * 1024))
             .await
             .unwrap();
 
@@ -1169,7 +1355,7 @@ mod tests {
             bindings: vec![binding_with_min_size(5.0)],
             layers: vec![line_layer_plan("ln", "lines", mars_style::LabelSurvival::Independent)],
         };
-        let manifest = run_snapshot(&deps, &plan, "test".into(), 1, 4 * 1024 * 1024 * 1024)
+        let manifest = run_snapshot(&deps, &plan, "test".into(), 1, &test_spill(4 * 1024 * 1024 * 1024))
             .await
             .unwrap();
 
@@ -1215,7 +1401,7 @@ mod tests {
                 mars_style::LabelSurvival::FollowGeometry,
             )],
         };
-        let manifest = run_snapshot(&deps, &plan, "test".into(), 1, 4 * 1024 * 1024 * 1024)
+        let manifest = run_snapshot(&deps, &plan, "test".into(), 1, &test_spill(4 * 1024 * 1024 * 1024))
             .await
             .unwrap();
 
@@ -1239,7 +1425,7 @@ mod tests {
             bindings: vec![binding_plan("pts", 16 * 1024)],
             layers: vec![],
         };
-        let manifest = run_snapshot(&deps, &plan, "test".into(), 1, 4 * 1024 * 1024 * 1024)
+        let manifest = run_snapshot(&deps, &plan, "test".into(), 1, &test_spill(4 * 1024 * 1024 * 1024))
             .await
             .unwrap();
         let pages: Vec<&PageEntry> = manifest.pages.iter().collect();
@@ -1271,7 +1457,10 @@ mod tests {
             bindings: vec![binding_plan("pts", 16 * 1024)],
             layers: vec![],
         };
-        let err = run_snapshot(&deps, &plan, "test".into(), 1, 64).await.unwrap_err();
+        // Force immediate spill (threshold 0.0) and clamp the scratch budget
+        // so the first frame trips ScratchBudgetExceeded.
+        let spill = SpillConfig::test_with(64, std::env::temp_dir(), 64, 0.0);
+        let err = run_snapshot(&deps, &plan, "test".into(), 1, &spill).await.unwrap_err();
         match err {
             CompilerError::ScratchBudgetExceeded {
                 binding,
