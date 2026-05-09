@@ -27,7 +27,11 @@ pub enum GeomKind {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FeatureGeom {
-    pub id: u64,
+    /// Source-supplied identifier. Carried as data, not as the substrate's
+    /// primary key; non-uniqueness is allowed (a source row exploded into
+    /// multiple parts shares the same user_id). The per-page primary key is
+    /// the positional slot index (`feature_idx`) assigned at encode time.
+    pub user_id: u64,
     /// Per-feature bounding box stored as f32 per SPEC §9.3. At canonical-CRS
     /// magnitudes (~6e5 m for Danish UTM-32) this is ~0.05 m of precision,
     /// so the index bbox is APPROXIMATE: feature-level filtering must not
@@ -239,21 +243,24 @@ fn geom_type_byte(g: &GeomKind) -> u8 {
 
 /// Length in bytes of one feature index entry.
 ///
-/// Layout: u64 id, [f32; 4] bbox, u8 geom_type, u32 coord_offset, u32 coord_len.
-/// Stride 33 is unaligned: the index is decoded by copying each field through
-/// `from_le_bytes`. Zero-copy cast to `&[FeatureEntry]` is NOT supported with
-/// the current stride. SPEC §9.3 must be amended in a future format-bump pass.
+/// Layout: u64 user_id, [f32; 4] bbox, u8 geom_type, u32 coord_offset, u32 coord_len.
+/// `user_id` is non-key data (a source row may produce multiple features that
+/// share the same user_id). Per-page primary key is positional: the entry's
+/// position in the index (`feature_idx`) is what attrs/class/label sidecars
+/// join against. Stride 33 is unaligned: the index is decoded by copying each
+/// field through `from_le_bytes`. Zero-copy cast to `&[FeatureEntry]` is NOT
+/// supported with the current stride. SPEC §9.3 must be amended in a future
+/// format-bump pass.
 pub(crate) const FEATURE_INDEX_ENTRY_LEN: usize = 8 + 4 * 4 + 1 + 4 + 4;
 
 /// encode features into the geometry-payload section bytes.
 ///
-/// Features must be sorted by `id` ascending (required for determinism and
-/// for the index to support binary search). Violation returns
-/// `ArtifactError::UnsortedFeatures` in release; debug builds also assert.
+/// Caller is responsible for the deterministic feature ordering — the encoder
+/// trusts the input order (the compiler computes a stable
+/// `(hilbert_key, user_id, row_fingerprint)` tuple before calling). `user_id`
+/// is permitted to repeat: it is data, not a key. Position-in-input becomes
+/// the substrate primary key (`feature_idx`).
 pub fn encode_geometry_payload(features: &[FeatureGeom]) -> Result<Bytes, ArtifactError> {
-    if !features.windows(2).all(|w| w[0].id < w[1].id) {
-        return Err(ArtifactError::UnsortedFeatures);
-    }
     let mut b = GeomPayloadBuilder::new();
     for f in features {
         b.push_feature(f)?;
@@ -270,7 +277,6 @@ pub struct GeomPayloadBuilder {
     body: Vec<u8>,
     spans: Vec<(u32, u32)>,
     index: Vec<(u64, [f32; 4], u8)>,
-    last_id: Option<u64>,
 }
 
 /// Geometry-type tag handed to [`GeomPayloadBuilder::begin`]. Kept separate
@@ -312,7 +318,7 @@ pub struct FeatureWriter<'a> {
     py: i64,
     have_anchor: bool,
     bbox: BboxAcc,
-    id: u64,
+    user_id: u64,
     ended: bool,
 }
 
@@ -374,19 +380,14 @@ impl GeomPayloadBuilder {
             body: Vec::new(),
             spans: Vec::new(),
             index: Vec::new(),
-            last_id: None,
         }
     }
 
-    /// Start writing a feature with the given id and geom type. Returns a
-    /// stateful writer the caller drives. `id` must be strictly greater than
-    /// every previously written id.
-    pub fn begin(&mut self, id: u64, geom_type: GeomType) -> Result<FeatureWriter<'_>, ArtifactError> {
-        if let Some(prev) = self.last_id
-            && id <= prev
-        {
-            return Err(ArtifactError::UnsortedFeatures);
-        }
+    /// Start writing a feature with the given user_id and geom type. Returns
+    /// a stateful writer the caller drives. The slot index (`feature_idx`,
+    /// the per-page primary key) is the position at which the feature is
+    /// appended; `user_id` is non-key data and may repeat.
+    pub fn begin(&mut self, user_id: u64, geom_type: GeomType) -> Result<FeatureWriter<'_>, ArtifactError> {
         let body_start =
             u32::try_from(self.body.len()).map_err(|_| ArtifactError::Malformed("geometry payload too large"))?;
         Ok(FeatureWriter {
@@ -397,7 +398,7 @@ impl GeomPayloadBuilder {
             py: 0,
             have_anchor: false,
             bbox: BboxAcc::default(),
-            id,
+            user_id,
             ended: false,
         })
     }
@@ -406,19 +407,13 @@ impl GeomPayloadBuilder {
     /// encoder; producers that already have rows materialised may call this
     /// directly.
     pub fn push_feature(&mut self, f: &FeatureGeom) -> Result<(), ArtifactError> {
-        if let Some(prev) = self.last_id
-            && f.id <= prev
-        {
-            return Err(ArtifactError::UnsortedFeatures);
-        }
         let start =
             u32::try_from(self.body.len()).map_err(|_| ArtifactError::Malformed("geometry payload too large"))?;
         write_geom(&mut self.body, &f.geom)?;
         let len = u32::try_from(self.body.len() - start as usize)
             .map_err(|_| ArtifactError::Malformed("geometry section too large"))?;
         self.spans.push((start, len));
-        self.index.push((f.id, f.bbox, geom_type_byte(&f.geom)));
-        self.last_id = Some(f.id);
+        self.index.push((f.user_id, f.bbox, geom_type_byte(&f.geom)));
         Ok(())
     }
 
@@ -438,8 +433,8 @@ impl GeomPayloadBuilder {
             .ok_or(ArtifactError::Malformed("geometry payload too large"))?;
         let mut out = Vec::with_capacity(total_len);
         out.extend_from_slice(&count.to_le_bytes());
-        for ((id, bbox, geom_type), (off, len)) in self.index.iter().zip(&self.spans) {
-            out.extend_from_slice(&id.to_le_bytes());
+        for ((user_id, bbox, geom_type), (off, len)) in self.index.iter().zip(&self.spans) {
+            out.extend_from_slice(&user_id.to_le_bytes());
             for v in bbox {
                 out.extend_from_slice(&v.to_le_bytes());
             }
@@ -510,8 +505,9 @@ impl<'a> FeatureWriter<'a> {
             .checked_sub(self.body_start)
             .ok_or(ArtifactError::Malformed("geometry section too large"))?;
         self.builder.spans.push((self.body_start, len));
-        self.builder.index.push((self.id, self.bbox.snapshot(), self.geom_type));
-        self.builder.last_id = Some(self.id);
+        self.builder
+            .index
+            .push((self.user_id, self.bbox.snapshot(), self.geom_type));
         self.ended = true;
         Ok(())
     }
@@ -542,12 +538,15 @@ fn read_array<const N: usize>(slice: &[u8], offset: usize) -> Result<[u8; N], Ar
         .map_err(|_| ArtifactError::Truncated)
 }
 
-/// One feature's index entry: id, approximate bbox, and pointer into the
-/// coord area. Decoded lazily by [`FeatureIndexIter`]; coordinates stay
-/// untouched until [`decode_one_geom`] is called for a chosen entry.
+/// One feature's index entry: user_id (data), approximate bbox, and pointer
+/// into the coord area. Decoded lazily by [`FeatureIndexIter`]; coordinates
+/// stay untouched until [`decode_one_geom`] is called for a chosen entry.
+/// The substrate primary key is positional — see [`FeatureIndexIter`] for
+/// `(feature_idx, entry)` pairs.
 #[derive(Debug, Clone, Copy)]
 pub struct FeatureIndexEntry {
-    pub id: u64,
+    /// Source-supplied identifier; non-unique. See [`FeatureGeom::user_id`].
+    pub user_id: u64,
     pub bbox: [f32; 4],
     pub geom_type: u8,
     /// offset into the coord area (the bytes after the index header).
@@ -611,7 +610,7 @@ impl Iterator for FeatureIndexIter<'_> {
         let off = 4 + self.pos * FEATURE_INDEX_ENTRY_LEN;
         self.pos += 1;
         let entry = (|| -> Result<FeatureIndexEntry, ArtifactError> {
-            let id = u64::from_le_bytes(read_array::<8>(self.bytes, off)?);
+            let user_id = u64::from_le_bytes(read_array::<8>(self.bytes, off)?);
             let bbox = [
                 f32::from_le_bytes(read_array::<4>(self.bytes, off + 8)?),
                 f32::from_le_bytes(read_array::<4>(self.bytes, off + 12)?),
@@ -630,7 +629,7 @@ impl Iterator for FeatureIndexIter<'_> {
                 return Err(ArtifactError::Truncated);
             }
             Ok(FeatureIndexEntry {
-                id,
+                user_id,
                 bbox,
                 geom_type,
                 coord_offset,
@@ -820,7 +819,7 @@ fn visit_geom<V: GeomVisitor>(geom_type: u8, buf: &[u8], pos: &mut usize, v: &mu
     Ok(())
 }
 
-/// Decode only features whose `(id, bbox)` predicate returns `true`.
+/// Decode only features whose `(user_id, bbox)` predicate returns `true`.
 /// Walks the cheap index, applies `pred`, and decodes coordinates only for
 /// survivors. Equivalent in result to filtering the output of
 /// [`decode_geometry_payload`], but avoids decoding skipped features.
@@ -833,12 +832,12 @@ where
     let mut out = Vec::new();
     for entry in iter {
         let entry = entry?;
-        if !pred(entry.id, entry.bbox) {
+        if !pred(entry.user_id, entry.bbox) {
             continue;
         }
         let geom = decode_one_geom(coord_area, &entry)?;
         out.push(FeatureGeom {
-            id: entry.id,
+            user_id: entry.user_id,
             bbox: entry.bbox,
             geom,
         });
@@ -880,7 +879,7 @@ pub fn decode_geometry_at_slots(bytes: &[u8], slots: &[u32]) -> Result<Vec<Featu
         cursor += 1;
         let geom = decode_one_geom(coord_area, &entry)?;
         out.push(FeatureGeom {
-            id: entry.id,
+            user_id: entry.user_id,
             bbox: entry.bbox,
             geom,
         });
@@ -914,7 +913,7 @@ pub fn decode_geometry_payload(bytes: &[u8]) -> Result<Vec<FeatureGeom>, Artifac
         let entry = entry?;
         let geom = decode_one_geom(coord_area, &entry)?;
         out.push(FeatureGeom {
-            id: entry.id,
+            user_id: entry.user_id,
             bbox: entry.bbox,
             geom,
         });

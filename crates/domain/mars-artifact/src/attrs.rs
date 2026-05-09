@@ -40,13 +40,14 @@ const TAG_STRING: u8 = 4;
 const SECTION_MAGIC: &[u8; 8] = b"MARSATTR";
 
 /// Per-entry size of the directory at the tail of the attributes section
-/// (`[u64 feature_id][u32 byte_offset]`).
-const DIR_ENTRY_LEN: usize = 12;
+/// (`[u32 feature_idx][u32 byte_offset]`). v2: keyed on the per-page slot
+/// index, not the source-supplied user_id (which may repeat).
+const DIR_ENTRY_LEN: usize = 8;
 
 /// Section header is `[magic 8][version u32][count u32][dir_offset u32]`.
 const SECTION_HEADER_LEN: usize = 8 + 4 + 4 + 4;
 
-const SECTION_VERSION: u32 = 1;
+const SECTION_VERSION: u32 = 2;
 
 /// Errors raised while decoding or encoding an attribute block.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -88,12 +89,12 @@ pub enum AttrError {
     /// multiple of `DIR_ENTRY_LEN`, declared count would overflow).
     #[error("attributes section: bad directory")]
     SectionBadDirectory,
-    /// Section directory is not sorted ascending by feature_id.
+    /// Section directory is not sorted ascending by feature_idx.
     #[error("attributes section: directory not sorted")]
     SectionUnsorted,
-    /// Two entries in the section share the same feature_id.
-    #[error("attributes section: duplicate feature_id {0}")]
-    SectionDuplicateFeatureId(u64),
+    /// Two entries in the section share the same slot index.
+    #[error("attributes section: duplicate feature_idx {0}")]
+    SectionDuplicateFeatureIdx(u32),
 }
 
 /// Encode an ordered slice of `(name, AttrValue)` pairs to bytes.
@@ -255,34 +256,35 @@ impl<'a> Cursor<'a> {
 
 /// Encode an attributes section: a directory-indexed bundle of per-feature
 /// rows. Each `row_bytes` is whatever the per-row codec produced (typically
-/// [`encode_row`]). The section pairs every row with its `feature_id` so the
-/// reader can binary-search by id without scanning rows.
+/// [`encode_row`]). The section pairs every row with its slot index
+/// (`feature_idx`) so the reader can do an O(1) lookup once the directory is
+/// validated dense.
 ///
 /// Layout (little-endian):
 /// ```text
-///   [magic "MARSATTR"][version u32 = 1][count u32][dir_offset u32]
+///   [magic "MARSATTR"][version u32 = 2][count u32][dir_offset u32]
 ///   rows region: count × [u32 row_len][row_bytes]
-///   directory region (at dir_offset, sorted by feature_id):
-///     count × [u64 feature_id][u32 byte_offset]
+///   directory region (at dir_offset, sorted by feature_idx):
+///     count × [u32 feature_idx][u32 byte_offset]
 /// ```
 /// `byte_offset` points at the row's `[u32 row_len]` length prefix, measured
 /// from the start of the section payload.
-pub fn encode_attributes_section(rows: &[(u64, &[u8])]) -> Result<Bytes, AttrError> {
+pub fn encode_attributes_section(rows: &[(u32, &[u8])]) -> Result<Bytes, AttrError> {
     let count = u32::try_from(rows.len()).map_err(|_| AttrError::InputTooLarge { kind: "row count" })?;
 
-    // first pass: stable sort a (feature_id, original_index) helper so callers
+    // first pass: stable sort a (feature_idx, original_index) helper so callers
     // need not pre-sort. duplicates are rejected up front.
-    let mut order: Vec<(u64, usize)> = rows.iter().enumerate().map(|(i, (id, _))| (*id, i)).collect();
-    order.sort_unstable_by_key(|(id, _)| *id);
+    let mut order: Vec<(u32, usize)> = rows.iter().enumerate().map(|(i, (idx, _))| (*idx, i)).collect();
+    order.sort_unstable_by_key(|(idx, _)| *idx);
     for w in order.windows(2) {
         if w[0].0 == w[1].0 {
-            return Err(AttrError::SectionDuplicateFeatureId(w[0].0));
+            return Err(AttrError::SectionDuplicateFeatureIdx(w[0].0));
         }
     }
 
-    // second pass: emit rows in feature_id-sorted order, recording each row's
-    // byte offset (relative to section payload start) for the directory.
-    let mut out = Vec::with_capacity(SECTION_HEADER_LEN + rows.len() * 16);
+    // second pass: emit rows in feature_idx-sorted order, recording each
+    // row's byte offset (relative to section payload start) for the directory.
+    let mut out = Vec::with_capacity(SECTION_HEADER_LEN + rows.len() * 12);
     out.extend_from_slice(SECTION_MAGIC);
     out.extend_from_slice(&SECTION_VERSION.to_le_bytes());
     out.extend_from_slice(&count.to_le_bytes());
@@ -290,7 +292,7 @@ pub fn encode_attributes_section(rows: &[(u64, &[u8])]) -> Result<Bytes, AttrErr
     out.extend_from_slice(&0u32.to_le_bytes());
 
     let mut offsets: Vec<u32> = Vec::with_capacity(rows.len());
-    for (_id, original_idx) in &order {
+    for (_idx, original_idx) in &order {
         let payload = rows[*original_idx].1;
         let row_len = u32::try_from(payload.len()).map_err(|_| AttrError::InputTooLarge { kind: "row payload" })?;
         let off = u32::try_from(out.len()).map_err(|_| AttrError::InputTooLarge { kind: "row offset" })?;
@@ -302,9 +304,9 @@ pub fn encode_attributes_section(rows: &[(u64, &[u8])]) -> Result<Bytes, AttrErr
     let dir_offset = u32::try_from(out.len()).map_err(|_| AttrError::InputTooLarge {
         kind: "directory offset",
     })?;
-    // directory: count × [u64 feature_id][u32 byte_offset], sorted ascending.
-    for (i, (id, _)) in order.iter().enumerate() {
-        out.extend_from_slice(&id.to_le_bytes());
+    // directory: count × [u32 feature_idx][u32 byte_offset], sorted ascending.
+    for (i, (idx, _)) in order.iter().enumerate() {
+        out.extend_from_slice(&idx.to_le_bytes());
         out.extend_from_slice(&offsets[i].to_le_bytes());
     }
 
@@ -351,23 +353,23 @@ impl<'a> AttributesSection<'a> {
 
         // verify ascending order so binary search is meaningful, and guard
         // against forged blobs.
-        let mut prev: Option<u64> = None;
+        let mut prev: Option<u32> = None;
         for i in 0..(count as usize) {
             let off = dir_offset + i * DIR_ENTRY_LEN;
-            let id = u64::from_le_bytes(
-                bytes[off..off + 8]
+            let idx = u32::from_le_bytes(
+                bytes[off..off + 4]
                     .try_into()
                     .map_err(|_| AttrError::SectionBadDirectory)?,
             );
             if let Some(p) = prev {
-                if id == p {
-                    return Err(AttrError::SectionDuplicateFeatureId(id));
+                if idx == p {
+                    return Err(AttrError::SectionDuplicateFeatureIdx(idx));
                 }
-                if id < p {
+                if idx < p {
                     return Err(AttrError::SectionUnsorted);
                 }
             }
-            prev = Some(id);
+            prev = Some(idx);
         }
 
         Ok(Self {
@@ -387,9 +389,9 @@ impl<'a> AttributesSection<'a> {
         self.count == 0
     }
 
-    /// Binary-search the directory and return the row payload slice for
-    /// `feature_id`, or `None` when the id is absent.
-    pub fn lookup(&self, feature_id: u64) -> Result<Option<&'a [u8]>, AttrError> {
+    /// Binary-search the directory and return the row payload slice for the
+    /// given slot, or `None` when no row was recorded for that slot.
+    pub fn lookup(&self, feature_idx: u32) -> Result<Option<&'a [u8]>, AttrError> {
         if self.count == 0 {
             return Ok(None);
         }
@@ -398,15 +400,15 @@ impl<'a> AttributesSection<'a> {
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
             let off = self.dir_offset + mid * DIR_ENTRY_LEN;
-            let id = u64::from_le_bytes(
-                self.bytes[off..off + 8]
+            let idx = u32::from_le_bytes(
+                self.bytes[off..off + 4]
                     .try_into()
                     .map_err(|_| AttrError::SectionBadDirectory)?,
             );
-            match id.cmp(&feature_id) {
+            match idx.cmp(&feature_idx) {
                 core::cmp::Ordering::Equal => {
                     let row_off = u32::from_le_bytes(
-                        self.bytes[off + 8..off + 12]
+                        self.bytes[off + 4..off + 8]
                             .try_into()
                             .map_err(|_| AttrError::SectionBadDirectory)?,
                     ) as usize;
@@ -544,24 +546,24 @@ mod tests {
 
     #[test]
     fn section_roundtrip_1k() {
-        let mut rows: Vec<(u64, Vec<u8>)> = (0..1000)
+        let mut rows: Vec<(u32, Vec<u8>)> = (0..1000)
             .map(|i| {
                 let payload = encoded(&[("k", AttrValue::Int(i as i64))]);
-                (i as u64 * 31 + 5, payload)
+                (i as u32 * 31 + 5, payload)
             })
             .collect();
-        let refs: Vec<(u64, &[u8])> = rows.iter().map(|(id, p)| (*id, p.as_slice())).collect();
+        let refs: Vec<(u32, &[u8])> = rows.iter().map(|(idx, p)| (*idx, p.as_slice())).collect();
         let bytes = encode_attributes_section(&refs).unwrap();
         let sec = AttributesSection::open(&bytes).unwrap();
 
-        // sample 100 ids and confirm decoded rows match.
+        // sample 100 entries and confirm decoded rows match.
         for i in (0..1000).step_by(10) {
-            let id = i as u64 * 31 + 5;
-            let got = sec.lookup(id).unwrap().unwrap();
+            let idx = i as u32 * 31 + 5;
+            let got = sec.lookup(idx).unwrap().unwrap();
             let expected = &rows[i].1;
-            assert_eq!(got, expected.as_slice(), "row {id}");
+            assert_eq!(got, expected.as_slice(), "row {idx}");
         }
-        // a missing id between two present ones falls through.
+        // a missing slot between two present ones falls through.
         assert!(sec.lookup(rows[0].0 + 1).unwrap().is_none());
         rows.clear();
     }
@@ -572,14 +574,14 @@ mod tests {
         let sec = AttributesSection::open(&bytes).unwrap();
         assert!(sec.is_empty());
         assert!(sec.lookup(0).unwrap().is_none());
-        assert!(sec.lookup(u64::MAX).unwrap().is_none());
+        assert!(sec.lookup(u32::MAX).unwrap().is_none());
     }
 
     #[test]
-    fn section_rejects_duplicate_feature_ids_at_encode() {
+    fn section_rejects_duplicate_slot_at_encode() {
         let r = encoded(&[("k", AttrValue::Int(1))]);
         let err = encode_attributes_section(&[(5, &r), (5, &r)]).unwrap_err();
-        assert!(matches!(err, AttrError::SectionDuplicateFeatureId(5)));
+        assert!(matches!(err, AttrError::SectionDuplicateFeatureIdx(5)));
     }
 
     #[test]
@@ -623,9 +625,9 @@ mod tests {
 
         let dir_off = buf.len() as u32;
         // descending: 9 then 1.
-        buf.extend_from_slice(&9u64.to_le_bytes());
+        buf.extend_from_slice(&9u32.to_le_bytes());
         buf.extend_from_slice(&off1.to_le_bytes());
-        buf.extend_from_slice(&1u64.to_le_bytes());
+        buf.extend_from_slice(&1u32.to_le_bytes());
         buf.extend_from_slice(&off2.to_le_bytes());
 
         // patch dir_offset.

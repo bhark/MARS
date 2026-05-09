@@ -33,7 +33,7 @@ fn make_polygon(id: u64) -> FeatureGeom {
         (cy + 5.0) as f32,
     ];
     FeatureGeom {
-        id,
+        user_id: id,
         bbox,
         geom: GeomKind::Polygon(vec![ring]),
     }
@@ -55,7 +55,7 @@ fn make_linestring(id: u64) -> FeatureGeom {
         hi_y = hi_y.max(y as f32);
     }
     FeatureGeom {
-        id,
+        user_id: id,
         bbox: [lo_x, lo_y, hi_x, hi_y],
         geom: GeomKind::LineString(verts),
     }
@@ -65,7 +65,7 @@ fn make_point(id: u64) -> FeatureGeom {
     let x = (id as f64) * 11.0;
     let y = ((id % 53) as f64) * 9.0;
     FeatureGeom {
-        id,
+        user_id: id,
         bbox: [x as f32, y as f32, x as f32, y as f32],
         geom: GeomKind::Point((x, y)),
     }
@@ -109,7 +109,7 @@ fn bench_index_only(c: &mut Criterion) {
                 let mut acc = 0u64;
                 for entry in iter {
                     let entry = entry.unwrap();
-                    acc = acc.wrapping_add(entry.id);
+                    acc = acc.wrapping_add(entry.user_id);
                 }
                 black_box(acc)
             });

@@ -144,7 +144,7 @@ fn bench_geometry_payload_linear_walk(c: &mut Criterion) {
             }
             ring.push(ring[0]);
             FeatureGeom {
-                id: k as u64,
+                user_id: k as u64,
                 bbox: [
                     (cx - 0.5) as f32,
                     (cy - 0.5) as f32,
@@ -175,7 +175,7 @@ fn bench_geometry_payload_linear_walk(c: &mut Criterion) {
                 let it = iter_feature_index(&payload).unwrap();
                 for e in it.flatten() {
                     if e.bbox[0] <= q[2] && e.bbox[1] <= q[3] && e.bbox[2] >= q[0] && e.bbox[3] >= q[1] {
-                        out.push(e.id as u32);
+                        out.push(e.user_id as u32);
                     }
                 }
                 black_box(&out);
@@ -238,7 +238,7 @@ fn bench_feature_prep_combined(c: &mut Criterion) {
             }
             ring.push(ring[0]);
             FeatureGeom {
-                id: k as u64,
+                user_id: k as u64,
                 bbox: [
                     (cx - 0.5) as f32,
                     (cy - 0.5) as f32,
@@ -283,7 +283,7 @@ fn bench_feature_prep_combined(c: &mut Criterion) {
                 let entry = &entries[i as usize];
                 let geom = decode_one_geom(&coord_area, entry).unwrap();
                 let class = class_lookup
-                    .binary_search_by_key(&entry.id, |&(fid, _)| fid)
+                    .binary_search_by_key(&entry.user_id, |&(fid, _)| fid)
                     .map(|p| u64::from(class_lookup[p].1))
                     .unwrap_or(0);
                 acc = acc.wrapping_add(class);

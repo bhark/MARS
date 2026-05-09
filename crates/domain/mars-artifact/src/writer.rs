@@ -31,9 +31,9 @@ pub struct ArtifactWriter {
     // deferred so finish() can validate (ascending feature_id, declared count)
     // and surface errors that the infallible add_* calls cannot.
     pending_features: Option<Vec<FeatureGeom>>,
-    pending_class_assignment: Option<Vec<(u64, u16)>>,
+    pending_class_assignment: Option<Vec<(u32, u16)>>,
     pending_label_candidates: Option<Vec<LabelCandidate>>,
-    pending_attributes: Option<Vec<(u64, Vec<u8>)>>,
+    pending_attributes: Option<Vec<(u32, Vec<u8>)>>,
 }
 
 impl ArtifactWriter {
@@ -68,16 +68,17 @@ impl ArtifactWriter {
         self
     }
 
-    pub fn add_class_assignment(&mut self, items: &[(u64, u16)]) -> &mut Self {
+    pub fn add_class_assignment(&mut self, items: &[(u32, u16)]) -> &mut Self {
         self.pending_class_assignment = Some(items.to_vec());
         self
     }
 
-    /// Stage an attributes section. Each `(feature_id, row_bytes)` pair is the
-    /// per-feature payload produced by [`attrs::encode_row`]; the writer wraps
-    /// them in a directory-indexed section so the reader can binary-search by
-    /// `feature_id`. Errors surface in [`Self::finish`].
-    pub fn add_attributes(&mut self, rows: Vec<(u64, Vec<u8>)>) -> &mut Self {
+    /// Stage an attributes section. Each `(feature_idx, row_bytes)` pair is
+    /// the per-feature payload produced by [`attrs::encode_row`] keyed on the
+    /// page-local slot index; the writer wraps them in a directory-indexed
+    /// section so the reader can resolve by slot. Errors surface in
+    /// [`Self::finish`].
+    pub fn add_attributes(&mut self, rows: Vec<(u32, Vec<u8>)>) -> &mut Self {
         self.pending_attributes = Some(rows);
         self
     }
@@ -155,7 +156,7 @@ impl ArtifactWriter {
             self.sections.push((SectionKind::LabelCandidates, bytes));
         }
         if let Some(rows) = self.pending_attributes.take() {
-            let refs: Vec<(u64, &[u8])> = rows.iter().map(|(id, p)| (*id, p.as_slice())).collect();
+            let refs: Vec<(u32, &[u8])> = rows.iter().map(|(idx, p)| (*idx, p.as_slice())).collect();
             let bytes = attrs::encode_attributes_section(&refs)?;
             self.sections.push((SectionKind::Attributes, bytes));
         }

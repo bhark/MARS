@@ -206,12 +206,12 @@ impl ArtifactReader {
         Ok(AttributesSection::open(bytes)?)
     }
 
-    /// Random-access lookup of one row's per-feature payload by `feature_id`.
-    /// Returns `Ok(None)` when the id is absent from the attributes section.
-    /// Errors out if the section is missing or malformed.
-    pub fn attributes_by_feature_id(&self, feature_id: u64) -> Result<Option<&[u8]>, ArtifactError> {
+    /// Random-access lookup of one row's per-feature payload by per-page
+    /// slot index. Returns `Ok(None)` when the slot has no row in the
+    /// attributes section. Errors out if the section is missing or malformed.
+    pub fn attributes_by_slot(&self, feature_idx: u32) -> Result<Option<&[u8]>, ArtifactError> {
         let sec = self.attributes_section()?;
-        Ok(sec.lookup(feature_id)?)
+        Ok(sec.lookup(feature_idx)?)
     }
 
     /// Borrow a section payload by kind without copying. Used by typed

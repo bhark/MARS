@@ -5,11 +5,18 @@
 //! ```text
 //! u32 count
 //! repeat count times:
-//!   u64 feature_id
 //!   u8  flags        bit0 = foreign_origin
-//!                    bit1..2 = shape (0=Point, 1=Polyline, 2=PolygonAnchor)
+//!                    bit1 = has_slot (when set, a u32 feature_idx follows
+//!                                     the style/priority pair; when clear
+//!                                     the candidate is a pruned-feature
+//!                                     label whose geometry was filtered
+//!                                     out at this level and so has no
+//!                                     per-page slot)
+//!                    bit2..3 = shape (0=Point, 1=Polyline, 2=PolygonAnchor)
 //!   u16 priority
 //!   u16 style_ref_idx
+//!   if flags & HAS_SLOT:
+//!     u32 feature_idx
 //!   if shape == Point or PolygonAnchor:
 //!     f32 anchor_x, anchor_y
 //!   if shape == Polyline:
@@ -19,9 +26,11 @@
 //!   text_len bytes utf-8
 //! ```
 //!
-//! Candidates appear in feature-id ascending order, mirroring class_assignment;
-//! a single feature may emit multiple candidates (one polyline, repeats, etc.)
-//! so equal feature_ids are permitted but must remain contiguous.
+//! Slot-bearing candidates appear in feature_idx ascending order; equal slots
+//! are permitted (a feature may emit multiple candidates - polyline repeats,
+//! etc.) but must remain contiguous. Pruned-feature candidates (no slot) are
+//! collected at the section tail in stable caller-supplied order so they can
+//! coexist with slotted entries without violating the ascending invariant.
 
 use bytes::Bytes;
 
@@ -29,7 +38,10 @@ use crate::ArtifactError;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct LabelCandidate {
-    pub feature_id: u64,
+    /// Per-page slot of the feature this label belongs to. `None` denotes a
+    /// pruned-feature label (geometry filtered out at this level by
+    /// `Independent` survival policy).
+    pub feature_idx: Option<u32>,
     pub foreign_origin: bool,
     pub priority: u16,
     pub style_ref_idx: u16,
@@ -49,13 +61,15 @@ const SHAPE_POLYLINE: u8 = 1;
 const SHAPE_POLYGON_ANCHOR: u8 = 2;
 
 const FLAG_FOREIGN: u8 = 1 << 0;
-const SHAPE_SHIFT: u8 = 1;
+const FLAG_HAS_SLOT: u8 = 1 << 1;
+const SHAPE_SHIFT: u8 = 2;
 const SHAPE_MASK: u8 = 0b11 << SHAPE_SHIFT;
 
-// minimum bytes any candidate occupies on the wire: 8 (id) + 1 (flags) + 2 (prio)
-// + 2 (style) + 2 (text_len) = 15. point/polygon shapes add 8; an empty polyline
-// adds 2. 15 is the cheapest legal entry, used to bound the count up front.
-const MIN_ENTRY_LEN: usize = 8 + 1 + 2 + 2 + 2;
+// minimum bytes any candidate occupies on the wire: 1 (flags) + 2 (prio)
+// + 2 (style) + 2 (text_len) = 7. point/polygon shapes add 8; an empty
+// polyline adds 2. slot-bearing entries add 4 more. 7 is the cheapest legal
+// entry, used to bound the count up front.
+const MIN_ENTRY_LEN: usize = 1 + 2 + 2 + 2;
 
 // hard limits on per-candidate sizes. wire encodes each as u16; cap matches the
 // representable range and keeps the decoder bounded. mirrors MAX_GEOM_COORDS in
@@ -63,19 +77,34 @@ const MIN_ENTRY_LEN: usize = 8 + 1 + 2 + 2 + 2;
 pub(crate) const MAX_LABEL_VERTS: usize = u16::MAX as usize;
 pub(crate) const MAX_LABEL_TEXT_BYTES: usize = u16::MAX as usize;
 
-/// encoder mirrors decoder: feature_id ascending (equal allowed for repeats).
-/// validates input rather than emit a blob the decoder will reject.
+/// encoder mirrors decoder: slot-bearing candidates must be ascending by
+/// feature_idx (equal allowed for repeats); slotless entries are emitted in
+/// caller-supplied order. validates input rather than emit a blob the
+/// decoder will reject.
 pub fn encode_label_candidates(items: &[LabelCandidate]) -> Result<Bytes, ArtifactError> {
-    let mut prev: Option<u64> = None;
+    let mut prev_idx: Option<u32> = None;
+    let mut seen_slotless = false;
     for c in items {
-        if let Some(p) = prev
-            && c.feature_id < p
-        {
-            return Err(ArtifactError::Malformed(
-                "label candidates must be ascending by feature_id",
-            ));
+        match c.feature_idx {
+            Some(idx) => {
+                if seen_slotless {
+                    return Err(ArtifactError::Malformed(
+                        "slot-bearing label candidate after a slotless one",
+                    ));
+                }
+                if let Some(p) = prev_idx
+                    && idx < p
+                {
+                    return Err(ArtifactError::Malformed(
+                        "label candidates must be ascending by feature_idx",
+                    ));
+                }
+                prev_idx = Some(idx);
+            }
+            None => {
+                seen_slotless = true;
+            }
         }
-        prev = Some(c.feature_id);
         if c.text.len() > MAX_LABEL_TEXT_BYTES {
             return Err(ArtifactError::Malformed("label text exceeds max bytes"));
         }
@@ -88,7 +117,6 @@ pub fn encode_label_candidates(items: &[LabelCandidate]) -> Result<Bytes, Artifa
     let mut out = Vec::with_capacity(4 + items.len() * (MIN_ENTRY_LEN + 8));
     out.extend_from_slice(&(items.len() as u32).to_le_bytes());
     for c in items {
-        out.extend_from_slice(&c.feature_id.to_le_bytes());
         let shape_bits = match c.shape {
             LabelShape::Point { .. } => SHAPE_POINT,
             LabelShape::Polyline(_) => SHAPE_POLYLINE,
@@ -98,9 +126,15 @@ pub fn encode_label_candidates(items: &[LabelCandidate]) -> Result<Bytes, Artifa
         if c.foreign_origin {
             flags |= FLAG_FOREIGN;
         }
+        if c.feature_idx.is_some() {
+            flags |= FLAG_HAS_SLOT;
+        }
         out.push(flags);
         out.extend_from_slice(&c.priority.to_le_bytes());
         out.extend_from_slice(&c.style_ref_idx.to_le_bytes());
+        if let Some(idx) = c.feature_idx {
+            out.extend_from_slice(&idx.to_le_bytes());
+        }
         match &c.shape {
             LabelShape::Point { x, y } | LabelShape::PolygonAnchor { x, y } => {
                 out.extend_from_slice(&x.to_le_bytes());
@@ -135,13 +169,12 @@ pub fn decode_label_candidates(bytes: &[u8]) -> Result<Vec<LabelCandidate>, Arti
     }
     let mut pos = 4;
     let mut out = Vec::with_capacity(n);
-    let mut prev_id: Option<u64> = None;
+    let mut prev_idx: Option<u32> = None;
+    let mut seen_slotless = false;
     for _ in 0..n {
-        if bytes.len() < pos + 8 + 1 + 2 + 2 {
+        if bytes.len() < pos + 1 + 2 + 2 {
             return Err(ArtifactError::Truncated);
         }
-        let feature_id = u64::from_le_bytes(bytes[pos..pos + 8].try_into().map_err(|_| ArtifactError::Truncated)?);
-        pos += 8;
         let flags = bytes[pos];
         pos += 1;
         let priority = u16::from_le_bytes([bytes[pos], bytes[pos + 1]]);
@@ -149,14 +182,30 @@ pub fn decode_label_candidates(bytes: &[u8]) -> Result<Vec<LabelCandidate>, Arti
         let style_ref_idx = u16::from_le_bytes([bytes[pos], bytes[pos + 1]]);
         pos += 2;
 
-        if let Some(p) = prev_id
-            && feature_id < p
-        {
-            return Err(ArtifactError::Malformed(
-                "label candidates must be ascending by feature_id",
-            ));
-        }
-        prev_id = Some(feature_id);
+        let feature_idx = if flags & FLAG_HAS_SLOT != 0 {
+            if bytes.len() < pos + 4 {
+                return Err(ArtifactError::Truncated);
+            }
+            let idx = u32::from_le_bytes([bytes[pos], bytes[pos + 1], bytes[pos + 2], bytes[pos + 3]]);
+            pos += 4;
+            if seen_slotless {
+                return Err(ArtifactError::Malformed(
+                    "slot-bearing label candidate after a slotless one",
+                ));
+            }
+            if let Some(p) = prev_idx
+                && idx < p
+            {
+                return Err(ArtifactError::Malformed(
+                    "label candidates must be ascending by feature_idx",
+                ));
+            }
+            prev_idx = Some(idx);
+            Some(idx)
+        } else {
+            seen_slotless = true;
+            None
+        };
 
         let foreign_origin = flags & FLAG_FOREIGN != 0;
         let shape_bits = (flags & SHAPE_MASK) >> SHAPE_SHIFT;
@@ -210,7 +259,7 @@ pub fn decode_label_candidates(bytes: &[u8]) -> Result<Vec<LabelCandidate>, Arti
         pos += tlen;
 
         out.push(LabelCandidate {
-            feature_id,
+            feature_idx,
             foreign_origin,
             priority,
             style_ref_idx,
@@ -232,7 +281,7 @@ mod tests {
     fn sample() -> Vec<LabelCandidate> {
         vec![
             LabelCandidate {
-                feature_id: 1,
+                feature_idx: Some(1),
                 foreign_origin: false,
                 priority: 100,
                 style_ref_idx: 0,
@@ -240,7 +289,7 @@ mod tests {
                 text: "alpha".into(),
             },
             LabelCandidate {
-                feature_id: 2,
+                feature_idx: Some(2),
                 foreign_origin: true,
                 priority: 50,
                 style_ref_idx: 3,
@@ -248,12 +297,21 @@ mod tests {
                 text: "Ø greek δ".into(),
             },
             LabelCandidate {
-                feature_id: 3,
+                feature_idx: Some(3),
                 foreign_origin: false,
                 priority: 0,
                 style_ref_idx: 7,
                 shape: LabelShape::PolygonAnchor { x: 100.0, y: 200.0 },
                 text: String::new(),
+            },
+            // pruned-feature label: no slot.
+            LabelCandidate {
+                feature_idx: None,
+                foreign_origin: false,
+                priority: 25,
+                style_ref_idx: 0,
+                shape: LabelShape::Point { x: 9.0, y: 9.0 },
+                text: "pruned".into(),
             },
         ]
     }
@@ -300,7 +358,7 @@ mod tests {
     fn encoder_rejects_unsorted_features() {
         let unsorted = vec![
             LabelCandidate {
-                feature_id: 5,
+                feature_idx: Some(5),
                 foreign_origin: false,
                 priority: 0,
                 style_ref_idx: 0,
@@ -308,7 +366,7 @@ mod tests {
                 text: "a".into(),
             },
             LabelCandidate {
-                feature_id: 1,
+                feature_idx: Some(1),
                 foreign_origin: false,
                 priority: 0,
                 style_ref_idx: 0,
@@ -323,9 +381,35 @@ mod tests {
     }
 
     #[test]
+    fn encoder_rejects_slotted_after_slotless() {
+        let bad = vec![
+            LabelCandidate {
+                feature_idx: None,
+                foreign_origin: false,
+                priority: 0,
+                style_ref_idx: 0,
+                shape: LabelShape::Point { x: 0.0, y: 0.0 },
+                text: "p".into(),
+            },
+            LabelCandidate {
+                feature_idx: Some(1),
+                foreign_origin: false,
+                priority: 0,
+                style_ref_idx: 0,
+                shape: LabelShape::Point { x: 0.0, y: 0.0 },
+                text: "s".into(),
+            },
+        ];
+        assert!(matches!(
+            encode_label_candidates(&bad),
+            Err(ArtifactError::Malformed(_))
+        ));
+    }
+
+    #[test]
     fn rejects_oversized_text() {
         let big = LabelCandidate {
-            feature_id: 1,
+            feature_idx: Some(1),
             foreign_origin: false,
             priority: 0,
             style_ref_idx: 0,
@@ -341,7 +425,7 @@ mod tests {
     #[test]
     fn rejects_oversized_polyline() {
         let big = LabelCandidate {
-            feature_id: 1,
+            feature_idx: Some(1),
             foreign_origin: false,
             priority: 0,
             style_ref_idx: 0,
@@ -356,14 +440,14 @@ mod tests {
 
     #[test]
     fn rejects_bad_text_utf8() {
-        // hand-craft: count=1, fid=0, flags=0 (Point), prio=0, idx=0, x=0, y=0,
-        // text_len=2, two invalid utf-8 bytes
+        // hand-craft: count=1, flags=HAS_SLOT|Point, prio=0, idx=0, slot=0,
+        // x=0, y=0, text_len=2, two invalid utf-8 bytes
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&1u32.to_le_bytes());
-        bytes.extend_from_slice(&0u64.to_le_bytes());
-        bytes.push(0u8);
+        bytes.push(FLAG_HAS_SLOT);
         bytes.extend_from_slice(&0u16.to_le_bytes());
         bytes.extend_from_slice(&0u16.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes()); // feature_idx
         bytes.extend_from_slice(&0f32.to_le_bytes());
         bytes.extend_from_slice(&0f32.to_le_bytes());
         bytes.extend_from_slice(&2u16.to_le_bytes());

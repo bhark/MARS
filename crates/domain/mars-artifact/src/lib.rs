@@ -5,7 +5,7 @@
 pub const MAGIC: &[u8; 8] = b"MARS\0\0\0\0";
 
 /// Format version of the on-disk container. Bumped on incompatible changes.
-pub const FORMAT_VERSION: u32 = 1;
+pub const FORMAT_VERSION: u32 = 2;
 
 // generated planus code uses `unsafe` for zero-copy reads; it is the only
 // place we permit unsafe in this crate. all hand-written code below is safe.
@@ -78,8 +78,6 @@ pub enum ArtifactError {
     InvalidWriterState(&'static str),
     #[error("coordinate {0} out of representable range for quantization")]
     CoordOutOfRange(f64),
-    #[error("features must be sorted by id ascending")]
-    UnsortedFeatures,
     #[error("attributes section: {0}")]
     Attrs(#[from] AttrError),
 }

@@ -68,15 +68,17 @@ pub fn wkb_centroid(wkb: &[u8]) -> Result<[f64; 2], WkbError> {
     Ok([(bbox.min_x + bbox.max_x) * 0.5, (bbox.min_y + bbox.max_y) * 0.5])
 }
 
-/// Decode a WKB / EWKB geometry into a [`FeatureGeom`] keyed by `id`. Bbox
-/// is computed in the same pass.
-pub fn wkb_to_feature_geom(wkb: &[u8], id: u64) -> Result<FeatureGeom, WkbError> {
+/// Decode a WKB / EWKB geometry into a [`FeatureGeom`] tagged with the
+/// source-supplied `user_id`. Bbox is computed in the same pass. The slot
+/// (per-page primary key) is assigned later by the writer; `user_id` is
+/// non-key data and is allowed to repeat across features.
+pub fn wkb_to_feature_geom(wkb: &[u8], user_id: u64) -> Result<FeatureGeom, WkbError> {
     let mut acc = BboxAcc::new();
     let mut cur = Cursor::new(wkb);
     let geom = walk_geom(&mut cur, &mut acc, 0)?;
     let bb = acc.finish()?;
     Ok(FeatureGeom {
-        id,
+        user_id,
         bbox: [bb.min_x as f32, bb.min_y as f32, bb.max_x as f32, bb.max_y as f32],
         geom,
     })
@@ -352,7 +354,7 @@ mod tests {
     #[test]
     fn point_decode() {
         let g = wkb_to_feature_geom(&point_le(1.5, 2.5), 7).unwrap();
-        assert_eq!(g.id, 7);
+        assert_eq!(g.user_id, 7);
         assert!(matches!(g.geom, GeomKind::Point((1.5, 2.5))));
     }
 

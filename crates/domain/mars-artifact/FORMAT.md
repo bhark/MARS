@@ -1,8 +1,8 @@
-# MARS artifact format v1
+# MARS artifact format v2
 
 ## File layout
-- header: 8B magic "MARS\0\0\0\0", u32 LE format_version (1), u32 LE flags (0)
-- sections, each: u16 LE kind, u16 LE flags (bit 0 = compressed; v1 always 0), u64 LE length, length payload bytes
+- header: 8B magic "MARS\0\0\0\0", u32 LE format_version (2), u32 LE flags (0)
+- sections, each: u16 LE kind, u16 LE flags (bit 0 = compressed; v2 always 0), u64 LE length, length payload bytes
 - footer: FlatBuffers (planus) blob describing artifact kind, section index (kind, file_offset, length, uncompressed_length), bbox, feature_count, source_artifact_ref for layer artifacts
 - u32 LE footer_length, 8B trailer "MARS\0\0\0\0"
 
@@ -16,11 +16,20 @@ All multi-byte integers are little-endian.
 - 0x06 StyleRefs
 - 0x07 SpatialIndex
 
-## Geometry payload v1
+## Substrate primary key
+The per-page primary key for joining sidecars (attributes / class / label) to
+geometry is `feature_idx`: the positional slot index of the feature in the
+GeometryPayload, `0..n`. Source-supplied identifiers (`user_id`) live on the
+geometry-index entry as data, not as a key, and are explicitly allowed to
+repeat — for example when a source row is exploded into per-part features by
+a simplification pipeline. Determinism is owned by the compiler: it sorts by
+`(hilbert_key, user_id, row_fingerprint)` before encoding.
+
+## Geometry payload v2
 Endian: little-endian. All deltas zigzag-varint. Coordinates quantized to integer millimetres ((x * 1000.0).round() as i64).
 
-Per feature, in ascending feature_id order:
-- u64 feature_id
+Per feature, in compiler-supplied slot order:
+- u64 user_id (non-key data; may repeat)
 - [f32; 4] bbox in canonical CRS units (NOT mm)
 - u8 geom_type: 1=Point, 2=LineString, 3=Polygon, 4=MultiPoint, 5=MultiLineString, 6=MultiPolygon (matches WKB)
 - u32 coord_block_offset
@@ -33,10 +42,28 @@ The packed coord array follows the feature index. For each feature's coord block
 - Multi*: varint part_count; per part the singular layout
 - Empty: vertex_count = 0 / ring_count = 0 / part_count = 0 — permitted; rendered as no-op
 
-Determinism: features must be written in ascending feature_id order. Two writes with identical input must produce byte-identical artifacts.
+Determinism: the encoder writes features in caller-supplied order (the
+substrate primary key is the position itself). Two writes with identical
+input must produce byte-identical artifacts.
+
+## attributes section (source artifacts)
+Header: `[magic "MARSATTR"][u32 version = 2][u32 count][u32 dir_offset]`.
+Rows region: `count × [u32 row_len][row_bytes]`.
+Directory region (at `dir_offset`, sorted ascending by feature_idx):
+`count × [u32 feature_idx][u32 byte_offset]` — slot is the per-page primary
+key; user_id is not used here.
 
 ## class_assignment section (layer artifacts)
-[(u64 feature_id, u16 class_index)] sorted ascending by feature_id.
+`u32 count`, then `count × [u32 feature_idx][u16 class_index]` sorted
+ascending by feature_idx. Sparse: only slots that match a class appear.
+
+## label_candidates section (layer artifacts)
+See `label_candidates.rs` for the wire layout. Each entry carries a flags
+byte; bit 1 (`HAS_SLOT`) marks slot-bearing labels (`u32 feature_idx`
+follows). Slotless entries carry pruned-feature labels — features whose
+geometry was filtered out at this level under the Independent survival
+policy. The codec requires slotted entries to be ascending by feature_idx
+and to precede any slotless entries.
 
 ## style_refs section (layer artifacts)
 u32 count, then `count` entries each as (u32 length, length UTF-8 bytes) — style_id strings, indexed by class_index.

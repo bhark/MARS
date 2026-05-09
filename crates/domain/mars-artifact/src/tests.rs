@@ -69,7 +69,7 @@ prop_compose! {
         // ids must be strictly ascending and unique per encoder contract.
         let mut out = Vec::with_capacity(geoms.len());
         for (i, g) in geoms.into_iter().enumerate() {
-            out.push(FeatureGeom { id: i as u64, bbox: [0.0; 4], geom: g });
+            out.push(FeatureGeom { user_id: i as u64, bbox: [0.0; 4], geom: g });
         }
         out
     }
@@ -84,7 +84,7 @@ proptest! {
         let back = decode_geometry_payload(&bytes).unwrap();
         prop_assert_eq!(features.len(), back.len());
         for (a, b) in features.iter().zip(&back) {
-            prop_assert_eq!(a.id, b.id);
+            prop_assert_eq!(a.user_id, b.user_id);
             prop_assert_eq!(a.bbox, b.bbox);
             prop_assert!(geom_close(&a.geom, &b.geom));
         }
@@ -109,12 +109,12 @@ proptest! {
         let full: Vec<FeatureGeom> = decode_geometry_payload(&bytes)
             .unwrap()
             .into_iter()
-            .filter(|f| pred(f.id, f.bbox))
+            .filter(|f| pred(f.user_id, f.bbox))
             .collect();
 
         prop_assert_eq!(filtered.len(), full.len());
         for (a, b) in filtered.iter().zip(&full) {
-            prop_assert_eq!(a.id, b.id);
+            prop_assert_eq!(a.user_id, b.user_id);
             prop_assert_eq!(a.bbox, b.bbox);
             prop_assert!(geom_close(&a.geom, &b.geom));
         }
@@ -220,7 +220,7 @@ fn visitor_event_shape_per_geom_kind() {
 
     for (g, want) in cases {
         let features = vec![FeatureGeom {
-            id: 1,
+            user_id: 1,
             bbox: [0.0; 4],
             geom: g.clone(),
         }];
@@ -238,17 +238,17 @@ fn visitor_event_shape_per_geom_kind() {
 fn empty_geometries_roundtrip() {
     let features = vec![
         FeatureGeom {
-            id: 0,
+            user_id: 0,
             bbox: [0.0; 4],
             geom: GeomKind::LineString(vec![]),
         },
         FeatureGeom {
-            id: 1,
+            user_id: 1,
             bbox: [0.0; 4],
             geom: GeomKind::Polygon(vec![]),
         },
         FeatureGeom {
-            id: 2,
+            user_id: 2,
             bbox: [0.0; 4],
             geom: GeomKind::MultiPolygon(vec![]),
         },
@@ -257,14 +257,14 @@ fn empty_geometries_roundtrip() {
     let back = decode_geometry_payload(&bytes).unwrap();
     assert_eq!(features.len(), back.len());
     for (a, b) in features.iter().zip(&back) {
-        assert_eq!(a.id, b.id);
+        assert_eq!(a.user_id, b.user_id);
         assert!(geom_close(&a.geom, &b.geom));
     }
 }
 
 #[test]
 fn class_assignment_roundtrip() {
-    let items = vec![(1u64, 0u16), (5, 2), (42, 7)];
+    let items = vec![(1u32, 0u16), (5, 2), (42, 7)];
     let bytes = crate::encode_class_assignment(&items).unwrap();
     let back = decode_class_assignment(&bytes).unwrap();
     assert_eq!(items, back);
@@ -280,7 +280,7 @@ fn style_refs_roundtrip() {
 
 fn build_simple_artifact() -> Bytes {
     let features = vec![FeatureGeom {
-        id: 1,
+        user_id: 1,
         bbox: [0.0, 0.0, 10.0, 10.0],
         geom: GeomKind::LineString(vec![(0.0, 0.0), (10.0, 10.0)]),
     }];
@@ -314,7 +314,7 @@ fn artifact_deterministic() {
 #[test]
 fn layer_artifact_with_source_ref() {
     let mut w = ArtifactWriter::new(ArtifactKind::Layer);
-    w.add_class_assignment(&[(1, 0), (2, 1)])
+    w.add_class_assignment(&[(1u32, 0u16), (2, 1)])
         .add_style_refs(&["a".to_owned(), "b".to_owned()])
         .set_bbox(Bbox::new(0.0, 0.0, 1.0, 1.0))
         .set_feature_count(2)
@@ -335,7 +335,7 @@ fn layer_artifact_with_source_ref() {
     assert_eq!(s.cell_y, 4);
     assert_eq!(s.content_hash.0, [7u8; 32]);
     let ca = r.section(SectionKind::ClassAssignment).unwrap();
-    assert_eq!(decode_class_assignment(&ca).unwrap(), vec![(1, 0), (2, 1)]);
+    assert_eq!(decode_class_assignment(&ca).unwrap(), vec![(1u32, 0u16), (2, 1)]);
     let sr = r.section(SectionKind::StyleRefs).unwrap();
     assert_eq!(decode_style_refs(&sr).unwrap(), vec!["a".to_owned(), "b".to_owned()]);
 }
@@ -459,7 +459,7 @@ fn writer_rejects_source_ref_on_source_kind() {
 #[test]
 fn writer_validates_feature_count_against_payload() {
     let features = vec![FeatureGeom {
-        id: 1,
+        user_id: 1,
         bbox: [0.0; 4],
         geom: GeomKind::Point((0.0, 0.0)),
     }];
@@ -474,17 +474,17 @@ fn writer_validates_feature_count_against_payload() {
 fn decode_geometry_at_slots_returns_only_requested() {
     let features = vec![
         FeatureGeom {
-            id: 10,
+            user_id: 10,
             bbox: [0.0, 0.0, 1.0, 1.0],
             geom: GeomKind::Point((0.5, 0.5)),
         },
         FeatureGeom {
-            id: 20,
+            user_id: 20,
             bbox: [1.0, 1.0, 2.0, 2.0],
             geom: GeomKind::Point((1.5, 1.5)),
         },
         FeatureGeom {
-            id: 30,
+            user_id: 30,
             bbox: [2.0, 2.0, 3.0, 3.0],
             geom: GeomKind::Point((2.5, 2.5)),
         },
@@ -492,7 +492,7 @@ fn decode_geometry_at_slots_returns_only_requested() {
     let bytes = encode_geometry_payload(&features).unwrap();
     let got = decode_geometry_at_slots(&bytes, &[2, 0]).unwrap();
     assert_eq!(got.len(), 2);
-    let ids: Vec<u64> = got.iter().map(|f| f.id).collect();
+    let ids: Vec<u64> = got.iter().map(|f| f.user_id).collect();
     assert!(ids.contains(&10));
     assert!(ids.contains(&30));
     assert!(!ids.contains(&20));
@@ -501,20 +501,20 @@ fn decode_geometry_at_slots_returns_only_requested() {
 #[test]
 fn decode_geometry_at_slots_dedupes_input() {
     let features = vec![FeatureGeom {
-        id: 7,
+        user_id: 7,
         bbox: [0.0, 0.0, 1.0, 1.0],
         geom: GeomKind::Point((0.0, 0.0)),
     }];
     let bytes = encode_geometry_payload(&features).unwrap();
     let got = decode_geometry_at_slots(&bytes, &[0, 0, 0]).unwrap();
     assert_eq!(got.len(), 1);
-    assert_eq!(got[0].id, 7);
+    assert_eq!(got[0].user_id, 7);
 }
 
 #[test]
 fn decode_geometry_at_slots_silently_drops_oob() {
     let features = vec![FeatureGeom {
-        id: 1,
+        user_id: 1,
         bbox: [0.0, 0.0, 1.0, 1.0],
         geom: GeomKind::Point((0.0, 0.0)),
     }];
@@ -527,12 +527,12 @@ fn decode_geometry_at_slots_silently_drops_oob() {
 fn writer_derives_feature_count_from_staged_payload() {
     let features = vec![
         FeatureGeom {
-            id: 1,
+            user_id: 1,
             bbox: [0.0; 4],
             geom: GeomKind::Point((0.0, 0.0)),
         },
         FeatureGeom {
-            id: 2,
+            user_id: 2,
             bbox: [0.0; 4],
             geom: GeomKind::Point((1.0, 1.0)),
         },
@@ -556,12 +556,12 @@ fn writer_rejects_geometry_without_feature_count() {
 
 #[test]
 fn class_assignment_rejects_unsorted() {
-    // hand-build: count=2, ids 5,1 (decreasing)
+    // hand-build: count=2, slots 5,1 (decreasing)
     let mut buf = Vec::new();
     buf.extend_from_slice(&2u32.to_le_bytes());
-    buf.extend_from_slice(&5u64.to_le_bytes());
+    buf.extend_from_slice(&5u32.to_le_bytes());
     buf.extend_from_slice(&0u16.to_le_bytes());
-    buf.extend_from_slice(&1u64.to_le_bytes());
+    buf.extend_from_slice(&1u32.to_le_bytes());
     buf.extend_from_slice(&1u16.to_le_bytes());
     assert!(matches!(
         decode_class_assignment(&buf),
@@ -573,9 +573,9 @@ fn class_assignment_rejects_unsorted() {
 fn class_assignment_rejects_duplicate() {
     let mut buf = Vec::new();
     buf.extend_from_slice(&2u32.to_le_bytes());
-    buf.extend_from_slice(&5u64.to_le_bytes());
+    buf.extend_from_slice(&5u32.to_le_bytes());
     buf.extend_from_slice(&0u16.to_le_bytes());
-    buf.extend_from_slice(&5u64.to_le_bytes());
+    buf.extend_from_slice(&5u32.to_le_bytes());
     buf.extend_from_slice(&1u16.to_le_bytes());
     assert!(matches!(
         decode_class_assignment(&buf),
@@ -585,7 +585,7 @@ fn class_assignment_rejects_duplicate() {
 
 #[test]
 fn class_assignment_rejects_trailing_bytes() {
-    let mut buf = crate::encode_class_assignment(&[(1u64, 0u16)]).unwrap().to_vec();
+    let mut buf = crate::encode_class_assignment(&[(1u32, 0u16)]).unwrap().to_vec();
     buf.push(0);
     let err = decode_class_assignment(&buf).unwrap_err();
     assert!(matches!(err, ArtifactError::Malformed(_)));
@@ -600,29 +600,36 @@ fn style_refs_rejects_huge_count() {
 }
 
 #[test]
-fn geometry_rejects_unsorted_features() {
+fn geometry_accepts_repeated_user_ids() {
+    // user_id is non-key data; the substrate primary key is positional, so
+    // repeated user_ids (and any input order) are encoded verbatim.
     let features = vec![
         FeatureGeom {
-            id: 5,
+            user_id: 5,
             bbox: [0.0; 4],
             geom: GeomKind::Point((0.0, 0.0)),
         },
         FeatureGeom {
-            id: 1,
+            user_id: 5,
             bbox: [0.0; 4],
             geom: GeomKind::Point((1.0, 1.0)),
         },
+        FeatureGeom {
+            user_id: 1,
+            bbox: [0.0; 4],
+            geom: GeomKind::Point((2.0, 2.0)),
+        },
     ];
-    assert!(matches!(
-        encode_geometry_payload(&features),
-        Err(ArtifactError::UnsortedFeatures)
-    ));
+    let bytes = encode_geometry_payload(&features).unwrap();
+    let back = decode_geometry_payload(&bytes).unwrap();
+    let ids: Vec<u64> = back.iter().map(|f| f.user_id).collect();
+    assert_eq!(ids, vec![5, 5, 1]);
 }
 
 #[test]
 fn geometry_rejects_non_finite_coord() {
     let features = vec![FeatureGeom {
-        id: 0,
+        user_id: 0,
         bbox: [0.0; 4],
         geom: GeomKind::Point((f64::NAN, 0.0)),
     }];
@@ -635,7 +642,7 @@ fn geometry_rejects_non_finite_coord() {
 #[test]
 fn geometry_rejects_oversize_coord() {
     let features = vec![FeatureGeom {
-        id: 0,
+        user_id: 0,
         bbox: [0.0; 4],
         geom: GeomKind::Point((1e20, 0.0)),
     }];
