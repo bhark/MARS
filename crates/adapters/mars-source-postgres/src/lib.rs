@@ -188,6 +188,20 @@ impl PgSource {
                 })
             }));
         }
+        // pre_recycle fires before every checkout from the pool. an explicit
+        // ROLLBACK guarantees no inherited transaction state, so a session
+        // that returned its connection without committing/rolling back
+        // (panic, drop, future cancellation) cannot leak its snapshot to the
+        // next checkout. ROLLBACK outside a txn is a postgres NOTICE, not an
+        // error, so this stays idempotent.
+        builder = builder.pre_recycle(Hook::async_fn(|client, _| {
+            Box::pin(async move {
+                client
+                    .batch_execute("ROLLBACK")
+                    .await
+                    .map_err(|e| HookError::message(format!("pre_recycle rollback: {e}")))
+            })
+        }));
         let pool = builder.build().map_err(|e| SourceError::backend("pool create", e))?;
 
         Ok(Self {
