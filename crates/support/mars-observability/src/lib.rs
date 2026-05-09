@@ -49,6 +49,12 @@ pub mod metrics {
     /// to resolve a stylesheet entry; the runtime drops them rather than
     /// painting a diagnostic fallback colour.
     pub const RENDER_FEATURE_UNSTYLED: &str = "mars_render_feature_unstyled_total";
+
+    /// Counter labelled by `binding` tracking features dropped by the compiler
+    /// at emit time because no layer's class chain matched. these features
+    /// would otherwise bloat the geometry payload and increment
+    /// `mars_render_feature_unstyled_total` on every render pass.
+    pub const COMPILER_FEATURES_UNMATCHED: &str = "mars_compiler_features_unmatched_total";
 }
 
 /// Initialise the global tracing subscriber.
@@ -137,6 +143,7 @@ struct MetricsInner {
     capabilities_rebuild_failures: IntCounter,
     label_seconds: Histogram,
     render_feature_unstyled: IntCounterVec,
+    compiler_features_unmatched: IntCounterVec,
 }
 
 impl std::fmt::Debug for Metrics {
@@ -222,6 +229,13 @@ impl Metrics {
             ),
             &["layer"],
         )?;
+        let compiler_features_unmatched = IntCounterVec::new(
+            Opts::new(
+                metrics::COMPILER_FEATURES_UNMATCHED,
+                "total features dropped at compile time because no layer's class chain matched",
+            ),
+            &["binding"],
+        )?;
 
         registry.register(Box::new(request_total.clone()))?;
         registry.register(Box::new(request_duration.clone()))?;
@@ -237,6 +251,7 @@ impl Metrics {
         registry.register(Box::new(capabilities_rebuild_failures.clone()))?;
         registry.register(Box::new(label_seconds.clone()))?;
         registry.register(Box::new(render_feature_unstyled.clone()))?;
+        registry.register(Box::new(compiler_features_unmatched.clone()))?;
 
         Ok(Self {
             inner: Arc::new(MetricsInner {
@@ -255,6 +270,7 @@ impl Metrics {
                 capabilities_rebuild_failures,
                 label_seconds,
                 render_feature_unstyled,
+                compiler_features_unmatched,
             }),
         })
     }
@@ -345,6 +361,17 @@ impl Metrics {
         self.inner.render_feature_unstyled.with_label_values(&[layer]).inc_by(n);
     }
 
+    /// Increment the compiler unmatched-feature counter for `binding`. Called
+    /// when a row is dropped at emit time because no layer's class chain
+    /// matched it; keeps the geometry payload tight and avoids paying the
+    /// `feature_unstyled` cost on every subsequent render.
+    pub fn inc_compiler_features_unmatched(&self, binding: &str, n: u64) {
+        self.inner
+            .compiler_features_unmatched
+            .with_label_values(&[binding])
+            .inc_by(n);
+    }
+
     /// Encode the current registry as Prometheus text exposition format.
     pub fn encode_text(&self) -> Result<String, ObservabilityError> {
         let encoder = TextEncoder::new();
@@ -370,6 +397,7 @@ mod tests {
         m.observe_compiler_rebuild_duration(Duration::from_secs_f64(1.23));
         m.set_compiler_window_lag(Duration::from_secs_f64(0.5));
         m.inc_render_feature_unstyled("Bygning", 3);
+        m.inc_compiler_features_unmatched("buildings_live", 5);
         let text = m.encode_text().unwrap();
         assert!(text.contains("mars_request_total"));
         assert!(text.contains("interface=\"wms\""));
@@ -384,5 +412,7 @@ mod tests {
         assert!(text.contains("mars_compiler_window_lag_seconds"));
         assert!(text.contains("mars_render_feature_unstyled_total"));
         assert!(text.contains("layer=\"Bygning\""));
+        assert!(text.contains("mars_compiler_features_unmatched_total"));
+        assert!(text.contains("binding=\"buildings_live\""));
     }
 }
