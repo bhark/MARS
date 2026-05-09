@@ -118,10 +118,10 @@ pub struct FixtureOptions {
     pub feature_count: u64,
     /// label survival policy stamped onto the synthesised layer config.
     pub label_survival: LabelSurvival,
-    /// extra label_candidates whose `feature_id` does NOT appear in the
+    /// extra label candidates whose `feature_idx` is out of range for the
     /// page's geometry section. used to exercise the FollowGeometry filter
     /// without having to manipulate viewport intersection.
-    pub orphan_label_feature_ids: Vec<u64>,
+    pub orphan_label_feature_idxs: Vec<u32>,
 }
 
 impl Default for FixtureOptions {
@@ -130,7 +130,7 @@ impl Default for FixtureOptions {
             manifest_version: 1,
             feature_count: 3,
             label_survival: LabelSurvival::Independent,
-            orphan_label_feature_ids: Vec::new(),
+            orphan_label_feature_idxs: Vec::new(),
         }
     }
 }
@@ -142,7 +142,7 @@ pub async fn build_fixture_with(opts: FixtureOptions) -> Fixture {
     // synthesise per-feature geometry: a 10x10 square at (10*i, 10*i).
     let features: Vec<FeatureGeom> = (0..opts.feature_count)
         .map(|i| FeatureGeom {
-            id: 1000 + i,
+            user_id: 1000 + i,
             bbox: [
                 (i as f32) * 10.0,
                 (i as f32) * 10.0,
@@ -172,11 +172,12 @@ pub async fn build_fixture_with(opts: FixtureOptions) -> Fixture {
         spatial.add(slot as u32, f.bbox);
     }
     let spatial_bytes = spatial.finish().unwrap();
-    let attrs_pairs: Vec<(u64, Vec<u8>)> = features
+    let attrs_pairs: Vec<(u32, Vec<u8>)> = features
         .iter()
-        .map(|f| {
-            let pairs = vec![("name".to_string(), AttrValue::String(format!("feat-{}", f.id)))];
-            (f.id, encode_row(&pairs).unwrap().to_vec())
+        .enumerate()
+        .map(|(slot, f)| {
+            let pairs = vec![("name".to_string(), AttrValue::String(format!("feat-{}", f.user_id)))];
+            (slot as u32, encode_row(&pairs).unwrap().to_vec())
         })
         .collect();
 
@@ -190,9 +191,9 @@ pub async fn build_fixture_with(opts: FixtureOptions) -> Fixture {
     let page_bytes = writer.finish().unwrap();
     let page_hash = mars_artifact::compute_content_hash(&page_bytes);
 
-    // class sidecar: every feature → class index 0; one style ref pointing to
+    // class sidecar: every slot → class index 0; one style ref pointing to
     // the stylesheet's "buildings__main" entry. label-style ref appended.
-    let class_assignments: Vec<(u64, u16)> = features.iter().map(|f| (f.id, 0u16)).collect();
+    let class_assignments: Vec<(u32, u16)> = (0..opts.feature_count).map(|i| (i as u32, 0u16)).collect();
     let style_refs: Vec<String> = vec!["buildings__main".to_string(), "buildings__label".to_string()];
     let mut writer = ArtifactWriter::new(ArtifactKind::Layer);
     writer
@@ -206,8 +207,9 @@ pub async fn build_fixture_with(opts: FixtureOptions) -> Fixture {
     // centroid, style_ref_idx = 1 (the appended label style ref).
     let mut labels: Vec<LabelCandidate> = features
         .iter()
-        .map(|f| LabelCandidate {
-            feature_id: f.id,
+        .enumerate()
+        .map(|(slot, f)| LabelCandidate {
+            feature_idx: Some(slot as u32),
             foreign_origin: false,
             priority: 100,
             style_ref_idx: 1,
@@ -215,28 +217,27 @@ pub async fn build_fixture_with(opts: FixtureOptions) -> Fixture {
                 x: (f.bbox[0] + f.bbox[2]) * 0.5,
                 y: (f.bbox[1] + f.bbox[3]) * 0.5,
             },
-            text: format!("L{}", f.id),
+            text: format!("L{}", f.user_id),
         })
         .collect();
-    // orphan labels: synthetic candidates whose feature_id is absent from
-    // the page geometry. anchored inside the page bbox so they survive
-    // canvas clipping; the only thing that should drop them is the
-    // FollowGeometry filter on the runtime label path.
-    for &orphan_id in &opts.orphan_label_feature_ids {
+    // orphan labels: synthetic slot-bearing candidates whose feature_idx is
+    // out of range for the page's geometry section. anchored inside the
+    // page bbox so they survive canvas clipping; the only thing that
+    // should drop them is the FollowGeometry filter on the runtime label
+    // path. (slotless candidates are kept by all policies; only an
+    // out-of-range slot exercises the filter.)
+    for &orphan_idx in &opts.orphan_label_feature_idxs {
         labels.push(LabelCandidate {
-            feature_id: orphan_id,
+            feature_idx: Some(orphan_idx),
             foreign_origin: false,
             priority: 100,
             style_ref_idx: 1,
-            // anchored well clear of any feature-label position so greedy
-            // collision can't be the reason an orphan disappears - any
-            // missing orphan must have been dropped by the survival filter.
             shape: LabelShape::Point { x: 50.0, y: 50.0 },
-            text: format!("ORPH{orphan_id}"),
+            text: format!("ORPH{orphan_idx}"),
         });
     }
-    // wire format requires ascending feature_id ordering.
-    labels.sort_by_key(|c| c.feature_id);
+    // wire format requires ascending feature_idx for slot-bearing entries.
+    labels.sort_by_key(|c| c.feature_idx.unwrap_or(u32::MAX));
     let mut writer = ArtifactWriter::new(ArtifactKind::Layer);
     writer.add_label_candidates(&labels).set_bbox(page_bbox);
     let label_bytes = writer.finish().unwrap();

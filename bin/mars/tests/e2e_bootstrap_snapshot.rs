@@ -152,20 +152,19 @@ async fn snapshot_bootstrap_e2e() -> Result<()> {
     let sidecar = SidecarReader::open(&sidecar_bytes).context("open sidecar")?;
 
     for &id in &sample_ids {
-        let key = sidecar.lookup(id);
-        assert!(key.is_some(), "sidecar missing feature_id {id}");
+        assert!(sidecar.lookup_all(id).next().is_some(), "sidecar missing user_id {id}");
     }
 
     // Verify each sampled id is decodable through some page in the manifest.
     let mut found = 0usize;
     for &id in &sample_ids {
-        if let Some(page_entry) = find_page_for_id(&manifest.pages, &store, id).await {
+        if let Some((page_entry, slot)) = find_page_for_id(&manifest.pages, &store, id).await {
             let key = page_entry.key.object_key(&page_entry.content_hash).unwrap();
             let page_bytes = store.get(&key, page_entry.content_hash).await.context("fetch page")?;
             let reader = ArtifactReader::open(page_bytes).context("open page")?;
-            // attributes by feature_id must succeed.
+            // attributes by slot must succeed.
             let row = reader
-                .attributes_by_feature_id(id)
+                .attributes_by_slot(slot)
                 .context("attrs lookup")?
                 .expect("feature in page");
             let decoded = mars_artifact::decode_row(row).context("decode row")?;
@@ -200,13 +199,18 @@ async fn find_page_for_id(
     pages: &[mars_types::PageEntry],
     store: &Arc<FsStore>,
     id: u64,
-) -> Option<mars_types::PageEntry> {
+) -> Option<(mars_types::PageEntry, u32)> {
     for p in pages {
         let key = p.key.object_key(&p.content_hash).ok()?;
         let bytes = store.get(&key, p.content_hash).await.ok()?;
         let reader = ArtifactReader::open(bytes).ok()?;
-        if reader.attributes_by_feature_id(id).ok().flatten().is_some() {
-            return Some(p.clone());
+        let geom_bytes = reader.section(SectionKind::GeometryPayload).ok()?;
+        let iter = mars_artifact::iter_feature_index(&geom_bytes).ok()?;
+        for (slot_idx, entry) in iter.enumerate() {
+            let entry = entry.ok()?;
+            if entry.user_id == id {
+                return Some((p.clone(), slot_idx as u32));
+            }
         }
     }
     None

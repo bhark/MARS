@@ -58,7 +58,7 @@ fn inspect_accepts_synthetic_artifact() {
 
     let mut w = ArtifactWriter::new(ArtifactKind::Source);
     w.add_geometry_payload(vec![FeatureGeom {
-        id: 1,
+        user_id: 1,
         bbox: [0.0, 0.0, 1.0, 1.0],
         geom: GeomKind::Point((0.5, 0.5)),
     }])

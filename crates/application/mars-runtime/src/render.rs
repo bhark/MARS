@@ -7,15 +7,14 @@
 //! path stops at "raw geometry, fallback style" so the spine is verifiable
 //! in isolation.
 
-use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use bytes::Bytes;
 use futures_util::StreamExt;
 use futures_util::stream::FuturesUnordered;
 use mars_artifact::{
-    ArtifactReader, GeomKind, LabelCandidate, LabelShape, SectionKind, SpatialIndex, decode_class_assignment,
-    decode_geometry_at_slots, decode_label_candidates, decode_style_refs,
+    ArtifactReader, FeatureGeom, GeomKind, LabelCandidate, LabelShape, SectionKind, SpatialIndex,
+    decode_class_assignment, decode_label_candidates, decode_one_geom, decode_style_refs, iter_feature_index,
 };
 use mars_config::Layer;
 use mars_render_port::{Canvas, DrawOp, Path, Renderer, Subpath};
@@ -171,19 +170,16 @@ async fn render_layer_pages(
     let same_crs = binding.native_crs.as_str() == plan.crs.as_str();
     while let Some(res) = futs.next().await {
         let (entry, page_bytes, class_bytes, label_bytes) = res?;
-        let class = match class_bytes {
-            Some(b) => Some(ClassResolver::open(b)?),
-            None => None,
-        };
         let DecodedPage {
             ops: mut page_ops,
-            rendered_feature_ids,
+            rendered_slots,
+            class,
         } = decode_page_to_ops(
             page_bytes,
+            class_bytes,
             &entry,
             plan,
             binding,
-            class.as_ref(),
             &state.stylesheet,
             fallback,
             same_crs,
@@ -192,7 +188,7 @@ async fn render_layer_pages(
         if let Some(bytes) = label_bytes {
             let survival_filter = match label_survival {
                 LabelSurvival::Independent => None,
-                LabelSurvival::FollowGeometry => Some(&rendered_feature_ids),
+                LabelSurvival::FollowGeometry => Some(rendered_slots.as_slice()),
             };
             let mut prepared = prepare_labels(
                 bytes,
@@ -210,51 +206,62 @@ async fn render_layer_pages(
     Ok(out)
 }
 
-/// per-page render output. `rendered_feature_ids` is the set of ids whose
+/// per-page render output. `rendered_slots[i]` is true when slot `i`'s
 /// geometry survived the spatial-index hit-test for this page; the runtime
 /// uses it as the FollowGeometry survival filter, defending the label path
-/// against compiler drift between geometry and label sidecar.
+/// against compiler drift between geometry and label sidecar. `class` is
+/// hoisted alongside ops so the label pass can resolve style refs without
+/// reopening the artifact.
 struct DecodedPage {
     ops: Vec<DrawOp>,
-    rendered_feature_ids: BTreeSet<u64>,
+    rendered_slots: Vec<bool>,
+    class: Option<ClassResolver>,
 }
 
-/// resolves `feature_id -> Style` by binary-searching the class assignment
-/// table and looking the resulting style ref up in the active stylesheet.
-struct ClassResolver {
-    /// `(feature_id, class_index)` pairs sorted ascending by feature_id.
-    assignments: Vec<(u64, u16)>,
+/// resolves `feature_idx -> Style` by direct slot indexing on a dense
+/// `Vec<Option<u16>>`, then looking the class index up in the page-local
+/// style_refs table to get a stylesheet entry name.
+pub(crate) struct ClassResolver {
+    /// indexed by per-page slot; `None` when the slot has no class.
+    by_slot: Vec<Option<u16>>,
     /// `class_index` indexes into this list to get a stylesheet ref name.
     style_refs: Vec<String>,
 }
 
 impl ClassResolver {
-    fn open(bytes: Bytes) -> Result<Self, RuntimeError> {
+    fn open(bytes: Bytes, page_feature_count: usize) -> Result<Self, RuntimeError> {
         let reader = ArtifactReader::open(bytes).map_err(map_artifact_err)?;
         let class_bytes = reader.section(SectionKind::ClassAssignment).map_err(map_artifact_err)?;
         let style_refs_bytes = reader.section(SectionKind::StyleRefs).map_err(map_artifact_err)?;
         let assignments = decode_class_assignment(&class_bytes).map_err(map_artifact_err)?;
         let style_refs = decode_style_refs(&style_refs_bytes).map_err(map_artifact_err)?;
-        Ok(Self {
-            assignments,
-            style_refs,
-        })
+        let mut by_slot: Vec<Option<u16>> = vec![None; page_feature_count];
+        for (slot, cls) in assignments {
+            let s = slot as usize;
+            if s < by_slot.len() {
+                by_slot[s] = Some(cls);
+            }
+        }
+        Ok(Self { by_slot, style_refs })
     }
 
-    fn style_ref_for(&self, feature_id: u64) -> Option<&str> {
-        let pos = self.assignments.binary_search_by_key(&feature_id, |&(id, _)| id).ok()?;
-        let cls = self.assignments[pos].1 as usize;
+    fn style_ref_for(&self, feature_idx: u32) -> Option<&str> {
+        let cls = (*self.by_slot.get(feature_idx as usize)?)? as usize;
         self.style_refs.get(cls).map(String::as_str)
+    }
+
+    pub(crate) fn style_refs(&self) -> &[String] {
+        &self.style_refs
     }
 }
 
 #[allow(clippy::too_many_arguments)]
 fn decode_page_to_ops(
     bytes: Bytes,
+    class_bytes: Option<Bytes>,
     page: &PageEntry,
     plan: &RenderPlan,
     binding: &BindingMetadata,
-    class: Option<&ClassResolver>,
     stylesheet: &Stylesheet,
     fallback: &Arc<Style>,
     same_crs: bool,
@@ -263,10 +270,16 @@ fn decode_page_to_ops(
     let spatial_bytes = reader.section(SectionKind::SpatialIndex).map_err(map_artifact_err)?;
     let geom_bytes = reader.section(SectionKind::GeometryPayload).map_err(map_artifact_err)?;
     let idx = SpatialIndex::open(spatial_bytes).map_err(map_artifact_err)?;
+    let page_feature_count = idx.len() as usize;
+    let class = match class_bytes {
+        Some(b) => Some(ClassResolver::open(b, page_feature_count)?),
+        None => None,
+    };
     if idx.is_empty() {
         return Ok(DecodedPage {
             ops: Vec::new(),
-            rendered_feature_ids: BTreeSet::new(),
+            rendered_slots: Vec::new(),
+            class,
         });
     }
     let qbb = bbox_native(plan.bbox, &plan.crs, &binding.native_crs)?;
@@ -278,21 +291,59 @@ fn decode_page_to_ops(
         let _ = page;
         return Ok(DecodedPage {
             ops: Vec::new(),
-            rendered_feature_ids: BTreeSet::new(),
+            rendered_slots: vec![false; page_feature_count],
+            class,
         });
     }
-    let features = decode_geometry_at_slots(&geom_bytes, &slots).map_err(map_artifact_err)?;
+    slots.sort_unstable();
+    slots.dedup();
+    let mut rendered_slots = vec![false; page_feature_count];
+    for &s in &slots {
+        let i = s as usize;
+        if i < rendered_slots.len() {
+            rendered_slots[i] = true;
+        }
+    }
+
+    // walk the index alongside the slot cursor so we keep (slot, feature)
+    // pairs together (decode_geometry_at_slots loses slot identity).
+    let iter = iter_feature_index(&geom_bytes).map_err(map_artifact_err)?;
+    let coord_area = iter.coord_area();
+    let mut paired: Vec<(u32, FeatureGeom)> = Vec::with_capacity(slots.len());
+    let mut cursor = 0usize;
+    for (slot_idx, entry) in iter.enumerate() {
+        if cursor >= slots.len() {
+            break;
+        }
+        let entry = entry.map_err(map_artifact_err)?;
+        let slot_u32 = u32::try_from(slot_idx).map_err(|_| RuntimeError::InvalidManifest {
+            reason: "render: slot index overflow".into(),
+        })?;
+        if slot_u32 != slots[cursor] {
+            continue;
+        }
+        cursor += 1;
+        let geom = decode_one_geom(coord_area, &entry).map_err(map_artifact_err)?;
+        paired.push((
+            slot_u32,
+            FeatureGeom {
+                user_id: entry.user_id,
+                bbox: entry.bbox,
+                geom,
+            },
+        ));
+    }
+
     let projected = if same_crs {
-        features
+        paired
     } else {
-        project_features(features, &binding.native_crs, &plan.crs)?
+        project_paired_features(paired, &binding.native_crs, &plan.crs)?
     };
     let mut ops = Vec::with_capacity(projected.len());
-    let mut rendered_feature_ids = BTreeSet::new();
-    for f in projected {
-        rendered_feature_ids.insert(f.id);
+    for (slot, f) in projected {
         let style = class
-            .and_then(|c| c.style_ref_for(f.id))
+            .as_ref()
+            .and_then(|c| c.style_ref_for(slot))
             .and_then(|name| stylesheet.geometry.get(name).cloned())
             .unwrap_or_else(|| fallback.clone());
         if let Some(op) = feature_to_drawop(&f.geom, plan.bbox, plan.width, plan.height, style) {
@@ -301,7 +352,8 @@ fn decode_page_to_ops(
     }
     Ok(DecodedPage {
         ops,
-        rendered_feature_ids,
+        rendered_slots,
+        class,
     })
 }
 
@@ -313,20 +365,23 @@ fn bbox_to_f32(b: Bbox) -> [f32; 4] {
     [b.min_x as f32, b.min_y as f32, b.max_x as f32, b.max_y as f32]
 }
 
-fn project_features(
-    features: Vec<mars_artifact::FeatureGeom>,
+fn project_paired_features(
+    features: Vec<(u32, mars_artifact::FeatureGeom)>,
     from: &mars_types::CrsCode,
     to: &mars_types::CrsCode,
-) -> Result<Vec<mars_artifact::FeatureGeom>, RuntimeError> {
+) -> Result<Vec<(u32, mars_artifact::FeatureGeom)>, RuntimeError> {
     let xform = mars_proj::cached_transformer(from, to).map_err(map_proj_err)?;
     let mut out = Vec::with_capacity(features.len());
-    for f in features {
+    for (slot, f) in features {
         let geom = project_geom(&f.geom, &xform)?;
-        out.push(mars_artifact::FeatureGeom {
-            id: f.id,
-            bbox: f.bbox,
-            geom,
-        });
+        out.push((
+            slot,
+            mars_artifact::FeatureGeom {
+                user_id: f.user_id,
+                bbox: f.bbox,
+                geom,
+            },
+        ));
     }
     Ok(out)
 }
@@ -463,7 +518,7 @@ fn prepare_labels(
     class: Option<&ClassResolver>,
     stylesheet: &Stylesheet,
     same_crs: bool,
-    survival_filter: Option<&BTreeSet<u64>>,
+    survival_filter: Option<&[bool]>,
     renderer: &dyn Renderer,
 ) -> Result<Vec<PreparedLabel>, RuntimeError> {
     let reader = ArtifactReader::open(bytes).map_err(map_artifact_err)?;
@@ -479,13 +534,17 @@ fn prepare_labels(
         Some(mars_proj::cached_transformer(&binding.native_crs, &plan.crs).map_err(map_proj_err)?)
     };
     for c in candidates {
-        // FollowGeometry: drop candidates whose feature was pruned at this
-        // level. compiler is the primary enforcer; runtime stays defensive
-        // against drift (eg. older sidecar epoch left over after a swap).
-        if let Some(allow) = survival_filter
-            && !allow.contains(&c.feature_id)
-        {
-            continue;
+        // FollowGeometry: drop slot-bearing candidates whose feature wasn't
+        // rendered at this scale. slotless (pruned-feature) labels are
+        // emitted unconditionally - they exist precisely because their
+        // geometry was filtered out at compile time. compiler is the
+        // primary enforcer; runtime stays defensive against drift (eg. an
+        // older sidecar epoch left over after a swap).
+        if let (Some(allow), Some(idx)) = (survival_filter, c.feature_idx) {
+            let i = idx as usize;
+            if i >= allow.len() || !allow[i] {
+                continue;
+            }
         }
         let anchor_world = match label_anchor_world(&c, xform.as_deref()) {
             Some(a) => a,
@@ -496,7 +555,7 @@ fn prepare_labels(
             continue;
         }
         let style_name = class
-            .and_then(|cl| cl.style_refs.get(c.style_ref_idx as usize))
+            .and_then(|cl| cl.style_refs().get(c.style_ref_idx as usize))
             .map(String::as_str);
         let Some(style) = style_name.and_then(|n| stylesheet.labels.get(n).cloned()) else {
             continue;

@@ -26,7 +26,7 @@ use bytes::Bytes;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use mars_artifact::{
     ArtifactKind, ArtifactReader, ArtifactWriter, DEFAULT_NODE_SIZE, FeatureGeom, GeomKind, SectionKind, SpatialIndex,
-    SpatialIndexBuilder, decode_class_assignment, decode_geometry_at_slots, decode_style_refs, encode_geometry_payload,
+    SpatialIndexBuilder, decode_class_assignment, decode_style_refs, encode_geometry_payload,
 };
 use mars_render_port::{DrawOp, Path, Subpath};
 use mars_style::{Colour, Style, Stylesheet};
@@ -55,7 +55,7 @@ fn make_features(n: usize) -> Vec<FeatureGeom> {
             }
             ring.push(ring[0]);
             FeatureGeom {
-                id: k as u64,
+                user_id: k as u64,
                 bbox: [
                     (cx - 0.5) as f32,
                     (cy - 0.5) as f32,
@@ -114,8 +114,8 @@ fn build_page(features: &[FeatureGeom]) -> Bytes {
 }
 
 fn build_class_sidecar(n: usize) -> Bytes {
-    // sorted-by-feature_id (feature_id, class_index). matches snapshot output.
-    let assignments: Vec<(u64, u16)> = (0..n).map(|k| (k as u64, (k % NUM_CLASSES) as u16)).collect();
+    // sorted-by-feature_idx (slot, class_index). matches snapshot output.
+    let assignments: Vec<(u32, u16)> = (0..n).map(|k| (k as u32, (k % NUM_CLASSES) as u16)).collect();
     let style_refs: Vec<String> = (0..NUM_CLASSES).map(|c| format!("style_{c}")).collect();
     let mut w = ArtifactWriter::new(ArtifactKind::Layer);
     w.set_bbox(page_bbox(n))
@@ -179,27 +179,32 @@ fn polygon_to_drawop(rings: &[Vec<(f64, f64)>], v: Bbox, style: Arc<Style>) -> D
     }
 }
 
-/// resolves feature_id → style ref name. mirrors `runtime::render::ClassResolver`
+/// resolves feature_idx → style ref name. mirrors `runtime::render::ClassResolver`
 /// exactly without depending on its private symbol.
 struct ClassJoin {
-    assignments: Vec<(u64, u16)>,
+    by_slot: Vec<Option<u16>>,
     style_refs: Vec<String>,
 }
 
 impl ClassJoin {
-    fn open(bytes: Bytes) -> Self {
+    fn open(bytes: Bytes, page_feature_count: usize) -> Self {
         let reader = ArtifactReader::open(bytes).unwrap();
         let class_bytes = reader.section(SectionKind::ClassAssignment).unwrap();
         let style_refs_bytes = reader.section(SectionKind::StyleRefs).unwrap();
-        Self {
-            assignments: decode_class_assignment(&class_bytes).unwrap(),
-            style_refs: decode_style_refs(&style_refs_bytes).unwrap(),
+        let assignments = decode_class_assignment(&class_bytes).unwrap();
+        let style_refs = decode_style_refs(&style_refs_bytes).unwrap();
+        let mut by_slot: Vec<Option<u16>> = vec![None; page_feature_count];
+        for (slot, cls) in assignments {
+            let s = slot as usize;
+            if s < by_slot.len() {
+                by_slot[s] = Some(cls);
+            }
         }
+        Self { by_slot, style_refs }
     }
 
-    fn style_ref_for(&self, feature_id: u64) -> Option<&str> {
-        let pos = self.assignments.binary_search_by_key(&feature_id, |&(id, _)| id).ok()?;
-        let cls = self.assignments[pos].1 as usize;
+    fn style_ref_for(&self, feature_idx: u32) -> Option<&str> {
+        let cls = (*self.by_slot.get(feature_idx as usize)?)? as usize;
         self.style_refs.get(cls).map(String::as_str)
     }
 }
@@ -219,22 +224,52 @@ fn feature_prep_once(
     let spatial = reader.section(SectionKind::SpatialIndex).unwrap();
     let geom = reader.section(SectionKind::GeometryPayload).unwrap();
     let idx = SpatialIndex::open(spatial).unwrap();
+    let page_feature_count = idx.len() as usize;
     slot_buf.clear();
     idx.query(bbox_to_f32(qbb), slot_buf);
     if slot_buf.is_empty() {
         return Vec::new();
     }
-    let mut features = decode_geometry_at_slots(&geom, slot_buf).unwrap();
-    if let Some(t) = transformer {
-        for f in &mut features {
-            f.geom = project_geom(&f.geom, t);
+    let mut sorted_slots = slot_buf.clone();
+    sorted_slots.sort_unstable();
+    sorted_slots.dedup();
+    // walk the index alongside the slot cursor so we keep slots paired
+    // with their decoded features (decode_geometry_at_slots discards the
+    // slot identity).
+    let iter = mars_artifact::iter_feature_index(&geom).unwrap();
+    let coord_area = iter.coord_area();
+    let mut paired: Vec<(u32, FeatureGeom)> = Vec::with_capacity(sorted_slots.len());
+    let mut cursor = 0usize;
+    for (slot_idx, entry) in iter.enumerate() {
+        if cursor >= sorted_slots.len() {
+            break;
         }
+        let entry = entry.unwrap();
+        let slot_u32 = slot_idx as u32;
+        if slot_u32 != sorted_slots[cursor] {
+            continue;
+        }
+        cursor += 1;
+        let g = mars_artifact::decode_one_geom(coord_area, &entry).unwrap();
+        let g = if let Some(t) = transformer {
+            project_geom(&g, t)
+        } else {
+            g
+        };
+        paired.push((
+            slot_u32,
+            FeatureGeom {
+                user_id: entry.user_id,
+                bbox: entry.bbox,
+                geom: g,
+            },
+        ));
     }
-    let class = ClassJoin::open(class_bytes);
-    let mut ops = Vec::with_capacity(features.len());
-    for f in features {
+    let class = ClassJoin::open(class_bytes, page_feature_count);
+    let mut ops = Vec::with_capacity(paired.len());
+    for (slot, f) in paired {
         let style = class
-            .style_ref_for(f.id)
+            .style_ref_for(slot)
             .and_then(|n| stylesheet.geometry.get(n).cloned())
             .unwrap_or_else(|| fallback.clone());
         if let GeomKind::Polygon(rings) = &f.geom {

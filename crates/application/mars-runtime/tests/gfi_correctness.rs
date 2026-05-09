@@ -19,7 +19,7 @@ async fn gfi_returns_feature_attrs_for_known_pixel_click() {
     // squarely inside feature 1000.
     let hits = fix.runtime.get_feature_info(&plan, (3, 60)).await.expect("gfi");
     assert!(!hits.is_empty(), "expected at least one hit, got none");
-    let first = hits.iter().find(|h| h.feature_id == 1000).expect("feature 1000");
+    let first = hits.iter().find(|h| h.user_id == 1000).expect("feature 1000");
     let name_attr = first.attrs.iter().find(|(k, _)| k == "name").expect("name attr");
     match &name_attr.1 {
         AttrValue::String(s) => assert_eq!(s, "feat-1000"),

@@ -28,8 +28,10 @@ use crate::{fetch::fetch_page, plan as planning};
 pub struct LayerFeatureInfo {
     /// layer the feature belongs to.
     pub layer: LayerId,
-    /// stable feature identifier.
-    pub feature_id: u64,
+    /// source-supplied identifier; non-unique (multiple substrate features
+    /// with the same `user_id` may share a hit, eg. a row exploded into
+    /// per-part features).
+    pub user_id: u64,
     /// decoded attribute values keyed by configured attribute name. order
     /// matches the on-disk row codec; callers that need a specific shape
     /// should materialise into their own map.
@@ -119,15 +121,16 @@ fn decode_page_hits(
     if slots.is_empty() {
         return Ok(Vec::new());
     }
-    // walk the feature index once and collect feature_ids at the matched
-    // slots. cheaper than decoding geometry — we only need the ids to drive
-    // the attribute lookup.
+    // walk the feature index once and collect (slot, user_id) at the
+    // matched slots. attributes are joined by slot (the substrate primary
+    // key); user_id is the source-supplied identifier carried back to the
+    // caller for display.
     let geom_bytes = reader.section(SectionKind::GeometryPayload).map_err(map_artifact_err)?;
     let mut sorted = slots;
     sorted.sort_unstable();
     sorted.dedup();
     let iter = mars_artifact::iter_feature_index(&geom_bytes).map_err(map_artifact_err)?;
-    let mut feature_ids: Vec<u64> = Vec::with_capacity(sorted.len());
+    let mut hits: Vec<(u32, u64)> = Vec::with_capacity(sorted.len());
     let mut cursor = 0usize;
     for (slot_idx, entry) in iter.enumerate() {
         let entry = entry.map_err(map_artifact_err)?;
@@ -142,26 +145,27 @@ fn decode_page_hits(
             continue;
         }
         cursor += 1;
-        feature_ids.push(entry.id);
+        hits.push((slot_u32, entry.user_id));
     }
 
-    let mut out: Vec<LayerFeatureInfo> = Vec::with_capacity(feature_ids.len());
-    for fid in feature_ids {
-        match reader.attributes_by_feature_id(fid).map_err(map_artifact_err)? {
+    let mut out: Vec<LayerFeatureInfo> = Vec::with_capacity(hits.len());
+    for (slot, user_id) in hits {
+        match reader.attributes_by_slot(slot).map_err(map_artifact_err)? {
             Some(row_bytes) => {
                 let attrs = decode_row(row_bytes).map_err(map_attr_err)?;
                 out.push(LayerFeatureInfo {
                     layer: layer_id.clone(),
-                    feature_id: fid,
+                    user_id,
                     attrs,
                 });
             }
             None => {
-                // attribute section missing the id: feature was indexed but
-                // its row was not written. surface as a hit with no attrs.
+                // attribute section missing the slot: feature was indexed
+                // but its row was not written. surface as a hit with no
+                // attrs.
                 out.push(LayerFeatureInfo {
                     layer: layer_id.clone(),
-                    feature_id: fid,
+                    user_id,
                     attrs: Vec::new(),
                 });
             }
