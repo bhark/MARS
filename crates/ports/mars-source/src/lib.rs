@@ -278,6 +278,77 @@ pub trait Source: Send + Sync + 'static {
         &'a self,
         binding: &'a SourceBinding,
     ) -> Result<BoxStream<'a, Result<i64, SourceError>>, SourceError>;
+
+    /// Open a compile-time session against `binding`. The returned session
+    /// holds one connection in a snapshot-isolated transaction so a pass-1
+    /// geometry summary scan and a pass-2 row hydration scan see identical
+    /// row sets. Non-snapshot callers (incremental cycles) keep using the
+    /// stateless `fetch_*` methods above. Default impl is `NotImplemented`
+    /// so adapters opt in explicitly.
+    async fn open_compile_session<'a>(
+        &'a self,
+        _binding: &'a SourceBinding,
+    ) -> Result<Box<dyn CompileSession + 'a>, SourceError> {
+        Err(SourceError::NotImplemented {
+            what: "open_compile_session",
+        })
+    }
+}
+
+/// Per-row geometry summary produced by [`CompileSession::fetch_geometry_summary`].
+/// Bbox + byte length + a stable digest of the geometry bytes — exactly the
+/// fixed-size record the pass-1 page planner needs.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RowSummary {
+    /// Stable identifier of the row inside the source collection.
+    pub feature_id: i64,
+    /// Axis-aligned bounds in native CRS units, [xmin, ymin, xmax, ymax].
+    pub bbox: [f32; 4],
+    /// Length of the encoded geometry in bytes; pass 1 uses this as the
+    /// per-row contribution to the page-byte sweep.
+    pub geom_byte_length: u32,
+    /// Stable u64 digest of the geometry bytes. Same algorithm pass 2 uses
+    /// when re-hashing hydrated `RowBytes.geometry`, so boundary-edge ties
+    /// resolve identically across the two passes.
+    pub geom_digest: u64,
+}
+
+/// Compile-time session bound to one `SourceBinding`. Holds a connection in
+/// a snapshot-isolated transaction so pass-1 (geometry summary) and pass-2
+/// (row hydration via `fetch_by_feature_ids`) see the same rows.
+///
+/// `&mut self` on the streaming methods enforces one stream at a time:
+/// callers drain (or drop) one stream before opening the next.
+///
+/// `geom_fingerprint` is the stable hash function the session uses to
+/// derive `RowSummary::geom_digest` from geometry bytes server-side; pass 2
+/// calls it to recompute the same fingerprint on hydrated `RowBytes`
+/// geometry, so the two passes agree on boundary-edge tiebreakers.
+#[async_trait]
+pub trait CompileSession: Send + Sync {
+    /// Stream a per-row geometry summary across the bound table. Pass 1
+    /// of the unified compile pipeline.
+    async fn fetch_geometry_summary<'a>(
+        &'a mut self,
+    ) -> Result<BoxStream<'a, Result<RowSummary, SourceError>>, SourceError>;
+
+    /// Stream rows matching `ids` from the same snapshot. Pass 2 of the
+    /// unified compile pipeline. Bag-valued: a source row exploded into
+    /// multiple parts may return multiple rows per id.
+    async fn fetch_by_feature_ids<'a>(
+        &'a mut self,
+        ids: &'a [i64],
+    ) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError>;
+
+    /// Compute the same stable u64 digest the session embeds in
+    /// `RowSummary::geom_digest`, given hydrated geometry bytes. Pass 2
+    /// calls this to assign a fingerprint to `RowBytes` rows; the result
+    /// must match what pass 1 saw for the same row.
+    fn geom_fingerprint(&self, geometry: &[u8]) -> u64;
+
+    /// Cleanly close the session (e.g. COMMIT the snapshot transaction).
+    /// Callers MUST invoke `close` on success paths; `Drop` is best-effort.
+    async fn close(self: Box<Self>) -> Result<(), SourceError>;
 }
 
 /// Per-row record returned by `Source`. Geometry is opaque adapter-native
