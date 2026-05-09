@@ -19,7 +19,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use mars_grid::BandConfig;
 use mars_source::{ChangeSubscription, SourceError};
 
 pub(crate) mod pgoutput;
@@ -53,19 +52,15 @@ impl CollectionTopology {
     }
 }
 
-/// Wiring `PgSource::subscribe` needs at runtime. Independent of `PgConfig`
-/// because the topology is layer-derived; the bin builds it from the parsed
-/// config and hands it to `PgSource::with_topology`.
+/// Wiring `PgSource::subscribe` needs at runtime. The topology is layer-derived;
+/// the bin builds it from the parsed config and hands it to
+/// `PgSource::with_topology`. Page-keyed substrate: the change-feed
+/// translator surfaces per-row bbox/centroid in the emitted `ChangeEvent`,
+/// so the topology only needs the relation -> collection mapping.
 #[derive(Debug, Clone)]
 pub struct ReplicationTopology {
     /// One entry per pgoutput-bound collection.
     pub collections: Vec<CollectionTopology>,
-    /// Configured scale bands; geometry bbox is enumerated against every
-    /// band so all touched cells across all bands are reported as dirty.
-    pub bands: Vec<BandConfig>,
-    /// Hard ceiling on cells emitted per row to prevent a bug-induced bbox
-    /// from generating an unbounded list.
-    pub max_cells_per_row: usize,
 }
 
 impl ReplicationTopology {
@@ -134,8 +129,6 @@ mod tests {
                 geometry_column: "geom".into(),
                 id_column: "gid".into(),
             }],
-            bands: vec![],
-            max_cells_per_row: 1024,
         };
         assert!(t.find("public", "roads_t").is_some());
         assert!(t.find("public", "buildings").is_none());

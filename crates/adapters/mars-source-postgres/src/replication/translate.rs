@@ -309,7 +309,6 @@ fn nibble(c: u8) -> Result<u8, SourceError> {
 mod tests {
     use super::*;
     use crate::replication::{CollectionTopology, ReplicationTopology};
-    use mars_grid::{BandConfig, BandName};
 
     fn point_le(x: f64, y: f64) -> Vec<u8> {
         let mut v = vec![1u8];
@@ -337,13 +336,6 @@ mod tests {
                     id_column: "gid".into(),
                 },
             ],
-            bands: vec![BandConfig {
-                name: BandName::new("hi"),
-                max_denom: 25_000,
-                origin: (0.0, 0.0),
-                cell_size: 1024.0,
-            }],
-            max_cells_per_row: 1024,
         }
     }
 

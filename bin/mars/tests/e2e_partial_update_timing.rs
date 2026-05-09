@@ -18,7 +18,6 @@ use anyhow::{Context, Result};
 use futures_util::SinkExt;
 use mars_compiler::{Compiler, Deps as CompilerDeps};
 use mars_config::{Config, config_dir};
-use mars_grid::{BandConfig, BandName};
 use mars_source::ChangeFeed;
 use mars_source_postgres::{CollectionTopology, PgConfig, PgSource, ReplicationTopology};
 use mars_store_fs::{FsPublisher, FsStore};
@@ -94,13 +93,6 @@ async fn partial_update_cycle_within_5min() -> Result<()> {
             geometry_column: "geom".into(),
             id_column: "gid".into(),
         }],
-        bands: vec![BandConfig {
-            name: BandName::new("hi"),
-            max_denom: 50_000,
-            origin: (0.0, 0.0),
-            cell_size: 1024.0,
-        }],
-        max_cells_per_row: 1024,
     };
 
     let pg_cfg = PgConfig {

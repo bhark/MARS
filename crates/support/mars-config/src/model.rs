@@ -26,7 +26,10 @@ pub struct Config {
     pub artifacts: Artifacts,
     /// Scale-band definitions used by the compiler.
     pub scales: Scales,
-    /// Per-band cell grid configuration.
+    /// Per-band cell grid configuration. **Deprecated:** the page-keyed
+    /// substrate does not consume cell-grid metadata; the field is accepted
+    /// for backwards compatibility with existing fixtures and ignored.
+    #[serde(default)]
     pub cells: Cells,
     /// External interface toggles (WMS / WMTS / final tile cache).
     pub interfaces: Interfaces,
@@ -60,9 +63,8 @@ pub struct Compiler {
     /// publishing a manifest. Unit-suffixed duration (`5min`, `30s`).
     #[serde(default = "default_compiler_window")]
     pub window: String,
-    /// Maximum number of source cells the snapshot driver builds concurrently.
-    /// `None` resolves at runtime to `available_parallelism()` (capped by the
-    /// source-side connection pool). `NonZeroUsize` rejects 0 at deserialise.
+    /// **Deprecated.** Cell-substrate concurrency knob. Ignored under the
+    /// page-keyed substrate; accepted for backward compatibility.
     #[serde(default)]
     pub parallel_cells: Option<NonZeroUsize>,
     /// Per-page hydrated-row working-set ceiling enforced during pass-2
@@ -475,19 +477,21 @@ pub struct Band {
     pub max_denom: u64,
 }
 
-/// Cell grid configuration. SPEC §7.1.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Cell grid configuration. **Deprecated:** retained only for backward
+/// compatibility with fixtures from the cell-keyed substrate. The page-keyed
+/// substrate does not consume any of these fields.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Cells {
-    /// Grid kind (`regular`).
+    /// Grid kind. Ignored.
+    #[serde(default)]
     pub grid: String,
-    /// Origin in the canonical CRS.
+    /// Origin in the canonical CRS. Ignored.
+    #[serde(default)]
     pub origin: [f64; 2],
-    /// Per-band cell size (unit-suffixed metres).
+    /// Per-band cell size (unit-suffixed metres). Ignored.
+    #[serde(default)]
     pub size_per_band: BTreeMap<String, String>,
-    /// Optional service-wide extent in canonical CRS units. Phase 0 compiler
-    /// uses this to enumerate cells per band; if absent, a single cell at the
-    /// origin is enumerated. Phase 1 will derive this from the union of source
-    /// binding extents read from the database.
+    /// Service-wide extent in canonical CRS units. Ignored.
     #[serde(default)]
     pub extent: Option<Bbox>,
 }

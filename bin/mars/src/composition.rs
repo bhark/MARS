@@ -6,37 +6,14 @@
 
 use std::collections::BTreeMap;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Result, anyhow};
 use mars_config::Config;
-use mars_grid::{BandConfig, BandName};
 use mars_source_postgres::{CollectionTopology, ReplicationTopology, SourceCollectionId};
-
-/// Hard ceiling on cells emitted per row by the change-feed translator.
-/// Mirrors the planner's per-band limit; both ends keep the runtime cost of a
-/// single misbehaving geometry bounded.
-const MAX_CELLS_PER_ROW: usize = 4096;
 
 /// Build the replication topology from configuration. Deduplicates source
 /// bindings on `(schema, table)` so the same physical table appearing in
 /// multiple layers maps to a single replication entry.
 pub(crate) fn build_replication_topology(cfg: &Config) -> Result<ReplicationTopology> {
-    let origin = (cfg.cells.origin[0], cfg.cells.origin[1]);
-    let cell_sizes = cfg.cells.size_per_band_m().context("resolve cells.size_per_band")?;
-
-    let mut bands = Vec::with_capacity(cfg.scales.bands.len());
-    for band in &cfg.scales.bands {
-        let cell_size = cell_sizes
-            .get(&band.name)
-            .copied()
-            .ok_or_else(|| anyhow!("cells.size_per_band missing entry for band '{}'", band.name))?;
-        bands.push(BandConfig {
-            name: BandName::new(band.name.as_str()),
-            max_denom: u32::try_from(band.max_denom).unwrap_or(u32::MAX),
-            origin,
-            cell_size,
-        });
-    }
-
     let mut seen: BTreeMap<(String, String), CollectionTopology> = BTreeMap::new();
     for layer in &cfg.layers {
         for binding in &layer.sources {
@@ -86,11 +63,7 @@ pub(crate) fn build_replication_topology(cfg: &Config) -> Result<ReplicationTopo
         ));
     }
 
-    Ok(ReplicationTopology {
-        collections,
-        bands,
-        max_cells_per_row: MAX_CELLS_PER_ROW,
-    })
+    Ok(ReplicationTopology { collections })
 }
 
 /// Validate the change-feed configuration block for compiler mode. Runtime
@@ -244,7 +217,6 @@ mod tests {
         ]);
         let topo = build_replication_topology(&cfg).unwrap();
         assert_eq!(topo.collections.len(), 2);
-        assert_eq!(topo.bands.len(), 2);
         assert!(
             topo.collections
                 .iter()
@@ -302,14 +274,6 @@ mod tests {
     fn build_replication_topology_rejects_empty_layer_set() {
         let cfg = cfg_with_layers(vec![]);
         assert!(build_replication_topology(&cfg).is_err());
-    }
-
-    #[test]
-    fn build_replication_topology_rejects_missing_band_size() {
-        let mut cfg = cfg_with_layers(vec![layer("a", vec![("public.roads", "geom")])]);
-        cfg.cells.size_per_band.remove("lo");
-        let err = build_replication_topology(&cfg).unwrap_err().to_string();
-        assert!(err.contains("missing entry for band 'lo'"), "{err}");
     }
 
     #[test]

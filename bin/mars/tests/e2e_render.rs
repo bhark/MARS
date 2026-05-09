@@ -72,8 +72,8 @@ async fn end_to_end_compile_and_render() -> Result<()> {
     );
     std::fs::write(&cfg_path, yaml).context("write fixture yaml")?;
 
-    let cfg: Config = mars_config::load(&cfg_path).context("load fixture")?;
-    mars_config::validate(&cfg, &config_dir(&cfg_path)).context("validate fixture")?;
+    let mut cfg: Config = mars_config::load(&cfg_path).context("load fixture")?;
+    mars_config::validate(&mut cfg, &config_dir(&cfg_path)).context("validate fixture")?;
 
     // compile snapshot
     let compile_result = run_compile(&cfg).await;

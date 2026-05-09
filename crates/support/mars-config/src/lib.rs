@@ -164,27 +164,7 @@ pub fn validate(config: &mut Config, config_dir: &Path) -> Result<(), ConfigErro
         }
     }
 
-    if config.cells.size_per_band.is_empty() {
-        return Err(ConfigError::Invalid("cells.size_per_band must not be empty".into()));
-    }
-    for k in config.cells.size_per_band.keys() {
-        if !band_names.contains(k.as_str()) {
-            return Err(ConfigError::Invalid(format!(
-                "cells.size_per_band references unknown band {k:?}"
-            )));
-        }
-    }
-    // every declared band must have a cells.size_per_band entry — without one
-    // the planner errors at first use, far from the config that broke it.
-    for band in &config.scales.bands {
-        if !config.cells.size_per_band.contains_key(band.name.as_str()) {
-            return Err(ConfigError::Invalid(format!(
-                "scales.bands declares {:?} but cells.size_per_band has no entry for it",
-                band.name
-            )));
-        }
-    }
-
+    // page-keyed substrate: cells.* is ignored; no cross-checks against bands.
     let mut layer_names = std::collections::BTreeSet::new();
     for layer in &config.layers {
         if !layer_names.insert(layer.name.as_str()) {
@@ -643,16 +623,6 @@ mod tests {
     }
 
     #[test]
-    fn rejects_empty_size_per_band() {
-        let mut cfg = minimal_config();
-        cfg.cells.size_per_band.clear();
-        assert!(matches!(
-            validate(&mut cfg, Path::new(".")),
-            Err(ConfigError::Invalid(ref s)) if s.contains("size_per_band")
-        ));
-    }
-
-    #[test]
     fn rejects_when_clause_referencing_undeclared_attribute() {
         let mut cfg = minimal_config();
         cfg.layers = vec![Layer {
@@ -791,20 +761,6 @@ label_survival: follow_geometry
         assert!(matches!(
             validate(&mut cfg, Path::new(".")),
             Err(ConfigError::Invalid(ref s)) if s.contains("when: parse error")
-        ));
-    }
-
-    #[test]
-    fn rejects_band_without_size_per_band_entry() {
-        let mut cfg = minimal_config();
-        cfg.scales.bands.push(Band {
-            name: "lo".into(),
-            max_denom: 100_000,
-        });
-        // size_per_band still only knows about "hi"
-        assert!(matches!(
-            validate(&mut cfg, Path::new(".")),
-            Err(ConfigError::Invalid(ref s)) if s.contains("no entry") && s.contains("lo")
         ));
     }
 

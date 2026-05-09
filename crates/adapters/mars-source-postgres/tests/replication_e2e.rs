@@ -14,7 +14,6 @@
 
 use std::time::Duration;
 
-use mars_grid::{BandConfig, BandName};
 use mars_source::{ChangeEvent, ChangeFeed, SourceError};
 use mars_source_postgres::{CollectionTopology, PgConfig, PgSource, ReplicationTopology};
 use rand::distributions::{Alphanumeric, DistString};
@@ -112,13 +111,6 @@ fn topology_for(collections: &[(&str, &str)]) -> ReplicationTopology {
                 id_column: "gid".into(),
             })
             .collect(),
-        bands: vec![BandConfig {
-            name: BandName::new("hi"),
-            max_denom: 25_000,
-            origin: (0.0, 0.0),
-            cell_size: 1024.0,
-        }],
-        max_cells_per_row: 1024,
     }
 }
 

@@ -21,7 +21,6 @@ use anyhow::{Context, Result};
 use mars_compiler::sidecar::SidecarReader;
 use mars_compiler::{Compiler, Deps as CompilerDeps};
 use mars_config::{Config, config_dir};
-use mars_grid::{BandConfig, BandName};
 use mars_source::ChangeFeed;
 use mars_source_postgres::{CollectionTopology, PgConfig, PgSource, ReplicationTopology};
 use mars_store::{ManifestStore, ObjectStore};
@@ -93,13 +92,6 @@ async fn e2e_change_feed_cycle_publishes_v3_manifest() -> Result<()> {
             geometry_column: "geom".into(),
             id_column: "gid".into(),
         }],
-        bands: vec![BandConfig {
-            name: BandName::new("hi"),
-            max_denom: 50_000,
-            origin: (0.0, 0.0),
-            cell_size: 1024.0,
-        }],
-        max_cells_per_row: 1024,
     };
 
     let pg_cfg = PgConfig {
@@ -239,9 +231,18 @@ async fn e2e_change_feed_cycle_publishes_v3_manifest() -> Result<()> {
         .await
         .context("fetch new sidecar")?;
     let new_sidecar = SidecarReader::open(&new_sidecar_bytes).context("open new sidecar")?;
-    assert!(new_sidecar.lookup(9999).is_some(), "inserted id missing from sidecar");
-    assert!(new_sidecar.lookup(100).is_none(), "deleted id still present in sidecar");
-    assert!(new_sidecar.lookup(50).is_some(), "updated id absent from sidecar");
+    assert!(
+        new_sidecar.lookup_all(9999).next().is_some(),
+        "inserted id missing from sidecar"
+    );
+    assert!(
+        new_sidecar.lookup_all(100).next().is_none(),
+        "deleted id still present in sidecar"
+    );
+    assert!(
+        new_sidecar.lookup_all(50).next().is_some(),
+        "updated id absent from sidecar"
+    );
 
     // Total feature count: bootstrap + 1 (insert) - 1 (delete).
     let new_count: u64 = new_manifest.pages.iter().map(|p| p.feature_count).sum();
