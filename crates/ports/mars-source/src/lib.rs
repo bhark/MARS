@@ -307,9 +307,13 @@ pub struct RowSummary {
     /// Length of the encoded geometry in bytes; pass 1 uses this as the
     /// per-row contribution to the page-byte sweep.
     pub geom_byte_length: u32,
-    /// Stable u64 digest of the geometry bytes. Same algorithm pass 2 uses
-    /// when re-hashing hydrated `RowBytes.geometry`, so boundary-edge ties
-    /// resolve identically across the two passes.
+    /// Stable u64 digest of the geometry bytes computed server-side
+    /// (currently MD5 truncated to 64 bits). Used as a planning-time
+    /// tie-breaker after `(hilbert_key, feature_id)`. Pass 2 hashes
+    /// hydrated geometry independently with a different algorithm; the
+    /// two digests are not expected to match. Per-page row assignment is
+    /// driven by `PlannedPage.feature_ids`, so digest agreement across
+    /// passes is not load-bearing for correctness.
     pub geom_digest: u64,
 }
 
