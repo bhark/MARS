@@ -440,6 +440,14 @@ async fn rebuild_binding_incremental(
                     .then_with(|| a.feature.user_id.cmp(&b.feature.user_id))
                     .then_with(|| a.row_fingerprint.cmp(&b.row_fingerprint))
             });
+            // β.2: drop rows no layer's class chain matches before geometry
+            // emit. metric is per-binding; per-layer bookkeeping is muddied
+            // by shared bindings, binding is the right granularity.
+            let (page_rows, dropped_unmatched) = filter_unmatched_rows(page_rows, &layer_plans);
+            if dropped_unmatched > 0 {
+                deps.metrics
+                    .inc_compiler_features_unmatched(binding_plan.binding_id.as_str(), dropped_unmatched);
+            }
             // per-page working-set ceiling. checked over the leveled rows
             // that actually flow into flush_page; pruned rows live on the
             // pruned label sidecar tail and are intentionally excluded.
@@ -773,6 +781,16 @@ async fn execute_rebalance_one_binding(
                         slice.last().map(|x| x.key).unwrap_or(HilbertKey::min())
                     };
                     let pruned_slice = drain_pruned_through(&in_range_pruned, &mut pruned_idx, cap);
+                    // β.2: drop rows no layer's class chain matches before
+                    // geometry emit (rebalance Split).
+                    let (slice, dropped_unmatched) = filter_unmatched_rows(slice, &layer_plans);
+                    if dropped_unmatched > 0 {
+                        deps.metrics
+                            .inc_compiler_features_unmatched(binding_plan.binding_id.as_str(), dropped_unmatched);
+                    }
+                    if slice.is_empty() {
+                        continue;
+                    }
                     enforce_page_budget(
                         &slice,
                         working_set_bytes,
@@ -842,6 +860,16 @@ async fn execute_rebalance_one_binding(
                 }
                 drop_page_with_sidecars(&left, &layer_plans, outcome);
                 drop_page_with_sidecars(&right, &layer_plans, outcome);
+                if merged_leveled.is_empty() {
+                    continue;
+                }
+                // β.2: drop rows no layer's class chain matches before geometry
+                // emit (rebalance Merge).
+                let (merged_leveled, dropped_unmatched) = filter_unmatched_rows(merged_leveled, &layer_plans);
+                if dropped_unmatched > 0 {
+                    deps.metrics
+                        .inc_compiler_features_unmatched(binding_plan.binding_id.as_str(), dropped_unmatched);
+                }
                 if merged_leveled.is_empty() {
                     continue;
                 }
@@ -992,6 +1020,13 @@ pub async fn rebuild_binding_from_plan<'a>(
                     .then_with(|| a.feature.user_id.cmp(&b.feature.user_id))
                     .then_with(|| a.row_fingerprint.cmp(&b.row_fingerprint))
             });
+            // β.2: drop rows no layer's class chain matches before geometry
+            // emit; binding-scoped metric tracks the count.
+            let (page_rows, dropped_unmatched) = filter_unmatched_rows(page_rows, &layer_plans);
+            if dropped_unmatched > 0 {
+                deps.metrics
+                    .inc_compiler_features_unmatched(binding_plan.binding_id.as_str(), dropped_unmatched);
+            }
             enforce_page_budget(
                 &page_rows,
                 working_set_bytes,
@@ -1241,6 +1276,41 @@ pub(crate) async fn flush_page(
     })
 }
 
+/// drop rows that no layer's class chain matches. a row is kept if at
+/// least one layer either has no classes (label-only layers can't drop)
+/// or matches via [`assign_class`]. keeps the geometry payload tight:
+/// features that would silently drop at render time (counted in
+/// `mars_render_feature_unstyled_total`) never reach the artifact.
+///
+/// returns `(kept, dropped_count)`. order of kept rows is preserved.
+pub(crate) fn filter_unmatched_rows(rows: Vec<KeyedRow>, layers: &[&LayerPlan]) -> (Vec<KeyedRow>, u64) {
+    if layers.is_empty() || layers.iter().any(|l| l.classes.is_empty()) {
+        // a label-only layer (or no layers at all) cannot drop rows at this
+        // pass: we have no class chain authoritative enough to decide. keep
+        // everything; runtime stays defensive via the unstyled counter.
+        return (rows, 0);
+    }
+    // materialise per-layer when_clauses once so the per-row hot path
+    // doesn't pay the clone-per-row cost.
+    let per_layer: Vec<Vec<Option<mars_expr::Expr>>> = layers
+        .iter()
+        .map(|l| l.classes.iter().map(|c| c.when.clone()).collect())
+        .collect();
+    let mut dropped: u64 = 0;
+    let kept: Vec<KeyedRow> = rows
+        .into_iter()
+        .filter(|r| {
+            let attrs = RowAttrs::new(r.attrs.as_ref());
+            let any_match = per_layer.iter().any(|wc| assign_class(wc, &attrs).is_some());
+            if !any_match {
+                dropped += 1;
+            }
+            any_match
+        })
+        .collect();
+    (kept, dropped)
+}
+
 /// For each layer plan: evaluate class assignments against `rows`, emit a
 /// label candidate per row whose attrs match, and write per-layer class /
 /// label sidecars to the store.
@@ -1423,7 +1493,7 @@ fn attr_value_to_artifact(v: &AttrValue) -> ArtAttrValue {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
-    use mars_types::{Bbox, PageKey};
+    use mars_types::{Bbox, LayerId, PageKey};
 
     fn page_entry(binding: &str, level: u8, page_id: u64, lo: u64, hi: u64) -> PageEntry {
         PageEntry {
@@ -1466,5 +1536,103 @@ mod tests {
                 (HilbertKey::new(100), HilbertKey::new(200), PageId::new(0)),
             ]
         );
+    }
+
+    fn keyed_row(user_id: u64, kind: &str, key: u64) -> KeyedRow {
+        KeyedRow {
+            feature: FeatureGeom {
+                user_id,
+                bbox: [0.0, 0.0, 1.0, 1.0],
+                geom: mars_artifact::GeomKind::Point((0.0, 0.0)),
+            },
+            attrs: Arc::new(vec![("kind".into(), AttrValue::String(kind.into()))]),
+            geom_bytes_estimate: 16,
+            key: HilbertKey::new(key),
+            row_fingerprint: user_id,
+        }
+    }
+
+    fn layer_with_classes(name: &str, when_exprs: &[Option<&str>]) -> crate::plan::LayerPlan {
+        let classes = when_exprs
+            .iter()
+            .enumerate()
+            .map(|(i, w)| crate::plan::ClassPlan {
+                name: format!("c{i}"),
+                when: w.map(|s| mars_expr::parse(s).unwrap()),
+                style_ref: format!("{name}__c{i}"),
+            })
+            .collect();
+        crate::plan::LayerPlan {
+            layer_id: LayerId::new(name),
+            binding_id: BindingId::try_new(name).unwrap(),
+            kind: "geom".into(),
+            classes,
+            label: None,
+            label_survival: mars_style::LabelSurvival::Independent,
+        }
+    }
+
+    #[test]
+    fn filter_unmatched_rows_drops_rows_that_match_no_layer() {
+        let layer = layer_with_classes("roads", &[Some("kind = 'major'")]);
+        let layers: Vec<&crate::plan::LayerPlan> = vec![&layer];
+        let rows = vec![
+            keyed_row(1, "major", 10),
+            keyed_row(2, "minor", 20),
+            keyed_row(3, "major", 30),
+        ];
+        let (kept, dropped) = filter_unmatched_rows(rows, &layers);
+        assert_eq!(dropped, 1);
+        let ids: Vec<u64> = kept.iter().map(|r| r.feature.user_id).collect();
+        assert_eq!(ids, vec![1, 3]);
+    }
+
+    #[test]
+    fn filter_unmatched_rows_keeps_all_when_a_layer_has_no_classes() {
+        // a label-only layer (no classes) means we cannot authoritatively
+        // drop anything: keep all rows so its labels still emit.
+        let label_only = crate::plan::LayerPlan {
+            layer_id: LayerId::new("labels"),
+            binding_id: BindingId::try_new("labels").unwrap(),
+            kind: "geom".into(),
+            classes: Vec::new(),
+            label: None,
+            label_survival: mars_style::LabelSurvival::Independent,
+        };
+        let layers: Vec<&crate::plan::LayerPlan> = vec![&label_only];
+        let rows = vec![keyed_row(1, "anything", 10), keyed_row(2, "else", 20)];
+        let (kept, dropped) = filter_unmatched_rows(rows, &layers);
+        assert_eq!(dropped, 0);
+        assert_eq!(kept.len(), 2);
+    }
+
+    #[test]
+    fn filter_unmatched_rows_keeps_row_that_matches_any_layer() {
+        // shared-binding case: layer A matches "major", layer B matches
+        // "minor". a row labelled "minor" must survive because B keeps it.
+        let a = layer_with_classes("a", &[Some("kind = 'major'")]);
+        let b = layer_with_classes("b", &[Some("kind = 'minor'")]);
+        let layers: Vec<&crate::plan::LayerPlan> = vec![&a, &b];
+        let rows = vec![
+            keyed_row(1, "major", 10),
+            keyed_row(2, "minor", 20),
+            keyed_row(3, "path", 30),
+        ];
+        let (kept, dropped) = filter_unmatched_rows(rows, &layers);
+        assert_eq!(dropped, 1);
+        let ids: Vec<u64> = kept.iter().map(|r| r.feature.user_id).collect();
+        assert_eq!(ids, vec![1, 2]);
+    }
+
+    #[test]
+    fn filter_unmatched_rows_keeps_all_under_catch_all_class() {
+        // a `None` when-clause is the catch-all; assign_class returns Some
+        // for it, so no row should be dropped.
+        let layer = layer_with_classes("any", &[None]);
+        let layers: Vec<&crate::plan::LayerPlan> = vec![&layer];
+        let rows = vec![keyed_row(1, "x", 10), keyed_row(2, "y", 20)];
+        let (kept, dropped) = filter_unmatched_rows(rows, &layers);
+        assert_eq!(dropped, 0);
+        assert_eq!(kept.len(), 2);
     }
 }
