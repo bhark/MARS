@@ -133,6 +133,16 @@ pub enum RuntimeError {
         /// Human-readable mismatch reason.
         reason: String,
     },
+    /// A class assignment named a stylesheet entry that the runtime's
+    /// stylesheet does not contain. Surfaces drift between the compiler's
+    /// emitted style refs and the runtime's loaded stylesheet.
+    #[error("stylesheet entry '{name}' referenced by layer '{layer}' is missing")]
+    StylesheetDrift {
+        /// Layer that referenced the missing entry.
+        layer: String,
+        /// Stylesheet entry name that was not found.
+        name: String,
+    },
 }
 
 /// All ports the runtime needs.

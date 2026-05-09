@@ -3,9 +3,9 @@
 //! pulls the threads of `state` (binding/level/page index), `plan` (level
 //! pick and viewport intersection), and `fetch` (page bytes via the cache
 //! port) together into the actual render pipeline that `Runtime::render`
-//! exposes. style join and labels arrive in D5 / D6; this module's render
-//! path stops at "raw geometry, fallback style" so the spine is verifiable
-//! in isolation.
+//! exposes. features whose class chain resolves to no stylesheet entry are
+//! dropped (counted via `mars_render_feature_unstyled_total`); a class that
+//! names a missing stylesheet entry surfaces as `RuntimeError::StylesheetDrift`.
 
 use std::sync::Arc;
 
@@ -17,36 +17,12 @@ use mars_artifact::{
 };
 use mars_config::Layer;
 use mars_render_port::{Canvas, DrawOp, Path, Renderer, Subpath};
-use mars_style::{Colour, LabelStyle, LabelSurvival, Style, Stylesheet};
+use mars_style::{LabelStyle, LabelSurvival, Style, Stylesheet};
 use mars_types::{Bbox, BindingMetadata, LayerId, PageEntry};
 
 use crate::state::RuntimeState;
 use crate::{Deps, RenderPlan, RuntimeError};
 use crate::{fetch::fetch_page, fetch::fetch_sidecar, plan as planning};
-
-/// fallback style used when no class sidecar binds the feature to a named
-/// stylesheet entry. blue fill + dark stroke so the spine stays visible
-/// against the white default background of the test fixtures.
-fn fallback_style() -> Arc<Style> {
-    Arc::new(Style {
-        fill: Some(Colour {
-            r: 64,
-            g: 128,
-            b: 220,
-            a: 200,
-        }),
-        stroke: Some(Colour {
-            r: 32,
-            g: 64,
-            b: 110,
-            a: 255,
-        }),
-        stroke_width: Some(1.0),
-        stroke_dasharray: None,
-        stroke_linecap: None,
-        stroke_linejoin: None,
-    })
-}
 
 /// drive one render plan end-to-end. produces encoded image bytes ready to
 /// hand back to the WMS / WMTS interface.
@@ -60,7 +36,6 @@ pub(crate) async fn render_plan(state: &RuntimeState, deps: &Deps, plan: &Render
     };
     let mut all_ops: Vec<DrawOp> = Vec::new();
     let mut all_labels: Vec<PreparedLabel> = Vec::new();
-    let fallback = fallback_style();
     for layer_id in &plan.layers {
         let layer_cfg = lookup_layer(config, layer_id)?;
         let denom = crate::denom_from_plan(plan.bbox.width(), plan.width);
@@ -90,7 +65,6 @@ pub(crate) async fn render_plan(state: &RuntimeState, deps: &Deps, plan: &Render
             binding,
             &pages,
             plan,
-            &fallback,
             layer_cfg.label_survival,
             deps.renderer.as_ref(),
             page_fetch_concurrency,
@@ -134,7 +108,6 @@ async fn render_layer_pages(
     binding: &BindingMetadata,
     pages: &[&PageEntry],
     plan: &RenderPlan,
-    fallback: &Arc<Style>,
     label_survival: LabelSurvival,
     renderer: &dyn Renderer,
     page_fetch_concurrency: usize,
@@ -190,16 +163,21 @@ async fn render_layer_pages(
             ops: mut page_ops,
             rendered_slots,
             class,
+            unstyled_count,
         } = decode_page_to_ops(
             page_bytes,
             class_bytes,
             &entry,
             plan,
             binding,
+            layer_id,
             &state.stylesheet,
-            fallback,
             same_crs,
         )?;
+        if unstyled_count > 0 {
+            deps.metrics
+                .inc_render_feature_unstyled(layer_id.as_str(), unstyled_count);
+        }
         out.ops.append(&mut page_ops);
         if let Some(bytes) = label_bytes {
             let survival_filter = match label_survival {
@@ -232,6 +210,10 @@ struct DecodedPage {
     ops: Vec<DrawOp>,
     rendered_slots: Vec<bool>,
     class: Option<ClassResolver>,
+    /// features whose class chain resolved to no stylesheet entry. caller
+    /// reports to the unstyled counter once per page so we don't pay metric
+    /// overhead per slot on the hot path.
+    unstyled_count: u64,
 }
 
 /// resolves `feature_idx -> Style` by direct slot indexing on a dense
@@ -278,8 +260,8 @@ fn decode_page_to_ops(
     page: &PageEntry,
     plan: &RenderPlan,
     binding: &BindingMetadata,
+    layer_id: &LayerId,
     stylesheet: &Stylesheet,
-    fallback: &Arc<Style>,
     same_crs: bool,
 ) -> Result<DecodedPage, RuntimeError> {
     let reader = ArtifactReader::open(bytes).map_err(map_artifact_err)?;
@@ -296,6 +278,7 @@ fn decode_page_to_ops(
             ops: Vec::new(),
             rendered_slots: Vec::new(),
             class,
+            unstyled_count: 0,
         });
     }
     let qbb = bbox_native(plan.bbox, &plan.crs, &binding.native_crs)?;
@@ -309,6 +292,7 @@ fn decode_page_to_ops(
             ops: Vec::new(),
             rendered_slots: vec![false; page_feature_count],
             class,
+            unstyled_count: 0,
         });
     }
     slots.sort_unstable();
@@ -356,12 +340,22 @@ fn decode_page_to_ops(
         project_paired_features(paired, &binding.native_crs, &plan.crs)?
     };
     let mut ops = Vec::with_capacity(projected.len());
+    let mut unstyled_count: u64 = 0;
     for (slot, f) in projected {
-        let style = class
-            .as_ref()
-            .and_then(|c| c.style_ref_for(slot))
-            .and_then(|name| stylesheet.geometry.get(name).cloned())
-            .unwrap_or_else(|| fallback.clone());
+        let Some(name) = class.as_ref().and_then(|c| c.style_ref_for(slot)) else {
+            // class chain didn't match this feature; drop it and let the
+            // caller bump the unstyled counter once for the page.
+            unstyled_count += 1;
+            continue;
+        };
+        let Some(style) = stylesheet.geometry.get(name).cloned() else {
+            // class assignment names a stylesheet entry the runtime doesn't
+            // know about: manifest/stylesheet drift, surface as a typed error.
+            return Err(RuntimeError::StylesheetDrift {
+                layer: layer_id.as_str().to_owned(),
+                name: name.to_owned(),
+            });
+        };
         if let Some(op) = feature_to_drawop(&f.geom, plan.bbox, plan.width, plan.height, style) {
             ops.push(op);
         }
@@ -370,6 +364,7 @@ fn decode_page_to_ops(
         ops,
         rendered_slots,
         class,
+        unstyled_count,
     })
 }
 
@@ -677,7 +672,20 @@ fn map_proj_err(e: mars_proj::ProjError) -> RuntimeError {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
+    use mars_style::Colour;
+
     use super::*;
+
+    fn test_style() -> Arc<Style> {
+        Arc::new(Style {
+            fill: Some(Colour { r: 0, g: 0, b: 0, a: 255 }),
+            stroke: None,
+            stroke_width: None,
+            stroke_dasharray: None,
+            stroke_linecap: None,
+            stroke_linejoin: None,
+        })
+    }
 
     #[test]
     fn world_to_pixel_origin_top_left() {
@@ -711,7 +719,7 @@ mod tests {
             (0.0, 0.0),
         ]]);
         let v = Bbox::new(0.0, 0.0, 10.0, 10.0);
-        let op = feature_to_drawop(&geom, v, 100, 100, fallback_style()).unwrap();
+        let op = feature_to_drawop(&geom, v, 100, 100, test_style()).unwrap();
         match op {
             DrawOp::Path { path, .. } => {
                 assert_eq!(path.subpaths.len(), 1);
@@ -726,7 +734,7 @@ mod tests {
     fn feature_to_drawop_linestring_open() {
         let geom = GeomKind::LineString(vec![(0.0, 0.0), (10.0, 10.0)]);
         let v = Bbox::new(0.0, 0.0, 10.0, 10.0);
-        let op = feature_to_drawop(&geom, v, 100, 100, fallback_style()).unwrap();
+        let op = feature_to_drawop(&geom, v, 100, 100, test_style()).unwrap();
         if let DrawOp::Path { path, .. } = op {
             assert_eq!(path.subpaths.len(), 1);
             assert!(!path.subpaths[0].closed);

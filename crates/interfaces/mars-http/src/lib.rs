@@ -455,7 +455,8 @@ fn map_runtime_error(e: &RuntimeError) -> EdgeException {
         | RuntimeError::Render(_)
         | RuntimeError::Encode(_)
         | RuntimeError::InvalidManifest { .. }
-        | RuntimeError::ConfigManifestMismatch { .. } => internal_error(),
+        | RuntimeError::ConfigManifestMismatch { .. }
+        | RuntimeError::StylesheetDrift { .. } => internal_error(),
     }
 }
 
