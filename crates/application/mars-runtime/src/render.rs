@@ -18,7 +18,7 @@ use mars_artifact::{
     decode_geometry_at_slots, decode_label_candidates, decode_style_refs,
 };
 use mars_config::Layer;
-use mars_render_port::{Canvas, DrawOp, Path, Subpath};
+use mars_render_port::{Canvas, DrawOp, Path, Renderer, Subpath};
 use mars_style::{Colour, LabelStyle, LabelSurvival, Style, Stylesheet};
 use mars_types::{Bbox, BindingMetadata, LayerId, PageEntry};
 
@@ -93,6 +93,7 @@ pub(crate) async fn render_plan(state: &RuntimeState, deps: &Deps, plan: &Render
             plan,
             &fallback,
             layer_cfg.label_survival,
+            deps.renderer.as_ref(),
         )
         .await?;
         all_ops.extend(layer_out.ops);
@@ -135,6 +136,7 @@ async fn render_layer_pages(
     plan: &RenderPlan,
     fallback: &Arc<Style>,
     label_survival: LabelSurvival,
+    renderer: &dyn Renderer,
 ) -> Result<LayerOutput, RuntimeError> {
     let mut futs = FuturesUnordered::new();
     for page in pages {
@@ -200,6 +202,7 @@ async fn render_layer_pages(
                 &state.stylesheet,
                 same_crs,
                 survival_filter,
+                renderer,
             )?;
             out.labels.append(&mut prepared);
         }
@@ -461,6 +464,7 @@ fn prepare_labels(
     stylesheet: &Stylesheet,
     same_crs: bool,
     survival_filter: Option<&BTreeSet<u64>>,
+    renderer: &dyn Renderer,
 ) -> Result<Vec<PreparedLabel>, RuntimeError> {
     let reader = ArtifactReader::open(bytes).map_err(map_artifact_err)?;
     let label_bytes = reader.section(SectionKind::LabelCandidates).map_err(map_artifact_err)?;
@@ -497,7 +501,13 @@ fn prepare_labels(
         let Some(style) = style_name.and_then(|n| stylesheet.labels.get(n).cloned()) else {
             continue;
         };
-        let bbox_px = approximate_text_bbox(&c.text, anchor_px, &style);
+        let bbox_px = match renderer.measure_text(&c.text, &style) {
+            Ok(m) => text_bbox_from_metrics(anchor_px, m),
+            // font lookup / shaping failure: drop the candidate. matches the
+            // existing "drop on error" behaviour of style/anchor resolution
+            // a few lines above.
+            Err(_) => continue,
+        };
         out.push(PreparedLabel {
             anchor_px,
             text: c.text,
@@ -533,20 +543,19 @@ fn inside_pixel_canvas(p: (f32, f32), w: u32, h: u32) -> bool {
     p.0 >= 0.0 && p.1 >= 0.0 && p.0 <= w as f32 && p.1 <= h as f32
 }
 
-/// approximate text bbox at `anchor_px` in pixel space. width is a coarse
-/// `chars × 0.55 × font_size` estimate; height is `font_size × 1.2`. enough
-/// for the greedy collision pass; a font-aware refinement lives in a
-/// follow-up that exposes a measure-text API on the renderer port.
-fn approximate_text_bbox(text: &str, anchor: (f32, f32), style: &LabelStyle) -> (f32, f32, f32, f32) {
-    let font_size = style.font_size.max(1.0);
-    let chars = text.chars().count().max(1) as f32;
-    let half_w = (chars * 0.55 * font_size) * 0.5;
-    let half_h = (font_size * 1.2) * 0.5;
+/// build a pixel-space bbox around `anchor` from the font-aware metrics the
+/// renderer would use to rasterise the same run. anchor is the baseline
+/// origin; bbox extends by half advance horizontally and by ascent / descent
+/// vertically. centred horizontally because draw_label paints around the
+/// anchor; the vertical extent uses the actual font ascent + descent so the
+/// collision bbox matches what tiny-skia paints.
+fn text_bbox_from_metrics(anchor: (f32, f32), m: mars_render_port::TextMetrics) -> (f32, f32, f32, f32) {
+    let half_w = m.advance_x * 0.5;
     (
         anchor.0 - half_w,
-        anchor.1 - half_h,
+        anchor.1 - m.ascent,
         anchor.0 + half_w,
-        anchor.1 + half_h,
+        anchor.1 + m.descent,
     )
 }
 
