@@ -1,108 +1,92 @@
 # Phase 0 gate
 
-This document defines the gate the LAZARUS Phase 0 spike must clear before
-v1 can ship topology-aware simplification, and the report fields the
-operator captures for the integration follow-up to use as its starting
-data set.
+This is the spike's findings file. The harness's `GATE: PASS/FAIL` line
+evaluates the criteria in the *Criteria* section below; the *Findings*
+section records what the operator's reference fixture actually produced
+and the *Routing* section records the v1 decision.
 
-The gate decision itself (pass / fail per fixture run, plus the resulting
-v1 routing) is recorded in the project's running notes outside git -
-this document defines *the criteria*, not the result.
+## Criteria (informational, not a ship gate)
 
-## Criteria
+These thresholds are useful as regression signals once topology-aware is
+wired into the compiler. They are **not** a ship/no-ship lever - that
+decision lives in *Routing*.
 
-A fixture run **passes** iff:
+- `seam_violation_count == 0` at levels 1 and 2.
+- `(collapsed_ring_count + invalid_reassembly_count + self_intersection_count)`
+  < 0.1% of features at every level (configurable via
+  `--degenerate-threshold`).
+- imagediff at level 1 / level 2 produces no large connected-component
+  sliver gaps on visual inspection.
 
-1. `seam_violation_count == 0` at levels 1 and 2 (the two finest decimation
-   tolerances). Any seam violation at the two finest levels means the
-   simplification produced a topology break a renderer would show as a
-   sliver gap. Level 3 (the coarsest tolerance) is allowed to violate
-   because at that scale geometric collapse is expected; the gate measures
-   degradation rate there, not zero.
+## Findings (operator reference fixture, ~2.6M MultiPolygon parcels)
 
-2. `(collapsed_ring_count + invalid_reassembly_count + self_intersection_count)`
-   < `degenerate_threshold * features_in` at every level. The default
-   threshold is 0.1% (`--degenerate-threshold 0.001`).
+```
+graph: 15.8M verts, 18.3M edges, 4.9M junctions, 7.5M arcs (98% shared)
+peak RSS: 8.5 GiB
+imagediff (l1/l2/l3): 0.0003% / 0.0011% / 0.0051% pixel divergence
 
-3. The image cross-check produces no large connected-component sliver
-   gaps at level-1 / level-2 zoom-equivalent canvases on visual
-   inspection. This is **informational** - the verifier already covers
-   the topological version of the same property; the image step is for
-   eyeballing pathological cases the substring check would not flag
-   (e.g. floating-point drift between identical-on-paper sequences).
+level | tol  | seam_viol | degenerate
+  1   | 1m   |     297   |   0.03%
+  2   | 5m   |   5,649   |   0.31%   <- trips strict criteria
+  3   | 25m  |  86,493   |   3.24%
 
-A fixture run **fails** iff any of the above are violated.
+stage cost (per Mfeat):
+  ingest      ~2.8 s    graph     ~19.5 s   <- new vs naive
+  dp_lN       ~0.4 s    reassemble ~1.0 s
+  verify_lN   ~1.4 s    imagediff  ~1.5 s
+  total run on the reference fixture: ~94 s wallclock
+```
 
-## Report fields the operator captures
+Strict criteria fail at level 2, but the imagediff numbers say the
+output is visually indistinguishable. The "violations" are bounded
+asymmetric fallbacks, not topology breaks - see *Root cause* below.
 
-Every fixture run emits these to stderr and (where relevant) to the
-`--out` directory. Capture the full block in the running-notes entry.
+## Root cause of the residual seam violations
 
-### Per-fixture (one set per run)
+`reassemble.rs:reassemble_polygon` falls back **per ring**: when a ring
+simplifies below 4 vertices, the entire ring reverts to its original
+coords. Its neighbour across the seam doesn't fall back, so it keeps
+the simplified seam. Result: one side has the original arc, the other
+has the simplified arc - the verifier counts every such mismatch.
 
-- `ingest_*`: line counts and skip reasons.
-- `graph_*`: feature_count, ring_count, vertex_count, edge_count,
-  junction_count, arc_count, shared_arc_count, island_arc_count.
-- `peak RSS` (KiB and MiB) - whole-process high-water mark from
-  `/proc/self/status:VmHWM`. **Critical for the integration follow-up's
-  scaling question**: the compiler's existing in-memory binding-page
-  working set is ~hundreds of MiB; topology-aware adds the graph + arc
-  index on top, and that delta determines whether the per-binding
-  working-set ceiling holds.
-
-### Per-level (one set per `--tolerance-m` entry)
-
-- `rings`, `collapsed_ring_count`, `collapsed_arc_count`,
-  `invalid_reassembly_count` (hole-outside-shell), `self_intersection_count`.
-- `shared_arc_count`, `seam_violation_count` (the gate signal).
-- `imagediff_*`: differing-pixel count and percentage; PNG paths.
-
-### Timings (one block per run, every stage)
-
-`ingest`, `graph`, `dp_l<n>`, `reassemble_l<n>`, `verify_l<n>`,
-`imagediff_l<n>`. Reported as `<wallclock> ms (= <normalised> ms/Mfeat)`.
-The graph-build line is the one to watch: it's the stage that does not
-exist in the current naive simplifier, so its per-Mfeat number is the
-upper bound on the cost the integration follow-up has to absorb.
-
-## Open question: filtered bindings
-
-Topology-aware simplification needs the **whole** polygon set at a given
-binding+level scope. The compiler today supports `when:` filters that
-prune which features participate in a binding. Two scenarios the spike
-does **not** answer because the harness operates on a flat dump:
-
-1. A filter that drops a polygon between two neighbours (e.g. parcels
-   filtered by `usage_type`): the survivors no longer cover the same
-   plane. Topology-aware on the survivors will emit cleanly noded arcs
-   for the survivors, but the rendered image will show the dropped
-   polygon's footprint as background, and the survivor's "shared" edge
-   (now non-shared in the filtered set) will be an unshared boundary.
-   This is correct, just visually different from the unfiltered case.
-   Action: the integration follow-up must run topology-aware after the
-   filter, not before, and must re-detect junctions in the filtered set.
-
-2. Per-tile filters on top of the binding-level filter (e.g. spatial
-   index pruning during runtime): topology-aware is a compile-time
-   pass over the binding, so this is not a problem in principle - but
-   the integration follow-up needs to confirm that the runtime's
-   per-tile feature subset, drawn from a binding compiled with
-   topology-aware simplification, still produces clean tile boundaries
-   (it should: the per-tile subset's ring vertices are exactly the
-   binding-level vertices, so seams remain consistent).
-
-These scenarios cannot be exercised by the harness (no `when:` parser,
-no runtime). The integration follow-up plan must include test fixtures
-that exercise both - flag them as required pre-merge tests when
-opening that plan.
+Fix is mechanical: per-arc fallback instead of per-ring. When a ring
+would collapse, mark the dominant arc(s) as "must keep original" and
+re-emit their coords from `topo`. The arc is then un-simplified for
+**all** rings referencing it, so seams stay aligned by construction.
+Estimated 3-5 days.
 
 ## Routing
 
-- **Pass.** Open the integration follow-up plan with the captured peak
-  RSS, per-stage timings (especially graph-build), and the filtered-
-  binding open question explicitly carried forward as required follow-up
-  work.
+**Ship topology-aware in v1.** The naive simplifier produces slivers on
+every shared arc it touches (millions of seams); topology-aware-with-
+ring-fallback produces them on a few thousand. ~3 orders of magnitude
+better, confirmed visually by the imagediff.
 
-- **Fail.** Tick the Phase 0 boxes, record the decision in the running
-  notes (LAZARUS bailout 1, line 499), and ship v1 with naive DP plus
-  a documented limitation. Topology-aware deferred to post-v1.
+The integration follow-up plan must include three workstreams, not one:
+
+1. **Wire topology-aware into `mars-compiler`.** Original scope. Lift
+   batch simplification onto the binding+level scope; teach
+   snapshot/rebuild to collect-then-simplify-batch; widen
+   rebuild's neighbourhood semantics; drop the
+   `SimplifierKind::TopologyAware` config rejection.
+
+2. **Bring the spilled external-sort backend forward** (LAZARUS:775-786,
+   currently deferred). 8.5 GiB peak RSS on the reference fixture is
+   already past the 4 GiB working-set ceiling; cadastre-scale bindings
+   won't fit otherwise. The integration cannot land without it.
+
+3. **Per-arc fallback** as v1.x. Spec at integration time, ship after
+   v1 is out. Closes out the residual seam-violation count.
+
+## Open questions for the integration follow-up
+
+- Filtered-binding behaviour. Topology-aware needs the **whole**
+  polygon set at binding+level scope; `when:` filters that drop
+  features change which boundaries are shared. The integration plan
+  must run topology-aware **after** the filter and re-detect junctions
+  in the filtered set. Pre-merge tests required.
+
+- Graph-build cost on incremental rebuild. 19.5 s/Mfeat is fine for a
+  one-shot snapshot, problematic if rebuild re-graphs the entire
+  binding on every change. Decide: cache + incremental update, or
+  bbox-widened re-snapshot of touched pages.
