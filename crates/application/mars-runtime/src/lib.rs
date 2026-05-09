@@ -39,8 +39,12 @@ const DEFAULT_PIXEL_BUDGET: u32 = 128_000_000;
 /// default decoded-geometry cache size when constructed without an explicit one.
 const DEFAULT_DECODED_CACHE_BYTES: usize = 256 * 1024 * 1024;
 
-/// Decoded-geometry LRU cache. Phase B is a sized counter only; phase-d
-/// reintroduces the real per-page geometry cache and its eviction policy.
+/// Decoded-geometry LRU cache. **Placeholder only:** the current renderer
+/// does not consult or populate this cache; it tracks a configured capacity
+/// and an always-zero `current_bytes` counter so the runtime constructor
+/// surface stays stable while the page-keyed render path matures. Real
+/// per-page geometry caching will plug in here without changing the public
+/// surface.
 #[derive(Debug)]
 pub struct DecodedGeometryCache {
     capacity_bytes: usize,

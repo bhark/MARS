@@ -199,15 +199,14 @@ pub struct Render {
     /// `png` crate default if exact byte parity with older renders is needed.
     #[serde(default)]
     pub png_compression: PngCompression,
-    /// Bytes-bounded LRU of decoded source-artifact geometry (SPEC §10.4).
-    /// Hits skip the LEB128 varint walk for hot source artifacts, which on
-    /// PostGIS-class workloads dominates per-render CPU. Expressed as a
-    /// unit-suffixed byte literal (`256MiB`).
+    /// **Deprecated.** Bytes-bounded LRU of decoded source-artifact geometry.
+    /// The current renderer does not honour this knob; the value is parsed
+    /// for backward compatibility and otherwise ignored.
     #[serde(default = "default_decoded_geometry_cache")]
     pub decoded_geometry_cache: String,
-    /// Parallel geometry emit. Splits the per-cell `cpu.emit` loop across
-    /// rayon's global pool; each worker resolves its own thread-local PROJ
-    /// transformer cache. Toggleable for safe rollback.
+    /// **Deprecated.** Parallel geometry-emit toggle from the cell-substrate
+    /// renderer. Ignored under the page-keyed substrate; accepted for
+    /// backward compatibility.
     #[serde(default)]
     pub parallel_emit: ParallelEmit,
 }
