@@ -150,8 +150,8 @@ async fn current_rejects_v1_manifest() {
     let pub_ = S3Publisher::from_store(&s);
     let err = pub_.current().await.unwrap_err();
     assert!(
-        matches!(err, StoreError::UnsupportedManifestVersion { found: 1, supported: 3 }),
-        "expected UnsupportedManifestVersion {{ found: 1, supported: 3 }}, got {err:?}"
+        matches!(err, StoreError::UnsupportedManifestVersion { found: 1, supported: 4 }),
+        "expected UnsupportedManifestVersion {{ found: 1, supported: 4 }}, got {err:?}"
     );
 }
 
@@ -169,8 +169,29 @@ async fn current_rejects_v2_manifest() {
     let pub_ = S3Publisher::from_store(&s);
     let err = pub_.current().await.unwrap_err();
     assert!(
-        matches!(err, StoreError::UnsupportedManifestVersion { found: 2, supported: 3 }),
-        "expected UnsupportedManifestVersion {{ found: 2, supported: 3 }}, got {err:?}"
+        matches!(err, StoreError::UnsupportedManifestVersion { found: 2, supported: 4 }),
+        "expected UnsupportedManifestVersion {{ found: 2, supported: 4 }}, got {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn current_rejects_v3_manifest() {
+    let backend = Arc::new(InMemory::new());
+    let s = store_with("", backend);
+    // v3 had `hilbert_range_table: Vec<(HilbertKey, HilbertKey)>`; v4 widens
+    // it to a 3-tuple carrying a stable PageId. v3 must be rejected.
+    write_legacy_manifest(
+        &s,
+        3,
+        r#"{"format_version":3,"version":3,"service":"svc","created_at":{"secs_since_epoch":0,"nanos_since_epoch":0},"bindings":[],"pages":[],"class_sidecars":[],"label_sidecars":[],"style_artifact":null,"source_version":null,"epoch":0}"#,
+    )
+    .await;
+
+    let pub_ = S3Publisher::from_store(&s);
+    let err = pub_.current().await.unwrap_err();
+    assert!(
+        matches!(err, StoreError::UnsupportedManifestVersion { found: 3, supported: 4 }),
+        "expected UnsupportedManifestVersion {{ found: 3, supported: 4 }}, got {err:?}"
     );
 }
 
@@ -178,20 +199,20 @@ async fn current_rejects_v2_manifest() {
 async fn current_rejects_future_manifest_version() {
     let backend = Arc::new(InMemory::new());
     let s = store_with("", backend);
-    // forwards-incompatibility: a v4 body must also be rejected, not silently
+    // forwards-incompatibility: a v5 body must also be rejected, not silently
     // accepted as "newer therefore probably ok".
     write_legacy_manifest(
         &s,
         1,
-        r#"{"format_version":4,"version":1,"service":"svc","created_at":{"secs_since_epoch":0,"nanos_since_epoch":0},"bindings":[],"pages":[],"class_sidecars":[],"label_sidecars":[],"style_artifact":null,"source_version":null,"epoch":0}"#,
+        r#"{"format_version":5,"version":1,"service":"svc","created_at":{"secs_since_epoch":0,"nanos_since_epoch":0},"bindings":[],"pages":[],"class_sidecars":[],"label_sidecars":[],"style_artifact":null,"source_version":null,"epoch":0}"#,
     )
     .await;
 
     let pub_ = S3Publisher::from_store(&s);
     let err = pub_.current().await.unwrap_err();
     assert!(
-        matches!(err, StoreError::UnsupportedManifestVersion { found: 4, supported: 3 }),
-        "expected UnsupportedManifestVersion {{ found: 4, supported: 3 }}, got {err:?}"
+        matches!(err, StoreError::UnsupportedManifestVersion { found: 5, supported: 4 }),
+        "expected UnsupportedManifestVersion {{ found: 5, supported: 4 }}, got {err:?}"
     );
 }
 

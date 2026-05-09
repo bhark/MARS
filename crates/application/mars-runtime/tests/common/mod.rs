@@ -298,7 +298,7 @@ pub async fn build_fixture_with(opts: FixtureOptions) -> Fixture {
             label_min_priority: 0,
             page_count: 1,
             combined_bbox: page_bbox,
-            hilbert_range_table: vec![(HilbertKey::new(0), HilbertKey::new(u64::MAX))],
+            hilbert_range_table: vec![(HilbertKey::new(0), HilbertKey::new(u64::MAX), PageId::new(1))],
         }],
         page_membership_sidecar: None,
     };

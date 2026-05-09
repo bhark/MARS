@@ -10,6 +10,14 @@ once it starts tagging releases.
 
 ### Changed
 
+- **Manifest format bumped from v3 to v4** (breaking on-disk change).
+  `LevelMetadata.hilbert_range_table` widens from
+  `Vec<(HilbertKey, HilbertKey)>` to `Vec<(HilbertKey, HilbertKey, PageId)>`
+  so the change-feed path reads the persisted `PageId` directly instead of
+  reconstructing one from the table position. Rebalance allocates fresh
+  page ids and the prior reconstruction landed dirties on the wrong page.
+  Existing v3 manifests are no longer readable; bootstrap a fresh manifest
+  after upgrade.
 - Pass-1 page boundary cutting now sizes rows by
   `octet_length(ST_AsBinary(geom))` (raw WKB bytes server-side) instead of an
   estimate derived from decoded and simplified geometry size. The new metric is

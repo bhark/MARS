@@ -236,16 +236,21 @@ impl<'a> IncrementalCycle<'a> {
 }
 
 fn pages_for_key(level: &LevelMetadata, key: HilbertKey) -> Vec<PageId> {
+    // table is sorted ascending by `range_lo`; partition_point gives us the
+    // first row whose range starts strictly after `key`. walk back from
+    // there collecting any entry whose range still covers `key`. PageId is
+    // read from the table — it is not the row index (rebalance allocates
+    // fresh ids that no longer match table position).
     let ranges = &level.hilbert_range_table;
-    let end = ranges.partition_point(|(range_lo, _)| *range_lo <= key);
+    let end = ranges.partition_point(|(range_lo, _, _)| *range_lo <= key);
     let mut page_ids = Vec::new();
     for idx in (0..end).rev() {
-        let (range_lo, range_hi) = ranges[idx];
+        let (range_lo, range_hi, page_id) = ranges[idx];
         if range_hi < key {
             break;
         }
         if range_lo <= key {
-            page_ids.push(PageId::new(idx as u64));
+            page_ids.push(page_id);
         }
     }
     page_ids
@@ -291,14 +296,21 @@ mod tests {
     }
 
     fn level(level: u8, ranges: Vec<(HilbertKey, HilbertKey)>) -> LevelMetadata {
+        // synthesize identity-mapped page ids for the test fixtures; the
+        // production code populates them from PageEntry.key.page_id.
+        let table = ranges
+            .into_iter()
+            .enumerate()
+            .map(|(i, (lo, hi))| (lo, hi, PageId::new(i as u64)))
+            .collect::<Vec<_>>();
         LevelMetadata {
             level: DecimationLevel::new(level),
             vertex_tolerance_m: f64::from(level),
             geometry_min_size_m: 0.0,
             label_min_priority: 0,
-            page_count: ranges.len() as u32,
+            page_count: table.len() as u32,
             combined_bbox: Bbox::new(0.0, 0.0, 100.0, 100.0),
-            hilbert_range_table: ranges,
+            hilbert_range_table: table,
         }
     }
 
@@ -423,5 +435,32 @@ mod tests {
             BTreeSet::from_iter(page_ids),
             BTreeSet::from_iter([PageId::new(0), PageId::new(1), PageId::new(2)])
         );
+    }
+
+    #[test]
+    fn pages_for_key_returns_persisted_page_ids_not_table_index() {
+        // simulate a manifest whose page_ids no longer match table position
+        // (rebalance allocated fresh ids). pages_for_key must read the
+        // persisted page_id, not synthesize from the array index.
+        let key_lo = HilbertKey::new(10);
+        let key_mid = HilbertKey::new(50);
+        let key_hi = HilbertKey::new(90);
+        let lvl = LevelMetadata {
+            level: DecimationLevel::new(0),
+            vertex_tolerance_m: 0.0,
+            geometry_min_size_m: 0.0,
+            label_min_priority: 0,
+            page_count: 3,
+            combined_bbox: Bbox::new(0.0, 0.0, 100.0, 100.0),
+            hilbert_range_table: vec![
+                (key_lo, key_lo, PageId::new(7)),
+                (key_mid, key_mid, PageId::new(42)),
+                (key_hi, key_hi, PageId::new(99)),
+            ],
+        };
+        assert_eq!(pages_for_key(&lvl, key_mid), vec![PageId::new(42)]);
+        assert_eq!(pages_for_key(&lvl, key_lo), vec![PageId::new(7)]);
+        assert_eq!(pages_for_key(&lvl, key_hi), vec![PageId::new(99)]);
+        assert!(pages_for_key(&lvl, HilbertKey::new(11)).is_empty());
     }
 }

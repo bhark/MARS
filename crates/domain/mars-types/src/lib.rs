@@ -6,11 +6,13 @@ use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
-/// current `Manifest::format_version`. Bumped to 3 in LAZARUS Phase B when
-/// the substrate switched from cell-keyed to page-keyed addressing. v3
-/// readers reject anything other than this exact value (no more "accept
-/// `<= max`" — see `mars-store-fs` / `mars-store-s3` manifest readers).
-pub const MANIFEST_FORMAT_VERSION: u32 = 3;
+/// current `Manifest::format_version`. Bumped to 4 when
+/// `LevelMetadata.hilbert_range_table` started carrying the per-entry
+/// `PageId` so dirty-page lookup stays correct after rebalance allocates
+/// fresh ids. Readers reject anything other than this exact value (no
+/// "accept `<= max`" — see `mars-store-fs` / `mars-store-s3` manifest
+/// readers).
+pub const MANIFEST_FORMAT_VERSION: u32 = 4;
 
 /// upper bound on the on-disk pointer string. Versions are `v\d+` so 32 chars
 /// (`v` + 31 decimal digits) covers anything `u64` can represent comfortably.
@@ -350,8 +352,12 @@ pub struct LevelMetadata {
     pub label_min_priority: u32,
     pub page_count: u32,
     pub combined_bbox: Bbox,
-    /// per-page `(hilbert_lo, hilbert_hi)` sorted ascending; binary-searchable.
-    pub hilbert_range_table: Vec<(HilbertKey, HilbertKey)>,
+    /// per-page `(hilbert_lo, hilbert_hi, page_id)` sorted ascending by
+    /// `hilbert_lo`; binary-searchable. `page_id` is carried alongside the
+    /// range because rebalance allocates fresh page ids that no longer
+    /// match the table position; consumers must read `page_id` directly
+    /// rather than reconstructing it from the array index.
+    pub hilbert_range_table: Vec<(HilbertKey, HilbertKey, PageId)>,
 }
 
 /// per-binding metadata. one entry per `(table_or_view, geometry_column,
@@ -856,8 +862,8 @@ mod tests {
             page_count: 12,
             combined_bbox: Bbox::new(-10.0, -10.0, 10.0, 10.0),
             hilbert_range_table: vec![
-                (HilbertKey::new(0), HilbertKey::new(100)),
-                (HilbertKey::new(101), HilbertKey::new(500)),
+                (HilbertKey::new(0), HilbertKey::new(100), PageId::new(0)),
+                (HilbertKey::new(101), HilbertKey::new(500), PageId::new(1)),
             ],
         };
         let s = serde_json::to_string(&lm).unwrap();

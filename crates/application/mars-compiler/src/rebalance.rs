@@ -129,14 +129,19 @@ mod tests {
     use mars_types::{BindingId, ContentHash, DecimationLevel, HilbertKey, PageId};
 
     fn level(combined: Bbox, ranges: Vec<(HilbertKey, HilbertKey)>) -> LevelMetadata {
+        let table = ranges
+            .into_iter()
+            .enumerate()
+            .map(|(i, (lo, hi))| (lo, hi, PageId::new(i as u64)))
+            .collect::<Vec<_>>();
         LevelMetadata {
             level: DecimationLevel::new(0),
             vertex_tolerance_m: 0.0,
             geometry_min_size_m: 0.0,
             label_min_priority: 0,
-            page_count: ranges.len() as u32,
+            page_count: table.len() as u32,
             combined_bbox: combined,
-            hilbert_range_table: ranges,
+            hilbert_range_table: table,
         }
     }
 

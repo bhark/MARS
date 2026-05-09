@@ -312,7 +312,9 @@ async fn rebuild_binding_incremental(
             })?;
 
     // 1. assemble the union of dirty hilbert ranges across all dirty levels.
-    //    each (level, page_id) maps into LevelMetadata::hilbert_range_table.
+    //    look up by `page_id` in the level's hilbert_range_table; the table
+    //    is keyed by PageId, not by table-position (rebalance allocates
+    //    fresh ids that no longer match position).
     type DirtyPage = (PageId, (HilbertKey, HilbertKey));
     let mut dirty_ranges: Vec<(HilbertKey, HilbertKey)> = Vec::new();
     let mut dirty_pages_by_level: BTreeMap<DecimationLevel, Vec<DirtyPage>> = BTreeMap::new();
@@ -326,8 +328,13 @@ async fn rebuild_binding_incremental(
                     what: "rebuild: missing prior level metadata",
                 })?;
         for page_id in page_ids {
-            let idx = page_id.get() as usize;
-            if let Some(range) = level_meta.hilbert_range_table.get(idx).copied() {
+            if let Some((lo, hi, _)) = level_meta
+                .hilbert_range_table
+                .iter()
+                .find(|(_, _, id)| id == page_id)
+                .copied()
+            {
+                let range = (lo, hi);
                 dirty_ranges.push(range);
                 dirty_pages_by_level.entry(*level).or_default().push((*page_id, range));
             }
@@ -1000,7 +1007,10 @@ pub async fn rebuild_binding_from_plan<'a>(
             label_min_priority: level_plan.label_min_priority,
             page_count: level_pages.len() as u32,
             combined_bbox: page_plan.combined_bbox,
-            hilbert_range_table: level_pages.iter().map(|p| p.hilbert_range).collect(),
+            hilbert_range_table: level_pages
+                .iter()
+                .map(|p| (p.hilbert_range.0, p.hilbert_range.1, p.key.page_id))
+                .collect(),
         });
         all_pages.append(&mut level_pages);
     }
@@ -1050,10 +1060,10 @@ pub async fn rebuild_binding_from_plan<'a>(
 /// because it is the natural complement to [`rebuild_pages`].
 #[must_use]
 pub fn recompute_level_metadata(prior: &LevelMetadata, pages: &[PageEntry], binding_id: &BindingId) -> LevelMetadata {
-    let mut ranges: Vec<(HilbertKey, HilbertKey)> = pages
+    let mut ranges: Vec<(HilbertKey, HilbertKey, PageId)> = pages
         .iter()
         .filter(|p| p.key.binding_id == *binding_id && p.key.level == prior.level)
-        .map(|p| p.hilbert_range)
+        .map(|p| (p.hilbert_range.0, p.hilbert_range.1, p.key.page_id))
         .collect();
     ranges.sort_by_key(|r| r.0);
     LevelMetadata {
@@ -1432,8 +1442,8 @@ mod tests {
         assert_eq!(
             updated.hilbert_range_table,
             vec![
-                (HilbertKey::new(50), HilbertKey::new(75)),
-                (HilbertKey::new(100), HilbertKey::new(200)),
+                (HilbertKey::new(50), HilbertKey::new(75), PageId::new(1)),
+                (HilbertKey::new(100), HilbertKey::new(200), PageId::new(0)),
             ]
         );
     }
