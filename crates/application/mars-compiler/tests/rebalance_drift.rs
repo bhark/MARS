@@ -55,9 +55,7 @@ struct FakeSource {
 impl FakeSource {
     fn with_rows(rows: Vec<RowBytes>) -> Self {
         let map: HashMap<u64, RowBytes> = rows.into_iter().map(|r| (r.feature_id, r)).collect();
-        Self {
-            rows: Mutex::new(map),
-        }
+        Self { rows: Mutex::new(map) }
     }
 }
 
@@ -78,10 +76,7 @@ impl Source for FakeSource {
         ids: &'a [i64],
     ) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError> {
         let lock = self.rows.lock().unwrap();
-        let owned: Vec<RowBytes> = ids
-            .iter()
-            .filter_map(|i| lock.get(&(*i as u64)).cloned())
-            .collect();
+        let owned: Vec<RowBytes> = ids.iter().filter_map(|i| lock.get(&(*i as u64)).cloned()).collect();
         Ok(Box::pin(stream::iter(owned.into_iter().map(Ok))))
     }
 
@@ -166,7 +161,9 @@ async fn rebalance_candidates_flags_oversize_page() {
         bindings: vec![binding_plan("points", 100 * 1024 * 1024)],
         layers: vec![],
     };
-    let manifest = run_snapshot(&deps, &plan, "test".into(), 1, 4 * 1024 * 1024 * 1024).await.unwrap();
+    let manifest = run_snapshot(&deps, &plan, "test".into(), 1, 4 * 1024 * 1024 * 1024)
+        .await
+        .unwrap();
     let binding_id = BindingId::try_new("points").unwrap();
     let level0_pages: Vec<PageEntry> = manifest
         .pages
@@ -203,7 +200,9 @@ async fn execute_rebalance_split_preserves_feature_ids_and_balances_sizes() {
         bindings: vec![binding_plan("points", 100 * 1024 * 1024)],
         layers: vec![],
     };
-    let manifest = run_snapshot(&deps, &plan, "test".into(), 1, 4 * 1024 * 1024 * 1024).await.unwrap();
+    let manifest = run_snapshot(&deps, &plan, "test".into(), 1, 4 * 1024 * 1024 * 1024)
+        .await
+        .unwrap();
     let binding_id = BindingId::try_new("points").unwrap();
     let level0_meta = manifest.bindings[0].levels[0].clone();
     let level0_pages: Vec<PageEntry> = manifest

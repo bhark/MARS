@@ -91,10 +91,7 @@ pub fn rebalance_candidates(level: &LevelMetadata, pages: &[PageEntry], target_b
         }
         let lhs = pages[i].size_bytes as f64;
         let rhs = pages[i + 1].size_bytes as f64;
-        if lhs < SIZE_LO_FACTOR * target
-            && rhs < SIZE_LO_FACTOR * target
-            && (lhs + rhs) <= SIZE_HI_FACTOR * target
-        {
+        if lhs < SIZE_LO_FACTOR * target && rhs < SIZE_LO_FACTOR * target && (lhs + rhs) <= SIZE_HI_FACTOR * target {
             ops.push(RebalanceOp::Merge {
                 left: pages[i].key.clone(),
                 right: pages[i + 1].key.clone(),

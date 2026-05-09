@@ -167,10 +167,13 @@ pub fn build_bootstrap_plan(cfg: &Config) -> Result<BootstrapPlan, PlanError> {
     for layer in &cfg.layers {
         for binding in &layer.sources {
             let id = binding_id_for(&binding.from)?;
-            let sidecar_warn = binding.resolved_sidecar_size_warn_bytes().map_err(|_| PlanError::ConflictingBinding {
-                id: id.clone(),
-                detail: "sidecar_size_warn_bytes failed to parse",
-            })?;
+            let sidecar_warn =
+                binding
+                    .resolved_sidecar_size_warn_bytes()
+                    .map_err(|_| PlanError::ConflictingBinding {
+                        id: id.clone(),
+                        detail: "sidecar_size_warn_bytes failed to parse",
+                    })?;
             let plan = BindingPlan {
                 binding_id: id.clone(),
                 source_table: binding.from.clone(),
@@ -269,10 +272,7 @@ fn resolve_label_style(cfg: &Config, layer: &CfgLayer, attach: &LabelStyleAttach
             );
             (name.clone(), style)
         }
-        LabelStyleAttach::Inline(style) => (
-            format!("{layer}__label", layer = layer.name),
-            style.clone(),
-        ),
+        LabelStyleAttach::Inline(style) => (format!("{layer}__label", layer = layer.name), style.clone()),
     }
 }
 
@@ -590,7 +590,10 @@ mod tests {
         ]);
         let plan = build_bootstrap_plan(&cfg).unwrap();
         let parcels = BindingId::try_new("parcels").unwrap();
-        let collected: Vec<_> = plan.layers_for(&parcels).map(|l| l.layer_id.as_str().to_string()).collect();
+        let collected: Vec<_> = plan
+            .layers_for(&parcels)
+            .map(|l| l.layer_id.as_str().to_string())
+            .collect();
         assert_eq!(collected, vec!["a".to_string()]);
     }
 

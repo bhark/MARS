@@ -192,11 +192,7 @@ impl Compiler {
         self.apply_cycle(batches, &CancellationToken::new()).await
     }
 
-    async fn apply_cycle(
-        &self,
-        batches: Vec<ChangeBatch>,
-        shutdown: &CancellationToken,
-    ) -> Result<u64, CompilerError> {
+    async fn apply_cycle(&self, batches: Vec<ChangeBatch>, shutdown: &CancellationToken) -> Result<u64, CompilerError> {
         let prior = self
             .deps
             .manifest
@@ -240,10 +236,7 @@ impl Compiler {
                     if let Some(sc) = sidecars.get(&binding_plan.binding_id) {
                         let outcome = reconcile::reconcile_binding(&self.deps, binding_plan, sc).await?;
                         for w in [
-                            (
-                                "missing_in_sidecar",
-                                outcome.report.missing_in_sidecar.len(),
-                            ),
+                            ("missing_in_sidecar", outcome.report.missing_in_sidecar.len()),
                             ("orphan_in_sidecar", outcome.report.orphan_in_sidecar.len()),
                         ] {
                             if w.1 > 0 {
@@ -314,8 +307,7 @@ impl Compiler {
         // rebuild dirty pages.
         let working_set_bytes = self.config.compiler.bootstrap_working_set()?;
         let started = std::time::Instant::now();
-        let outcome =
-            rebuild::rebuild_pages(&self.deps, &plan, &prior, &sidecars, dirty, working_set_bytes).await?;
+        let outcome = rebuild::rebuild_pages(&self.deps, &plan, &prior, &sidecars, dirty, working_set_bytes).await?;
         self.deps.metrics.observe_compiler_rebuild_duration(started.elapsed());
 
         // merge outcome into prior to produce the new manifest.
@@ -400,8 +392,7 @@ impl Compiler {
         }
 
         let working_set_bytes = self.config.compiler.bootstrap_working_set()?;
-        let outcome =
-            rebuild::execute_rebalance(&self.deps, &plan, &prior, &sidecars, ops, working_set_bytes).await?;
+        let outcome = rebuild::execute_rebalance(&self.deps, &plan, &prior, &sidecars, ops, working_set_bytes).await?;
         let next_version = prior.version + 1;
         let new_manifest = merge_manifest(&prior, &outcome, next_version, prior.source_version.clone());
         publish_with_retry(

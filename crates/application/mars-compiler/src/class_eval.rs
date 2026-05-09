@@ -149,9 +149,10 @@ fn label_shape_from_geom(feature: &FeatureGeom, placement: &Placement) -> Option
         (GeomKind::LineString(line), Placement::Line { .. }) if !line.is_empty() => Some(LabelShape::Polyline(
             line.iter().map(|&(x, y)| (x as f32, y as f32)).collect(),
         )),
-        (GeomKind::MultiLineString(parts), Placement::Line { .. }) => parts.iter().find(|p| !p.is_empty()).map(|p| {
-            LabelShape::Polyline(p.iter().map(|&(x, y)| (x as f32, y as f32)).collect())
-        }),
+        (GeomKind::MultiLineString(parts), Placement::Line { .. }) => parts
+            .iter()
+            .find(|p| !p.is_empty())
+            .map(|p| LabelShape::Polyline(p.iter().map(|&(x, y)| (x as f32, y as f32)).collect())),
         (GeomKind::LineString(line), _) if !line.is_empty() => {
             let mid = line[line.len() / 2];
             Some(LabelShape::Point {
@@ -273,7 +274,13 @@ mod tests {
     fn polygon_anchor_uses_bbox_centroid() {
         let f = feature(
             42,
-            GeomKind::Polygon(vec![vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (0.0, 0.0)]]),
+            GeomKind::Polygon(vec![vec![
+                (0.0, 0.0),
+                (10.0, 0.0),
+                (10.0, 10.0),
+                (0.0, 10.0),
+                (0.0, 0.0),
+            ]]),
             [0.0, 0.0, 10.0, 10.0],
         );
         let row = vec![("name".into(), AttrValue::String("Sq".into()))];

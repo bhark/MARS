@@ -21,8 +21,8 @@ use mars_compiler::sidecar::SidecarReader;
 use mars_compiler::snapshot::run_snapshot;
 use mars_observability::Metrics;
 use mars_source::{
-    AttrValue, ChangeEvent, ChangeFeed, ChangeSubscription, GeometryEnvelope, LeaderLock, LeaderLockGuard,
-    RowBytes, Source, SourceBinding as PortBinding, SourceCollectionId, SourceError,
+    AttrValue, ChangeEvent, ChangeFeed, ChangeSubscription, GeometryEnvelope, LeaderLock, LeaderLockGuard, RowBytes,
+    Source, SourceBinding as PortBinding, SourceCollectionId, SourceError,
 };
 use mars_store::ManifestStore;
 use mars_store::mem::{InMemoryPublisher, InMemoryStore};
@@ -77,10 +77,7 @@ impl Source for FakeSource {
         ids: &'a [i64],
     ) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError> {
         let lock = self.rows.lock().unwrap();
-        let owned: Vec<RowBytes> = ids
-            .iter()
-            .filter_map(|i| lock.get(&(*i as u64)).cloned())
-            .collect();
+        let owned: Vec<RowBytes> = ids.iter().filter_map(|i| lock.get(&(*i as u64)).cloned()).collect();
         Ok(Box::pin(stream::iter(owned.into_iter().map(Ok))))
     }
 
@@ -100,9 +97,7 @@ struct NopFeed;
 #[async_trait]
 impl ChangeFeed for NopFeed {
     async fn subscribe(&self) -> Result<Box<dyn ChangeSubscription>, SourceError> {
-        Err(SourceError::NotImplemented {
-            what: "bench feed",
-        })
+        Err(SourceError::NotImplemented { what: "bench feed" })
     }
 }
 #[derive(Default)]
@@ -110,9 +105,7 @@ struct NopLock;
 #[async_trait]
 impl LeaderLock for NopLock {
     async fn try_acquire(&self, _key: i64) -> Result<Option<Box<dyn LeaderLockGuard>>, SourceError> {
-        Err(SourceError::NotImplemented {
-            what: "bench lock",
-        })
+        Err(SourceError::NotImplemented { what: "bench lock" })
     }
 }
 
@@ -164,7 +157,9 @@ async fn build_fixture(n_features: usize, page_size: u64) -> Fixture {
         bindings: vec![binding_plan("points", page_size)],
         layers: vec![],
     };
-    let prior = run_snapshot(&deps, &plan, "bench".into(), 1, 8 * 1024 * 1024 * 1024).await.unwrap();
+    let prior = run_snapshot(&deps, &plan, "bench".into(), 1, 8 * 1024 * 1024 * 1024)
+        .await
+        .unwrap();
     let binding_id = BindingId::try_new("points").unwrap();
     let sidecar_ref = prior
         .bindings

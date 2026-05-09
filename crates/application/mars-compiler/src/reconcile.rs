@@ -145,9 +145,7 @@ mod tests {
     use futures_core::stream::BoxStream;
     use futures_util::stream;
     use mars_observability::Metrics;
-    use mars_source::{
-        ChangeFeed, ChangeSubscription, LeaderLock, LeaderLockGuard, RowBytes, Source, SourceError,
-    };
+    use mars_source::{ChangeFeed, ChangeSubscription, LeaderLock, LeaderLockGuard, RowBytes, Source, SourceError};
     use mars_store::ManifestStore;
     use mars_store::stub::{NotImplementedManifestStore, NotImplementedStore};
     use mars_types::{CrsCode, DecimationLevel, HilbertKey};

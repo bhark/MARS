@@ -28,8 +28,8 @@ use mars_compiler::sidecar::SidecarReader;
 use mars_compiler::snapshot::run_snapshot;
 use mars_observability::Metrics;
 use mars_source::{
-    AttrValue, ChangeEvent, ChangeFeed, ChangeSubscription, GeometryEnvelope, LeaderLock, LeaderLockGuard,
-    RowBytes, Source, SourceBinding as PortBinding, SourceCollectionId, SourceError,
+    AttrValue, ChangeEvent, ChangeFeed, ChangeSubscription, GeometryEnvelope, LeaderLock, LeaderLockGuard, RowBytes,
+    Source, SourceBinding as PortBinding, SourceCollectionId, SourceError,
 };
 use mars_store::mem::{InMemoryPublisher, InMemoryStore};
 use mars_store::{ManifestStore, ObjectStore, StoreError};
@@ -96,10 +96,7 @@ impl Source for FakeSource {
         ids: &'a [i64],
     ) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError> {
         let lock = self.rows.lock().unwrap();
-        let owned: Vec<RowBytes> = ids
-            .iter()
-            .filter_map(|i| lock.get(&(*i as u64)).cloned())
-            .collect();
+        let owned: Vec<RowBytes> = ids.iter().filter_map(|i| lock.get(&(*i as u64)).cloned()).collect();
         Ok(Box::pin(stream::iter(owned.into_iter().map(Ok))))
     }
 
@@ -221,11 +218,7 @@ fn binding_plan(id: &str, page_size: u64) -> BindingPlan {
     }
 }
 
-fn make_deps(
-    source: Arc<FakeSource>,
-    store: Arc<dyn ObjectStore>,
-    manifest_store: Arc<dyn ManifestStore>,
-) -> Deps {
+fn make_deps(source: Arc<FakeSource>, store: Arc<dyn ObjectStore>, manifest_store: Arc<dyn ManifestStore>) -> Deps {
     Deps {
         source,
         change_feed: Arc::new(NopFeed),
@@ -239,11 +232,7 @@ fn make_deps(
 /// merge a rebuild outcome into the prior manifest in the same shape the
 /// compiler's cycle entry point uses; inlined here so the test can avoid
 /// pulling in a private `merge_manifest` symbol.
-fn merge(
-    prior: &Manifest,
-    outcome: &mars_compiler::rebuild::RebuildOutcome,
-    next_version: u64,
-) -> Manifest {
+fn merge(prior: &Manifest, outcome: &mars_compiler::rebuild::RebuildOutcome, next_version: u64) -> Manifest {
     let replacement_pages: std::collections::HashSet<_> =
         outcome.replacement_pages.iter().map(|p| p.key.clone()).collect();
     let dropped_pages: std::collections::HashSet<_> = outcome.dropped_pages.iter().cloned().collect();
@@ -257,10 +246,8 @@ fn merge(
         .iter()
         .map(|s| (s.layer_id.clone(), s.page_key.clone()))
         .collect();
-    let dropped_class: std::collections::HashSet<_> =
-        outcome.dropped_class_sidecars.iter().cloned().collect();
-    let dropped_label: std::collections::HashSet<_> =
-        outcome.dropped_label_sidecars.iter().cloned().collect();
+    let dropped_class: std::collections::HashSet<_> = outcome.dropped_class_sidecars.iter().cloned().collect();
+    let dropped_label: std::collections::HashSet<_> = outcome.dropped_label_sidecars.iter().cloned().collect();
 
     let mut pages: Vec<PageEntry> = prior
         .pages
@@ -367,13 +354,19 @@ async fn rebuild_cycle_is_atomic_under_put_fault_injection() {
         let raw = Arc::new(InMemoryStore::new());
         let injector = Arc::new(FaultInjectingStore::passthrough(raw.clone()));
         let manifest_store: Arc<dyn ManifestStore> = Arc::new(InMemoryPublisher::new());
-        let deps = make_deps(source.clone(), injector.clone() as Arc<dyn ObjectStore>, manifest_store.clone());
+        let deps = make_deps(
+            source.clone(),
+            injector.clone() as Arc<dyn ObjectStore>,
+            manifest_store.clone(),
+        );
 
         let plan = BootstrapPlan {
             bindings: vec![binding_plan("points", 1024)],
             layers: vec![],
         };
-        let bootstrap = run_snapshot(&deps, &plan, "test".into(), 1, 4 * 1024 * 1024 * 1024).await.unwrap();
+        let bootstrap = run_snapshot(&deps, &plan, "test".into(), 1, 4 * 1024 * 1024 * 1024)
+            .await
+            .unwrap();
         manifest_store.publish(&bootstrap).await.unwrap();
         let _ = run_one_rebuild_cycle(&deps, &source, &plan, &bootstrap).await.unwrap();
         let counter = injector.counter.lock().unwrap();
@@ -443,7 +436,11 @@ async fn run_one_rebuild_cycle(
 
     // mmap prior sidecar.
     let binding_id = BindingId::try_new("points").unwrap();
-    let sidecar_ref = prior.bindings.iter().find(|b| b.binding_id == binding_id).unwrap()
+    let sidecar_ref = prior
+        .bindings
+        .iter()
+        .find(|b| b.binding_id == binding_id)
+        .unwrap()
         .page_membership_sidecar
         .as_ref()
         .unwrap();
@@ -473,4 +470,3 @@ async fn run_one_rebuild_cycle(
     let outcome = rebuild_pages(deps, plan, prior, &sidecars, dirty, 4 * 1024 * 1024 * 1024).await?;
     Ok(merge(prior, &outcome, prior.version + 1))
 }
-

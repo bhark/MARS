@@ -24,8 +24,8 @@ use mars_compiler::sidecar::SidecarReader;
 use mars_compiler::snapshot::run_snapshot;
 use mars_observability::Metrics;
 use mars_source::{
-    AttrValue, ChangeEvent, ChangeFeed, ChangeSubscription, GeometryEnvelope, LeaderLock, LeaderLockGuard,
-    RowBytes, Source, SourceBinding as PortBinding, SourceCollectionId, SourceError,
+    AttrValue, ChangeEvent, ChangeFeed, ChangeSubscription, GeometryEnvelope, LeaderLock, LeaderLockGuard, RowBytes,
+    Source, SourceBinding as PortBinding, SourceCollectionId, SourceError,
 };
 use mars_store::ObjectStore;
 use mars_store::mem::{InMemoryPublisher, InMemoryStore};
@@ -63,9 +63,7 @@ struct FakeSource {
 impl FakeSource {
     fn with_rows(rows: Vec<RowBytes>) -> Self {
         let map: HashMap<u64, RowBytes> = rows.into_iter().map(|r| (r.feature_id, r)).collect();
-        Self {
-            rows: Mutex::new(map),
-        }
+        Self { rows: Mutex::new(map) }
     }
 
     fn insert(&self, r: RowBytes) {
@@ -101,10 +99,7 @@ impl Source for FakeSource {
         ids: &'a [i64],
     ) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError> {
         let lock = self.rows.lock().unwrap();
-        let owned: Vec<RowBytes> = ids
-            .iter()
-            .filter_map(|i| lock.get(&(*i as u64)).cloned())
-            .collect();
+        let owned: Vec<RowBytes> = ids.iter().filter_map(|i| lock.get(&(*i as u64)).cloned()).collect();
         Ok(Box::pin(stream::iter(owned.into_iter().map(Ok))))
     }
 
@@ -196,7 +191,9 @@ async fn surgical_invalidation_rebuilds_only_dirty_pages() {
     };
 
     // bootstrap
-    let bootstrap = run_snapshot(&deps, &plan, "test".into(), 1, 4 * 1024 * 1024 * 1024).await.unwrap();
+    let bootstrap = run_snapshot(&deps, &plan, "test".into(), 1, 4 * 1024 * 1024 * 1024)
+        .await
+        .unwrap();
     assert!(
         bootstrap.pages.len() >= 3,
         "fixture must produce >= 3 pages to exercise cross-page moves; got {}",
@@ -204,15 +201,21 @@ async fn surgical_invalidation_rebuilds_only_dirty_pages() {
     );
 
     // capture prior content hashes per PageKey for the post-cycle diff.
-    let prior_hashes: HashMap<PageKey, ContentHash> =
-        bootstrap.pages.iter().map(|p| (p.key.clone(), p.content_hash)).collect();
+    let prior_hashes: HashMap<PageKey, ContentHash> = bootstrap
+        .pages
+        .iter()
+        .map(|p| (p.key.clone(), p.content_hash))
+        .collect();
 
     // pick three distinct pages to drive the four mutations against.
     // the bootstrap's page list is sorted by hilbert_range.0, so the first
     // page covers the smallest keys, the last the largest.
     let binding_id = BindingId::try_new("points").unwrap();
-    let pages_for_binding: Vec<&PageEntry> =
-        bootstrap.pages.iter().filter(|p| p.key.binding_id == binding_id).collect();
+    let pages_for_binding: Vec<&PageEntry> = bootstrap
+        .pages
+        .iter()
+        .filter(|p| p.key.binding_id == binding_id)
+        .collect();
     let page_a = pages_for_binding.first().expect("first page").key.clone();
     let page_b = pages_for_binding[pages_for_binding.len() / 2].key.clone();
     let page_c = pages_for_binding.last().expect("last page").key.clone();
@@ -337,13 +340,14 @@ async fn surgical_invalidation_rebuilds_only_dirty_pages() {
     let dirty = cycle.finish();
     assert!(dirty.warnings.is_empty(), "no warnings expected: {:?}", dirty.warnings);
 
-    let outcome = rebuild_pages(&deps, &plan, &bootstrap, &sidecars, dirty, 4 * 1024 * 1024 * 1024).await.unwrap();
+    let outcome = rebuild_pages(&deps, &plan, &bootstrap, &sidecars, dirty, 4 * 1024 * 1024 * 1024)
+        .await
+        .unwrap();
 
     // pages outside the touched set (A, B, C) must be untouched: not present
     // in replacement_pages and not in dropped_pages.
-    let touched: std::collections::HashSet<PageKey> = [page_a.clone(), page_b.clone(), page_c.clone()]
-        .into_iter()
-        .collect();
+    let touched: std::collections::HashSet<PageKey> =
+        [page_a.clone(), page_b.clone(), page_c.clone()].into_iter().collect();
     let replaced: std::collections::HashSet<PageKey> =
         outcome.replacement_pages.iter().map(|p| p.key.clone()).collect();
     let dropped: std::collections::HashSet<PageKey> = outcome.dropped_pages.iter().cloned().collect();
@@ -395,7 +399,10 @@ async fn surgical_invalidation_rebuilds_only_dirty_pages() {
         .expect("refreshed sidecar reference");
     let new_sidecar_bytes = store.get(&new_sidecar_ref.key, new_sidecar_ref.hash).await.unwrap();
     let new_sidecar = SidecarReader::open(&new_sidecar_bytes).unwrap();
-    assert!(new_sidecar.lookup(new_id_to_insert).is_some(), "insert must land in sidecar");
+    assert!(
+        new_sidecar.lookup(new_id_to_insert).is_some(),
+        "insert must land in sidecar"
+    );
     assert!(
         new_sidecar.lookup(id_in_a_to_delete).is_none(),
         "delete must drop from sidecar"

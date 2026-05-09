@@ -861,7 +861,9 @@ mod tests {
             layers: vec![layer_plan("dots", "points", true)],
         };
 
-        let manifest = run_snapshot(&deps, &plan, "test".into(), 1, 4 * 1024 * 1024 * 1024).await.unwrap();
+        let manifest = run_snapshot(&deps, &plan, "test".into(), 1, 4 * 1024 * 1024 * 1024)
+            .await
+            .unwrap();
         assert_eq!(manifest.bindings.len(), 1);
         assert_eq!(manifest.bindings[0].feature_count_total, 100);
         assert_eq!(manifest.pages.len(), 1);
@@ -883,8 +885,7 @@ mod tests {
         let cls_key = cls_entry.object_key().unwrap();
         let cls_bytes = store.objects.lock().unwrap().get(cls_key.as_str()).unwrap().clone();
         let cls_reader = ArtifactReader::open(cls_bytes).unwrap();
-        let assignments =
-            decode_class_assignment(&cls_reader.section(SectionKind::ClassAssignment).unwrap()).unwrap();
+        let assignments = decode_class_assignment(&cls_reader.section(SectionKind::ClassAssignment).unwrap()).unwrap();
         assert_eq!(assignments.len(), 100);
         for (id, idx) in &assignments {
             assert_eq!(*idx, 0);
@@ -950,16 +951,12 @@ mod tests {
             bindings: vec![bp],
             layers: vec![layer_plan("dots", "points", false)],
         };
-        let manifest = run_snapshot(&deps, &plan, "test".into(), 1, 4 * 1024 * 1024 * 1024).await.unwrap();
+        let manifest = run_snapshot(&deps, &plan, "test".into(), 1, 4 * 1024 * 1024 * 1024)
+            .await
+            .unwrap();
 
         // levels 0 + 1 each have at least one page; level 2 has zero (all pruned).
-        let level_pages = |lvl: u8| {
-            manifest
-                .pages
-                .iter()
-                .filter(|p| p.key.level.get() == lvl)
-                .count()
-        };
+        let level_pages = |lvl: u8| manifest.pages.iter().filter(|p| p.key.level.get() == lvl).count();
         assert!(level_pages(0) >= 1);
         assert!(level_pages(1) >= 1);
         assert_eq!(level_pages(2), 0);
@@ -983,7 +980,9 @@ mod tests {
             bindings: vec![binding_plan("pts", 16 * 1024)],
             layers: vec![],
         };
-        let manifest = run_snapshot(&deps, &plan, "test".into(), 1, 4 * 1024 * 1024 * 1024).await.unwrap();
+        let manifest = run_snapshot(&deps, &plan, "test".into(), 1, 4 * 1024 * 1024 * 1024)
+            .await
+            .unwrap();
         let pages: Vec<&PageEntry> = manifest.pages.iter().collect();
         assert!(pages.len() > 1);
         let total: u64 = pages.iter().map(|p| p.feature_count).sum();

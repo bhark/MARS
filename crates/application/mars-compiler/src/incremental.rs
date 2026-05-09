@@ -389,10 +389,7 @@ mod tests {
         );
 
         // observed feature ids accumulated for non-truncated bindings.
-        assert_eq!(
-            roads.observed,
-            BTreeSet::from_iter([1u64, 2, 3, 77])
-        );
+        assert_eq!(roads.observed, BTreeSet::from_iter([1u64, 2, 3, 77]));
 
         let buildings = dirty
             .per_binding

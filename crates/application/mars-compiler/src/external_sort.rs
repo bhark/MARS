@@ -179,10 +179,22 @@ mod tests {
     #[test]
     fn bucketed_sort_orders_keys_ascending() {
         let mut rows = vec![
-            Row { key: k(0xF0F0_F0F0_0000_0000), tag: 1 },
-            Row { key: k(0x0102_0304_0506_0708), tag: 2 },
-            Row { key: k(0xAAAA_AAAA_AAAA_AAAA), tag: 3 },
-            Row { key: k(0x0000_0000_0000_0001), tag: 4 },
+            Row {
+                key: k(0xF0F0_F0F0_0000_0000),
+                tag: 1,
+            },
+            Row {
+                key: k(0x0102_0304_0506_0708),
+                tag: 2,
+            },
+            Row {
+                key: k(0xAAAA_AAAA_AAAA_AAAA),
+                tag: 3,
+            },
+            Row {
+                key: k(0x0000_0000_0000_0001),
+                tag: 4,
+            },
         ];
         bucketed_sort_in_place(&mut rows, 12, |r| r.key);
         let _ = rows[0].tag;

@@ -119,13 +119,13 @@ async fn rebuild_binding_truncate(
     working_set_bytes: u64,
     outcome: &mut RebuildOutcome,
 ) -> Result<(), CompilerError> {
-    let binding = plan
-        .bindings
-        .iter()
-        .find(|b| b.binding_id == *binding_id)
-        .ok_or(CompilerError::LegacySubstrateRetired {
-            what: "rebuild: unknown binding for truncate",
-        })?;
+    let binding =
+        plan.bindings
+            .iter()
+            .find(|b| b.binding_id == *binding_id)
+            .ok_or(CompilerError::LegacySubstrateRetired {
+                what: "rebuild: unknown binding for truncate",
+            })?;
     let bo: BindingOutput = snapshot_one_binding(deps, binding, plan, working_set_bytes).await?;
     outcome.refreshed_bindings.push(bo.meta);
     outcome.replacement_pages.extend(bo.pages);
@@ -146,27 +146,29 @@ async fn rebuild_binding_incremental(
     sidecar_warn_bytes: u64,
     outcome: &mut RebuildOutcome,
 ) -> Result<(), CompilerError> {
-    let binding_plan = plan
-        .bindings
-        .iter()
-        .find(|b| b.binding_id == *binding_id)
-        .ok_or(CompilerError::LegacySubstrateRetired {
-            what: "rebuild: unknown binding for incremental cycle",
-        })?;
-    let prior_binding = prior
-        .bindings
-        .iter()
-        .find(|m| m.binding_id == *binding_id)
-        .ok_or(CompilerError::LegacySubstrateRetired {
-            what: "rebuild: missing prior binding metadata",
-        })?;
-    let combined_bbox = prior_binding
-        .levels
-        .first()
-        .map(|l| l.combined_bbox)
-        .ok_or(CompilerError::LegacySubstrateRetired {
-            what: "rebuild: prior binding has no level metadata",
-        })?;
+    let binding_plan =
+        plan.bindings
+            .iter()
+            .find(|b| b.binding_id == *binding_id)
+            .ok_or(CompilerError::LegacySubstrateRetired {
+                what: "rebuild: unknown binding for incremental cycle",
+            })?;
+    let prior_binding =
+        prior
+            .bindings
+            .iter()
+            .find(|m| m.binding_id == *binding_id)
+            .ok_or(CompilerError::LegacySubstrateRetired {
+                what: "rebuild: missing prior binding metadata",
+            })?;
+    let combined_bbox =
+        prior_binding
+            .levels
+            .first()
+            .map(|l| l.combined_bbox)
+            .ok_or(CompilerError::LegacySubstrateRetired {
+                what: "rebuild: prior binding has no level metadata",
+            })?;
 
     // 1. assemble the union of dirty hilbert ranges across all dirty levels.
     //    each (level, page_id) maps into LevelMetadata::hilbert_range_table.
@@ -174,21 +176,19 @@ async fn rebuild_binding_incremental(
     let mut dirty_ranges: Vec<(HilbertKey, HilbertKey)> = Vec::new();
     let mut dirty_pages_by_level: BTreeMap<DecimationLevel, Vec<DirtyPage>> = BTreeMap::new();
     for (level, page_ids) in &binding_dirty.per_level {
-        let level_meta = prior_binding
-            .levels
-            .iter()
-            .find(|m| m.level == *level)
-            .ok_or(CompilerError::LegacySubstrateRetired {
-                what: "rebuild: missing prior level metadata",
-            })?;
+        let level_meta =
+            prior_binding
+                .levels
+                .iter()
+                .find(|m| m.level == *level)
+                .ok_or(CompilerError::LegacySubstrateRetired {
+                    what: "rebuild: missing prior level metadata",
+                })?;
         for page_id in page_ids {
             let idx = page_id.get() as usize;
             if let Some(range) = level_meta.hilbert_range_table.get(idx).copied() {
                 dirty_ranges.push(range);
-                dirty_pages_by_level
-                    .entry(*level)
-                    .or_default()
-                    .push((*page_id, range));
+                dirty_pages_by_level.entry(*level).or_default().push((*page_id, range));
             }
         }
     }
@@ -336,10 +336,9 @@ async fn rebuild_binding_incremental(
             new_entries.push((r.feature.id, r.key));
         }
     }
-    let sidecar_bytes: Bytes =
-        encode_sidecar(&mut new_entries).map_err(|e| CompilerError::LegacySubstrateRetired {
-            what: stringify_sidecar_err(&e),
-        })?;
+    let sidecar_bytes: Bytes = encode_sidecar(&mut new_entries).map_err(|e| CompilerError::LegacySubstrateRetired {
+        what: stringify_sidecar_err(&e),
+    })?;
     let sidecar_size = sidecar_bytes.len() as u64;
     if sidecar_size > sidecar_warn_bytes {
         tracing::warn!(
@@ -422,27 +421,29 @@ async fn execute_rebalance_one_binding(
     working_set_bytes: u64,
     outcome: &mut RebuildOutcome,
 ) -> Result<(), CompilerError> {
-    let binding_plan = plan
-        .bindings
-        .iter()
-        .find(|b| b.binding_id == *binding_id)
-        .ok_or(CompilerError::LegacySubstrateRetired {
-            what: "rebalance: unknown binding",
-        })?;
-    let prior_binding = prior
-        .bindings
-        .iter()
-        .find(|m| m.binding_id == *binding_id)
-        .ok_or(CompilerError::LegacySubstrateRetired {
-            what: "rebalance: missing prior binding metadata",
-        })?;
-    let combined_bbox = prior_binding
-        .levels
-        .first()
-        .map(|l| l.combined_bbox)
-        .ok_or(CompilerError::LegacySubstrateRetired {
-            what: "rebalance: prior binding has no level metadata",
-        })?;
+    let binding_plan =
+        plan.bindings
+            .iter()
+            .find(|b| b.binding_id == *binding_id)
+            .ok_or(CompilerError::LegacySubstrateRetired {
+                what: "rebalance: unknown binding",
+            })?;
+    let prior_binding =
+        prior
+            .bindings
+            .iter()
+            .find(|m| m.binding_id == *binding_id)
+            .ok_or(CompilerError::LegacySubstrateRetired {
+                what: "rebalance: missing prior binding metadata",
+            })?;
+    let combined_bbox =
+        prior_binding
+            .levels
+            .first()
+            .map(|l| l.combined_bbox)
+            .ok_or(CompilerError::LegacySubstrateRetired {
+                what: "rebalance: prior binding has no level metadata",
+            })?;
     let sc = sidecar.ok_or(CompilerError::LegacySubstrateRetired {
         what: "rebalance: missing page-membership sidecar",
     })?;
@@ -545,16 +546,13 @@ async fn execute_rebalance_one_binding(
                     .ok_or(CompilerError::LegacySubstrateRetired {
                         what: "rebalance: split source page missing",
                     })?;
-                let level_plan = binding_plan
-                    .levels
-                    .iter()
-                    .find(|l| l.level == page.level)
-                    .ok_or(CompilerError::LegacySubstrateRetired {
+                let level_plan = binding_plan.levels.iter().find(|l| l.level == page.level).ok_or(
+                    CompilerError::LegacySubstrateRetired {
                         what: "rebalance: split level plan missing",
-                    })?;
+                    },
+                )?;
                 let (lo, hi) = src.hilbert_range;
-                let in_range: Vec<KeyedRow> =
-                    rows.iter().filter(|r| r.key >= lo && r.key <= hi).cloned().collect();
+                let in_range: Vec<KeyedRow> = rows.iter().filter(|r| r.key >= lo && r.key <= hi).cloned().collect();
                 drop_page_with_sidecars(&page, &layer_plans, outcome);
                 if in_range.is_empty() || into == 0 {
                     continue;
@@ -604,13 +602,11 @@ async fn execute_rebalance_one_binding(
                     .ok_or(CompilerError::LegacySubstrateRetired {
                         what: "rebalance: merge right source missing",
                     })?;
-                let level_plan = binding_plan
-                    .levels
-                    .iter()
-                    .find(|l| l.level == left.level)
-                    .ok_or(CompilerError::LegacySubstrateRetired {
+                let level_plan = binding_plan.levels.iter().find(|l| l.level == left.level).ok_or(
+                    CompilerError::LegacySubstrateRetired {
                         what: "rebalance: merge level plan missing",
-                    })?;
+                    },
+                )?;
                 let (l_lo, l_hi) = src_l.hilbert_range;
                 let (r_lo, r_hi) = src_r.hilbert_range;
                 let merged: Vec<KeyedRow> = rows
@@ -647,11 +643,7 @@ async fn execute_rebalance_one_binding(
     Ok(())
 }
 
-fn drop_page_with_sidecars(
-    page: &mars_types::PageKey,
-    layer_plans: &[&LayerPlan],
-    outcome: &mut RebuildOutcome,
-) {
+fn drop_page_with_sidecars(page: &mars_types::PageKey, layer_plans: &[&LayerPlan], outcome: &mut RebuildOutcome) {
     outcome.dropped_pages.push(page.clone());
     for layer in layer_plans {
         outcome
@@ -677,11 +669,7 @@ fn bump_page_id(map: &mut HashMap<DecimationLevel, u64>, level: DecimationLevel)
 /// merged page list. Exposed here rather than at the cycle entry point
 /// because it is the natural complement to [`rebuild_pages`].
 #[must_use]
-pub fn recompute_level_metadata(
-    prior: &LevelMetadata,
-    pages: &[PageEntry],
-    binding_id: &BindingId,
-) -> LevelMetadata {
+pub fn recompute_level_metadata(prior: &LevelMetadata, pages: &[PageEntry], binding_id: &BindingId) -> LevelMetadata {
     let mut ranges: Vec<(HilbertKey, HilbertKey)> = pages
         .iter()
         .filter(|p| p.key.binding_id == *binding_id && p.key.level == prior.level)
