@@ -626,4 +626,53 @@ mod tests {
             }
         ));
     }
+
+    /// load -> validate -> propagate. exercises that per-level decimation
+    /// values declared on a binding survive the full pipeline into the
+    /// compiler's BindingPlan in declaration order. closes the gap noted
+    /// during the LAZARUS Phase E audit (line 671) where no test covered
+    /// the propagation end-to-end.
+    #[test]
+    fn binding_plan_carries_decimation_levels_in_order() {
+        use std::path::Path;
+        let mut b = binding("buildings");
+        b.levels = Some(vec![
+            DecimationLevelConfig {
+                level: 0,
+                vertex_tolerance_m: 0.0,
+                geometry_min_size_m: 0.0,
+                label_min_priority: 0,
+            },
+            DecimationLevelConfig {
+                level: 1,
+                vertex_tolerance_m: 2.5,
+                geometry_min_size_m: 5.0,
+                label_min_priority: 50,
+            },
+            DecimationLevelConfig {
+                level: 2,
+                vertex_tolerance_m: 10.0,
+                geometry_min_size_m: 25.0,
+                label_min_priority: 100,
+            },
+        ]);
+        let cfg = config_with(vec![layer("l", vec![b])]);
+        mars_config::validate(&cfg, Path::new(".")).expect("validate");
+        let plan = build_bootstrap_plan(&cfg).expect("plan");
+        assert_eq!(plan.bindings.len(), 1);
+        let levels = &plan.bindings[0].levels;
+        assert_eq!(levels.len(), 3);
+        assert_eq!(levels[0].level, DecimationLevel::new(0));
+        assert_eq!(levels[0].vertex_tolerance_m, 0.0);
+        assert_eq!(levels[0].geometry_min_size_m, 0.0);
+        assert_eq!(levels[0].label_min_priority, 0);
+        assert_eq!(levels[1].level, DecimationLevel::new(1));
+        assert_eq!(levels[1].vertex_tolerance_m, 2.5);
+        assert_eq!(levels[1].geometry_min_size_m, 5.0);
+        assert_eq!(levels[1].label_min_priority, 50);
+        assert_eq!(levels[2].level, DecimationLevel::new(2));
+        assert_eq!(levels[2].vertex_tolerance_m, 10.0);
+        assert_eq!(levels[2].geometry_min_size_m, 25.0);
+        assert_eq!(levels[2].label_min_priority, 100);
+    }
 }

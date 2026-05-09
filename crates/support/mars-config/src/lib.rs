@@ -378,9 +378,12 @@ fn validate_binding_levels(layer: &LayerId, idx: usize, binding: &SourceBinding)
             "layer {layer} source[{idx}] levels: must not be empty when set"
         )));
     }
-    let mut prev: Option<u8> = None;
+    let mut prev_level: Option<u8> = None;
+    let mut prev_vertex_tol: Option<f64> = None;
+    let mut prev_min_size: Option<f64> = None;
+    let mut prev_label_prio: Option<u32> = None;
     for (li, lvl) in levels.iter().enumerate() {
-        if let Some(p) = prev
+        if let Some(p) = prev_level
             && lvl.level <= p
         {
             return Err(ConfigError::Invalid(format!(
@@ -388,7 +391,7 @@ fn validate_binding_levels(layer: &LayerId, idx: usize, binding: &SourceBinding)
                 lvl.level, p
             )));
         }
-        prev = Some(lvl.level);
+        prev_level = Some(lvl.level);
         if !lvl.vertex_tolerance_m.is_finite() || lvl.vertex_tolerance_m < 0.0 {
             return Err(ConfigError::Invalid(format!(
                 "layer {layer} source[{idx}] levels[{li}] vertex_tolerance_m must be finite and >= 0"
@@ -399,6 +402,37 @@ fn validate_binding_levels(layer: &LayerId, idx: usize, binding: &SourceBinding)
                 "layer {layer} source[{idx}] levels[{li}] geometry_min_size_m must be finite and >= 0"
             )));
         }
+        // monotone non-decreasing across the level sequence: higher levels
+        // are coarser. lets the page-rebuild path reason about decimation
+        // sets as a strict refinement chain (level n's surviving features
+        // are a superset of level n+1's).
+        if let Some(p) = prev_vertex_tol
+            && lvl.vertex_tolerance_m < p
+        {
+            return Err(ConfigError::Invalid(format!(
+                "layer {layer} source[{idx}] levels[{li}] vertex_tolerance_m {} must be >= previous {}",
+                lvl.vertex_tolerance_m, p
+            )));
+        }
+        if let Some(p) = prev_min_size
+            && lvl.geometry_min_size_m < p
+        {
+            return Err(ConfigError::Invalid(format!(
+                "layer {layer} source[{idx}] levels[{li}] geometry_min_size_m {} must be >= previous {}",
+                lvl.geometry_min_size_m, p
+            )));
+        }
+        if let Some(p) = prev_label_prio
+            && lvl.label_min_priority < p
+        {
+            return Err(ConfigError::Invalid(format!(
+                "layer {layer} source[{idx}] levels[{li}] label_min_priority {} must be >= previous {}",
+                lvl.label_min_priority, p
+            )));
+        }
+        prev_vertex_tol = Some(lvl.vertex_tolerance_m);
+        prev_min_size = Some(lvl.geometry_min_size_m);
+        prev_label_prio = Some(lvl.label_min_priority);
     }
     Ok(())
 }
@@ -956,6 +990,112 @@ label_survival: follow_geometry
         cfg.layers = vec![layer_with_binding(b)];
         let err = validate(&cfg, Path::new("."));
         assert!(matches!(&err, Err(ConfigError::Invalid(s)) if s.contains("vertex_tolerance_m")));
+    }
+
+    #[test]
+    fn rejects_decreasing_vertex_tolerance_across_levels() {
+        let mut cfg = minimal_config();
+        let mut b = binding("buildings");
+        b.levels = Some(vec![
+            DecimationLevelConfig {
+                level: 0,
+                vertex_tolerance_m: 5.0,
+                geometry_min_size_m: 0.0,
+                label_min_priority: 0,
+            },
+            DecimationLevelConfig {
+                level: 1,
+                vertex_tolerance_m: 1.0,
+                geometry_min_size_m: 0.0,
+                label_min_priority: 0,
+            },
+        ]);
+        cfg.layers = vec![layer_with_binding(b)];
+        let err = validate(&cfg, Path::new("."));
+        assert!(
+            matches!(&err, Err(ConfigError::Invalid(s)) if s.contains("vertex_tolerance_m") && s.contains(">= previous")),
+            "expected monotone vertex_tolerance_m rejection, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_decreasing_geometry_min_size_across_levels() {
+        let mut cfg = minimal_config();
+        let mut b = binding("buildings");
+        b.levels = Some(vec![
+            DecimationLevelConfig {
+                level: 0,
+                vertex_tolerance_m: 0.0,
+                geometry_min_size_m: 10.0,
+                label_min_priority: 0,
+            },
+            DecimationLevelConfig {
+                level: 1,
+                vertex_tolerance_m: 0.0,
+                geometry_min_size_m: 1.0,
+                label_min_priority: 0,
+            },
+        ]);
+        cfg.layers = vec![layer_with_binding(b)];
+        let err = validate(&cfg, Path::new("."));
+        assert!(
+            matches!(&err, Err(ConfigError::Invalid(s)) if s.contains("geometry_min_size_m") && s.contains(">= previous")),
+            "expected monotone geometry_min_size_m rejection, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_decreasing_label_min_priority_across_levels() {
+        let mut cfg = minimal_config();
+        let mut b = binding("buildings");
+        b.levels = Some(vec![
+            DecimationLevelConfig {
+                level: 0,
+                vertex_tolerance_m: 0.0,
+                geometry_min_size_m: 0.0,
+                label_min_priority: 100,
+            },
+            DecimationLevelConfig {
+                level: 1,
+                vertex_tolerance_m: 0.0,
+                geometry_min_size_m: 0.0,
+                label_min_priority: 50,
+            },
+        ]);
+        cfg.layers = vec![layer_with_binding(b)];
+        let err = validate(&cfg, Path::new("."));
+        assert!(
+            matches!(&err, Err(ConfigError::Invalid(s)) if s.contains("label_min_priority") && s.contains(">= previous")),
+            "expected monotone label_min_priority rejection, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn accepts_monotone_non_decreasing_levels() {
+        let mut cfg = minimal_config();
+        let mut b = binding("buildings");
+        b.levels = Some(vec![
+            DecimationLevelConfig {
+                level: 0,
+                vertex_tolerance_m: 0.0,
+                geometry_min_size_m: 0.0,
+                label_min_priority: 0,
+            },
+            DecimationLevelConfig {
+                level: 1,
+                vertex_tolerance_m: 1.0,
+                geometry_min_size_m: 5.0,
+                label_min_priority: 50,
+            },
+            DecimationLevelConfig {
+                level: 2,
+                vertex_tolerance_m: 1.0, // equal is allowed
+                geometry_min_size_m: 10.0,
+                label_min_priority: 100,
+            },
+        ]);
+        cfg.layers = vec![layer_with_binding(b)];
+        assert!(validate(&cfg, Path::new(".")).is_ok());
     }
 
     #[test]
