@@ -43,7 +43,7 @@ use crate::plan::{BootstrapPlan, LayerPlan, LevelPlan};
 use crate::rebalance::RebalanceOp;
 use crate::sidecar::{SidecarReader, encode_sidecar};
 use crate::snapshot::{
-    BindingOutput, KeyedRow, binding_schema, binding_table, emit_layer_sidecars, flush_page,
+    BindingOutput, KeyedRow, binding_schema, binding_table, drain_pruned_through, emit_layer_sidecars, flush_page,
     membership_sidecar_object_key, snapshot_one_binding,
 };
 use crate::{CompilerError, Deps};
@@ -257,21 +257,27 @@ async fn rebuild_binding_incremental(
             continue;
         };
         for (page_id, (lo, hi)) in dirty_pages {
-            let mut page_rows: Vec<KeyedRow> = rows
-                .iter()
-                .filter(|r| r.key >= *lo && r.key <= *hi)
-                .filter(|r| passes_min_size(&r.feature, level_plan.geometry_min_size_m))
-                .map(|r| KeyedRow {
-                    feature: FeatureGeom {
-                        id: r.feature.id,
-                        bbox: r.feature.bbox,
-                        geom: simplify(&r.feature.geom, level_plan.vertex_tolerance_m, binding_plan.simplifier),
-                    },
-                    attrs: r.attrs.clone(),
-                    geom_bytes_estimate: r.geom_bytes_estimate,
-                    key: r.key,
-                })
-                .collect();
+            // partition rows in this page's hilbert range into leveled
+            // (passes min-size; rendered + paged) and pruned (fails min-size;
+            // contributes Independent label candidates only).
+            let mut page_rows: Vec<KeyedRow> = Vec::new();
+            let mut pruned_rows: Vec<KeyedRow> = Vec::new();
+            for r in rows.iter().filter(|r| r.key >= *lo && r.key <= *hi) {
+                if passes_min_size(&r.feature, level_plan.geometry_min_size_m) {
+                    page_rows.push(KeyedRow {
+                        feature: FeatureGeom {
+                            id: r.feature.id,
+                            bbox: r.feature.bbox,
+                            geom: simplify(&r.feature.geom, level_plan.vertex_tolerance_m, binding_plan.simplifier),
+                        },
+                        attrs: r.attrs.clone(),
+                        geom_bytes_estimate: r.geom_bytes_estimate,
+                        key: r.key,
+                    });
+                } else {
+                    pruned_rows.push(r.clone());
+                }
+            }
             // page_rows ordering follows row arrival; flush_page reorders by
             // feature_id internally so we don't need to pre-sort here.
             page_rows.sort_by_key(|r| r.key);
@@ -282,6 +288,9 @@ async fn rebuild_binding_incremental(
                 page_id: *page_id,
             };
             if page_rows.is_empty() {
+                // no rendered geometry survives at this level for this page.
+                // pruned-feature labels have nowhere to attach (no page key),
+                // so the whole page including its label sidecars drops.
                 outcome.dropped_pages.push(page_key.clone());
                 for layer in &layer_plans {
                     outcome
@@ -303,6 +312,7 @@ async fn rebuild_binding_incremental(
                 level_plan,
                 &page_entry,
                 &page_rows,
+                &pruned_rows,
                 &layer_plans,
                 &mut class_acc,
                 &mut label_acc,
@@ -544,25 +554,61 @@ async fn execute_rebalance_one_binding(
                     },
                 )?;
                 let (lo, hi) = src.hilbert_range;
-                let in_range: Vec<KeyedRow> = rows.iter().filter(|r| r.key >= lo && r.key <= hi).cloned().collect();
+                // partition source-range rows into leveled (passes_min_size,
+                // re-paged) and pruned (Independent label candidates only).
+                // simplify is applied here so split-output pages match what
+                // snapshot/rebuild would emit at this level.
+                let mut in_range_leveled: Vec<KeyedRow> = Vec::new();
+                let mut in_range_pruned: Vec<KeyedRow> = Vec::new();
+                for r in rows.iter().filter(|r| r.key >= lo && r.key <= hi) {
+                    if passes_min_size(&r.feature, level_plan.geometry_min_size_m) {
+                        in_range_leveled.push(KeyedRow {
+                            feature: FeatureGeom {
+                                id: r.feature.id,
+                                bbox: r.feature.bbox,
+                                geom: simplify(&r.feature.geom, level_plan.vertex_tolerance_m, binding_plan.simplifier),
+                            },
+                            attrs: r.attrs.clone(),
+                            geom_bytes_estimate: r.geom_bytes_estimate,
+                            key: r.key,
+                        });
+                    } else {
+                        in_range_pruned.push(r.clone());
+                    }
+                }
+                in_range_leveled.sort_by_key(|r| r.key);
+                in_range_pruned.sort_by_key(|r| r.key);
                 drop_page_with_sidecars(&page, &layer_plans, outcome);
-                if in_range.is_empty() || into == 0 {
+                if in_range_leveled.is_empty() || into == 0 {
+                    // no rendered geometry survives -> drop the page; pruned
+                    // labels have nowhere to live (matches incremental path).
                     continue;
                 }
-                let n = in_range.len();
+                let n = in_range_leveled.len();
                 let into_usize = into as usize;
                 let chunk = n.div_ceil(into_usize);
+                let mut pruned_idx: usize = 0;
+                let split_count = into_usize.min(n.div_ceil(chunk));
                 for k in 0..into_usize {
                     let start = k * chunk;
                     if start >= n {
                         break;
                     }
                     let end = ((k + 1) * chunk).min(n);
-                    let slice: Vec<KeyedRow> = in_range[start..end].to_vec();
+                    let slice: Vec<KeyedRow> = in_range_leveled[start..end].to_vec();
                     if slice.is_empty() {
                         continue;
                     }
                     let new_page_id = bump_page_id(&mut next_page_id, page.level);
+                    // last sub-page absorbs remaining pruned tail; earlier
+                    // sub-pages take pruned rows up to their hilbert max.
+                    let is_last = k + 1 == split_count;
+                    let cap = if is_last {
+                        HilbertKey::max()
+                    } else {
+                        slice.last().map(|x| x.key).unwrap_or(HilbertKey::min())
+                    };
+                    let pruned_slice = drain_pruned_through(&in_range_pruned, &mut pruned_idx, cap);
                     let entry = flush_page(deps, binding_plan, page.level, PageId::new(new_page_id), &slice).await?;
                     let mut class_acc = Vec::new();
                     let mut label_acc = Vec::new();
@@ -571,6 +617,7 @@ async fn execute_rebalance_one_binding(
                         level_plan,
                         &entry,
                         &slice,
+                        pruned_slice,
                         &layer_plans,
                         &mut class_acc,
                         &mut label_acc,
@@ -601,25 +648,49 @@ async fn execute_rebalance_one_binding(
                 )?;
                 let (l_lo, l_hi) = src_l.hilbert_range;
                 let (r_lo, r_hi) = src_r.hilbert_range;
-                let merged: Vec<KeyedRow> = rows
+                let mut merged_leveled: Vec<KeyedRow> = Vec::new();
+                let mut merged_pruned: Vec<KeyedRow> = Vec::new();
+                for r in rows
                     .iter()
                     .filter(|r| (r.key >= l_lo && r.key <= l_hi) || (r.key >= r_lo && r.key <= r_hi))
-                    .cloned()
-                    .collect();
+                {
+                    if passes_min_size(&r.feature, level_plan.geometry_min_size_m) {
+                        merged_leveled.push(KeyedRow {
+                            feature: FeatureGeom {
+                                id: r.feature.id,
+                                bbox: r.feature.bbox,
+                                geom: simplify(&r.feature.geom, level_plan.vertex_tolerance_m, binding_plan.simplifier),
+                            },
+                            attrs: r.attrs.clone(),
+                            geom_bytes_estimate: r.geom_bytes_estimate,
+                            key: r.key,
+                        });
+                    } else {
+                        merged_pruned.push(r.clone());
+                    }
+                }
                 drop_page_with_sidecars(&left, &layer_plans, outcome);
                 drop_page_with_sidecars(&right, &layer_plans, outcome);
-                if merged.is_empty() {
+                if merged_leveled.is_empty() {
                     continue;
                 }
                 let new_page_id = bump_page_id(&mut next_page_id, left.level);
-                let entry = flush_page(deps, binding_plan, left.level, PageId::new(new_page_id), &merged).await?;
+                let entry = flush_page(
+                    deps,
+                    binding_plan,
+                    left.level,
+                    PageId::new(new_page_id),
+                    &merged_leveled,
+                )
+                .await?;
                 let mut class_acc = Vec::new();
                 let mut label_acc = Vec::new();
                 emit_layer_sidecars(
                     deps,
                     level_plan,
                     &entry,
-                    &merged,
+                    &merged_leveled,
+                    &merged_pruned,
                     &layer_plans,
                     &mut class_acc,
                     &mut label_acc,

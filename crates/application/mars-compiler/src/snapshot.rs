@@ -18,9 +18,15 @@
 //!   (the LAZARUS plan calls for ~4 GiB working-set ceiling; in C.2.b we
 //!   keep the in-memory path and document the limitation).
 //! - rebuild from change-feed events (incremental.rs, sidecar lookups).
-//! - label survival for features pruned out of a level (Independent
-//!   policy currently emits labels for kept features only; pruned-feature
-//!   anchors land alongside the rebuild path).
+//!
+//! `LabelSurvival::Independent`: a feature whose geometry is pruned at a
+//! level by `passes_min_size` still contributes a label candidate. its
+//! candidate is attributed to the spatially-nearest emitted page (the page
+//! whose hilbert range covers the pruned row's key, or the trailing page
+//! for keys past the last leveled row). a level with NO leveled rows emits
+//! no page and therefore drops Independent candidates at that level too --
+//! there is nowhere to attach them, and a wholly-empty level renders blank
+//! anyway.
 
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -206,11 +212,16 @@ async fn emit_level(
     out_class_sidecars: &mut Vec<LayerSidecarEntry>,
     out_label_sidecars: &mut Vec<LayerSidecarEntry>,
 ) -> Result<LevelMetadata, CompilerError> {
-    // pre-filter + simplify per the level's rules. retain Hilbert keys and
-    // attrs without re-decoding.
+    // pre-filter + simplify per the level's rules. rows that fail the size
+    // filter aren't paged, but their (feature, attrs) are retained so
+    // emit_layer_sidecars can produce Independent label candidates for them.
+    // pruned ordering follows `keyed`'s Hilbert ordering, so the page sweep
+    // below can attribute each pruned row to the right page in one pass.
     let mut leveled: Vec<KeyedRow> = Vec::with_capacity(keyed.len());
+    let mut pruned: Vec<KeyedRow> = Vec::new();
     for r in keyed {
         if !passes_min_size(&r.feature, level.geometry_min_size_m) {
+            pruned.push(r.clone());
             continue;
         }
         let geom = simplify(&r.feature.geom, level.vertex_tolerance_m, binding.simplifier);
@@ -230,16 +241,23 @@ async fn emit_level(
     let mut next_page_id: u64 = 0;
     let mut current: Vec<KeyedRow> = Vec::new();
     let mut current_bytes: u64 = 0;
+    let mut pruned_idx: usize = 0;
 
     for r in leveled {
         let est = estimate_row_size(&r);
         if !current.is_empty() && current_bytes.saturating_add(est) > binding.page_size_target_bytes {
+            // attribute pruned rows up to (and including) this page's max
+            // hilbert key; the final page absorbs anything past the last
+            // leveled key.
+            let page_max_key = current.last().map(|x| x.key).unwrap_or(HilbertKey::min());
+            let pruned_chunk = drain_pruned_through(&pruned, &mut pruned_idx, page_max_key);
             let page = flush_page(deps, binding, level.level, PageId::new(next_page_id), &current).await?;
             emit_layer_sidecars(
                 deps,
                 level,
                 &page,
                 &current,
+                pruned_chunk,
                 layers,
                 out_class_sidecars,
                 out_label_sidecars,
@@ -254,12 +272,16 @@ async fn emit_level(
         current.push(r);
     }
     if !current.is_empty() {
+        // trailing page absorbs every remaining pruned row, including those
+        // past the last leveled key.
+        let pruned_chunk = drain_pruned_through(&pruned, &mut pruned_idx, HilbertKey::max());
         let page = flush_page(deps, binding, level.level, PageId::new(next_page_id), &current).await?;
         emit_layer_sidecars(
             deps,
             level,
             &page,
             &current,
+            pruned_chunk,
             layers,
             out_class_sidecars,
             out_label_sidecars,
@@ -357,6 +379,17 @@ fn combined_bbox_of(rows: &[KeyedRow]) -> Bbox {
     Bbox::new(min_x, min_y, max_x, max_y)
 }
 
+/// Pull pruned rows whose hilbert key is `<= cap` off the head of the
+/// pre-sorted `pruned` slice, advancing `idx`. Returns a borrowed slice of
+/// the consumed range; ordering follows `pruned`'s own Hilbert ordering.
+pub(crate) fn drain_pruned_through<'a>(pruned: &'a [KeyedRow], idx: &mut usize, cap: HilbertKey) -> &'a [KeyedRow] {
+    let start = *idx;
+    while *idx < pruned.len() && pruned[*idx].key <= cap {
+        *idx += 1;
+    }
+    &pruned[start..*idx]
+}
+
 fn estimate_row_size(r: &KeyedRow) -> u64 {
     // approximate: WKB bytes (proxy for varint geom size) + attrs strings.
     let attr_bytes: usize = r.attrs.iter().map(|(k, _)| k.len() + 8).sum();
@@ -450,11 +483,13 @@ pub(crate) async fn flush_page(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn emit_layer_sidecars(
     deps: &Deps,
     level: &LevelPlan,
     page: &PageEntry,
     rows: &[KeyedRow],
+    pruned: &[KeyedRow],
     layers: &[&LayerPlan],
     out_class: &mut Vec<LayerSidecarEntry>,
     out_label: &mut Vec<LayerSidecarEntry>,
@@ -491,11 +526,32 @@ pub(crate) async fn emit_layer_sidecars(
                     &attrs,
                     spec,
                     layer.label_survival,
-                    false, // geom_pruned == false here: features that didn't pass the level filter never reach the page.
+                    false,
                     level.label_min_priority,
                 )
             {
                 labels.push(c);
+            }
+        }
+
+        // pruned-feature labels: rows whose geometry was filtered out by
+        // passes_min_size still emit a candidate when the layer's policy is
+        // Independent. emit_label_candidate returns None for FollowGeometry,
+        // so the call is uniform. no class assignment - the feature has no
+        // geometry on this page.
+        if let Some(spec) = &label_spec {
+            for r in pruned {
+                let attrs = RowAttrs::new(r.attrs.as_ref());
+                if let Some(c) = emit_label_candidate(
+                    &r.feature,
+                    &attrs,
+                    spec,
+                    layer.label_survival,
+                    true,
+                    level.label_min_priority,
+                ) {
+                    labels.push(c);
+                }
             }
         }
 
@@ -519,6 +575,9 @@ pub(crate) async fn emit_layer_sidecars(
         out_class.push(class_entry);
 
         if !labels.is_empty() {
+            // label codec invariant: ascending feature_id. leveled-row labels
+            // are emitted in id order, pruned-row labels may interleave.
+            labels.sort_by_key(|c| c.feature_id);
             let label_bytes = build_label_artifact(&labels, page.spatial_bbox)?;
             let label_hash = compute_content_hash(&label_bytes);
             let label_size = label_bytes.len() as u64;
@@ -918,6 +977,173 @@ mod tests {
         // bindings carry three level-metadata entries, one per configured level.
         assert_eq!(manifest.bindings[0].levels.len(), 3);
         assert_eq!(manifest.bindings[0].levels[2].page_count, 0);
+    }
+
+    fn linestring_wkb(pts: &[(f64, f64)]) -> Bytes {
+        let mut v = vec![1u8];
+        v.extend_from_slice(&2u32.to_le_bytes());
+        v.extend_from_slice(&(pts.len() as u32).to_le_bytes());
+        for (x, y) in pts {
+            v.extend_from_slice(&x.to_le_bytes());
+            v.extend_from_slice(&y.to_le_bytes());
+        }
+        Bytes::from(v)
+    }
+
+    fn line_layer_plan(layer: &str, binding: &str, survival: mars_style::LabelSurvival) -> LayerPlan {
+        LayerPlan {
+            layer_id: LayerId::new(layer),
+            binding_id: BindingId::try_new(binding).unwrap(),
+            kind: "line".into(),
+            classes: vec![ClassPlan {
+                name: "default".into(),
+                when: None,
+                style_ref: format!("{layer}__default"),
+            }],
+            label: Some(crate::plan::LayerLabelPlan {
+                style_ref: format!("{layer}__label"),
+                style: mars_style::LabelStyle {
+                    font_family: "DejaVu Sans".into(),
+                    font_size: 12.0,
+                    fill: mars_style::Colour::rgb(0, 0, 0),
+                    halo: None,
+                    priority: 100,
+                    min_distance: 0.0,
+                },
+                text: mars_expr::parse_template("{name}").unwrap(),
+                placement: mars_style::Placement::Point,
+            }),
+            label_survival: survival,
+        }
+    }
+
+    /// Lines whose bbox-diagonal sits on either side of `min_size_m` so the
+    /// level filter prunes some features while keeping others.
+    fn mixed_size_lines() -> Vec<RowBytes> {
+        vec![
+            // short - bbox diag ~1m, will be pruned at min_size=5
+            RowBytes {
+                feature_id: 0,
+                geometry: linestring_wkb(&[(0.0, 0.0), (1.0, 0.0)]),
+                attributes: vec![("name".into(), AttrValue::String("a".into()))],
+            },
+            // long - bbox diag ~10m, kept
+            RowBytes {
+                feature_id: 1,
+                geometry: linestring_wkb(&[(100.0, 0.0), (110.0, 0.0)]),
+                attributes: vec![("name".into(), AttrValue::String("b".into()))],
+            },
+            // short - pruned
+            RowBytes {
+                feature_id: 2,
+                geometry: linestring_wkb(&[(200.0, 0.0), (201.0, 0.0)]),
+                attributes: vec![("name".into(), AttrValue::String("c".into()))],
+            },
+            // long - kept
+            RowBytes {
+                feature_id: 3,
+                geometry: linestring_wkb(&[(300.0, 0.0), (310.0, 0.0)]),
+                attributes: vec![("name".into(), AttrValue::String("d".into()))],
+            },
+        ]
+    }
+
+    fn binding_with_min_size(min_size: f64) -> BindingPlan {
+        BindingPlan {
+            binding_id: BindingId::try_new("lines").unwrap(),
+            source_table: "lines".into(),
+            geometry_column: "geom".into(),
+            id_column: Some("id".into()),
+            attributes: vec!["name".into()],
+            native_crs: CrsCode::new("EPSG:25832"),
+            levels: vec![LevelPlan {
+                level: DecimationLevel::new(0),
+                vertex_tolerance_m: 0.0,
+                geometry_min_size_m: min_size,
+                label_min_priority: 0,
+            }],
+            page_size_target_bytes: 5 * 1024 * 1024,
+            sidecar_size_warn_bytes: u64::MAX,
+            reconcile_every_cycles: 24,
+            simplifier: mars_config::SimplifierKind::Naive,
+        }
+    }
+
+    fn collect_label_feature_ids(manifest: &Manifest, store: &InMemoryStore) -> Vec<u64> {
+        use mars_artifact::decode_label_candidates;
+        let mut ids: Vec<u64> = Vec::new();
+        for entry in &manifest.label_sidecars {
+            let key = entry.object_key().unwrap();
+            let bytes = store.objects.lock().unwrap().get(key.as_str()).unwrap().clone();
+            let reader = ArtifactReader::open(bytes).unwrap();
+            let lbl_bytes = reader.section(SectionKind::LabelCandidates).unwrap();
+            let candidates = decode_label_candidates(&lbl_bytes).unwrap();
+            ids.extend(candidates.into_iter().map(|c| c.feature_id));
+        }
+        ids.sort_unstable();
+        ids
+    }
+
+    #[tokio::test]
+    async fn independent_label_survival_emits_pruned_feature_labels() {
+        let (deps, store) = make_deps(mixed_size_lines());
+        let plan = BootstrapPlan {
+            bindings: vec![binding_with_min_size(5.0)],
+            layers: vec![line_layer_plan("ln", "lines", mars_style::LabelSurvival::Independent)],
+        };
+        let manifest = run_snapshot(&deps, &plan, "test".into(), 1, 4 * 1024 * 1024 * 1024)
+            .await
+            .unwrap();
+
+        // every feature contributes a label even though half were pruned.
+        let label_ids = collect_label_feature_ids(&manifest, &store);
+        assert_eq!(
+            label_ids,
+            vec![0, 1, 2, 3],
+            "Independent must emit pruned-feature labels"
+        );
+
+        // class assignments only cover rendered features (the long lines).
+        let cls_ids: Vec<u64> = manifest
+            .class_sidecars
+            .iter()
+            .flat_map(|e| {
+                let key = e.object_key().unwrap();
+                let bytes = store.objects.lock().unwrap().get(key.as_str()).unwrap().clone();
+                let reader = ArtifactReader::open(bytes).unwrap();
+                let cls_bytes = reader.section(SectionKind::ClassAssignment).unwrap();
+                decode_class_assignment(&cls_bytes)
+                    .unwrap()
+                    .into_iter()
+                    .map(|(id, _)| id)
+            })
+            .collect();
+        let mut cls_ids_sorted = cls_ids;
+        cls_ids_sorted.sort_unstable();
+        assert_eq!(
+            cls_ids_sorted,
+            vec![1, 3],
+            "class assignments must NOT include pruned features"
+        );
+    }
+
+    #[tokio::test]
+    async fn follow_geometry_label_survival_drops_pruned_feature_labels() {
+        let (deps, store) = make_deps(mixed_size_lines());
+        let plan = BootstrapPlan {
+            bindings: vec![binding_with_min_size(5.0)],
+            layers: vec![line_layer_plan(
+                "ln",
+                "lines",
+                mars_style::LabelSurvival::FollowGeometry,
+            )],
+        };
+        let manifest = run_snapshot(&deps, &plan, "test".into(), 1, 4 * 1024 * 1024 * 1024)
+            .await
+            .unwrap();
+
+        let label_ids = collect_label_feature_ids(&manifest, &store);
+        assert_eq!(label_ids, vec![1, 3], "FollowGeometry must drop pruned-feature labels");
     }
 
     #[tokio::test]
