@@ -171,6 +171,26 @@ pub enum CompilerError {
         /// Configured plan budget (bytes).
         budget_bytes: u64,
     },
+    /// Compiler emit produced a class-assignment sidecar whose slot count
+    /// does not match the geometry payload's slot count, on a layer with at
+    /// least one class. Trips when β.2's drop-at-emit filter regresses or a
+    /// future refactor reintroduces the sparse-sidecar gap. Strict only for
+    /// single-layer-per-binding pages; shared-binding pages legitimately
+    /// produce per-layer sparse sidecars and are exempt.
+    #[error(
+        "compile invariant: layer {layer} page {page} class slots {class} != geometry slots {geom} \
+         (single-layer-per-binding; β.2 should have dropped unmatched rows)"
+    )]
+    ClassGeometryMismatch {
+        /// Affected layer.
+        layer: String,
+        /// Affected page id.
+        page: mars_types::PageId,
+        /// Geometry slot count.
+        geom: usize,
+        /// Class-assignment slot count.
+        class: usize,
+    },
 }
 
 /// All ports the compiler depends on, bundled for easy composition by the bin.

@@ -1368,6 +1368,21 @@ pub(crate) async fn emit_layer_sidecars(
             }
         }
 
+        // β.3 invariant: when the binding hosts exactly one classed layer
+        // (the typical fixture shape), every emitted geometry slot must
+        // have a class assignment after β.2's drop-at-emit filter. shared-
+        // binding pages legitimately leave per-layer sidecars sparse, so
+        // they're exempt from the assertion.
+        let classed_layers = layers.iter().filter(|l| !l.classes.is_empty()).count();
+        if classed_layers == 1 && !layer.classes.is_empty() && assignments.len() != rows.len() {
+            return Err(CompilerError::ClassGeometryMismatch {
+                layer: layer.layer_id.as_str().to_owned(),
+                page: page.key.page_id,
+                geom: rows.len(),
+                class: assignments.len(),
+            });
+        }
+
         if let Some(spec) = &label_spec {
             for r in pruned {
                 let attrs = RowAttrs::new(r.attrs.as_ref());
