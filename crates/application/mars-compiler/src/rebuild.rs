@@ -39,12 +39,13 @@ use mars_types::{
 use crate::decimate::{passes_min_size, simplify};
 use crate::external_sort::WorkingSetGuard;
 use crate::incremental::{BindingDirty, DirtyPages};
+use crate::page_plan::PagePlan;
 use crate::plan::{BootstrapPlan, LayerPlan, LevelPlan};
 use crate::rebalance::RebalanceOp;
 use crate::sidecar::{SidecarReader, encode_sidecar};
 use crate::snapshot::{
-    BindingOutput, KeyedRow, binding_schema, binding_table, drain_pruned_through, emit_layer_sidecars, flush_page,
-    membership_sidecar_object_key, snapshot_one_binding,
+    BindingOutput, KeyedRow, binding_schema, binding_table, drain_pruned_through, emit_layer_sidecars,
+    empty_level_metadata, flush_page, membership_sidecar_object_key, snapshot_one_binding,
 };
 use crate::{CompilerError, Deps};
 
@@ -789,6 +790,168 @@ fn bump_page_id(map: &mut HashMap<DecimationLevel, u64>, level: DecimationLevel)
     let id = *next;
     *next = next.saturating_add(1);
     id
+}
+
+/// Rebuild every page in `page_plan` against `binding_plan` by hydrating
+/// rows through the supplied [`mars_source::CompileSession`] and emitting
+/// page artifacts + class/label sidecars. Returns a [`BindingOutput`] in
+/// the same shape `snapshot::snapshot_one_binding` produced, so the caller
+/// can fold it into a manifest identically to the legacy bootstrap path.
+///
+/// The session must be freshly opened against `binding_plan`; the plan was
+/// built from its pass-1 scan and pass-2 here re-uses the same snapshot
+/// transaction.
+pub(crate) async fn rebuild_binding_from_plan<'a>(
+    deps: &Deps,
+    plan: &BootstrapPlan,
+    binding_plan: &crate::plan::BindingPlan,
+    page_plan: &PagePlan,
+    session: &mut (dyn mars_source::CompileSession + 'a),
+    working_set_bytes: u64,
+) -> Result<BindingOutput, CompilerError> {
+    if page_plan.feature_count_total == 0 {
+        return Ok(BindingOutput {
+            meta: BindingMetadata {
+                binding_id: binding_plan.binding_id.clone(),
+                source_table: binding_plan.source_table.clone(),
+                native_crs: binding_plan.native_crs.clone(),
+                feature_count_total: 0,
+                levels: binding_plan.levels.iter().map(empty_level_metadata).collect(),
+                page_membership_sidecar: None,
+            },
+            pages: Vec::new(),
+            class_sidecars: Vec::new(),
+            label_sidecars: Vec::new(),
+        });
+    }
+    if binding_plan.levels.len() != page_plan.levels.len() {
+        return Err(CompilerError::InvariantViolation {
+            what: "rebuild_from_plan: level count mismatch between binding and plan",
+        });
+    }
+
+    // union of feature ids across every planned page in every level. one
+    // fetch_by_feature_ids call per binding -> the postgres adapter chunks
+    // 16 384 ids per SQL roundtrip internally.
+    let mut union_ids: BTreeSet<i64> = BTreeSet::new();
+    for level_pp in &page_plan.levels {
+        for planned in &level_pp.pages {
+            for id in &planned.feature_ids {
+                union_ids.insert(*id);
+            }
+        }
+    }
+    let ids: Vec<i64> = union_ids.into_iter().collect();
+    let stream = session.fetch_by_feature_ids(&ids).await?;
+    let rows = hydrate_keyed_rows(stream, page_plan.combined_bbox).await?;
+
+    let layer_plans: Vec<&LayerPlan> = plan.layers_for(&binding_plan.binding_id).collect();
+    let mut all_pages: Vec<PageEntry> = Vec::new();
+    let mut levels_meta: Vec<LevelMetadata> = Vec::with_capacity(binding_plan.levels.len());
+    let mut class_sidecars: Vec<LayerSidecarEntry> = Vec::new();
+    let mut label_sidecars: Vec<LayerSidecarEntry> = Vec::new();
+
+    for (level_plan, level_pp) in binding_plan.levels.iter().zip(&page_plan.levels) {
+        debug_assert_eq!(level_plan.level, level_pp.level);
+        let mut level_pages: Vec<PageEntry> = Vec::new();
+        for planned in &level_pp.pages {
+            let (lo, hi) = planned.hilbert_range;
+            let mut page_rows: Vec<KeyedRow> = Vec::new();
+            let mut pruned_rows: Vec<KeyedRow> = Vec::new();
+            for r in rows.iter().filter(|r| r.key >= lo && r.key <= hi) {
+                if crate::decimate::passes_min_size(&r.feature, level_plan.geometry_min_size_m) {
+                    page_rows.push(KeyedRow {
+                        feature: FeatureGeom {
+                            user_id: r.feature.user_id,
+                            bbox: r.feature.bbox,
+                            geom: crate::decimate::simplify(
+                                &r.feature.geom,
+                                level_plan.vertex_tolerance_m,
+                                binding_plan.simplifier,
+                            ),
+                        },
+                        attrs: r.attrs.clone(),
+                        geom_bytes_estimate: r.geom_bytes_estimate,
+                        key: r.key,
+                        row_fingerprint: r.row_fingerprint,
+                    });
+                } else {
+                    pruned_rows.push(r.clone());
+                }
+            }
+            page_rows.sort_by(|a, b| {
+                a.key
+                    .cmp(&b.key)
+                    .then_with(|| a.feature.user_id.cmp(&b.feature.user_id))
+                    .then_with(|| a.row_fingerprint.cmp(&b.row_fingerprint))
+            });
+            enforce_page_budget(
+                &page_rows,
+                working_set_bytes,
+                binding_plan.binding_id.as_str(),
+                planned.page_id,
+            )?;
+            if page_rows.is_empty() {
+                // pruned-only page: drop entirely, matches incremental contract.
+                continue;
+            }
+            let entry = flush_page(deps, binding_plan, level_plan.level, planned.page_id, &page_rows).await?;
+            let mut class_acc: Vec<LayerSidecarEntry> = Vec::new();
+            let mut label_acc: Vec<LayerSidecarEntry> = Vec::new();
+            emit_layer_sidecars(
+                deps,
+                level_plan,
+                &entry,
+                &page_rows,
+                &pruned_rows,
+                &layer_plans,
+                &mut class_acc,
+                &mut label_acc,
+            )
+            .await?;
+            level_pages.push(entry);
+            class_sidecars.append(&mut class_acc);
+            label_sidecars.append(&mut label_acc);
+        }
+        levels_meta.push(LevelMetadata {
+            level: level_plan.level,
+            vertex_tolerance_m: level_plan.vertex_tolerance_m,
+            geometry_min_size_m: level_plan.geometry_min_size_m,
+            label_min_priority: level_plan.label_min_priority,
+            page_count: level_pages.len() as u32,
+            combined_bbox: page_plan.combined_bbox,
+            hilbert_range_table: level_pages.iter().map(|p| p.hilbert_range).collect(),
+        });
+        all_pages.append(&mut level_pages);
+    }
+
+    // page-membership sidecar: pass-1 already collected (user_id, hilbert_key)
+    // for every unfiltered row, so we just hand the slice to encode_sidecar.
+    let mut sidecar_entries = page_plan.sidecar_entries.clone();
+    let sidecar_bytes = encode_sidecar(&mut sidecar_entries)?;
+    let sidecar_hash = compute_content_hash(&sidecar_bytes);
+    let sidecar_key = membership_sidecar_object_key(binding_plan.binding_id.as_str(), &sidecar_hash)?;
+    let sidecar_size = sidecar_bytes.len() as u64;
+    deps.store.put(&sidecar_key, sidecar_bytes).await?;
+
+    let meta = BindingMetadata {
+        binding_id: binding_plan.binding_id.clone(),
+        source_table: binding_plan.source_table.clone(),
+        native_crs: binding_plan.native_crs.clone(),
+        feature_count_total: page_plan.feature_count_total,
+        levels: levels_meta,
+        page_membership_sidecar: Some(ArtifactEntry {
+            key: sidecar_key,
+            hash: sidecar_hash,
+            size_bytes: sidecar_size,
+        }),
+    };
+    Ok(BindingOutput {
+        meta,
+        pages: all_pages,
+        class_sidecars,
+        label_sidecars,
+    })
 }
 
 /// Recompute level metadata after pages were replaced or dropped. Pure;

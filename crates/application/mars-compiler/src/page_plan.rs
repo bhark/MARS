@@ -34,6 +34,11 @@ pub struct PagePlan {
     pub levels: Vec<LevelPagePlan>,
     /// Total rows seen by pass 1 before per-level filtering.
     pub feature_count_total: u64,
+    /// `(feature_id, hilbert_key)` for every unfiltered row pass 1 saw.
+    /// Pass 2 hands this to `encode_sidecar` to produce the binding's
+    /// page-membership sidecar without re-hydrating the table. Order is
+    /// pass-1 stream order; encode_sidecar performs its own sort.
+    pub sidecar_entries: Vec<(u64, HilbertKey)>,
 }
 
 /// One level's slice of the plan. Pages are emitted in ascending hilbert
@@ -119,6 +124,11 @@ pub async fn compute_page_plan(
         r.hilbert_key = key_from_centroid(cx, cy, combined_bbox);
     }
 
+    // sidecar entries: (user_id, hilbert_key) for every unfiltered row.
+    // postgres rejects negative ids upstream, so the i64 -> u64 cast preserves
+    // value.
+    let sidecar_entries: Vec<(u64, HilbertKey)> = rows.iter().map(|r| (r.feature_id as u64, r.hilbert_key)).collect();
+
     let mut levels: Vec<LevelPagePlan> = Vec::with_capacity(binding.levels.len());
     for level in &binding.levels {
         let mut level_rows: Vec<PlanRow> = rows
@@ -145,6 +155,7 @@ pub async fn compute_page_plan(
         combined_bbox,
         levels,
         feature_count_total,
+        sidecar_entries,
     })
 }
 

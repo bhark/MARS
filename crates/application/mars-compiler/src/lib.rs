@@ -260,13 +260,17 @@ impl Compiler {
         let plan = plan::build_bootstrap_plan(&self.config)?;
         let prev_version = self.deps.manifest.current().await?.map_or(0, |m| m.version);
         let next_version = prev_version + 1;
-        let spill = snapshot::SpillConfig::from_compiler(&self.config.compiler)?;
-        let manifest = snapshot::run_snapshot(
+        let working_set_bytes = self.config.compiler.bootstrap_working_set()?;
+        // 8 GiB cap on pass-1 plan footprint, see SPEC §compiler. step 10
+        // makes this configurable; for now hardcode the documented default.
+        let plan_budget_bytes: u64 = 8 * 1024 * 1024 * 1024;
+        let manifest = run_snapshot_from_plan(
             &self.deps,
             &plan,
             self.config.service.name.clone(),
             next_version,
-            &spill,
+            working_set_bytes,
+            plan_budget_bytes,
         )
         .await?;
         let v = publish_with_retry(self.deps.manifest.as_ref(), &manifest, &self.deps.metrics, &shutdown).await?;
@@ -528,6 +532,82 @@ impl Compiler {
             }
         }
     }
+}
+
+/// Snapshot orchestrator built on the unified compile pipeline:
+/// per binding, open a `CompileSession`, run [`crate::page_plan::compute_page_plan`]
+/// for pass 1, hand the resulting `PagePlan` to
+/// [`crate::rebuild::rebuild_binding_from_plan`] for pass 2, fold the
+/// emitted artifacts into a fresh `Manifest`. Returns the manifest for
+/// the caller to publish.
+async fn run_snapshot_from_plan(
+    deps: &Deps,
+    bootstrap: &plan::BootstrapPlan,
+    service_name: String,
+    manifest_version: u64,
+    working_set_bytes: u64,
+    plan_budget_bytes: u64,
+) -> Result<Manifest, CompilerError> {
+    use mars_source::{SourceBinding as PortBinding, SourceCollectionId};
+    use mars_types::{LayerSidecarEntry, MANIFEST_FORMAT_VERSION, PageEntry};
+
+    use crate::snapshot::{binding_schema, binding_table};
+
+    let mut bindings_meta: Vec<mars_types::BindingMetadata> = Vec::with_capacity(bootstrap.bindings.len());
+    let mut pages_meta: Vec<PageEntry> = Vec::new();
+    let mut class_sidecars: Vec<LayerSidecarEntry> = Vec::new();
+    let mut label_sidecars: Vec<LayerSidecarEntry> = Vec::new();
+
+    for binding_plan in &bootstrap.bindings {
+        let port_binding = PortBinding::new(
+            SourceCollectionId::new(binding_plan.binding_id.as_str()),
+            binding_schema(&binding_plan.source_table),
+            binding_table(&binding_plan.source_table),
+            binding_plan.geometry_column.clone(),
+            binding_plan.id_column.as_deref().unwrap_or("id"),
+            binding_plan.attributes.clone(),
+            binding_plan.native_crs.clone(),
+        )?;
+        let mut session = deps.source.open_compile_session(&port_binding).await?;
+        let page_plan = page_plan::compute_page_plan(session.as_mut(), binding_plan, plan_budget_bytes).await?;
+        let mut out = rebuild::rebuild_binding_from_plan(
+            deps,
+            bootstrap,
+            binding_plan,
+            &page_plan,
+            session.as_mut(),
+            working_set_bytes,
+        )
+        .await?;
+        session.close().await?;
+        bindings_meta.push(out.meta);
+        pages_meta.append(&mut out.pages);
+        class_sidecars.append(&mut out.class_sidecars);
+        label_sidecars.append(&mut out.label_sidecars);
+    }
+
+    pages_meta.sort_by(|a, b| {
+        a.key
+            .binding_id
+            .as_str()
+            .cmp(b.key.binding_id.as_str())
+            .then_with(|| a.key.level.cmp(&b.key.level))
+            .then_with(|| a.hilbert_range.0.cmp(&b.hilbert_range.0))
+    });
+
+    Ok(Manifest {
+        format_version: MANIFEST_FORMAT_VERSION,
+        version: manifest_version,
+        service: service_name,
+        created_at: std::time::SystemTime::now(),
+        bindings: bindings_meta,
+        pages: pages_meta,
+        class_sidecars,
+        label_sidecars,
+        style_artifact: None,
+        source_version: None,
+        epoch: manifest_version,
+    })
 }
 
 /// Merge a [`rebuild::RebuildOutcome`] into the prior manifest to produce
