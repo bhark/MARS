@@ -44,6 +44,11 @@ pub mod metrics {
     pub const CAPABILITIES_REBUILD_FAILURES: &str = "mars_capabilities_rebuild_failures_total";
     pub const MANIFEST_VERSION: &str = "mars_manifest_version";
     pub const MANIFEST_REJECT_TOTAL: &str = "mars_manifest_reject_total";
+
+    /// Counter labelled by `layer` tracking features whose class chain failed
+    /// to resolve a stylesheet entry; the runtime drops them rather than
+    /// painting a diagnostic fallback colour.
+    pub const RENDER_FEATURE_UNSTYLED: &str = "mars_render_feature_unstyled_total";
 }
 
 /// Initialise the global tracing subscriber.
@@ -131,6 +136,7 @@ struct MetricsInner {
     compiler_rebalance_runs: IntCounterVec,
     capabilities_rebuild_failures: IntCounter,
     label_seconds: Histogram,
+    render_feature_unstyled: IntCounterVec,
 }
 
 impl std::fmt::Debug for Metrics {
@@ -209,6 +215,13 @@ impl Metrics {
                 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0,
             ]),
         )?;
+        let render_feature_unstyled = IntCounterVec::new(
+            Opts::new(
+                metrics::RENDER_FEATURE_UNSTYLED,
+                "total features dropped at render time because their class chain resolved to no stylesheet entry",
+            ),
+            &["layer"],
+        )?;
 
         registry.register(Box::new(request_total.clone()))?;
         registry.register(Box::new(request_duration.clone()))?;
@@ -223,6 +236,7 @@ impl Metrics {
         registry.register(Box::new(compiler_rebalance_runs.clone()))?;
         registry.register(Box::new(capabilities_rebuild_failures.clone()))?;
         registry.register(Box::new(label_seconds.clone()))?;
+        registry.register(Box::new(render_feature_unstyled.clone()))?;
 
         Ok(Self {
             inner: Arc::new(MetricsInner {
@@ -240,6 +254,7 @@ impl Metrics {
                 compiler_rebalance_runs,
                 capabilities_rebuild_failures,
                 label_seconds,
+                render_feature_unstyled,
             }),
         })
     }
@@ -326,6 +341,16 @@ impl Metrics {
         self.inner.label_seconds.observe(duration.as_secs_f64());
     }
 
+    /// Increment the unstyled-feature counter for `layer`. Called when a
+    /// feature's class chain resolves to no stylesheet entry; the runtime
+    /// drops the feature rather than painting a diagnostic colour.
+    pub fn inc_render_feature_unstyled(&self, layer: &str, n: u64) {
+        self.inner
+            .render_feature_unstyled
+            .with_label_values(&[layer])
+            .inc_by(n);
+    }
+
     /// Encode the current registry as Prometheus text exposition format.
     pub fn encode_text(&self) -> Result<String, ObservabilityError> {
         let encoder = TextEncoder::new();
@@ -350,6 +375,7 @@ mod tests {
         m.inc_compiler_dirty_cells(7);
         m.observe_compiler_rebuild_duration(Duration::from_secs_f64(1.23));
         m.set_compiler_window_lag(Duration::from_secs_f64(0.5));
+        m.inc_render_feature_unstyled("Bygning", 3);
         let text = m.encode_text().unwrap();
         assert!(text.contains("mars_request_total"));
         assert!(text.contains("interface=\"wms\""));
@@ -362,5 +388,7 @@ mod tests {
         assert!(text.contains("mars_compiler_dirty_cells_total"));
         assert!(text.contains("mars_compiler_rebuild_duration_seconds"));
         assert!(text.contains("mars_compiler_window_lag_seconds"));
+        assert!(text.contains("mars_render_feature_unstyled_total"));
+        assert!(text.contains("layer=\"Bygning\""));
     }
 }
