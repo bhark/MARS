@@ -221,10 +221,8 @@ impl Compiler {
         let plan = plan::build_bootstrap_plan(&self.config)?;
         let prev_version = self.deps.manifest.current().await?.map_or(0, |m| m.version);
         let next_version = prev_version + 1;
-        let working_set_bytes = self.config.compiler.bootstrap_working_set()?;
-        // 8 GiB cap on pass-1 plan footprint, see SPEC §compiler. step 10
-        // makes this configurable; for now hardcode the documented default.
-        let plan_budget_bytes: u64 = 8 * 1024 * 1024 * 1024;
+        let working_set_bytes = self.config.compiler.compile_page_working_set()?;
+        let plan_budget_bytes = self.config.compiler.compile_plan_budget()?;
         let manifest = run_snapshot_from_plan(
             &self.deps,
             &plan,
@@ -366,8 +364,8 @@ impl Compiler {
         }
 
         // rebuild dirty pages.
-        let working_set_bytes = self.config.compiler.bootstrap_working_set()?;
-        let plan_budget_bytes: u64 = 8 * 1024 * 1024 * 1024;
+        let working_set_bytes = self.config.compiler.compile_page_working_set()?;
+        let plan_budget_bytes = self.config.compiler.compile_plan_budget()?;
         let started = std::time::Instant::now();
         let outcome = rebuild::rebuild_pages(
             &self.deps,
@@ -458,7 +456,7 @@ impl Compiler {
             sidecars.insert(id.clone(), reader);
         }
 
-        let working_set_bytes = self.config.compiler.bootstrap_working_set()?;
+        let working_set_bytes = self.config.compiler.compile_page_working_set()?;
         let outcome = rebuild::execute_rebalance(&self.deps, &plan, &prior, &sidecars, ops, working_set_bytes).await?;
         let next_version = prior.version + 1;
         let new_manifest = merge_manifest(&prior, &outcome, next_version, prior.source_version.clone());
