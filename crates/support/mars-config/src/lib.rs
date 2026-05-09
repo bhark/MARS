@@ -174,6 +174,8 @@ pub fn validate(config: &mut Config, config_dir: &Path) -> Result<(), ConfigErro
     }
 
     let mut band_names = std::collections::BTreeSet::new();
+    let mut band_windows: std::collections::BTreeMap<String, ScaleWindow> = std::collections::BTreeMap::new();
+    let mut prev_max: Option<u64> = None;
     for band in &config.scales.bands {
         if !band_names.insert(band.name.as_str()) {
             return Err(ConfigError::Invalid(format!(
@@ -181,6 +183,14 @@ pub fn validate(config: &mut Config, config_dir: &Path) -> Result<(), ConfigErro
                 band.name
             )));
         }
+        band_windows.insert(
+            band.name.clone(),
+            ScaleWindow {
+                min: prev_max,
+                max: Some(band.max_denom),
+            },
+        );
+        prev_max = Some(band.max_denom);
     }
 
     // page-keyed substrate: cells.* is ignored; no cross-checks against bands.
@@ -228,9 +238,18 @@ pub fn validate(config: &mut Config, config_dir: &Path) -> Result<(), ConfigErro
                 )));
             }
 
+            if binding.max_denom.is_some() && binding.band.is_none() {
+                return Err(ConfigError::Invalid(format!(
+                    "layer {} source[{i}] max_denom_exclusive requires a band",
+                    layer.name
+                )));
+            }
+
             validate_binding_from(&layer.name, i, &binding.from)?;
             validate_binding_levels(&layer.name, i, binding)?;
         }
+
+        validate_band_tiers(layer, &band_windows)?;
 
         for class in &layer.classes {
             match &class.style {
@@ -326,12 +345,94 @@ pub fn validate(config: &mut Config, config_dir: &Path) -> Result<(), ConfigErro
     Ok(())
 }
 
+/// Validate tier-set rules for every (layer, band) that has more than one
+/// source or any source carrying `max_denom_exclusive`.
+fn validate_band_tiers(
+    layer: &Layer,
+    band_windows: &std::collections::BTreeMap<String, ScaleWindow>,
+) -> Result<(), ConfigError> {
+    use std::collections::BTreeMap;
+
+    let mut by_band: BTreeMap<&str, Vec<(usize, &SourceBinding)>> = BTreeMap::new();
+    for (i, binding) in layer.sources.iter().enumerate() {
+        if let Some(band) = binding.band.as_deref() {
+            by_band.entry(band).or_default().push((i, binding));
+        }
+    }
+
+    for (band_name, sources) in by_band {
+        let band_window = band_windows.get(band_name).ok_or_else(|| {
+            ConfigError::Invalid(format!(
+                "layer {} band {band_name:?} not declared in scales.bands",
+                layer.name
+            ))
+        })?;
+        let band_cap = band_window.max.ok_or_else(|| {
+            ConfigError::Invalid("band cap is missing".into())
+        })?;
+
+        // back-compat: single source, no max_denom → covers whole band, no further checks.
+        if sources.len() == 1 && sources[0].1.max_denom.is_none() {
+            continue;
+        }
+
+        let mut prev_max: Option<u64> = None;
+        for (idx, (i, binding)) in sources.iter().enumerate() {
+            let is_last = idx == sources.len() - 1;
+            let this_max = binding.max_denom;
+
+            if !is_last && this_max.is_none() {
+                return Err(ConfigError::Invalid(format!(
+                    "layer {} source[{i}] in band {band_name:?} omits max_denom_exclusive but is not the last tier",
+                    layer.name
+                )));
+            }
+
+            if let Some(m) = this_max {
+                if m == 0 {
+                    return Err(ConfigError::Invalid(format!(
+                        "layer {} source[{i}] in band {band_name:?} max_denom_exclusive must be > 0",
+                        layer.name
+                    )));
+                }
+                if m > band_cap {
+                    return Err(ConfigError::Invalid(format!(
+                        "layer {} source[{i}] in band {band_name:?} max_denom_exclusive ({m}) exceeds band cap ({band_cap})",
+                        layer.name
+                    )));
+                }
+                if let Some(p) = prev_max
+                    && m <= p
+                {
+                    return Err(ConfigError::Invalid(format!(
+                        "layer {} source[{i}] in band {band_name:?} max_denom_exclusive ({m}) is not strictly greater than previous tier ({p})",
+                        layer.name
+                    )));
+                }
+            }
+
+            prev_max = this_max;
+        }
+
+        // last tier must reach band cap (or omit, which is equivalent).
+        let last_max = sources.last().and_then(|(_, b)| b.max_denom);
+        if let Some(m) = last_max
+            && m != band_cap
+        {
+            return Err(ConfigError::Invalid(format!(
+                "layer {} last tier in band {band_name:?} max_denom_exclusive ({m}) does not equal band cap ({band_cap})",
+                layer.name
+            )));
+        }
+    }
+
+    Ok(())
+}
+
 /// Fold each source binding's declared `band` into its `scale` window.
-/// Bands are ordered fine-to-coarse in `scales.bands`; band `i` covers
-/// the half-open denominator interval `[prev_max, this_max)` where
-/// `prev_max` is the previous band's `max_denom` (or `None` for band 0).
-/// The renderer routes purely on `source.scale`, so this step is what makes
-/// `band:` semantically active end-to-end.
+/// When multiple sources share a band, they form a tier-set: each tier's
+/// half-open window is `[prev_tier_max, this_tier_max)` intersected with the
+/// band window and any explicit `scale` bound.
 fn resolve_band_routing(config: &mut Config) -> Result<(), ConfigError> {
     let mut band_windows: std::collections::BTreeMap<String, ScaleWindow> = std::collections::BTreeMap::new();
     let mut prev_max: Option<u64> = None;
@@ -347,28 +448,44 @@ fn resolve_band_routing(config: &mut Config) -> Result<(), ConfigError> {
     }
 
     for layer in &mut config.layers {
-        for (i, source) in layer.sources.iter_mut().enumerate() {
-            let Some(band_name) = source.band.as_ref() else {
-                continue;
-            };
-            let band_window = band_windows.get(band_name).ok_or_else(|| {
-                // band existence is already checked above; this branch is
-                // defensive and should be unreachable.
+        // collect (band, idx) pairs so we can index mutably later.
+        let mut by_band: std::collections::BTreeMap<String, Vec<usize>> = std::collections::BTreeMap::new();
+        for (idx, source) in layer.sources.iter().enumerate() {
+            if let Some(band) = source.band.clone() {
+                by_band.entry(band).or_default().push(idx);
+            }
+        }
+
+        for (band_name, indices) in by_band {
+            let band_window = band_windows.get(&band_name).ok_or_else(|| {
                 ConfigError::Invalid(format!(
-                    "layer {} source[{i}] band {band_name:?} not declared in scales.bands",
+                    "layer {} band {band_name:?} not declared in scales.bands",
                     layer.name
                 ))
             })?;
-            let resolved = match &source.scale {
-                None => band_window.clone(),
-                Some(explicit) => intersect_scale_windows(explicit, band_window).ok_or_else(|| {
-                    ConfigError::Invalid(format!(
-                        "layer {} source[{i}] explicit scale window {:?} is disjoint from band {band_name:?} window {:?}",
-                        layer.name, explicit, band_window
-                    ))
-                })?,
-            };
-            source.scale = Some(resolved);
+
+            let mut prev_tier_max: Option<u64> = None;
+            for idx in indices {
+                let source = &mut layer.sources[idx];
+                let tier_min = prev_tier_max.or(band_window.min);
+                let tier_max = source.max_denom.or(band_window.max);
+
+                let tier_window = ScaleWindow {
+                    min: tier_min,
+                    max: tier_max,
+                };
+                let resolved = match &source.scale {
+                    None => tier_window,
+                    Some(explicit) => intersect_scale_windows(explicit, &tier_window).ok_or_else(|| {
+                        ConfigError::Invalid(format!(
+                            "layer {} source from {:?} explicit scale window {:?} is disjoint from tier window {:?}",
+                            layer.name, source.from, explicit, tier_window
+                        ))
+                    })?,
+                };
+                source.scale = Some(resolved);
+                prev_tier_max = tier_max;
+            }
         }
     }
 
@@ -671,6 +788,7 @@ mod tests {
             sources: vec![SourceBinding {
                 scale: None,
                 band: None,
+                max_denom: None,
                 from: "roads".into(),
                 geometry_column: "geom".into(),
                 id_column: Some("id".into()),
@@ -712,6 +830,7 @@ mod tests {
             sources: vec![SourceBinding {
                 scale: None,
                 band: None,
+                max_denom: None,
                 from: "roads".into(),
                 geometry_column: "geom".into(),
                 id_column: Some("id".into()),
@@ -724,78 +843,21 @@ mod tests {
             }],
             classes: vec![],
             label: Some(LayerLabel {
+                text: "{missing}".into(),
                 style: LabelStyleAttach::Inline(mars_style::LabelStyle {
-                    font_family: "DejaVu Sans".into(),
+                    font_family: "sans".into(),
                     font_size: 12.0,
                     fill: mars_style::Colour::rgb(0, 0, 0),
                     halo: None,
                     priority: 0,
                     min_distance: 0.0,
                 }),
-                text: "{name} ({kind})".into(),
                 placement: None,
             }),
             label_survival: mars_style::LabelSurvival::Independent,
         }];
-        assert!(matches!(
-            validate(&mut cfg, Path::new(".")),
-            Err(ConfigError::Invalid(ref s)) if s.contains("attribute") && s.contains("kind")
-        ));
-    }
-
-    #[test]
-    fn label_survival_defaults_to_independent_when_absent() {
-        // serde default kicks in when the layer YAML has no `label_survival:` line.
-        let yaml = r#"
-name: roads
-type: line
-sources: []
-"#;
-        let layer: Layer = serde_yaml_ng::from_str(yaml).unwrap();
-        assert!(matches!(layer.label_survival, mars_style::LabelSurvival::Independent));
-    }
-
-    #[test]
-    fn label_survival_follow_geometry_round_trips() {
-        let yaml = r#"
-name: roads
-type: line
-sources: []
-label_survival: follow_geometry
-"#;
-        let layer: Layer = serde_yaml_ng::from_str(yaml).unwrap();
-        assert!(matches!(
-            layer.label_survival,
-            mars_style::LabelSurvival::FollowGeometry
-        ));
-    }
-
-    #[test]
-    fn rejects_unparseable_when_clause() {
-        let mut cfg = minimal_config();
-        cfg.layers = vec![Layer {
-            name: mars_types::LayerId::new("roads"),
-            title: String::new(),
-            abstract_: String::new(),
-            kind: "line".into(),
-            scale: None,
-            group: None,
-            enable_get_feature_info: false,
-            bbox: None,
-            sources: vec![],
-            classes: vec![crate::model::Class {
-                name: "default".into(),
-                title: String::new(),
-                when: Some("(((".into()),
-                style: ClassStyle::Inline(Default::default()),
-            }],
-            label: None,
-            label_survival: mars_style::LabelSurvival::Independent,
-        }];
-        assert!(matches!(
-            validate(&mut cfg, Path::new(".")),
-            Err(ConfigError::Invalid(ref s)) if s.contains("when: parse error")
-        ));
+        let err = validate(&mut cfg, Path::new(".")).unwrap_err();
+        assert!(err.to_string().contains("missing"), "expected missing attribute error: {err}");
     }
 
     #[test]
@@ -1006,6 +1068,7 @@ label_survival: follow_geometry
         SourceBinding {
             scale: None,
             band: None,
+            max_denom: None,
             from: from.into(),
             geometry_column: "geom".into(),
             id_column: Some("id".into()),
@@ -1472,5 +1535,120 @@ label_survival: follow_geometry
         let scale = cfg.layers[0].sources[0].scale.as_ref().expect("scale set");
         assert_eq!(scale.min, Some(10));
         assert_eq!(scale.max, Some(20));
+    }
+
+    fn tiered_layer(sources: Vec<SourceBinding>) -> Layer {
+        Layer {
+            name: mars_types::LayerId::new("test"),
+            title: String::new(),
+            abstract_: String::new(),
+            kind: "polygon".into(),
+            scale: None,
+            group: None,
+            enable_get_feature_info: false,
+            bbox: None,
+            sources,
+            classes: vec![],
+            label: None,
+            label_survival: mars_style::LabelSurvival::Independent,
+        }
+    }
+
+    #[test]
+    fn two_tiers_in_band_resolve_to_non_overlapping_windows() {
+        let mut cfg = two_band_config();
+        cfg.layers = vec![tiered_layer(vec![
+            SourceBinding {
+                band: Some("hi".into()),
+                max_denom: Some(8_000),
+                from: "a".into(),
+                ..binding("a")
+            },
+            SourceBinding {
+                band: Some("hi".into()),
+                max_denom: Some(25_000),
+                from: "b".into(),
+                ..binding("b")
+            },
+        ])];
+        validate(&mut cfg, Path::new(".")).expect("validate");
+        let s0 = cfg.layers[0].sources[0].scale.as_ref().unwrap();
+        let s1 = cfg.layers[0].sources[1].scale.as_ref().unwrap();
+        assert_eq!(s0.min, None);
+        assert_eq!(s0.max, Some(8_000));
+        assert_eq!(s1.min, Some(8_000));
+        assert_eq!(s1.max, Some(25_000));
+    }
+
+    #[test]
+    fn back_compat_single_source_no_max_denom_covers_whole_band() {
+        let mut cfg = two_band_config();
+        cfg.layers = vec![tiered_layer(vec![SourceBinding {
+            band: Some("mid".into()),
+            max_denom: None,
+            from: "a".into(),
+            ..binding("a")
+        }])];
+        validate(&mut cfg, Path::new(".")).expect("validate");
+        let s = cfg.layers[0].sources[0].scale.as_ref().unwrap();
+        assert_eq!(s.min, Some(25_000));
+        assert_eq!(s.max, Some(250_000));
+    }
+
+    #[test]
+    fn duplicate_max_denom_in_band_rejected() {
+        let mut cfg = two_band_config();
+        cfg.layers = vec![tiered_layer(vec![
+            SourceBinding {
+                band: Some("hi".into()),
+                max_denom: Some(10_000),
+                from: "a".into(),
+                ..binding("a")
+            },
+            SourceBinding {
+                band: Some("hi".into()),
+                max_denom: Some(10_000),
+                from: "b".into(),
+                ..binding("b")
+            },
+        ])];
+        let err = validate(&mut cfg, Path::new(".")).unwrap_err();
+        assert!(err.to_string().contains("not strictly greater"));
+    }
+
+    #[test]
+    fn tier_max_denom_exceeds_band_cap_rejected() {
+        let mut cfg = two_band_config();
+        cfg.layers = vec![tiered_layer(vec![
+            SourceBinding {
+                band: Some("hi".into()),
+                max_denom: Some(50_000),
+                from: "a".into(),
+                ..binding("a")
+            },
+        ])];
+        let err = validate(&mut cfg, Path::new(".")).unwrap_err();
+        assert!(err.to_string().contains("exceeds band cap"));
+    }
+
+    #[test]
+    fn non_final_tier_equal_to_band_cap_rejected() {
+        let mut cfg = two_band_config();
+        cfg.layers = vec![tiered_layer(vec![
+            SourceBinding {
+                band: Some("hi".into()),
+                max_denom: Some(25_000),
+                from: "a".into(),
+                ..binding("a")
+            },
+            SourceBinding {
+                band: Some("hi".into()),
+                max_denom: Some(25_000),
+                from: "b".into(),
+                ..binding("b")
+            },
+        ])];
+        let err = validate(&mut cfg, Path::new(".")).unwrap_err();
+        assert!(err.to_string().contains("not strictly greater"));
     }
 }

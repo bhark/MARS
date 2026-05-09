@@ -245,3 +245,57 @@ fn unit_roundtrip() {
     assert_eq!(parse_duration("5min").unwrap(), Duration::from_secs(300));
     assert_eq!(parse_duration("30s").unwrap(), Duration::from_secs(30));
 }
+
+#[test]
+fn loads_tiered_sources_fixture() {
+    let dir = tempfile::tempdir().unwrap();
+    let yaml = r#"
+service: { name: t }
+source:
+  type: postgis
+  dsn: postgres://example/x
+  native_crs: EPSG:25832
+artifacts:
+  store: { type: fs, path: /tmp/s }
+  cache: { path: /tmp/c, max_size: 1MiB }
+scales:
+  bands:
+    - { name: hi, max_denom_exclusive: 25000 }
+    - { name: mid, max_denom_exclusive: 250000 }
+cells: { grid: regular, origin: [0, 0], size_per_band: { hi: 1024m, mid: 4096m } }
+interfaces: {}
+layers:
+  - name: bygning
+    type: polygon
+    sources:
+      - band: hi
+        max_denom_exclusive: 8000
+        from: geodanmark_latest.bygning
+        geometry_column: geometri
+      - band: hi
+        max_denom_exclusive: 10000
+        from: simplified.bygning_1meter
+        geometry_column: geometri
+      - band: hi
+        max_denom_exclusive: 25000
+        from: simplified.bygning_2meter
+        geometry_column: geometri
+    classes: []
+"#;
+    let p = dir.path().join("tiered.yaml");
+    fs::write(&p, yaml).unwrap();
+    let mut cfg = load(&p).expect("load tiered");
+    assert_eq!(cfg.layers.len(), 1);
+    assert_eq!(cfg.layers[0].sources.len(), 3);
+    validate(&mut cfg, dir.path()).expect("validate tiered");
+
+    let s0 = cfg.layers[0].sources[0].scale.as_ref().unwrap();
+    let s1 = cfg.layers[0].sources[1].scale.as_ref().unwrap();
+    let s2 = cfg.layers[0].sources[2].scale.as_ref().unwrap();
+    assert_eq!(s0.min, None);
+    assert_eq!(s0.max, Some(8_000));
+    assert_eq!(s1.min, Some(8_000));
+    assert_eq!(s1.max, Some(10_000));
+    assert_eq!(s2.min, Some(10_000));
+    assert_eq!(s2.max, Some(25_000));
+}

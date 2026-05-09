@@ -412,6 +412,7 @@ fn build_minimal_config(layer_id: &LayerId, binding_id: &BindingId, label_surviv
             sources: vec![SourceBinding {
                 scale: None,
                 band: None,
+                max_denom: None,
                 from: binding_id.as_str().into(),
                 geometry_column: "geom".into(),
                 id_column: None,

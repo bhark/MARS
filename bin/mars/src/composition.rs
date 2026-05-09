@@ -186,6 +186,7 @@ mod tests {
                 .map(|(from, geom)| CfgBinding {
                     scale: None,
                     band: None,
+                    max_denom: None,
                     from: from.into(),
                     geometry_column: geom.into(),
                     id_column: None,

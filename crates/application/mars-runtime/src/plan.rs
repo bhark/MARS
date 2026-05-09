@@ -254,6 +254,7 @@ mod tests {
         SourceBinding {
             scale,
             band: None,
+            max_denom: None,
             from: from.into(),
             geometry_column: "geom".into(),
             id_column: None,

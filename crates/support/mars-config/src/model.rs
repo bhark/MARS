@@ -745,6 +745,15 @@ pub struct SourceBinding {
     /// `scale`; setting both `band` and a disjoint `scale` is rejected.
     #[serde(default)]
     pub band: Option<String>,
+    /// Exclusive upper bound on scale denominator for this tier within its
+    /// band. When multiple sources share the same `band`, they form an ordered
+    /// tier-set sorted by `max_denom_exclusive` ascending. The effective
+    /// half-open window per tier is `[prev_max, this_max)` intersected with
+    /// the band window and any explicit `scale`. Omit on the last tier to
+    /// inherit the band cap. A single source with no `max_denom_exclusive`
+    /// covers the whole band (back-compat shorthand).
+    #[serde(default, rename = "max_denom_exclusive")]
+    pub max_denom: Option<u64>,
     /// Source table or relation.
     pub from: String,
     /// Geometry column.
