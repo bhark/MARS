@@ -195,6 +195,37 @@ async fn unified_compile_is_deterministic_across_runs() {
 }
 
 #[tokio::test]
+async fn rows_with_identical_geometry_but_different_attrs_are_slot_equivalent() {
+    // two rows with the same WKB geometry but different attribute payloads.
+    // (key, user_id, WKB-fingerprint) ties are not order-stable; both
+    // arrangements should compile without error and the manifest must
+    // contain exactly two features.
+    let geom = point_wkb(100.0, 200.0);
+    let rows = vec![
+        RowBytes {
+            feature_id: 1,
+            geometry: geom.clone(),
+            attributes: vec![("name".into(), AttrValue::String("alpha".into()))],
+        },
+        RowBytes {
+            feature_id: 2,
+            geometry: geom,
+            attributes: vec![("name".into(), AttrValue::String("beta".into()))],
+        },
+    ];
+    let (deps, _store) = make_deps(rows);
+    let plan = BootstrapPlan {
+        bindings: vec![binding_plan("points", 64 * 1024)],
+        layers: vec![],
+    };
+    let manifest = run_snapshot_from_plan(&deps, &plan, "test".into(), 1, WORKING_SET, PLAN_BUDGET)
+        .await
+        .unwrap();
+    let total: u64 = manifest.pages.iter().map(|p| p.feature_count).sum();
+    assert_eq!(total, 2, "both rows must land in the substrate");
+}
+
+#[tokio::test]
 async fn unified_compile_against_empty_source_yields_zero_pages() {
     let (deps, store) = make_deps(vec![]);
     let plan = BootstrapPlan {

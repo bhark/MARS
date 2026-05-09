@@ -92,7 +92,7 @@ pub(crate) async fn hydrate_keyed_rows<'a>(
     while let Some(item) = stream.next().await {
         let row: RowBytes = item?;
         let geom_bytes_estimate = row.geometry.len() as u64;
-        let row_fingerprint = compute_row_fingerprint_for_row(&row);
+        let row_fingerprint = compute_row_fingerprint_from_wkb(&row.geometry);
         let feature = wkb_to_feature_geom(&row.geometry, row.feature_id)?;
         let cx = (f64::from(feature.bbox[0]) + f64::from(feature.bbox[2])) / 2.0;
         let cy = (f64::from(feature.bbox[1]) + f64::from(feature.bbox[3])) / 2.0;
@@ -1059,10 +1059,13 @@ pub fn recompute_level_metadata(prior: &LevelMetadata, pages: &[PageEntry], bind
 // preserved for class / label evaluation and a hilbert key over the
 // binding's combined bbox.
 //
-// `row_fingerprint` is BLAKE3 over the row, used as the final tiebreaker
-// after `(hilbert_key, user_id)` so rows with the same hilbert key and the
-// same user_id (a source row exploded into multiple parts) sort
-// deterministically across compile passes.
+// `row_fingerprint` is BLAKE3 over WKB truncated to u64, used as the final
+// tiebreaker after `(hilbert_key, user_id)`. Within a `(key, user_id, WKB)`
+// tie attribute differences are NOT order-stable: rows with identical
+// geometry but different attrs hash to the same fingerprint and are
+// treated as equivalent for slot ordering. The page-rebuild pipeline
+// re-encodes attributes from the freshly hydrated row regardless, so the
+// substrate stays consistent.
 #[derive(Debug, Clone)]
 pub(crate) struct KeyedRow {
     pub(crate) feature: FeatureGeom,
@@ -1081,43 +1084,16 @@ pub struct BindingOutput {
     pub label_sidecars: Vec<LayerSidecarEntry>,
 }
 
-/// Stable per-row tiebreaker. BLAKE3 over `(geometry_bytes ||
-/// canonicalised attribute bytes)` truncated to u64.
-pub(crate) fn compute_row_fingerprint_for_row(row: &RowBytes) -> u64 {
+/// Stable per-row tiebreaker. BLAKE3 over geometry bytes truncated to u64.
+/// Identical WKB → identical fingerprint regardless of attribute payload;
+/// attribute differences within a `(key, user_id, WKB)` tie are not
+/// order-stable.
+pub(crate) fn compute_row_fingerprint_from_wkb(wkb: &[u8]) -> u64 {
     let mut hasher = blake3::Hasher::new();
-    hasher.update(&row.geometry);
-    // canonicalise: sort attribute pairs by name so reordering doesn't shift
-    // the fingerprint.
-    let mut sorted: Vec<&(String, AttrValue)> = row.attributes.iter().collect();
-    sorted.sort_unstable_by(|a, b| a.0.cmp(&b.0));
-    for (name, value) in sorted {
-        hasher.update(name.as_bytes());
-        hasher.update(b"\0");
-        hash_attr_value(&mut hasher, value);
-        hasher.update(b"\0");
-    }
+    hasher.update(wkb);
     let mut out = [0u8; 8];
     hasher.finalize_xof().fill(&mut out);
     u64::from_le_bytes(out)
-}
-
-fn hash_attr_value(hasher: &mut blake3::Hasher, v: &AttrValue) {
-    match v {
-        AttrValue::Null => hasher.update(b"N"),
-        AttrValue::Bool(b) => hasher.update(if *b { b"BT" } else { b"BF" }),
-        AttrValue::Int(i) => {
-            hasher.update(b"I");
-            hasher.update(&i.to_le_bytes())
-        }
-        AttrValue::Float(f) => {
-            hasher.update(b"F");
-            hasher.update(&f.to_bits().to_le_bytes())
-        }
-        AttrValue::String(s) => {
-            hasher.update(b"S");
-            hasher.update(s.as_bytes())
-        }
-    };
 }
 
 /// Pull pruned rows whose hilbert key is `<= cap` off the head of the
