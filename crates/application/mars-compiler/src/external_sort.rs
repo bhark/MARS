@@ -1,45 +1,13 @@
-//! Bucketed Hilbert-key sort for bootstrap row sets.
+//! Working-set guard for the rebuild path's per-page hydration pass.
 //!
-//! Sorts rows by `HilbertKey` using a top-bit bucket pass followed by
-//! in-bucket comparison sort. The same bucket structure underpins the
-//! disk-backed spill: when the in-memory accumulator crosses
-//! `bootstrap_working_set_bytes * bootstrap_spill_threshold_fraction`
-//! the bootstrap path drains its tail into per-bucket spill files (see
-//! [`crate::spill`]). The ordering algorithm and the tests in this module
-//! are agnostic to the bucket *materialisation* — `Vec<KeyedRow>` for the
-//! in-memory hot path, on-disk frames in `crate::spill::BucketSpill` for
-//! the spilled path.
-
-use mars_types::HilbertKey;
-
-/// Configuration for [`bucketed_sort_in_place`] and [`WorkingSetGuard`].
-#[derive(Debug, Clone, Copy)]
-pub struct ExternalSortConfig {
-    /// Working-set ceiling in bytes. The bootstrap accumulator drains its
-    /// in-memory tail to per-bucket spill files at
-    /// `working_set_bytes * spill_threshold_fraction`; the rebuild path
-    /// (which does not spill) fails with
-    /// [`crate::CompilerError::ScratchBudgetExceeded`] on overflow.
-    pub working_set_bytes: u64,
-    /// Number of leading bits of the Hilbert key used for the bucket pass.
-    /// Higher → more, smaller buckets; default 12 → 4096 buckets is well
-    /// matched to the L2 cache size on modern x86 cores while keeping
-    /// bucket count below the open-file-descriptor budget once the disk
-    /// backend lands.
-    pub bucket_bits: u8,
-}
-
-impl ExternalSortConfig {
-    /// Default for production use: 4 GiB ceiling, 12-bit bucket pass.
-    pub const DEFAULT: Self = Self {
-        working_set_bytes: 4 * 1024 * 1024 * 1024,
-        bucket_bits: 12,
-    };
-}
+//! The unified compile pipeline hydrates one page's worth of feature ids at
+//! a time and asserts the accumulated row bytes stay under the configured
+//! ceiling. The guard is intentionally tiny: bookkeeping plus a saturating
+//! threshold check.
 
 /// Tracks accumulated row-byte estimates against a configured ceiling.
-/// Designed for the streaming bootstrap path: callers update the guard
-/// once per row and check it before keeping the row in memory.
+/// Designed for the per-page hydration loop: callers update the guard once
+/// per row and check it before keeping the row in memory.
 #[derive(Debug)]
 pub struct WorkingSetGuard {
     ceiling_bytes: u64,
@@ -82,166 +50,10 @@ impl WorkingSetGuard {
     }
 }
 
-/// Sort `rows` ascending by the key returned by `key_of`, in-place,
-/// using a top-`bucket_bits` bucket pass followed by an in-bucket
-/// comparison sort. Stable within a bucket only — equal keys may be
-/// reordered relative to other equal keys, matching the existing
-/// `sort_by_key` semantics callers rely on (the page-build pipeline
-/// re-orders by `feature_id` later).
-///
-/// `key_of` is a closure returning `HilbertKey` for a row. Passed by
-/// closure (not via a trait) so callers do not need to commit to a
-/// particular `KeyedRow` shape — the same routine sorts the snapshot
-/// rows today and will sort spill-bucket entries when the disk backend
-/// lands.
-pub fn bucketed_sort_in_place<T, F>(rows: &mut Vec<T>, bucket_bits: u8, key_of: F)
-where
-    F: Fn(&T) -> HilbertKey,
-{
-    if rows.len() < 2 {
-        return;
-    }
-    let bits = bucket_bits.clamp(0, 16);
-    if bits == 0 {
-        rows.sort_by_key(&key_of);
-        return;
-    }
-    let bucket_count = 1usize << bits;
-    let shift = 64 - u32::from(bits);
-
-    // count pass.
-    let mut counts = vec![0usize; bucket_count];
-    let bucket_idx = |row: &T| -> usize {
-        let key_bits: u64 = key_of(row).get();
-        (key_bits >> shift) as usize
-    };
-    for r in rows.iter() {
-        counts[bucket_idx(r)] += 1;
-    }
-
-    // exclusive-prefix-sum into start offsets, retain a copy as final
-    // bucket boundaries for the per-bucket sort below.
-    let mut starts = Vec::with_capacity(bucket_count + 1);
-    let mut acc = 0usize;
-    for c in &counts {
-        starts.push(acc);
-        acc += *c;
-    }
-    starts.push(acc);
-
-    // counting-sort scatter. clone the row out once via swap_remove rotation
-    // to avoid moving from a shared mutable borrow. simplest correct path is
-    // to allocate a parallel destination vec.
-    let mut sorted: Vec<Option<T>> = (0..rows.len()).map(|_| None).collect();
-    let mut cursor = starts.clone();
-    for r in rows.drain(..) {
-        let bucket_bits_value: u64 = key_of(&r).get();
-        let b = (bucket_bits_value >> shift) as usize;
-        let slot = cursor[b];
-        cursor[b] += 1;
-        sorted[slot] = Some(r);
-    }
-    rows.extend(sorted.into_iter().flatten());
-
-    // in-bucket comparison sort. each bucket spans [starts[b]..starts[b+1]].
-    for b in 0..bucket_count {
-        let lo = starts[b];
-        let hi = starts[b + 1];
-        if hi - lo > 1 {
-            rows[lo..hi].sort_by_key(&key_of);
-        }
-    }
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
-
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    struct Row {
-        key: HilbertKey,
-        tag: u32,
-    }
-
-    fn k(v: u64) -> HilbertKey {
-        HilbertKey::new(v)
-    }
-
-    #[test]
-    fn bucketed_sort_orders_keys_ascending() {
-        let mut rows = vec![
-            Row {
-                key: k(0xF0F0_F0F0_0000_0000),
-                tag: 1,
-            },
-            Row {
-                key: k(0x0102_0304_0506_0708),
-                tag: 2,
-            },
-            Row {
-                key: k(0xAAAA_AAAA_AAAA_AAAA),
-                tag: 3,
-            },
-            Row {
-                key: k(0x0000_0000_0000_0001),
-                tag: 4,
-            },
-        ];
-        bucketed_sort_in_place(&mut rows, 12, |r| r.key);
-        let _ = rows[0].tag;
-        let keys: Vec<u64> = rows.iter().map(|r| r.key.get()).collect();
-        assert_eq!(
-            keys,
-            vec![
-                0x0000_0000_0000_0001,
-                0x0102_0304_0506_0708,
-                0xAAAA_AAAA_AAAA_AAAA,
-                0xF0F0_F0F0_0000_0000,
-            ]
-        );
-    }
-
-    #[test]
-    fn bucketed_sort_matches_naive_for_random_inputs() {
-        let mut rows: Vec<Row> = (0..2048u64)
-            .map(|i| Row {
-                key: k(i.wrapping_mul(2_654_435_761).rotate_left(13)),
-                tag: i as u32,
-            })
-            .collect();
-        let mut expected = rows.clone();
-        expected.sort_by_key(|a| a.key);
-        bucketed_sort_in_place(&mut rows, 12, |r| r.key);
-        assert_eq!(rows, expected);
-    }
-
-    #[test]
-    fn bucketed_sort_handles_duplicate_keys() {
-        let mut rows: Vec<Row> = (0..16u32)
-            .map(|i| Row {
-                key: k(0x4242_0000_0000_0000),
-                tag: i,
-            })
-            .collect();
-        bucketed_sort_in_place(&mut rows, 12, |r| r.key);
-        // all keys equal; tags preserved in some order, total count unchanged.
-        assert_eq!(rows.len(), 16);
-        let mut tags: Vec<u32> = rows.iter().map(|r| r.tag).collect();
-        tags.sort_unstable();
-        assert_eq!(tags, (0..16u32).collect::<Vec<_>>());
-    }
-
-    #[test]
-    fn bucketed_sort_handles_short_input() {
-        let mut empty: Vec<Row> = Vec::new();
-        bucketed_sort_in_place(&mut empty, 12, |r| r.key);
-        assert!(empty.is_empty());
-
-        let mut single = vec![Row { key: k(7), tag: 0 }];
-        bucketed_sort_in_place(&mut single, 12, |r| r.key);
-        assert_eq!(single.len(), 1);
-    }
 
     #[test]
     fn working_set_guard_admits_under_ceiling() {
@@ -257,8 +69,8 @@ mod tests {
         assert!(g.add(800).is_ok());
         let res = g.add(300);
         assert!(res.is_err());
-        // observed is updated even on rejection so the named error carries
-        // the correct overrun number.
+        // observed updated even on rejection so the named error carries the
+        // correct overrun number.
         assert_eq!(g.observed(), 1100);
     }
 

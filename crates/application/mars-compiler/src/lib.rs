@@ -21,8 +21,7 @@ pub mod rebalance;
 pub mod rebuild;
 pub mod reconcile;
 pub mod sidecar;
-pub mod snapshot;
-pub mod spill;
+pub mod testing;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -135,44 +134,26 @@ pub enum CompilerError {
         /// Offending binding identifier.
         binding: String,
     },
-    /// Bootstrap accumulated bytes exceeded the configured scratch budget.
-    /// The bucketed external sort drains its in-memory tail into per-bucket
-    /// spill files once accumulated row bytes cross
-    /// `bootstrap_working_set_bytes * bootstrap_spill_threshold_fraction`.
-    /// This error fires when:
-    /// - total spill bytes (sum of all bucket file sizes) cross
-    ///   `compiler.bootstrap_scratch_budget_bytes` during bootstrap, OR
-    /// - the rebuild path's in-memory working-set guard (which does not
-    ///   spill — rebuild fetches a bounded feature-id set) crosses
-    ///   `bootstrap_working_set_bytes`.
-    ///
-    /// LAZARUS bailout 5: lift the budget, point the scratch dir at a
-    /// larger volume, or split the binding.
+    /// Per-page hydrated working set crossed the configured ceiling. The
+    /// rebuild path fetches a bounded feature-id set per page and asserts
+    /// the hydrated rows stay under `compile_page_working_set_bytes`.
+    /// LAZARUS bailout 5: lift the budget, or split the binding.
     #[error(
-        "bootstrap scratch budget exceeded: binding {binding}{} accumulated {observed_bytes} bytes \
-         (budget {budget_bytes}). lift compiler.bootstrap_scratch_budget_bytes, point \
-         bootstrap_scratch_dir at a larger volume, or split the binding.",
+        "compile working-set exceeded: binding {binding}{} accumulated {observed_bytes} bytes \
+         (budget {budget_bytes}). lift compiler.compile_page_working_set_bytes or split the binding.",
         page_id.map(|p| format!(" page {}", p.get())).unwrap_or_default()
     )]
     ScratchBudgetExceeded {
         /// Affected binding id.
         binding: String,
         /// Affected page id when the breach was observed inside a per-page
-        /// hydration loop. `None` when the breach is binding-scoped (e.g. a
-        /// bootstrap accumulator overflow, before page boundaries exist).
+        /// hydration loop. `None` when the breach is binding-scoped.
         page_id: Option<mars_types::PageId>,
         /// Observed accumulated bytes at the point the budget was crossed.
         observed_bytes: u64,
-        /// Configured scratch budget.
+        /// Configured working-set ceiling.
         budget_bytes: u64,
     },
-    /// Disk-backed bootstrap external-sort spill failed (I/O error, codec
-    /// roundtrip mismatch, malformed frame). The
-    /// [`spill::SpillError::BudgetExceeded`] variant is mapped to
-    /// [`CompilerError::ScratchBudgetExceeded`] separately; everything else
-    /// surfaces here.
-    #[error(transparent)]
-    Spill(spill::SpillError),
     /// Pass-1 page planning observed more rows than the in-memory plan
     /// budget allows. Trips before the planner allocates beyond its
     /// configured ceiling so the operator gets a clean ceiling rather than
@@ -192,26 +173,6 @@ pub enum CompilerError {
         /// Configured plan budget (bytes).
         budget_bytes: u64,
     },
-}
-
-impl From<spill::SpillError> for CompilerError {
-    fn from(err: spill::SpillError) -> Self {
-        match err {
-            spill::SpillError::BudgetExceeded {
-                binding,
-                observed_bytes,
-                budget_bytes,
-            } => CompilerError::ScratchBudgetExceeded {
-                binding,
-                // bootstrap accumulator overflows happen before the planner
-                // assigns page ids; surface no page_id rather than fabricating.
-                page_id: None,
-                observed_bytes,
-                budget_bytes,
-            },
-            other => CompilerError::Spill(other),
-        }
-    }
 }
 
 /// All ports the compiler depends on, bundled for easy composition by the bin.
@@ -405,9 +366,19 @@ impl Compiler {
         }
 
         // rebuild dirty pages.
-        let spill = snapshot::SpillConfig::from_compiler(&self.config.compiler)?;
+        let working_set_bytes = self.config.compiler.bootstrap_working_set()?;
+        let plan_budget_bytes: u64 = 8 * 1024 * 1024 * 1024;
         let started = std::time::Instant::now();
-        let outcome = rebuild::rebuild_pages(&self.deps, &plan, &prior, &sidecars, dirty, &spill).await?;
+        let outcome = rebuild::rebuild_pages(
+            &self.deps,
+            &plan,
+            &prior,
+            &sidecars,
+            dirty,
+            working_set_bytes,
+            plan_budget_bytes,
+        )
+        .await?;
         self.deps.metrics.observe_compiler_rebuild_duration(started.elapsed());
 
         // merge outcome into prior to produce the new manifest.
@@ -540,7 +511,7 @@ impl Compiler {
 /// [`crate::rebuild::rebuild_binding_from_plan`] for pass 2, fold the
 /// emitted artifacts into a fresh `Manifest`. Returns the manifest for
 /// the caller to publish.
-async fn run_snapshot_from_plan(
+pub async fn run_snapshot_from_plan(
     deps: &Deps,
     bootstrap: &plan::BootstrapPlan,
     service_name: String,
@@ -551,7 +522,7 @@ async fn run_snapshot_from_plan(
     use mars_source::{SourceBinding as PortBinding, SourceCollectionId};
     use mars_types::{LayerSidecarEntry, MANIFEST_FORMAT_VERSION, PageEntry};
 
-    use crate::snapshot::{binding_schema, binding_table};
+    use crate::rebuild::{binding_schema, binding_table};
 
     let mut bindings_meta: Vec<mars_types::BindingMetadata> = Vec::with_capacity(bootstrap.bindings.len());
     let mut pages_meta: Vec<PageEntry> = Vec::new();

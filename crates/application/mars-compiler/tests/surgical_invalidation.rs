@@ -16,20 +16,19 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures_core::stream::BoxStream;
 use futures_util::stream;
-use mars_compiler::Deps;
 use mars_compiler::incremental::IncrementalCycle;
 use mars_compiler::plan::{BindingPlan, BootstrapPlan, LevelPlan};
 use mars_compiler::rebuild::rebuild_pages;
 use mars_compiler::sidecar::SidecarReader;
-use mars_compiler::snapshot::{SpillConfig, run_snapshot};
+use mars_compiler::testing::FullScanCompileSession;
+use mars_compiler::{Deps, run_snapshot_from_plan};
 
-fn test_spill(working_set: u64) -> SpillConfig {
-    SpillConfig::test_with(working_set, std::env::temp_dir(), u64::MAX, 1.0)
-}
+const TEST_WORKING_SET: u64 = 4 * 1024 * 1024 * 1024;
+const TEST_PLAN_BUDGET: u64 = 8 * 1024 * 1024 * 1024;
 use mars_observability::Metrics;
 use mars_source::{
-    AttrValue, ChangeEvent, ChangeFeed, ChangeSubscription, GeometryEnvelope, LeaderLock, LeaderLockGuard, RowBytes,
-    Source, SourceBinding as PortBinding, SourceCollectionId, SourceError,
+    AttrValue, ChangeEvent, ChangeFeed, ChangeSubscription, CompileSession, GeometryEnvelope, LeaderLock,
+    LeaderLockGuard, RowBytes, Source, SourceBinding as PortBinding, SourceCollectionId, SourceError,
 };
 use mars_store::ObjectStore;
 use mars_store::mem::{InMemoryPublisher, InMemoryStore};
@@ -116,6 +115,13 @@ impl Source for FakeSource {
         ids.sort();
         Ok(Box::pin(stream::iter(ids.into_iter().map(Ok))))
     }
+
+    async fn open_compile_session<'a>(
+        &'a self,
+        binding: &'a PortBinding,
+    ) -> Result<Box<dyn CompileSession + 'a>, SourceError> {
+        Ok(FullScanCompileSession::boxed(self, binding))
+    }
 }
 
 #[derive(Default)]
@@ -195,7 +201,7 @@ async fn surgical_invalidation_rebuilds_only_dirty_pages() {
     };
 
     // bootstrap
-    let bootstrap = run_snapshot(&deps, &plan, "test".into(), 1, &test_spill(4 * 1024 * 1024 * 1024))
+    let bootstrap = run_snapshot_from_plan(&deps, &plan, "test".into(), 1, TEST_WORKING_SET, TEST_PLAN_BUDGET)
         .await
         .unwrap();
     assert!(
@@ -350,7 +356,8 @@ async fn surgical_invalidation_rebuilds_only_dirty_pages() {
         &bootstrap,
         &sidecars,
         dirty,
-        &test_spill(4 * 1024 * 1024 * 1024),
+        TEST_WORKING_SET,
+        TEST_PLAN_BUDGET,
     )
     .await
     .unwrap();

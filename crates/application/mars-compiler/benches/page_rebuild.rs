@@ -13,16 +13,15 @@ use bytes::Bytes;
 use criterion::{Criterion, criterion_group, criterion_main};
 use futures_core::stream::BoxStream;
 use futures_util::stream;
-use mars_compiler::Deps;
 use mars_compiler::incremental::IncrementalCycle;
 use mars_compiler::plan::{BindingPlan, BootstrapPlan, LevelPlan};
 use mars_compiler::rebuild::rebuild_pages;
 use mars_compiler::sidecar::SidecarReader;
-use mars_compiler::snapshot::{SpillConfig, run_snapshot};
+use mars_compiler::testing::FullScanCompileSession;
+use mars_compiler::{Deps, run_snapshot_from_plan};
 
-fn test_spill(working_set: u64) -> SpillConfig {
-    SpillConfig::test_with(working_set, std::env::temp_dir(), u64::MAX, 1.0)
-}
+const BENCH_WORKING_SET: u64 = 8 * 1024 * 1024 * 1024;
+const BENCH_PLAN_BUDGET: u64 = 8 * 1024 * 1024 * 1024;
 use mars_observability::Metrics;
 use mars_source::{
     AttrValue, ChangeEvent, ChangeFeed, ChangeSubscription, GeometryEnvelope, LeaderLock, LeaderLockGuard, RowBytes,
@@ -94,6 +93,13 @@ impl Source for FakeSource {
         ids.sort();
         Ok(Box::pin(stream::iter(ids.into_iter().map(Ok))))
     }
+
+    async fn open_compile_session<'a>(
+        &'a self,
+        binding: &'a PortBinding,
+    ) -> Result<Box<dyn mars_source::CompileSession + 'a>, SourceError> {
+        Ok(FullScanCompileSession::boxed(self, binding))
+    }
 }
 
 #[derive(Default)]
@@ -161,7 +167,7 @@ async fn build_fixture(n_features: usize, page_size: u64) -> Fixture {
         bindings: vec![binding_plan("points", page_size)],
         layers: vec![],
     };
-    let prior = run_snapshot(&deps, &plan, "bench".into(), 1, &test_spill(8 * 1024 * 1024 * 1024))
+    let prior = run_snapshot_from_plan(&deps, &plan, "bench".into(), 1, BENCH_WORKING_SET, BENCH_PLAN_BUDGET)
         .await
         .unwrap();
     let binding_id = BindingId::try_new("points").unwrap();
@@ -240,7 +246,8 @@ fn bench_page_rebuild(c: &mut Criterion) {
                         &fixture.prior,
                         &sidecars,
                         dirty,
-                        &test_spill(8 * 1024 * 1024 * 1024),
+                        BENCH_WORKING_SET,
+                        BENCH_PLAN_BUDGET,
                     )
                     .await
                     .unwrap();

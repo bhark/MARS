@@ -29,24 +29,24 @@ use std::sync::Arc;
 use bytes::Bytes;
 use futures_core::stream::BoxStream;
 use futures_util::StreamExt;
-use mars_artifact::{FeatureGeom, compute_content_hash, wkb_to_feature_geom};
-use mars_source::{RowBytes, SourceBinding as PortBinding, SourceCollectionId, SourceError};
+use mars_artifact::{
+    ArtifactKind, ArtifactWriter, AttrValue as ArtAttrValue, FeatureGeom, LabelCandidate, MAX_ROW_BYTES,
+    SpatialIndexBuilder, compute_content_hash, encode_row, wkb_to_feature_geom,
+};
+use mars_source::{AttrValue, RowBytes, SourceBinding as PortBinding, SourceCollectionId, SourceError};
 use mars_types::{
-    ArtifactEntry, Bbox, BindingId, BindingMetadata, DecimationLevel, HilbertKey, LayerSidecarEntry, LevelMetadata,
-    Manifest, PageEntry, PageId,
+    ArtifactEntry, ArtifactKey, Bbox, BindingId, BindingMetadata, ContentHash, DecimationLevel, HilbertKey,
+    LayerSidecarEntry, LayerSidecarKind, LevelMetadata, Manifest, PageEntry, PageId, PageKey,
 };
 
+use crate::class_eval::{LabelSpec, RowAttrs, assign_class, emit_label_candidate};
 use crate::decimate::{passes_min_size, simplify};
 use crate::external_sort::WorkingSetGuard;
 use crate::incremental::{BindingDirty, DirtyPages};
-use crate::page_plan::PagePlan;
-use crate::plan::{BootstrapPlan, LayerPlan, LevelPlan};
+use crate::page_plan::{PagePlan, compute_page_plan};
+use crate::plan::{BindingPlan, BootstrapPlan, LayerPlan, LevelPlan};
 use crate::rebalance::RebalanceOp;
 use crate::sidecar::{SidecarReader, encode_sidecar};
-use crate::snapshot::{
-    BindingOutput, KeyedRow, binding_schema, binding_table, drain_pruned_through, emit_layer_sidecars,
-    empty_level_metadata, flush_page, membership_sidecar_object_key, snapshot_one_binding,
-};
 use crate::{CompilerError, Deps};
 
 /// Output of one rebuild pass. Replaces dirty pages and refreshed bindings
@@ -87,17 +87,17 @@ pub struct RebuildOutcome {
 pub(crate) async fn hydrate_keyed_rows<'a>(
     mut stream: BoxStream<'a, Result<RowBytes, SourceError>>,
     combined_bbox: Bbox,
-) -> Result<Vec<crate::snapshot::KeyedRow>, CompilerError> {
-    let mut rows: Vec<crate::snapshot::KeyedRow> = Vec::new();
+) -> Result<Vec<KeyedRow>, CompilerError> {
+    let mut rows: Vec<KeyedRow> = Vec::new();
     while let Some(item) = stream.next().await {
         let row: RowBytes = item?;
         let geom_bytes_estimate = row.geometry.len() as u64;
-        let row_fingerprint = crate::snapshot::compute_row_fingerprint_for_row(&row);
+        let row_fingerprint = compute_row_fingerprint_for_row(&row);
         let feature = wkb_to_feature_geom(&row.geometry, row.feature_id)?;
         let cx = (f64::from(feature.bbox[0]) + f64::from(feature.bbox[2])) / 2.0;
         let cy = (f64::from(feature.bbox[1]) + f64::from(feature.bbox[3])) / 2.0;
         let key = crate::hilbert::key_from_centroid(cx, cy, combined_bbox);
-        rows.push(crate::snapshot::KeyedRow {
+        rows.push(KeyedRow {
             feature,
             attrs: Arc::new(row.attributes),
             geom_bytes_estimate,
@@ -113,7 +113,7 @@ pub(crate) async fn hydrate_keyed_rows<'a>(
 /// running total crosses the ceiling. Mirrors the per-row formula
 /// [`hydrate_keyed_rows`] used to use, just measured per-page.
 pub(crate) fn enforce_page_budget(
-    rows: &[crate::snapshot::KeyedRow],
+    rows: &[KeyedRow],
     working_set_bytes: u64,
     binding_id: &str,
     page_id: PageId,
@@ -136,19 +136,32 @@ pub(crate) fn enforce_page_budget(
 
 /// Run one rebuild pass for the given dirty set. Per-binding sidecar
 /// thresholds are read from the matching [`BindingPlan`].
+///
+/// `working_set_bytes` is the per-page hydrated-row ceiling (pass-2);
+/// `plan_budget_bytes` caps the pass-1 page-planner allocation when the
+/// truncate path runs the unified compile pipeline against a binding.
 pub async fn rebuild_pages(
     deps: &Deps,
     plan: &BootstrapPlan,
     prior: &Manifest,
     sidecars: &HashMap<BindingId, SidecarReader<'_>>,
     dirty: DirtyPages,
-    spill: &crate::snapshot::SpillConfig,
+    working_set_bytes: u64,
+    plan_budget_bytes: u64,
 ) -> Result<RebuildOutcome, CompilerError> {
     let mut outcome = RebuildOutcome::default();
-    let working_set_bytes = spill.working_set_bytes;
     for (binding_id, binding_dirty) in dirty.per_binding {
         if binding_dirty.truncated {
-            rebuild_binding_truncate(deps, plan, &binding_id, spill, &mut outcome).await?;
+            rebuild_binding_truncate(
+                deps,
+                plan,
+                prior,
+                &binding_id,
+                working_set_bytes,
+                plan_budget_bytes,
+                &mut outcome,
+            )
+            .await?;
             continue;
         }
         let sidecar_warn = plan
@@ -173,25 +186,76 @@ pub async fn rebuild_pages(
     Ok(outcome)
 }
 
+/// Truncate-class rebuild: re-derive the binding's pages from scratch via
+/// the unified compile pipeline. Drops every prior page + sidecar of the
+/// binding so the new plan replaces them cleanly even when the new page
+/// count differs from the old one.
 async fn rebuild_binding_truncate(
     deps: &Deps,
     plan: &BootstrapPlan,
+    prior: &Manifest,
     binding_id: &BindingId,
-    spill: &crate::snapshot::SpillConfig,
+    working_set_bytes: u64,
+    plan_budget_bytes: u64,
     outcome: &mut RebuildOutcome,
 ) -> Result<(), CompilerError> {
-    let binding =
+    let binding_plan =
         plan.bindings
             .iter()
             .find(|b| b.binding_id == *binding_id)
             .ok_or(CompilerError::InvariantViolation {
                 what: "rebuild: unknown binding for truncate",
             })?;
-    let bo: BindingOutput = snapshot_one_binding(deps, binding, plan, spill).await?;
-    outcome.refreshed_bindings.push(bo.meta);
-    outcome.replacement_pages.extend(bo.pages);
-    outcome.replacement_class_sidecars.extend(bo.class_sidecars);
-    outcome.replacement_label_sidecars.extend(bo.label_sidecars);
+
+    // drop every prior artifact under this binding; the unified pipeline
+    // emits a fresh page set with page_ids restarting at 0, so any prior
+    // page_id higher than the new count would orphan otherwise.
+    for prior_page in &prior.pages {
+        if prior_page.key.binding_id == *binding_id {
+            outcome.dropped_pages.push(prior_page.key.clone());
+        }
+    }
+    for sc in &prior.class_sidecars {
+        if sc.page_key.binding_id == *binding_id {
+            outcome
+                .dropped_class_sidecars
+                .push((sc.layer_id.clone(), sc.page_key.clone()));
+        }
+    }
+    for sc in &prior.label_sidecars {
+        if sc.page_key.binding_id == *binding_id {
+            outcome
+                .dropped_label_sidecars
+                .push((sc.layer_id.clone(), sc.page_key.clone()));
+        }
+    }
+
+    let port_binding = PortBinding::new(
+        SourceCollectionId::new(binding_plan.binding_id.as_str()),
+        binding_schema(&binding_plan.source_table),
+        binding_table(&binding_plan.source_table),
+        binding_plan.geometry_column.clone(),
+        binding_plan.id_column.as_deref().unwrap_or("id"),
+        binding_plan.attributes.clone(),
+        binding_plan.native_crs.clone(),
+    )?;
+    let mut session = deps.source.open_compile_session(&port_binding).await?;
+    let page_plan = compute_page_plan(session.as_mut(), binding_plan, plan_budget_bytes).await?;
+    let mut out = rebuild_binding_from_plan(
+        deps,
+        plan,
+        binding_plan,
+        &page_plan,
+        session.as_mut(),
+        working_set_bytes,
+    )
+    .await?;
+    session.close().await?;
+
+    outcome.refreshed_bindings.push(out.meta);
+    outcome.replacement_pages.append(&mut out.pages);
+    outcome.replacement_class_sidecars.append(&mut out.class_sidecars);
+    outcome.replacement_label_sidecars.append(&mut out.label_sidecars);
     Ok(())
 }
 
@@ -801,10 +865,10 @@ fn bump_page_id(map: &mut HashMap<DecimationLevel, u64>, level: DecimationLevel)
 /// The session must be freshly opened against `binding_plan`; the plan was
 /// built from its pass-1 scan and pass-2 here re-uses the same snapshot
 /// transaction.
-pub(crate) async fn rebuild_binding_from_plan<'a>(
+pub async fn rebuild_binding_from_plan<'a>(
     deps: &Deps,
     plan: &BootstrapPlan,
-    binding_plan: &crate::plan::BindingPlan,
+    binding_plan: &BindingPlan,
     page_plan: &PagePlan,
     session: &mut (dyn mars_source::CompileSession + 'a),
     working_set_bytes: u64,
@@ -932,6 +996,16 @@ pub(crate) async fn rebuild_binding_from_plan<'a>(
     let sidecar_hash = compute_content_hash(&sidecar_bytes);
     let sidecar_key = membership_sidecar_object_key(binding_plan.binding_id.as_str(), &sidecar_hash)?;
     let sidecar_size = sidecar_bytes.len() as u64;
+    if sidecar_size > binding_plan.sidecar_size_warn_bytes {
+        tracing::warn!(
+            binding = binding_plan.binding_id.as_str(),
+            size_bytes = sidecar_size,
+            threshold_bytes = binding_plan.sidecar_size_warn_bytes,
+            "page-membership sidecar exceeds warning threshold; consider REPLICA IDENTITY FULL for this binding (LAZARUS bailout 4)"
+        );
+        deps.metrics
+            .inc_compiler_sidecar_threshold_warning(binding_plan.binding_id.as_str());
+    }
     deps.store.put(&sidecar_key, sidecar_bytes).await?;
 
     let meta = BindingMetadata {
@@ -974,6 +1048,344 @@ pub fn recompute_level_metadata(prior: &LevelMetadata, pages: &[PageEntry], bind
         page_count: ranges.len() as u32,
         combined_bbox: prior.combined_bbox,
         hilbert_range_table: ranges,
+    }
+}
+
+// -- per-page render helpers --------------------------------------------
+//
+// shared by the unified compile pipeline (truncate + bootstrap-from-plan
+// via `rebuild_binding_from_plan`), the incremental rebuild path, and the
+// rebalance executor. one source row decoded into a feature, with attrs
+// preserved for class / label evaluation and a hilbert key over the
+// binding's combined bbox.
+//
+// `row_fingerprint` is BLAKE3 over the row, used as the final tiebreaker
+// after `(hilbert_key, user_id)` so rows with the same hilbert key and the
+// same user_id (a source row exploded into multiple parts) sort
+// deterministically across compile passes.
+#[derive(Debug, Clone)]
+pub(crate) struct KeyedRow {
+    pub(crate) feature: FeatureGeom,
+    pub(crate) attrs: Arc<Vec<(String, AttrValue)>>,
+    pub(crate) geom_bytes_estimate: u64,
+    pub(crate) key: HilbertKey,
+    pub(crate) row_fingerprint: u64,
+}
+
+/// Output of one binding compile through the unified pipeline.
+#[derive(Debug)]
+pub struct BindingOutput {
+    pub meta: BindingMetadata,
+    pub pages: Vec<PageEntry>,
+    pub class_sidecars: Vec<LayerSidecarEntry>,
+    pub label_sidecars: Vec<LayerSidecarEntry>,
+}
+
+/// Stable per-row tiebreaker. BLAKE3 over `(geometry_bytes ||
+/// canonicalised attribute bytes)` truncated to u64.
+pub(crate) fn compute_row_fingerprint_for_row(row: &RowBytes) -> u64 {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(&row.geometry);
+    // canonicalise: sort attribute pairs by name so reordering doesn't shift
+    // the fingerprint.
+    let mut sorted: Vec<&(String, AttrValue)> = row.attributes.iter().collect();
+    sorted.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+    for (name, value) in sorted {
+        hasher.update(name.as_bytes());
+        hasher.update(b"\0");
+        hash_attr_value(&mut hasher, value);
+        hasher.update(b"\0");
+    }
+    let mut out = [0u8; 8];
+    hasher.finalize_xof().fill(&mut out);
+    u64::from_le_bytes(out)
+}
+
+fn hash_attr_value(hasher: &mut blake3::Hasher, v: &AttrValue) {
+    match v {
+        AttrValue::Null => hasher.update(b"N"),
+        AttrValue::Bool(b) => hasher.update(if *b { b"BT" } else { b"BF" }),
+        AttrValue::Int(i) => {
+            hasher.update(b"I");
+            hasher.update(&i.to_le_bytes())
+        }
+        AttrValue::Float(f) => {
+            hasher.update(b"F");
+            hasher.update(&f.to_bits().to_le_bytes())
+        }
+        AttrValue::String(s) => {
+            hasher.update(b"S");
+            hasher.update(s.as_bytes())
+        }
+    };
+}
+
+/// Pull pruned rows whose hilbert key is `<= cap` off the head of the
+/// pre-sorted slice, advancing `idx`.
+pub(crate) fn drain_pruned_through<'a>(pruned: &'a [KeyedRow], idx: &mut usize, cap: HilbertKey) -> &'a [KeyedRow] {
+    let start = *idx;
+    while *idx < pruned.len() && pruned[*idx].key <= cap {
+        *idx += 1;
+    }
+    &pruned[start..*idx]
+}
+
+/// Encode rows into a page artifact, write it to the object store, and
+/// return the matching [`PageEntry`]. Rows arrive in deterministic slot
+/// order; position becomes the substrate primary key.
+pub(crate) async fn flush_page(
+    deps: &Deps,
+    binding: &BindingPlan,
+    level: DecimationLevel,
+    page_id: PageId,
+    rows: &[KeyedRow],
+) -> Result<PageEntry, CompilerError> {
+    let mut min_x = f64::INFINITY;
+    let mut min_y = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+
+    let mut spatial_index = SpatialIndexBuilder::new(mars_artifact::DEFAULT_NODE_SIZE)?;
+    let mut features: Vec<FeatureGeom> = Vec::with_capacity(rows.len());
+    let mut attrs_pairs: Vec<(u32, Vec<u8>)> = Vec::with_capacity(rows.len());
+
+    for (slot, r) in rows.iter().enumerate() {
+        let bb = r.feature.bbox;
+        let slot_u32 = u32::try_from(slot).map_err(|_| CompilerError::InvariantViolation {
+            what: "page slot overflow",
+        })?;
+        spatial_index.add(slot_u32, bb);
+        if (bb[0] as f64) < min_x {
+            min_x = bb[0] as f64;
+        }
+        if (bb[1] as f64) < min_y {
+            min_y = bb[1] as f64;
+        }
+        if (bb[2] as f64) > max_x {
+            max_x = bb[2] as f64;
+        }
+        if (bb[3] as f64) > max_y {
+            max_y = bb[3] as f64;
+        }
+        features.push(r.feature.clone());
+        let pairs: Vec<(String, ArtAttrValue)> = r
+            .attrs
+            .iter()
+            .map(|(k, v)| (k.clone(), attr_value_to_artifact(v)))
+            .collect();
+        let row_bytes = encode_row(&pairs)?;
+        if row_bytes.len() > MAX_ROW_BYTES {
+            return Err(CompilerError::RowAttributesTooLarge {
+                feature_id: r.feature.user_id,
+                bytes: row_bytes.len(),
+                max: MAX_ROW_BYTES,
+            });
+        }
+        attrs_pairs.push((slot_u32, row_bytes.to_vec()));
+    }
+
+    let page_bbox = Bbox::new(min_x, min_y, max_x, max_y);
+    let spatial_index_bytes = spatial_index.finish()?;
+
+    let mut writer = ArtifactWriter::new(ArtifactKind::Source);
+    writer
+        .add_spatial_index(spatial_index_bytes)
+        .add_geometry_payload(features)
+        .add_attributes(attrs_pairs)
+        .set_bbox(page_bbox)
+        .set_feature_count(rows.len() as u64);
+    let artifact_bytes: Bytes = writer.finish()?;
+    let hash = compute_content_hash(&artifact_bytes);
+
+    let page_key = PageKey {
+        binding_id: binding.binding_id.clone(),
+        level,
+        page_id,
+    };
+    let object_key = page_key.object_key(&hash)?;
+    let size_bytes = artifact_bytes.len() as u64;
+    deps.store.put(&object_key, artifact_bytes).await?;
+
+    let hilbert_lo = rows.iter().map(|r| r.key).min().unwrap_or(HilbertKey::min());
+    let hilbert_hi = rows.iter().map(|r| r.key).max().unwrap_or(HilbertKey::max());
+
+    Ok(PageEntry {
+        key: page_key,
+        content_hash: hash,
+        spatial_bbox: page_bbox,
+        hilbert_range: (hilbert_lo, hilbert_hi),
+        feature_count: rows.len() as u64,
+        size_bytes,
+    })
+}
+
+/// For each layer plan: evaluate class assignments against `rows`, emit a
+/// label candidate per row whose attrs match, and write per-layer class /
+/// label sidecars to the store.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn emit_layer_sidecars(
+    deps: &Deps,
+    level: &LevelPlan,
+    page: &PageEntry,
+    rows: &[KeyedRow],
+    pruned: &[KeyedRow],
+    layers: &[&LayerPlan],
+    out_class: &mut Vec<LayerSidecarEntry>,
+    out_label: &mut Vec<LayerSidecarEntry>,
+) -> Result<(), CompilerError> {
+    for layer in layers {
+        let mut assignments: Vec<(u32, u16)> = Vec::with_capacity(rows.len());
+        let mut labels: Vec<LabelCandidate> = Vec::new();
+
+        let when_clauses: Vec<Option<mars_expr::Expr>> = layer.classes.iter().map(|c| c.when.clone()).collect();
+        let style_refs: Vec<String> = layer.classes.iter().map(|c| c.style_ref.clone()).collect();
+        let label_spec = layer.label.as_ref().map(|l| LabelSpec {
+            priority: l.style.priority,
+            text: &l.text,
+            placement: &l.placement,
+            style_ref_idx: u16::try_from(style_refs.len()).unwrap_or(u16::MAX),
+        });
+
+        for (slot, r) in rows.iter().enumerate() {
+            let slot_u32 = u32::try_from(slot).map_err(|_| CompilerError::InvariantViolation {
+                what: "page slot overflow",
+            })?;
+            let attrs = RowAttrs::new(r.attrs.as_ref());
+            if let Some(idx) = assign_class(&when_clauses, &attrs) {
+                assignments.push((slot_u32, idx));
+            }
+            if let Some(spec) = &label_spec
+                && let Some(c) = emit_label_candidate(
+                    &r.feature,
+                    Some(slot_u32),
+                    &attrs,
+                    spec,
+                    layer.label_survival,
+                    level.label_min_priority,
+                )
+            {
+                labels.push(c);
+            }
+        }
+
+        if let Some(spec) = &label_spec {
+            for r in pruned {
+                let attrs = RowAttrs::new(r.attrs.as_ref());
+                if let Some(c) = emit_label_candidate(
+                    &r.feature,
+                    None,
+                    &attrs,
+                    spec,
+                    layer.label_survival,
+                    level.label_min_priority,
+                ) {
+                    labels.push(c);
+                }
+            }
+        }
+
+        let mut style_refs_full = style_refs;
+        if let Some(label_plan) = layer.label.as_ref() {
+            style_refs_full.push(label_plan.style_ref.clone());
+        }
+
+        let class_bytes = build_class_artifact(&assignments, &style_refs_full, page.spatial_bbox)?;
+        let class_hash = compute_content_hash(&class_bytes);
+        let class_size = class_bytes.len() as u64;
+        let class_entry = LayerSidecarEntry {
+            layer_id: layer.layer_id.clone(),
+            page_key: page.key.clone(),
+            content_hash: class_hash,
+            size_bytes: class_size,
+            kind: LayerSidecarKind::Class,
+        };
+        let class_obj = class_entry.object_key()?;
+        deps.store.put(&class_obj, class_bytes).await?;
+        out_class.push(class_entry);
+
+        if !labels.is_empty() {
+            // slotted entries first (ascending feature_idx), pruned at the tail.
+            labels.sort_by_key(|c| (c.feature_idx.is_none(), c.feature_idx.unwrap_or(0)));
+            let label_bytes = build_label_artifact(&labels, page.spatial_bbox)?;
+            let label_hash = compute_content_hash(&label_bytes);
+            let label_size = label_bytes.len() as u64;
+            let label_entry = LayerSidecarEntry {
+                layer_id: layer.layer_id.clone(),
+                page_key: page.key.clone(),
+                content_hash: label_hash,
+                size_bytes: label_size,
+                kind: LayerSidecarKind::Label,
+            };
+            let label_obj = label_entry.object_key()?;
+            deps.store.put(&label_obj, label_bytes).await?;
+            out_label.push(label_entry);
+        }
+    }
+    Ok(())
+}
+
+fn build_class_artifact(
+    assignments: &[(u32, u16)],
+    style_refs: &[String],
+    page_bbox: Bbox,
+) -> Result<Bytes, CompilerError> {
+    let mut writer = ArtifactWriter::new(ArtifactKind::Layer);
+    writer
+        .add_class_assignment(assignments)
+        .add_style_refs(style_refs)
+        .set_bbox(page_bbox)
+        .set_feature_count(assignments.len() as u64);
+    writer.finish().map_err(CompilerError::from)
+}
+
+fn build_label_artifact(labels: &[LabelCandidate], page_bbox: Bbox) -> Result<Bytes, CompilerError> {
+    let mut writer = ArtifactWriter::new(ArtifactKind::Layer);
+    writer
+        .add_label_candidates(labels)
+        .set_bbox(page_bbox)
+        .set_feature_count(labels.len() as u64);
+    writer.finish().map_err(CompilerError::from)
+}
+
+pub(crate) fn empty_level_metadata(level: &LevelPlan) -> LevelMetadata {
+    LevelMetadata {
+        level: level.level,
+        vertex_tolerance_m: level.vertex_tolerance_m,
+        geometry_min_size_m: level.geometry_min_size_m,
+        label_min_priority: level.label_min_priority,
+        page_count: 0,
+        combined_bbox: Bbox::new(0.0, 0.0, 0.0, 0.0),
+        hilbert_range_table: Vec::new(),
+    }
+}
+
+pub(crate) fn binding_schema(from: &str) -> &str {
+    from.split_once('.').map(|(s, _)| s).unwrap_or("public")
+}
+
+pub(crate) fn binding_table(from: &str) -> &str {
+    from.split_once('.').map(|(_, t)| t).unwrap_or(from)
+}
+
+pub(crate) fn membership_sidecar_object_key(binding: &str, hash: &ContentHash) -> Result<ArtifactKey, CompilerError> {
+    if binding.contains('/') || binding.contains('\0') {
+        return Err(CompilerError::InvalidBindingId {
+            binding: binding.to_string(),
+        });
+    }
+    Ok(ArtifactKey::new(format!(
+        "bnd/{binding}/sidecar/{hex}.pmsc",
+        hex = hash.to_hex()
+    )))
+}
+
+fn attr_value_to_artifact(v: &AttrValue) -> ArtAttrValue {
+    match v {
+        AttrValue::Null => ArtAttrValue::Null,
+        AttrValue::Bool(b) => ArtAttrValue::Bool(*b),
+        AttrValue::Int(i) => ArtAttrValue::Int(*i),
+        AttrValue::Float(f) => ArtAttrValue::Float(*f),
+        AttrValue::String(s) => ArtAttrValue::String(s.clone()),
     }
 }
 

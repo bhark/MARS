@@ -2258,7 +2258,6 @@ dependencies = [
  "mars-store",
  "mars-style",
  "mars-types",
- "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
