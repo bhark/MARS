@@ -161,7 +161,9 @@ async fn e2e_change_feed_cycle_publishes_v3_manifest() -> Result<()> {
     let mut subscription = source.subscribe().await.context("subscribe")?;
 
     // Mutate: insert one new row, update one existing row in place, delete one.
-    let (client, conn) = tokio_postgres::connect(&dsn, NoTls).await.context("post-bootstrap connect")?;
+    let (client, conn) = tokio_postgres::connect(&dsn, NoTls)
+        .await
+        .context("post-bootstrap connect")?;
     tokio::spawn(async move {
         let _ = conn.await;
     });
@@ -280,9 +282,7 @@ async fn setup_database(dsn: &str) -> Result<()> {
                     }
                     let x = f64::from(i) * 4.0;
                     let y = f64::from(i) * 4.0;
-                    bulk.push_str(&format!(
-                        "({i}, 'p{i}', ST_GeomFromText('POINT({x} {y})', 25832))",
-                    ));
+                    bulk.push_str(&format!("({i}, 'p{i}', ST_GeomFromText('POINT({x} {y})', 25832))",));
                 }
                 bulk.push(';');
                 client.batch_execute(&bulk).await.context("seed insert")?;

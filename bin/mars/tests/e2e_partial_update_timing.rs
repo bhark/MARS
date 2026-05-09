@@ -23,8 +23,8 @@ use mars_source::ChangeFeed;
 use mars_source_postgres::{CollectionTopology, PgConfig, PgSource, ReplicationTopology};
 use mars_store_fs::{FsPublisher, FsStore};
 use rand::distributions::{Alphanumeric, DistString};
-use rand::{Rng, SeedableRng};
 use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 use tempfile::TempDir;
 use testcontainers::{
     GenericImage, ImageExt,
@@ -168,9 +168,7 @@ async fn partial_update_cycle_within_5min() -> Result<()> {
     let cycle_start = Instant::now();
     let v2 = compiler.run_cycle_once(batches).await.context("run_cycle_once")?;
     let cycle_elapsed = cycle_start.elapsed();
-    eprintln!(
-        "[gate2] cycle done in {cycle_elapsed:?} (manifest v{v2}); budget {GATE_BUDGET:?}"
-    );
+    eprintln!("[gate2] cycle done in {cycle_elapsed:?} (manifest v{v2}); budget {GATE_BUDGET:?}");
 
     assert!(
         cycle_elapsed <= GATE_BUDGET,
@@ -272,9 +270,7 @@ async fn apply_edit_batch(dsn: &str) -> Result<()> {
             ));
         } else if r < 0.2 {
             let target_id = rng.gen_range(0..FIXTURE_ROWS);
-            sql.push_str(&format!(
-                "DELETE FROM mars_timing.points WHERE gid = {target_id};\n"
-            ));
+            sql.push_str(&format!("DELETE FROM mars_timing.points WHERE gid = {target_id};\n"));
         } else {
             let target_id = rng.gen_range(0..FIXTURE_ROWS);
             let x = rng.gen_range(0.0..1_000_000.0);

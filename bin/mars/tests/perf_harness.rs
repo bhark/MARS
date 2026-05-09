@@ -224,14 +224,12 @@ struct LatencyResult {
     max_ms: f64,
 }
 
-async fn measure_latency(
-    runtime: &Runtime,
-    plan: &RenderPlan,
-    samples: usize,
-    warmup: usize,
-) -> Result<LatencyResult> {
+async fn measure_latency(runtime: &Runtime, plan: &RenderPlan, samples: usize, warmup: usize) -> Result<LatencyResult> {
     for _ in 0..warmup {
-        runtime.render(plan).await.map_err(|e| anyhow::anyhow!("warmup render: {e}"))?;
+        runtime
+            .render(plan)
+            .await
+            .map_err(|e| anyhow::anyhow!("warmup render: {e}"))?;
     }
     let mut ms_samples = Vec::with_capacity(samples);
     for _ in 0..samples {
