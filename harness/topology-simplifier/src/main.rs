@@ -6,6 +6,7 @@
 
 use clap::Parser;
 
+mod dp;
 mod graph;
 mod ingest;
 
@@ -66,7 +67,16 @@ fn main() -> anyhow::Result<()> {
         gstats.shared_arc_count,
         gstats.island_arc_count,
     );
-    eprintln!("(dp + reassemble + verify modules land in subsequent commits)");
-    let _ = topo;
+    for (i, tol) in args.tolerance_m.iter().enumerate() {
+        let simp = dp::simplify_arcs(&topo, *tol);
+        let total: usize = simp.arcs.iter().map(Vec::len).sum();
+        eprintln!(
+            "level {} (tolerance {} m): simplified arc vertex total = {}",
+            i + 1,
+            tol,
+            total,
+        );
+    }
+    eprintln!("(reassemble + verify modules land in subsequent commits)");
     Ok(())
 }
