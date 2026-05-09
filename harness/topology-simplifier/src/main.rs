@@ -9,6 +9,7 @@ use clap::Parser;
 mod dp;
 mod graph;
 mod ingest;
+mod reassemble;
 
 #[derive(Debug, Parser)]
 #[command(name = "topology-simplifier", about = "Phase 0 topology-aware simplification spike")]
@@ -69,14 +70,18 @@ fn main() -> anyhow::Result<()> {
     );
     for (i, tol) in args.tolerance_m.iter().enumerate() {
         let simp = dp::simplify_arcs(&topo, *tol);
-        let total: usize = simp.arcs.iter().map(Vec::len).sum();
+        let (_out, rstats) = reassemble::reassemble(&geoms, &topo, &simp);
         eprintln!(
-            "level {} (tolerance {} m): simplified arc vertex total = {}",
+            "level {} (tolerance {} m): rings={} collapsed_ring={} collapsed_arc={} invalid_hole={} self_isect={}",
             i + 1,
             tol,
-            total,
+            rstats.rings_total,
+            rstats.collapsed_ring_count,
+            rstats.collapsed_arc_count,
+            rstats.invalid_reassembly_count,
+            rstats.self_intersection_count,
         );
     }
-    eprintln!("(reassemble + verify modules land in subsequent commits)");
+    eprintln!("(verify module lands in next commit)");
     Ok(())
 }
