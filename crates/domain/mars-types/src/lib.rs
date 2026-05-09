@@ -184,8 +184,9 @@ impl_string_newtype!(
 );
 
 impl BindingId {
-    /// validating constructor. rejects empty, oversized, slash-bearing, null-
-    /// bearing, `.` and `..` ids before they can land in an object key.
+    /// validating constructor. rejects empty, oversized, slash-bearing,
+    /// backslash-bearing, null-bearing, `.` and `..` ids before they can
+    /// land in an object key.
     pub fn try_new(s: impl Into<::std::sync::Arc<str>>) -> Result<Self, BindingIdError> {
         let id = Self(s.into());
         if !is_safe_segment(id.as_str()) {
@@ -457,7 +458,13 @@ impl core::fmt::Display for ContentHash {
 
 /// true when `s` is a non-empty, bounded, path-safe segment.
 fn is_safe_segment(s: &str) -> bool {
-    !s.is_empty() && s.len() <= 128 && !s.contains('/') && !s.contains('\0') && s != "." && s != ".."
+    !s.is_empty()
+        && s.len() <= 128
+        && !s.contains('/')
+        && !s.contains('\\')
+        && !s.contains('\0')
+        && s != "."
+        && s != ".."
 }
 
 /// errors raised while building an [`ArtifactKey`] for a known on-disk shape.
@@ -681,6 +688,7 @@ mod tests {
     fn binding_id_try_new_rejects_unsafe() {
         assert!(BindingId::try_new("").is_err(), "empty");
         assert!(BindingId::try_new("foo/bar").is_err(), "slash");
+        assert!(BindingId::try_new("foo\\bar").is_err(), "backslash");
         assert!(BindingId::try_new("a\0b").is_err(), "null");
         assert!(BindingId::try_new("..").is_err(), "dotdot");
         assert!(BindingId::try_new(".").is_err(), "dot");
