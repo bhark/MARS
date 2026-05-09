@@ -5,6 +5,7 @@
 //! no tokio.
 
 mod emitter;
+mod expression;
 mod scanner;
 
 use std::fs;
@@ -21,7 +22,7 @@ use tracing_subscriber::util::SubscriberInitExt as _;
 use tracing_subscriber::{EnvFilter, Layer};
 
 use crate::emitter::{LayerSkeleton, Skeleton};
-use crate::scanner::{Token, block_range, is_block_opener, scan};
+use crate::scanner::{Token, block_range, is_block_opener, scan, scan_file};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -43,8 +44,6 @@ struct Cli {
 /// keywords whose presence we don't translate yet. some are block openers,
 /// some are scalar directives — `walk` handles both.
 const UNSUPPORTED: &[&str] = &[
-    "CLASS",
-    "STYLE",
     "SYMBOL",
     "FONTSET",
     "LEGEND",
@@ -97,8 +96,9 @@ fn main() -> Result<()> {
     let warn_count = Arc::new(AtomicUsize::new(0));
     install_tracing(warn_count.clone());
 
-    let src = fs::read_to_string(&cli.input).with_context(|| format!("reading {}", cli.input.display()))?;
-    let skeleton = translate(&src);
+    let tokens = scan_file(&cli.input)
+        .with_context(|| format!("scanning {}", cli.input.display()))?;
+    let skeleton = translate_tokens(&tokens);
     let yaml = emitter::render(&skeleton);
 
     match &cli.output {
@@ -117,17 +117,22 @@ fn main() -> Result<()> {
 
 /// translate a mapfile source into a YAML skeleton, warning on unsupported
 /// constructs as a side-effect via `tracing::warn!`.
+#[allow(dead_code)]
 pub(crate) fn translate(src: &str) -> Skeleton {
     let tokens = scan(src);
+    translate_tokens(&tokens)
+}
+
+fn translate_tokens(tokens: &[Token]) -> Skeleton {
     let mut skel = Skeleton::default();
 
     let map_slice: &[Token] = match tokens
         .iter()
         .position(|t| t.keyword.eq_ignore_ascii_case("MAP"))
-        .and_then(|i| block_range(&tokens, i))
+        .and_then(|i| block_range(tokens, i))
     {
         Some(r) => &tokens[r.start + 1..r.end.saturating_sub(1).max(r.start + 1)],
-        None => &tokens[..],
+        None => tokens,
     };
 
     walk(map_slice, &mut skel);

@@ -2363,6 +2363,8 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "clap",
+ "mars-expr",
+ "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",
 ]
