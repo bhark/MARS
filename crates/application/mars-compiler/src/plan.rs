@@ -43,6 +43,20 @@ pub enum PlanError {
         /// short description of which field disagrees
         detail: &'static str,
     },
+    /// Same `(layer_id, binding_id)` pair declared twice with diverging
+    /// class / label / kind shape. SPEC §7.3: bands are routing rules, not
+    /// substrate axes — multiple sources of one layer that resolve to the
+    /// same binding collapse to a single `LayerPlan`, which requires their
+    /// per-layer shape (classes, label, kind, label_survival) to agree.
+    #[error("layer {layer} on binding {binding} declared with conflicting shape: {detail}")]
+    ConflictingLayer {
+        /// layer name with conflicting declarations
+        layer: LayerId,
+        /// binding id the conflict is scoped to
+        binding: BindingId,
+        /// short description of which field disagrees
+        detail: &'static str,
+    },
     /// A class's `when:` failed to parse. config validation usually catches
     /// this; surfaced here in case a config bypasses validate.
     #[error("layer {layer} class {class:?} when: parse error: {source}")]
@@ -194,7 +208,15 @@ pub fn build_bootstrap_plan(cfg: &Config) -> Result<BootstrapPlan, PlanError> {
                 bindings.push(plan);
             }
 
-            layers.push(build_layer_plan(cfg, layer, &id)?);
+            let layer_plan = build_layer_plan(cfg, layer, &id)?;
+            if let Some(existing) = layers
+                .iter()
+                .find(|l| l.layer_id == layer_plan.layer_id && l.binding_id == layer_plan.binding_id)
+            {
+                ensure_layer_consistent(existing, &layer_plan)?;
+            } else {
+                layers.push(layer_plan);
+            }
         }
     }
 
@@ -363,6 +385,38 @@ fn ensure_consistent(existing: &BindingPlan, candidate: &BindingPlan) -> Result<
         return Err(PlanError::ConflictingBinding {
             id: existing.binding_id.clone(),
             detail: "simplifier",
+        });
+    }
+    Ok(())
+}
+
+fn ensure_layer_consistent(existing: &LayerPlan, candidate: &LayerPlan) -> Result<(), PlanError> {
+    if existing.kind != candidate.kind {
+        return Err(PlanError::ConflictingLayer {
+            layer: existing.layer_id.clone(),
+            binding: existing.binding_id.clone(),
+            detail: "kind",
+        });
+    }
+    if existing.classes != candidate.classes {
+        return Err(PlanError::ConflictingLayer {
+            layer: existing.layer_id.clone(),
+            binding: existing.binding_id.clone(),
+            detail: "classes",
+        });
+    }
+    if existing.label != candidate.label {
+        return Err(PlanError::ConflictingLayer {
+            layer: existing.layer_id.clone(),
+            binding: existing.binding_id.clone(),
+            detail: "label",
+        });
+    }
+    if existing.label_survival != candidate.label_survival {
+        return Err(PlanError::ConflictingLayer {
+            layer: existing.layer_id.clone(),
+            binding: existing.binding_id.clone(),
+            detail: "label_survival",
         });
     }
     Ok(())
@@ -659,8 +713,8 @@ mod tests {
                 label_min_priority: 100,
             },
         ]);
-        let cfg = config_with(vec![layer("l", vec![b])]);
-        mars_config::validate(&cfg, Path::new(".")).expect("validate");
+        let mut cfg = config_with(vec![layer("l", vec![b])]);
+        mars_config::validate(&mut cfg, Path::new(".")).expect("validate");
         let plan = build_bootstrap_plan(&cfg).expect("plan");
         assert_eq!(plan.bindings.len(), 1);
         let levels = &plan.bindings[0].levels;
@@ -677,5 +731,48 @@ mod tests {
         assert_eq!(levels[2].vertex_tolerance_m, 10.0);
         assert_eq!(levels[2].geometry_min_size_m, 25.0);
         assert_eq!(levels[2].label_min_priority, 100);
+    }
+
+    /// SPEC §7.3: bands are routing rules, not substrate axes. two sources of
+    /// the same layer that resolve to the same binding must collapse to one
+    /// LayerPlan, otherwise rebuild emits duplicate sidecars per page.
+    #[test]
+    fn layer_with_two_sources_same_binding_dedupes_layer_plan() {
+        let mut b1 = binding("vejmidte");
+        b1.band = Some("hi".into());
+        let mut b2 = binding("vejmidte");
+        b2.band = Some("mid".into());
+        let mut cfg = config_with(vec![layer("Vejmidte", vec![b1, b2])]);
+        // band: mid must exist in scales.bands or config validation would
+        // reject; the plan layer doesn't care, but keep the model coherent.
+        cfg.scales.bands.push(Band {
+            name: "mid".into(),
+            max_denom: 250_000,
+        });
+        let plan = build_bootstrap_plan(&cfg).unwrap();
+        assert_eq!(plan.bindings.len(), 1);
+        assert_eq!(plan.layers.len(), 1, "expected one LayerPlan, got {:#?}", plan.layers);
+        let id = BindingId::try_new("vejmidte").unwrap();
+        assert_eq!(plan.layers_for(&id).count(), 1);
+    }
+
+    #[test]
+    fn rejects_conflicting_layer_classes() {
+        let b1 = binding("parcels");
+        let b2 = binding("parcels");
+        let l1 = layer("shared", vec![b1]);
+        let mut l2 = layer("shared", vec![b2]);
+        l2.classes = vec![mars_config::Class {
+            name: "other".into(),
+            title: String::new(),
+            when: None,
+            style: ClassStyle::Inline(Default::default()),
+        }];
+        let cfg = config_with(vec![l1, l2]);
+        let err = build_bootstrap_plan(&cfg).unwrap_err();
+        assert!(
+            matches!(err, PlanError::ConflictingLayer { detail: "classes", .. }),
+            "unexpected error: {err:?}"
+        );
     }
 }
