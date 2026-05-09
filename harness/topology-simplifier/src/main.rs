@@ -1,10 +1,12 @@
 //! topology-simplifier harness entrypoint.
 //!
-//! workspace-excluded operator tool; see README. the binary scaffolding lives
-//! here from commit 1 — subsequent commits flesh out ingest, graph, dp,
-//! reassembly, verifier, timing, and image cross-check modules.
+//! workspace-excluded operator tool; see README. successive commits flesh out
+//! ingest, graph, dp, reassembly, verifier, timing, and image cross-check
+//! modules.
 
 use clap::Parser;
+
+mod ingest;
 
 #[derive(Debug, Parser)]
 #[command(name = "topology-simplifier", about = "Phase 0 topology-aware simplification spike")]
@@ -33,13 +35,25 @@ struct Args {
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     eprintln!(
-        "topology-simplifier scaffold: fixture={} out={} quantise={}mm tolerances={:?}",
+        "topology-simplifier: fixture={} out={} quantise={}mm tolerances={:?}",
         args.fixture.display(),
         args.out.display(),
         args.quantise_mm,
         args.tolerance_m,
     );
-    eprintln!("(scaffold only — pipeline modules land in subsequent commits)");
     let _ = args.degenerate_threshold;
+
+    let (geoms, stats) = ingest::load_fixture(&args.fixture)?;
+    eprintln!(
+        "ingest: lines={} kept={} skipped_non_polygon={} skipped_bad_line={} skipped_bad_hex={} skipped_bad_wkb={}",
+        stats.lines_read,
+        stats.kept,
+        stats.skipped_non_polygon,
+        stats.skipped_bad_line,
+        stats.skipped_bad_hex,
+        stats.skipped_bad_wkb,
+    );
+    eprintln!("(graph + dp + reassemble + verify modules land in subsequent commits)");
+    let _ = geoms;
     Ok(())
 }
