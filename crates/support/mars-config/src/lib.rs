@@ -367,9 +367,9 @@ fn validate_band_tiers(
                 layer.name
             ))
         })?;
-        let band_cap = band_window.max.ok_or_else(|| {
-            ConfigError::Invalid("band cap is missing".into())
-        })?;
+        let band_cap = band_window
+            .max
+            .ok_or_else(|| ConfigError::Invalid("band cap is missing".into()))?;
 
         // back-compat: single source, no max_denom → covers whole band, no further checks.
         if sources.len() == 1 && sources[0].1.max_denom.is_none() {
@@ -857,7 +857,10 @@ mod tests {
             label_survival: mars_style::LabelSurvival::Independent,
         }];
         let err = validate(&mut cfg, Path::new(".")).unwrap_err();
-        assert!(err.to_string().contains("missing"), "expected missing attribute error: {err}");
+        assert!(
+            err.to_string().contains("missing"),
+            "expected missing attribute error: {err}"
+        );
     }
 
     #[test]
@@ -1619,14 +1622,12 @@ mod tests {
     #[test]
     fn tier_max_denom_exceeds_band_cap_rejected() {
         let mut cfg = two_band_config();
-        cfg.layers = vec![tiered_layer(vec![
-            SourceBinding {
-                band: Some("hi".into()),
-                max_denom: Some(50_000),
-                from: "a".into(),
-                ..binding("a")
-            },
-        ])];
+        cfg.layers = vec![tiered_layer(vec![SourceBinding {
+            band: Some("hi".into()),
+            max_denom: Some(50_000),
+            from: "a".into(),
+            ..binding("a")
+        }])];
         let err = validate(&mut cfg, Path::new(".")).unwrap_err();
         assert!(err.to_string().contains("exceeds band cap"));
     }
