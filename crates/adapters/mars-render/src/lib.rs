@@ -422,28 +422,49 @@ mod tests {
         assert!(pm.is_ok(), "label op should be skipped, not error: {pm:?}");
     }
 
+    /// drives the same `jpeg_encoder` / `jpeg_decoder` pair the diff harness
+    /// uses (`bin/mars-diff-capture/src/coverage.rs::coverage_jpeg`). exercised
+    /// at three sizes so an mcu-boundary regression in the encoder cannot
+    /// hide behind the 16x16 single-mcu degenerate case: 16 = 1 mcu per side,
+    /// 512 = exactly 32 mcus per side (matches the `composite-urban-detail-jpeg`
+    /// case dimensions), 510 = non-multiple-of-16 chroma-upsampling boundary.
     #[test]
     fn jpeg_roundtrip_decodes_to_expected_dimensions() {
-        let canvas = Canvas {
-            width: 16,
-            height: 16,
-            background: Some(red()),
-        };
-        let pm = TinySkiaRenderer::new(std::sync::Arc::new(mars_text::Fonts::with_default()))
-            .render(canvas, &[])
-            .unwrap();
-        let bytes = TinySkiaEncoder::default().encode(&pm, ImageFormat::Jpeg).unwrap();
-        assert!(bytes.starts_with(&[0xFF, 0xD8]), "jpeg SOI marker");
+        for &dim in &[16u32, 510, 512] {
+            let canvas = Canvas {
+                width: dim,
+                height: dim,
+                background: Some(red()),
+            };
+            let pm = TinySkiaRenderer::new(std::sync::Arc::new(mars_text::Fonts::with_default()))
+                .render(canvas, &[])
+                .unwrap();
+            let bytes = TinySkiaEncoder::default().encode(&pm, ImageFormat::Jpeg).unwrap();
+            assert!(bytes.starts_with(&[0xFF, 0xD8]), "jpeg SOI marker at {dim}x{dim}");
 
-        let mut dec = jpeg_decoder::Decoder::new(std::io::Cursor::new(&bytes));
-        let pixels = dec.decode().unwrap();
-        let info = dec.info().unwrap();
-        assert_eq!((info.width, info.height), (16, 16));
-        assert_eq!(info.pixel_format, jpeg_decoder::PixelFormat::RGB24);
+            let mut dec = jpeg_decoder::Decoder::new(std::io::Cursor::new(&bytes));
+            let pixels = dec.decode().unwrap();
+            let info = dec.info().unwrap();
+            assert_eq!((info.width, info.height), (dim as u16, dim as u16), "dim {dim}");
+            // harness coverage_jpeg only accepts RGB24 / L8; if jpeg_encoder
+            // ever changes default colour space the harness silently regresses
+            // to coverage=None. assert here so the test fails first.
+            assert_eq!(
+                info.pixel_format,
+                jpeg_decoder::PixelFormat::RGB24,
+                "harness coverage path expects RGB24 at {dim}x{dim}"
+            );
 
-        // sanity-check colour is roughly red after lossy round-trip.
-        let (r, g, b) = (pixels[0], pixels[1], pixels[2]);
-        assert!(r > 200 && g < 60 && b < 60, "expected red-ish, got ({r},{g},{b})");
+            // mid-image sample (not corner) so chroma-upsampling artefacts at
+            // the right/bottom edge of non-multiple-of-16 sizes can't hide a
+            // colour-channel swap.
+            let mid = ((dim as usize / 2) * dim as usize + (dim as usize / 2)) * 3;
+            let (r, g, b) = (pixels[mid], pixels[mid + 1], pixels[mid + 2]);
+            assert!(
+                r > 200 && g < 60 && b < 60,
+                "expected red-ish at {dim}x{dim}, got ({r},{g},{b})"
+            );
+        }
     }
 
     #[test]
