@@ -248,7 +248,10 @@ pub enum AttrValue {
 /// Read-side port. Phase C surface (LAZARUS):
 /// - `fetch_full_table_streaming(binding)` for snapshot bootstrap, and
 /// - `fetch_by_feature_ids(binding, ids)` for incremental page rebuilds
-///   (PK-indexed, `WHERE id = ANY($1)`) — added in Phase C.2.
+///   (`WHERE id_column = ANY($1)`; bag-valued — sources are allowed to
+///   return multiple rows per id, in which case the compiler treats each
+///   row as a distinct substrate feature for rendering purposes) — added
+///   in Phase C.2.
 #[async_trait]
 pub trait Source: Send + Sync + 'static {
     /// Stream every row of `binding`'s table in undefined order. Cursor /
