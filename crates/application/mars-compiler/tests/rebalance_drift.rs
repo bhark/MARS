@@ -240,17 +240,19 @@ async fn execute_rebalance_split_preserves_feature_ids_and_balances_sizes() {
     let after_count: u64 = outcome.replacement_pages.iter().map(|p| p.feature_count).sum();
     assert_eq!(after_count, single.feature_count);
 
-    // every prior feature id resolves in exactly one rebuilt page.
+    // every prior feature id resolves in exactly one rebuilt page. With the
+    // slot-keyed substrate, walk the geometry index of each replacement page
+    // and tally per user_id.
     let mut after_size: u64 = 0;
     let mut hits_per_id: HashMap<u64, u32> = HashMap::new();
     for new_page in &outcome.replacement_pages {
         let key = new_page.key.object_key(&new_page.content_hash).unwrap();
         let bytes = store.get(&key, new_page.content_hash).await.unwrap();
         let reader = mars_artifact::ArtifactReader::open(bytes).unwrap();
-        for id in 0..200u64 {
-            if reader.attributes_by_feature_id(id).unwrap().is_some() {
-                *hits_per_id.entry(id).or_insert(0) += 1;
-            }
+        let geom_bytes = reader.section(mars_artifact::SectionKind::GeometryPayload).unwrap();
+        for entry in mars_artifact::iter_feature_index(&geom_bytes).unwrap() {
+            let entry = entry.unwrap();
+            *hits_per_id.entry(entry.user_id).or_insert(0) += 1;
         }
         after_size += new_page.size_bytes;
     }

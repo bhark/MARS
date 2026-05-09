@@ -153,7 +153,7 @@ mod tests {
 
     fn fg(bbox: [f32; 4]) -> FeatureGeom {
         FeatureGeom {
-            id: 1,
+            user_id: 1,
             bbox,
             geom: GeomKind::Point((0.0, 0.0)),
         }

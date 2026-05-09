@@ -8,7 +8,7 @@
 //! emit `Delete`, missing rows (in source but not sidecar) fetch geometry
 //! once and emit `Insert`.
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 
 use futures_util::StreamExt;
 use mars_artifact::{wkb_centroid, wkb_to_feature_geom};
@@ -21,14 +21,23 @@ use crate::snapshot::{binding_schema, binding_table};
 use crate::{CompilerError, Deps};
 
 /// summary of one reconciliation pass over a binding.
+///
+/// Bag semantics: drift is counted per `user_id` rather than treated as a
+/// boolean. `missing_in_sidecar[i] = (user_id, count)` says the source
+/// returned `count` more rows for `user_id` than the sidecar carries; the
+/// orphan map is the symmetric inverse. With non-unique source ids one
+/// row can split into several substrate features, so a single user_id may
+/// drift by more than one entry per cycle.
 #[derive(Debug, Clone)]
 pub struct ReconciliationReport {
     /// binding the pass ran against.
     pub binding_id: BindingId,
-    /// ids present in the source but absent from the sidecar.
-    pub missing_in_sidecar: Vec<u64>,
-    /// ids present in the sidecar but absent from the source.
-    pub orphan_in_sidecar: Vec<u64>,
+    /// `(user_id, count)` pairs for entries present in the source but not
+    /// (yet) reflected in the sidecar.
+    pub missing_in_sidecar: Vec<(u64, u32)>,
+    /// `(user_id, count)` pairs for entries present in the sidecar but no
+    /// longer present in the source.
+    pub orphan_in_sidecar: Vec<(u64, u32)>,
 }
 
 /// reconcile output: report plus the synthetic events the caller should
@@ -60,38 +69,73 @@ pub async fn reconcile_binding(
         binding_plan.native_crs.clone(),
     )?;
 
-    // 1. stream every source feature id.
+    // 1. count source rows per user_id (bag, not set — a non-unique source id
+    //    contributes one count per row).
     let mut stream = deps.source.stream_feature_ids(&port_binding).await?;
-    let mut source_ids: BTreeSet<u64> = BTreeSet::new();
+    let mut source_counts: BTreeMap<u64, u32> = BTreeMap::new();
     while let Some(item) = stream.next().await {
         let id = item?;
         if id < 0 {
             continue;
         }
-        source_ids.insert(id as u64);
+        *source_counts.entry(id as u64).or_default() += 1;
     }
 
-    // 2. diff against the sidecar.
-    let sidecar_ids: BTreeSet<u64> = sidecar.iter().map(|(id, _)| id).collect();
-    let missing: Vec<u64> = source_ids.difference(&sidecar_ids).copied().collect();
-    let orphan: Vec<u64> = sidecar_ids.difference(&source_ids).copied().collect();
+    // 2. count sidecar entries per user_id.
+    let mut sidecar_counts: BTreeMap<u64, u32> = BTreeMap::new();
+    for (id, _) in sidecar.iter() {
+        *sidecar_counts.entry(id).or_default() += 1;
+    }
+
+    // 3. diff: every user_id with a non-zero delta drives synthetic events.
+    //    union of keys so we can spot ids that left the source entirely.
+    let mut all_ids: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
+    all_ids.extend(source_counts.keys().copied());
+    all_ids.extend(sidecar_counts.keys().copied());
 
     let collection = SourceCollectionId::new(binding_plan.binding_id.as_str());
-    let mut events: Vec<ChangeEvent> = Vec::with_capacity(missing.len() + orphan.len());
+    let mut missing: Vec<(u64, u32)> = Vec::new();
+    let mut orphan: Vec<(u64, u32)> = Vec::new();
+    let mut to_fetch: Vec<u64> = Vec::new();
+    let mut events: Vec<ChangeEvent> = Vec::new();
 
-    // 3. orphans: emit Delete with no envelope; the cycle resolves the
-    //    hilbert key via sidecar lookup.
-    for id in &orphan {
-        events.push(ChangeEvent::Delete {
-            collection: collection.clone(),
-            feature_id: *id,
-            old_envelope: None,
-        });
+    for id in all_ids {
+        let src = source_counts.get(&id).copied().unwrap_or(0);
+        let side = sidecar_counts.get(&id).copied().unwrap_or(0);
+        match src.cmp(&side) {
+            std::cmp::Ordering::Greater => {
+                missing.push((id, src - side));
+                to_fetch.push(id);
+            }
+            std::cmp::Ordering::Less => {
+                let diff = side - src;
+                orphan.push((id, diff));
+                // emit `diff` Delete events; with bag semantics we cannot
+                // pin which specific multimap entry left, so the cycle
+                // dirties every page covering any sidecar entry for this
+                // user_id (incremental.rs::mark_old_side handles that via
+                // sidecar.lookup_all).
+                for _ in 0..diff {
+                    events.push(ChangeEvent::Delete {
+                        collection: collection.clone(),
+                        feature_id: id,
+                        old_envelope: None,
+                    });
+                }
+            }
+            std::cmp::Ordering::Equal => {}
+        }
     }
 
-    // 4. missing: fetch geometry once so we can emit a real envelope.
-    if !missing.is_empty() {
-        let ids_signed: Vec<i64> = missing
+    // 4. missing: fetch geometry for every drifting user_id once and emit
+    //    one synthetic Insert per returned row, each carrying its own
+    //    envelope so the cycle can identify the dirty page via centroid.
+    //    over-emitting beyond the strict deficit is benign — the rebuild
+    //    sidecar refresh drops every multimap entry for an observed id
+    //    and re-adds entries from the freshly fetched rows, which lands
+    //    at parity regardless of the event count.
+    if !to_fetch.is_empty() {
+        let ids_signed: Vec<i64> = to_fetch
             .iter()
             .map(|id| i64::try_from(*id).unwrap_or(i64::MAX))
             .collect();
@@ -160,7 +204,7 @@ mod tests {
 
     struct ReconcileSource {
         source_ids: Vec<i64>,
-        rows_for_ids: std::collections::HashMap<u64, RowBytes>,
+        rows_for_ids: std::collections::HashMap<u64, Vec<RowBytes>>,
     }
 
     #[async_trait]
@@ -182,6 +226,7 @@ mod tests {
             let owned: Vec<RowBytes> = ids
                 .iter()
                 .filter_map(|i| self.rows_for_ids.get(&(*i as u64)).cloned())
+                .flatten()
                 .collect();
             Ok(Box::pin(stream::iter(owned.into_iter().map(Ok))))
         }
@@ -257,11 +302,11 @@ mod tests {
         let mut rows_for_ids = std::collections::HashMap::new();
         rows_for_ids.insert(
             5u64,
-            RowBytes {
+            vec![RowBytes {
                 feature_id: 5,
                 geometry: point_wkb(50.0, 50.0),
                 attributes: vec![],
-            },
+            }],
         );
         let source = ReconcileSource {
             source_ids: vec![1, 2, 5], // 3 is orphan; 5 is missing
@@ -270,8 +315,8 @@ mod tests {
         let deps = make_deps(source);
 
         let outcome = reconcile_binding(&deps, &binding_plan(), &sidecar).await.unwrap();
-        assert_eq!(outcome.report.orphan_in_sidecar, vec![3]);
-        assert_eq!(outcome.report.missing_in_sidecar, vec![5]);
+        assert_eq!(outcome.report.orphan_in_sidecar, vec![(3, 1)]);
+        assert_eq!(outcome.report.missing_in_sidecar, vec![(5, 1)]);
         assert_eq!(outcome.synthetic_events.len(), 2);
 
         let has_delete_3 = outcome
@@ -304,5 +349,51 @@ mod tests {
         assert!(outcome.synthetic_events.is_empty());
         assert!(outcome.report.missing_in_sidecar.is_empty());
         assert!(outcome.report.orphan_in_sidecar.is_empty());
+    }
+
+    #[tokio::test]
+    async fn reconcile_handles_non_unique_user_ids_with_bag_arithmetic() {
+        // sidecar has user_id=7 once, source has it three times (e.g. a row
+        // exploded into three parts). reconcile must emit two Inserts so
+        // the rebuild path absorbs the extras.
+        let mut sidecar_entries = vec![(7u64, HilbertKey::new(70))];
+        let bytes = encode_sidecar(&mut sidecar_entries).unwrap();
+        let sidecar = SidecarReader::open(&bytes).unwrap();
+
+        let mut rows_for_ids = std::collections::HashMap::new();
+        rows_for_ids.insert(
+            7u64,
+            vec![
+                RowBytes {
+                    feature_id: 7,
+                    geometry: point_wkb(10.0, 10.0),
+                    attributes: vec![],
+                },
+                RowBytes {
+                    feature_id: 7,
+                    geometry: point_wkb(20.0, 20.0),
+                    attributes: vec![],
+                },
+                RowBytes {
+                    feature_id: 7,
+                    geometry: point_wkb(30.0, 30.0),
+                    attributes: vec![],
+                },
+            ],
+        );
+        let source = ReconcileSource {
+            source_ids: vec![7, 7, 7],
+            rows_for_ids,
+        };
+        let deps = make_deps(source);
+        let outcome = reconcile_binding(&deps, &binding_plan(), &sidecar).await.unwrap();
+        assert_eq!(outcome.report.missing_in_sidecar, vec![(7u64, 2)]);
+        assert!(outcome.report.orphan_in_sidecar.is_empty());
+        let inserts: Vec<_> = outcome
+            .synthetic_events
+            .iter()
+            .filter(|e| matches!(e, ChangeEvent::Insert { feature_id: 7, .. }))
+            .collect();
+        assert_eq!(inserts.len(), 3, "one Insert per source row, not deduped");
     }
 }

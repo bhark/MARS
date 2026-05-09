@@ -2245,6 +2245,7 @@ name = "mars-compiler"
 version = "0.0.1"
 dependencies = [
  "async-trait",
+ "blake3",
  "bytes",
  "criterion",
  "futures-core",

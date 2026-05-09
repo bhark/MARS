@@ -1,24 +1,29 @@
 //! page-membership sidecar codec.
 //!
-//! per binding, a flat mmap-friendly binary file pairing every feature_id
-//! with its hilbert key. used by the incremental compile path in C.2 to
-//! resolve change-feed events to dirty page sets without round-tripping
-//! through cells; written atomically alongside the manifest in the snapshot
-//! path so the runtime / GFI can rely on the manifest's
+//! per binding, a flat mmap-friendly binary file pairing every source
+//! `user_id` with its hilbert key. user_id is allowed to repeat — a source
+//! row exploded into multiple parts contributes one entry per part, all
+//! sharing the same user_id but landing on (potentially) different hilbert
+//! keys. used by the incremental compile path in C.2 to resolve
+//! change-feed events to dirty page sets without round-tripping through
+//! cells; written atomically alongside the manifest in the snapshot path
+//! so the runtime / GFI can rely on the manifest's
 //! `BindingMetadata::page_membership_sidecar` reference.
 //!
 //! on-disk format (little-endian):
 //! ```text
-//!   [magic "PMSC" u32][version u32 = 1][count u64]
-//!   entries: count × [u64 feature_id][u64 hilbert_key]   // sorted by feature_id
+//!   [magic "PMSC" u32][version u32 = 2][count u64]
+//!   entries: count × [u64 user_id][u64 hilbert_key]
+//!     // sorted by (user_id ascending, hilbert_key ascending);
+//!     // user_id may repeat
 //! ```
-//! 16 bytes per feature -> ~800 MiB at 50M features (forvaltning2-class).
+//! 16 bytes per entry -> ~800 MiB at 50M entries (forvaltning2-class).
 
 use bytes::Bytes;
 use mars_types::HilbertKey;
 
 const MAGIC: u32 = 0x_434D_5350; // "PMSC" little-endian
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 const HEADER_LEN: usize = 4 + 4 + 8;
 const ENTRY_LEN: usize = 16;
 
@@ -34,25 +39,18 @@ pub enum SidecarError {
         /// count declared in the header
         declared: u64,
     },
-    #[error("sidecar: entries not sorted ascending by feature_id")]
+    #[error("sidecar: entries not sorted ascending by (user_id, hilbert_key)")]
     Unsorted,
-    #[error("sidecar: duplicate feature_id {0}")]
-    DuplicateFeatureId(u64),
     #[error("sidecar: count {0} exceeds u64 byte budget")]
     CountTooLarge(usize),
 }
 
-/// Encode a page-membership sidecar from `(feature_id, hilbert_key)` pairs.
-/// the slice is sorted in place if not already; duplicate feature_ids are
-/// rejected as a consistency violation (one feature -> one hilbert key per
-/// snapshot).
+/// Encode a page-membership sidecar from `(user_id, hilbert_key)` pairs.
+/// The slice is sorted in place by `(user_id, hilbert_key)`; user_id is
+/// permitted to repeat (multimap semantics — a source row exploded into N
+/// parts contributes N entries with the same user_id).
 pub fn encode_sidecar(entries: &mut [(u64, HilbertKey)]) -> Result<Bytes, SidecarError> {
-    entries.sort_unstable_by_key(|(id, _)| *id);
-    for w in entries.windows(2) {
-        if w[0].0 == w[1].0 {
-            return Err(SidecarError::DuplicateFeatureId(w[0].0));
-        }
-    }
+    entries.sort_unstable_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
     let count = entries.len();
     let total_len = HEADER_LEN
         .checked_add(count.checked_mul(ENTRY_LEN).ok_or(SidecarError::CountTooLarge(count))?)
@@ -96,21 +94,25 @@ impl<'a> SidecarReader<'a> {
             return Err(SidecarError::BadCount { declared });
         }
 
-        // verify ascending feature_ids and reject duplicates -- both invariants
-        // are load-bearing for the binary-search lookup below.
-        let mut prev: Option<u64> = None;
+        // verify ascending (user_id, hilbert_key) order. duplicates of
+        // (user_id, hilbert_key) are tolerated (a row may land on the same
+        // hilbert key as itself across multimap entries); the multimap
+        // semantics rely on user_ids forming contiguous runs.
+        let mut prev: Option<(u64, u64)> = None;
         for i in 0..count {
             let off = HEADER_LEN + i * ENTRY_LEN;
             let id = u64::from_le_bytes(bytes[off..off + 8].try_into().map_err(|_| SidecarError::Truncated)?);
-            if let Some(p) = prev {
-                if id == p {
-                    return Err(SidecarError::DuplicateFeatureId(id));
-                }
-                if id < p {
-                    return Err(SidecarError::Unsorted);
-                }
+            let key = u64::from_le_bytes(
+                bytes[off + 8..off + 16]
+                    .try_into()
+                    .map_err(|_| SidecarError::Truncated)?,
+            );
+            if let Some(p) = prev
+                && (id, key) < p
+            {
+                return Err(SidecarError::Unsorted);
             }
-            prev = Some(id);
+            prev = Some((id, key));
         }
 
         Ok(Self { bytes, count })
@@ -157,11 +159,13 @@ impl<'a> SidecarReader<'a> {
         })
     }
 
-    /// Collect feature_ids whose hilbert key falls in any of `ranges`. Each
-    /// range is `(lo, hi)` inclusive. Single-pass over the sidecar; used by
-    /// the rebuild path to resolve dirty-page member sets.
+    /// Collect every `user_id` whose hilbert key falls in any of `ranges`.
+    /// Each range is `(lo, hi)` inclusive. Single-pass over the sidecar; the
+    /// returned vec may contain repeats when multiple multimap entries for
+    /// the same user_id land in the dirty range. Used by the rebuild path
+    /// to resolve dirty-page member sets.
     #[must_use]
-    pub fn feature_ids_in_ranges(&self, ranges: &[(HilbertKey, HilbertKey)]) -> Vec<u64> {
+    pub fn user_ids_in_ranges(&self, ranges: &[(HilbertKey, HilbertKey)]) -> Vec<u64> {
         if ranges.is_empty() {
             return Vec::new();
         }
@@ -174,47 +178,80 @@ impl<'a> SidecarReader<'a> {
         out
     }
 
-    /// Binary-search for `feature_id`. `Ok(None)` when the id is absent.
-    pub fn lookup(&self, feature_id: u64) -> Option<HilbertKey> {
-        if self.count == 0 {
-            return None;
+    /// Yield every `hilbert_key` recorded for `user_id` in the sidecar.
+    /// Returns an empty iterator when the id is absent. Multimap semantics:
+    /// a source row exploded into N parts produces N keys here.
+    pub fn lookup_all(&self, user_id: u64) -> impl Iterator<Item = HilbertKey> + '_ {
+        let start = self.lower_bound(user_id);
+        SidecarRangeIter {
+            sidecar: self,
+            cursor: start,
+            target: user_id,
         }
-        let mut lo: usize = 0;
-        let mut hi: usize = self.count;
+    }
+
+    fn read_id_at(&self, slot: usize) -> u64 {
+        let off = HEADER_LEN + slot * ENTRY_LEN;
+        u64::from_le_bytes([
+            self.bytes[off],
+            self.bytes[off + 1],
+            self.bytes[off + 2],
+            self.bytes[off + 3],
+            self.bytes[off + 4],
+            self.bytes[off + 5],
+            self.bytes[off + 6],
+            self.bytes[off + 7],
+        ])
+    }
+
+    fn read_key_at(&self, slot: usize) -> HilbertKey {
+        let off = HEADER_LEN + slot * ENTRY_LEN + 8;
+        HilbertKey::new(u64::from_le_bytes([
+            self.bytes[off],
+            self.bytes[off + 1],
+            self.bytes[off + 2],
+            self.bytes[off + 3],
+            self.bytes[off + 4],
+            self.bytes[off + 5],
+            self.bytes[off + 6],
+            self.bytes[off + 7],
+        ]))
+    }
+
+    fn lower_bound(&self, target: u64) -> usize {
+        let mut lo = 0usize;
+        let mut hi = self.count;
         while lo < hi {
             let mid = lo + (hi - lo) / 2;
-            let off = HEADER_LEN + mid * ENTRY_LEN;
-            // bounds were validated in `open`; entries[mid] sits in range.
-            let id = u64::from_le_bytes([
-                self.bytes[off],
-                self.bytes[off + 1],
-                self.bytes[off + 2],
-                self.bytes[off + 3],
-                self.bytes[off + 4],
-                self.bytes[off + 5],
-                self.bytes[off + 6],
-                self.bytes[off + 7],
-            ]);
-            match id.cmp(&feature_id) {
-                core::cmp::Ordering::Equal => {
-                    let kbase = off + 8;
-                    let key = u64::from_le_bytes([
-                        self.bytes[kbase],
-                        self.bytes[kbase + 1],
-                        self.bytes[kbase + 2],
-                        self.bytes[kbase + 3],
-                        self.bytes[kbase + 4],
-                        self.bytes[kbase + 5],
-                        self.bytes[kbase + 6],
-                        self.bytes[kbase + 7],
-                    ]);
-                    return Some(HilbertKey::new(key));
-                }
-                core::cmp::Ordering::Less => lo = mid + 1,
-                core::cmp::Ordering::Greater => hi = mid,
+            if self.read_id_at(mid) < target {
+                lo = mid + 1;
+            } else {
+                hi = mid;
             }
         }
-        None
+        lo
+    }
+}
+
+struct SidecarRangeIter<'a> {
+    sidecar: &'a SidecarReader<'a>,
+    cursor: usize,
+    target: u64,
+}
+
+impl<'a> Iterator for SidecarRangeIter<'a> {
+    type Item = HilbertKey;
+
+    fn next(&mut self) -> Option<HilbertKey> {
+        if self.cursor >= self.sidecar.count {
+            return None;
+        }
+        if self.sidecar.read_id_at(self.cursor) != self.target {
+            return None;
+        }
+        let key = self.sidecar.read_key_at(self.cursor);
+        self.cursor += 1;
+        Some(key)
     }
 }
 
@@ -239,11 +276,28 @@ mod tests {
         let bytes = encode_sidecar(&mut e).unwrap();
         let reader = SidecarReader::open(&bytes).unwrap();
         assert_eq!(reader.len(), 3);
-        assert_eq!(reader.lookup(1), Some(HilbertKey::new(10)));
-        assert_eq!(reader.lookup(2), Some(HilbertKey::new(20)));
-        assert_eq!(reader.lookup(3), Some(HilbertKey::new(30)));
-        assert_eq!(reader.lookup(0), None);
-        assert_eq!(reader.lookup(99), None);
+        assert_eq!(reader.lookup_all(1).collect::<Vec<_>>(), vec![HilbertKey::new(10)]);
+        assert_eq!(reader.lookup_all(2).collect::<Vec<_>>(), vec![HilbertKey::new(20)]);
+        assert_eq!(reader.lookup_all(3).collect::<Vec<_>>(), vec![HilbertKey::new(30)]);
+        assert!(reader.lookup_all(0).next().is_none());
+        assert!(reader.lookup_all(99).next().is_none());
+    }
+
+    #[test]
+    fn lookup_all_returns_every_key_for_repeated_user_id() {
+        let mut e = vec![
+            (5u64, HilbertKey::new(50)),
+            (5u64, HilbertKey::new(20)),
+            (5u64, HilbertKey::new(30)),
+            (1u64, HilbertKey::new(1)),
+        ];
+        let bytes = encode_sidecar(&mut e).unwrap();
+        let reader = SidecarReader::open(&bytes).unwrap();
+        assert_eq!(
+            reader.lookup_all(5).collect::<Vec<_>>(),
+            vec![HilbertKey::new(20), HilbertKey::new(30), HilbertKey::new(50)]
+        );
+        assert_eq!(reader.lookup_all(1).collect::<Vec<_>>(), vec![HilbertKey::new(1)]);
     }
 
     #[test]
@@ -261,10 +315,11 @@ mod tests {
                 .wrapping_add(1442695040888963407);
             let i = (state >> 32) % 10_000;
             let id = i * 31 + 7;
-            assert_eq!(reader.lookup(id), oracle.get(&id).copied(), "mismatch at id {id}");
+            let got: Vec<_> = reader.lookup_all(id).collect();
+            assert_eq!(got, vec![*oracle.get(&id).unwrap()], "mismatch at id {id}");
         }
         // an id known to be absent.
-        assert_eq!(reader.lookup(8), None);
+        assert!(reader.lookup_all(8).next().is_none());
     }
 
     #[test]
@@ -273,14 +328,20 @@ mod tests {
         let bytes = encode_sidecar(&mut e).unwrap();
         let reader = SidecarReader::open(&bytes).unwrap();
         assert!(reader.is_empty());
-        assert_eq!(reader.lookup(0), None);
+        assert!(reader.lookup_all(0).next().is_none());
     }
 
     #[test]
-    fn rejects_duplicate_feature_ids_at_encode() {
+    fn duplicate_user_ids_are_legal() {
+        // multimap semantics: two entries with the same user_id but
+        // different hilbert keys must both round-trip.
         let mut e = vec![(5u64, HilbertKey::new(1)), (5, HilbertKey::new(2))];
-        let err = encode_sidecar(&mut e).unwrap_err();
-        assert!(matches!(err, SidecarError::DuplicateFeatureId(5)));
+        let bytes = encode_sidecar(&mut e).unwrap();
+        let reader = SidecarReader::open(&bytes).unwrap();
+        assert_eq!(
+            reader.lookup_all(5).collect::<Vec<_>>(),
+            vec![HilbertKey::new(1), HilbertKey::new(2)]
+        );
     }
 
     #[test]
@@ -336,7 +397,7 @@ mod tests {
     }
 
     #[test]
-    fn feature_ids_in_ranges_filters_by_key() {
+    fn user_ids_in_ranges_filters_by_key() {
         let mut e = vec![
             (10u64, HilbertKey::new(100)),
             (20u64, HilbertKey::new(200)),
@@ -350,11 +411,11 @@ mod tests {
             (HilbertKey::new(150), HilbertKey::new(250)),
             (HilbertKey::new(350), HilbertKey::new(500)),
         ];
-        let ids = reader.feature_ids_in_ranges(&ranges);
+        let ids = reader.user_ids_in_ranges(&ranges);
         assert_eq!(ids, vec![20, 40, 50]);
 
         // empty range list yields empty result.
-        let empty = reader.feature_ids_in_ranges(&[]);
+        let empty = reader.user_ids_in_ranges(&[]);
         assert!(empty.is_empty());
     }
 

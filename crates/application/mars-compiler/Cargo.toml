@@ -15,6 +15,7 @@ workspace = true
 mars-types         = { workspace = true }
 mars-artifact      = { workspace = true }
 mars-source        = { workspace = true }
+blake3             = "1"
 mars-expr          = { workspace = true }
 mars-style         = { workspace = true }
 bytes              = { workspace = true }

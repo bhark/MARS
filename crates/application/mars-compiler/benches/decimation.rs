@@ -36,7 +36,7 @@ fn build_features() -> Vec<FeatureGeom> {
                 max_y = max_y.max(y as f32);
             }
             FeatureGeom {
-                id: i as u64,
+                user_id: i as u64,
                 bbox: [min_x, min_y, max_x, max_y],
                 geom: GeomKind::LineString(coords),
             }

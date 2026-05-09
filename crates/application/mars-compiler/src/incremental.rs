@@ -164,17 +164,24 @@ impl<'a> IncrementalCycle<'a> {
         if let Some(envelope) = old_envelope {
             return self.mark_envelope(binding_id, envelope);
         }
-        if let Some(key) = self
+        // sidecar is a multimap on user_id; a single change-feed event
+        // covers every part the row exploded into, so dirty every page
+        // that any of its sidecar entries touches.
+        let keys: Vec<HilbertKey> = self
             .sidecars
             .get(binding_id)
-            .and_then(|sidecar| sidecar.lookup(feature_id))
-        {
-            return self.mark_key(binding_id, key);
+            .map(|sidecar| sidecar.lookup_all(feature_id).collect())
+            .unwrap_or_default();
+        if keys.is_empty() {
+            self.dirty.warnings.push(IncrementalWarning::MissingOldGeometry {
+                binding_id: binding_id.clone(),
+                feature_id,
+            });
+            return Ok(());
         }
-        self.dirty.warnings.push(IncrementalWarning::MissingOldGeometry {
-            binding_id: binding_id.clone(),
-            feature_id,
-        });
+        for key in keys {
+            self.mark_key(binding_id, key)?;
+        }
         Ok(())
     }
 

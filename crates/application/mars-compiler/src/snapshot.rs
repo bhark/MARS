@@ -144,10 +144,20 @@ pub(crate) async fn snapshot_one_binding(
         })
         .collect();
     bucketed_sort_in_place(&mut keyed, ExternalSortConfig::DEFAULT.bucket_bits, |r| r.key);
+    // hilbert order is stable only within a bucket; the legacy id sort was
+    // the de facto tiebreaker and is gone now that user_id is allowed to
+    // repeat. fall back to (hilbert, user_id, row_fingerprint) so two
+    // compile passes over the same input produce byte-identical output.
+    keyed.sort_by(|a, b| {
+        a.key
+            .cmp(&b.key)
+            .then_with(|| a.feature.user_id.cmp(&b.feature.user_id))
+            .then_with(|| a.row_fingerprint.cmp(&b.row_fingerprint))
+    });
 
     // page-membership sidecar is computed once per binding (level-independent
-    // mapping feature_id -> hilbert key).
-    let mut sidecar_entries: Vec<(u64, HilbertKey)> = keyed.iter().map(|r| (r.feature.id, r.key)).collect();
+    // multimap user_id -> hilbert key; non-unique on user_id by design).
+    let mut sidecar_entries: Vec<(u64, HilbertKey)> = keyed.iter().map(|r| (r.feature.user_id, r.key)).collect();
 
     let layer_plans: Vec<&LayerPlan> = plan.layers_for(&binding.binding_id).collect();
 
@@ -227,13 +237,14 @@ async fn emit_level(
         let geom = simplify(&r.feature.geom, level.vertex_tolerance_m, binding.simplifier);
         leveled.push(KeyedRow {
             feature: FeatureGeom {
-                id: r.feature.id,
+                user_id: r.feature.user_id,
                 bbox: r.feature.bbox,
                 geom,
             },
             attrs: r.attrs.clone(),
             geom_bytes_estimate: r.geom_bytes_estimate,
             key: r.key,
+            row_fingerprint: r.row_fingerprint,
         });
     }
 
@@ -307,12 +318,20 @@ async fn emit_level(
 /// label evaluation and a Hilbert key assigned over the binding's combined
 /// bbox. Shared between the bootstrap and rebuild paths so both go through
 /// the same `flush_page` / `emit_layer_sidecars` pipeline.
+///
+/// `row_fingerprint` is BLAKE3(geom_bytes || canonicalised attrs) truncated
+/// to u64. Used as the final tiebreaker after `(hilbert_key, user_id)` so
+/// rows with the same hilbert key and the same user_id (a source row
+/// exploded into multiple parts) sort deterministically: identical bytes
+/// hash to the same fingerprint and produce stable slot order across
+/// compile passes.
 #[derive(Debug, Clone)]
 pub(crate) struct KeyedRow {
     pub(crate) feature: FeatureGeom,
     pub(crate) attrs: Arc<Vec<(String, AttrValue)>>,
     pub(crate) geom_bytes_estimate: u64,
     pub(crate) key: HilbertKey,
+    pub(crate) row_fingerprint: u64,
 }
 
 async fn collect_binding_rows(
@@ -336,6 +355,7 @@ async fn collect_binding_rows(
     while let Some(item) = stream.next().await {
         let row: RowBytes = item?;
         let geom_bytes_estimate = row.geometry.len() as u64;
+        let row_fingerprint = compute_row_fingerprint(&row);
         let feature = wkb_to_feature_geom(&row.geometry, row.feature_id)?;
         let attr_bytes: u64 = row.attributes.iter().map(|(k, _)| (k.len() + 16) as u64).sum();
         if let Err(observed) = guard.add(geom_bytes_estimate.saturating_add(attr_bytes).saturating_add(64)) {
@@ -350,9 +370,56 @@ async fn collect_binding_rows(
             attrs: Arc::new(row.attributes),
             geom_bytes_estimate,
             key: HilbertKey::min(),
+            row_fingerprint,
         });
     }
     Ok(rows)
+}
+
+/// Stable per-row tiebreaker for the final substrate slot order. BLAKE3 over
+/// `(geometry_bytes || canonicalised attribute bytes)` truncated to u64 — two
+/// rows with identical content produce the same fingerprint, so duplicate
+/// rows emitted from a non-unique-id source still sort deterministically.
+pub(crate) fn compute_row_fingerprint_for_row(row: &RowBytes) -> u64 {
+    compute_row_fingerprint(row)
+}
+
+fn compute_row_fingerprint(row: &RowBytes) -> u64 {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(&row.geometry);
+    // canonicalise: sort attribute pairs by name so reordering doesn't shift
+    // the fingerprint. attrs are typically already in name order from the
+    // adapter; the sort is cheap and removes a hidden dependency on that.
+    let mut sorted: Vec<&(String, AttrValue)> = row.attributes.iter().collect();
+    sorted.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+    for (name, value) in sorted {
+        hasher.update(name.as_bytes());
+        hasher.update(b"\0");
+        hash_attr_value(&mut hasher, value);
+        hasher.update(b"\0");
+    }
+    let mut out = [0u8; 8];
+    hasher.finalize_xof().fill(&mut out);
+    u64::from_le_bytes(out)
+}
+
+fn hash_attr_value(hasher: &mut blake3::Hasher, v: &AttrValue) {
+    match v {
+        AttrValue::Null => hasher.update(b"N"),
+        AttrValue::Bool(b) => hasher.update(if *b { b"BT" } else { b"BF" }),
+        AttrValue::Int(i) => {
+            hasher.update(b"I");
+            hasher.update(&i.to_le_bytes())
+        }
+        AttrValue::Float(f) => {
+            hasher.update(b"F");
+            hasher.update(&f.to_bits().to_le_bytes())
+        }
+        AttrValue::String(s) => {
+            hasher.update(b"S");
+            hasher.update(s.as_bytes())
+        }
+    };
 }
 
 fn combined_bbox_of(rows: &[KeyedRow]) -> Bbox {
@@ -410,15 +477,17 @@ pub(crate) async fn flush_page(
 
     let mut spatial_index = SpatialIndexBuilder::new(mars_artifact::DEFAULT_NODE_SIZE)?;
     let mut features: Vec<FeatureGeom> = Vec::with_capacity(rows.len());
-    let mut attrs_pairs: Vec<(u64, Vec<u8>)> = Vec::with_capacity(rows.len());
+    let mut attrs_pairs: Vec<(u32, Vec<u8>)> = Vec::with_capacity(rows.len());
 
-    let mut order: Vec<usize> = (0..rows.len()).collect();
-    order.sort_by_key(|&i| rows[i].feature.id);
-
-    for (slot, &i) in order.iter().enumerate() {
-        let r = &rows[i];
+    // rows arrive in deterministic slot order from the caller (collect/emit
+    // sort by (hilbert, user_id, row_fingerprint) once, here we simply walk
+    // them and let position be the substrate primary key).
+    for (slot, r) in rows.iter().enumerate() {
         let bb = r.feature.bbox;
-        spatial_index.add(slot as u32, bb);
+        let slot_u32 = u32::try_from(slot).map_err(|_| CompilerError::InvariantViolation {
+            what: "page slot overflow",
+        })?;
+        spatial_index.add(slot_u32, bb);
         if (bb[0] as f64) < min_x {
             min_x = bb[0] as f64;
         }
@@ -440,12 +509,12 @@ pub(crate) async fn flush_page(
         let row_bytes = encode_row(&pairs)?;
         if row_bytes.len() > MAX_ROW_BYTES {
             return Err(CompilerError::RowAttributesTooLarge {
-                feature_id: r.feature.id,
+                feature_id: r.feature.user_id,
                 bytes: row_bytes.len(),
                 max: MAX_ROW_BYTES,
             });
         }
-        attrs_pairs.push((r.feature.id, row_bytes.to_vec()));
+        attrs_pairs.push((slot_u32, row_bytes.to_vec()));
     }
 
     let page_bbox = Bbox::new(min_x, min_y, max_x, max_y);
@@ -494,12 +563,11 @@ pub(crate) async fn emit_layer_sidecars(
     out_class: &mut Vec<LayerSidecarEntry>,
     out_label: &mut Vec<LayerSidecarEntry>,
 ) -> Result<(), CompilerError> {
-    // page-internal feature-id ordering follows flush_page (ascending by id).
-    let mut order: Vec<usize> = (0..rows.len()).collect();
-    order.sort_by_key(|&i| rows[i].feature.id);
+    // rows arrive in slot order from flush_page; the slot is the row's
+    // position in the slice and is what sidecars join against.
 
     for layer in layers {
-        let mut assignments: Vec<(u64, u16)> = Vec::with_capacity(rows.len());
+        let mut assignments: Vec<(u32, u16)> = Vec::with_capacity(rows.len());
         let mut labels: Vec<LabelCandidate> = Vec::new();
 
         let when_clauses: Vec<Option<mars_expr::Expr>> = layer.classes.iter().map(|c| c.when.clone()).collect();
@@ -514,19 +582,21 @@ pub(crate) async fn emit_layer_sidecars(
             style_ref_idx: u16::try_from(style_refs.len()).unwrap_or(u16::MAX),
         });
 
-        for &i in &order {
-            let r = &rows[i];
+        for (slot, r) in rows.iter().enumerate() {
+            let slot_u32 = u32::try_from(slot).map_err(|_| CompilerError::InvariantViolation {
+                what: "page slot overflow",
+            })?;
             let attrs = RowAttrs::new(r.attrs.as_ref());
             if let Some(idx) = assign_class(&when_clauses, &attrs) {
-                assignments.push((r.feature.id, idx));
+                assignments.push((slot_u32, idx));
             }
             if let Some(spec) = &label_spec
                 && let Some(c) = emit_label_candidate(
                     &r.feature,
+                    Some(slot_u32),
                     &attrs,
                     spec,
                     layer.label_survival,
-                    false,
                     level.label_min_priority,
                 )
             {
@@ -538,16 +608,16 @@ pub(crate) async fn emit_layer_sidecars(
         // passes_min_size still emit a candidate when the layer's policy is
         // Independent. emit_label_candidate returns None for FollowGeometry,
         // so the call is uniform. no class assignment - the feature has no
-        // geometry on this page.
+        // slot on this page (pruned-feature labels carry no feature_idx).
         if let Some(spec) = &label_spec {
             for r in pruned {
                 let attrs = RowAttrs::new(r.attrs.as_ref());
                 if let Some(c) = emit_label_candidate(
                     &r.feature,
+                    None,
                     &attrs,
                     spec,
                     layer.label_survival,
-                    true,
                     level.label_min_priority,
                 ) {
                     labels.push(c);
@@ -575,9 +645,12 @@ pub(crate) async fn emit_layer_sidecars(
         out_class.push(class_entry);
 
         if !labels.is_empty() {
-            // label codec invariant: ascending feature_id. leveled-row labels
-            // are emitted in id order, pruned-row labels may interleave.
-            labels.sort_by_key(|c| c.feature_id);
+            // label codec invariant: slot-bearing entries ascending by
+            // feature_idx then slotless (pruned) at the tail. slotted
+            // entries are appended in slot order from the loop above and
+            // pruned entries follow, so a stable_sort keyed on the slot
+            // preserves the desired ordering.
+            labels.sort_by_key(|c| (c.feature_idx.is_none(), c.feature_idx.unwrap_or(0)));
             let label_bytes = build_label_artifact(&labels, page.spatial_bbox)?;
             let label_hash = compute_content_hash(&label_bytes);
             let label_size = label_bytes.len() as u64;
@@ -597,7 +670,7 @@ pub(crate) async fn emit_layer_sidecars(
 }
 
 fn build_class_artifact(
-    assignments: &[(u64, u16)],
+    assignments: &[(u32, u16)],
     style_refs: &[String],
     page_bbox: Bbox,
 ) -> Result<Bytes, CompilerError> {
@@ -893,16 +966,16 @@ mod tests {
         spix.query([0.0, 0.0, 1000.0, 1000.0], &mut hits);
         assert!(!hits.is_empty());
 
-        // class sidecar round-trips: every feature_id has a class assignment to index 0.
+        // class sidecar round-trips: every slot has a class assignment to index 0.
         let cls_entry = &manifest.class_sidecars[0];
         let cls_key = cls_entry.object_key().unwrap();
         let cls_bytes = store.objects.lock().unwrap().get(cls_key.as_str()).unwrap().clone();
         let cls_reader = ArtifactReader::open(cls_bytes).unwrap();
         let assignments = decode_class_assignment(&cls_reader.section(SectionKind::ClassAssignment).unwrap()).unwrap();
         assert_eq!(assignments.len(), 100);
-        for (id, idx) in &assignments {
+        for (slot, idx) in &assignments {
             assert_eq!(*idx, 0);
-            assert!(*id < 100);
+            assert!(*slot < 100);
         }
 
         // label sidecar is keyed against the same page.
@@ -1069,19 +1142,24 @@ mod tests {
         }
     }
 
-    fn collect_label_feature_ids(manifest: &Manifest, store: &InMemoryStore) -> Vec<u64> {
+    fn count_label_candidates(manifest: &Manifest, store: &InMemoryStore) -> (usize, usize) {
         use mars_artifact::decode_label_candidates;
-        let mut ids: Vec<u64> = Vec::new();
+        let mut slotted = 0usize;
+        let mut slotless = 0usize;
         for entry in &manifest.label_sidecars {
             let key = entry.object_key().unwrap();
             let bytes = store.objects.lock().unwrap().get(key.as_str()).unwrap().clone();
             let reader = ArtifactReader::open(bytes).unwrap();
             let lbl_bytes = reader.section(SectionKind::LabelCandidates).unwrap();
-            let candidates = decode_label_candidates(&lbl_bytes).unwrap();
-            ids.extend(candidates.into_iter().map(|c| c.feature_id));
+            for cand in decode_label_candidates(&lbl_bytes).unwrap() {
+                if cand.feature_idx.is_some() {
+                    slotted += 1;
+                } else {
+                    slotless += 1;
+                }
+            }
         }
-        ids.sort_unstable();
-        ids
+        (slotted, slotless)
     }
 
     #[tokio::test]
@@ -1095,16 +1173,15 @@ mod tests {
             .await
             .unwrap();
 
-        // every feature contributes a label even though half were pruned.
-        let label_ids = collect_label_feature_ids(&manifest, &store);
-        assert_eq!(
-            label_ids,
-            vec![0, 1, 2, 3],
-            "Independent must emit pruned-feature labels"
-        );
+        // 2 long lines kept (slotted labels), 2 short pruned (slotless labels).
+        // Independent survival policy keeps both classes.
+        let (slotted, slotless) = count_label_candidates(&manifest, &store);
+        assert_eq!(slotted, 2, "kept features get slotted labels");
+        assert_eq!(slotless, 2, "pruned features get slotless labels under Independent");
 
         // class assignments only cover rendered features (the long lines).
-        let cls_ids: Vec<u64> = manifest
+        // 2 long lines occupy slots 0..2; pruned rows have no slot here.
+        let cls_slots: Vec<u32> = manifest
             .class_sidecars
             .iter()
             .flat_map(|e| {
@@ -1115,15 +1192,15 @@ mod tests {
                 decode_class_assignment(&cls_bytes)
                     .unwrap()
                     .into_iter()
-                    .map(|(id, _)| id)
+                    .map(|(slot, _)| slot)
             })
             .collect();
-        let mut cls_ids_sorted = cls_ids;
-        cls_ids_sorted.sort_unstable();
+        let mut cls_sorted = cls_slots;
+        cls_sorted.sort_unstable();
         assert_eq!(
-            cls_ids_sorted,
-            vec![1, 3],
-            "class assignments must NOT include pruned features"
+            cls_sorted,
+            vec![0, 1],
+            "class assignments are keyed by slot; only the two kept features have slots"
         );
     }
 
@@ -1142,8 +1219,10 @@ mod tests {
             .await
             .unwrap();
 
-        let label_ids = collect_label_feature_ids(&manifest, &store);
-        assert_eq!(label_ids, vec![1, 3], "FollowGeometry must drop pruned-feature labels");
+        // FollowGeometry: only kept features get labels (slotted), no slotless.
+        let (slotted, slotless) = count_label_candidates(&manifest, &store);
+        assert_eq!(slotted, 2, "two kept features get slotted labels");
+        assert_eq!(slotless, 0, "FollowGeometry drops pruned-feature labels");
     }
 
     #[tokio::test]

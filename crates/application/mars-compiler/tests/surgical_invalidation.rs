@@ -400,19 +400,19 @@ async fn surgical_invalidation_rebuilds_only_dirty_pages() {
     let new_sidecar_bytes = store.get(&new_sidecar_ref.key, new_sidecar_ref.hash).await.unwrap();
     let new_sidecar = SidecarReader::open(&new_sidecar_bytes).unwrap();
     assert!(
-        new_sidecar.lookup(new_id_to_insert).is_some(),
+        new_sidecar.lookup_all(new_id_to_insert).next().is_some(),
         "insert must land in sidecar"
     );
     assert!(
-        new_sidecar.lookup(id_in_a_to_delete).is_none(),
+        new_sidecar.lookup_all(id_in_a_to_delete).next().is_none(),
         "delete must drop from sidecar"
     );
     assert!(
-        new_sidecar.lookup(id_in_b_in_page).is_some(),
+        new_sidecar.lookup_all(id_in_b_in_page).next().is_some(),
         "in-page update must remain"
     );
     assert!(
-        new_sidecar.lookup(id_to_move_b_to_c).is_some(),
+        new_sidecar.lookup_all(id_to_move_b_to_c).next().is_some(),
         "moved feature must remain in sidecar"
     );
 

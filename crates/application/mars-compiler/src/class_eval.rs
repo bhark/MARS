@@ -84,8 +84,9 @@ pub struct LabelSpec<'a> {
 }
 
 /// decide whether this feature emits a label candidate at this level, and
-/// build it. `geom_pruned` is true when the feature was dropped from the
-/// level's render set (decimate.rs::passes_min_size returned false).
+/// build it. `feature_idx` is the per-page slot when the feature was paged
+/// at this level, or `None` when its geometry was pruned by the level's
+/// `passes_min_size` filter.
 ///
 /// LAZARUS §Decimation: with `Independent` the label survives even when
 /// the geometry is pruned (prevents floating-anchor-with-no-feature at
@@ -93,13 +94,13 @@ pub struct LabelSpec<'a> {
 #[must_use]
 pub fn emit_label_candidate<A: AttributeAccess>(
     feature: &FeatureGeom,
+    feature_idx: Option<u32>,
     attrs: &A,
     spec: &LabelSpec<'_>,
     survival: LabelSurvival,
-    geom_pruned: bool,
     min_priority: u32,
 ) -> Option<LabelCandidate> {
-    if geom_pruned && matches!(survival, LabelSurvival::FollowGeometry) {
+    if feature_idx.is_none() && matches!(survival, LabelSurvival::FollowGeometry) {
         return None;
     }
     if u32::from(spec.priority) < min_priority {
@@ -108,7 +109,7 @@ pub fn emit_label_candidate<A: AttributeAccess>(
     let text = expand_template(spec.text, attrs).ok()?;
     let shape = label_shape_from_geom(feature, spec.placement)?;
     Some(LabelCandidate {
-        feature_id: feature.id,
+        feature_idx,
         foreign_origin: false,
         priority: spec.priority,
         style_ref_idx: spec.style_ref_idx,
@@ -190,8 +191,8 @@ mod tests {
     use super::*;
     use mars_expr::{parse, parse_template};
 
-    fn feature(id: u64, geom: GeomKind, bbox: [f32; 4]) -> FeatureGeom {
-        FeatureGeom { id, bbox, geom }
+    fn feature(user_id: u64, geom: GeomKind, bbox: [f32; 4]) -> FeatureGeom {
+        FeatureGeom { user_id, bbox, geom }
     }
 
     #[test]
@@ -232,8 +233,8 @@ mod tests {
             placement: &placement,
             style_ref_idx: 0,
         };
-        let cand = emit_label_candidate(&f, &attrs, &spec, LabelSurvival::Independent, true, 0).unwrap();
-        assert_eq!(cand.feature_id, 7);
+        let cand = emit_label_candidate(&f, None, &attrs, &spec, LabelSurvival::Independent, 0).unwrap();
+        assert_eq!(cand.feature_idx, None);
         assert_eq!(cand.text, "A");
     }
 
@@ -250,7 +251,7 @@ mod tests {
             placement: &placement,
             style_ref_idx: 0,
         };
-        let cand = emit_label_candidate(&f, &attrs, &spec, LabelSurvival::FollowGeometry, true, 0);
+        let cand = emit_label_candidate(&f, None, &attrs, &spec, LabelSurvival::FollowGeometry, 0);
         assert!(cand.is_none());
     }
 
@@ -267,7 +268,7 @@ mod tests {
             placement: &placement,
             style_ref_idx: 0,
         };
-        assert!(emit_label_candidate(&f, &attrs, &spec, LabelSurvival::Independent, false, 10).is_none());
+        assert!(emit_label_candidate(&f, Some(0), &attrs, &spec, LabelSurvival::Independent, 10).is_none());
     }
 
     #[test]
@@ -295,7 +296,7 @@ mod tests {
             placement: &placement,
             style_ref_idx: 0,
         };
-        let cand = emit_label_candidate(&f, &attrs, &spec, LabelSurvival::Independent, false, 0).unwrap();
+        let cand = emit_label_candidate(&f, Some(0), &attrs, &spec, LabelSurvival::Independent, 0).unwrap();
         match cand.shape {
             LabelShape::PolygonAnchor { x, y } => {
                 assert!((x - 5.0).abs() < f32::EPSILON);
@@ -322,7 +323,7 @@ mod tests {
             placement: &placement,
             style_ref_idx: 0,
         };
-        let cand = emit_label_candidate(&f, &attrs, &spec, LabelSurvival::Independent, false, 0).unwrap();
+        let cand = emit_label_candidate(&f, Some(0), &attrs, &spec, LabelSurvival::Independent, 0).unwrap();
         match cand.shape {
             LabelShape::Polyline(pts) => assert_eq!(pts.len(), 3),
             _ => panic!("expected polyline"),

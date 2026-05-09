@@ -197,7 +197,7 @@ async fn rebuild_binding_incremental(
     //    range) and (observed ids from this cycle's events).
     let mut feature_ids: BTreeSet<u64> = BTreeSet::new();
     if let Some(sc) = sidecar {
-        for id in sc.feature_ids_in_ranges(&dirty_ranges) {
+        for id in sc.user_ids_in_ranges(&dirty_ranges) {
             feature_ids.insert(id);
         }
     }
@@ -222,11 +222,12 @@ async fn rebuild_binding_incremental(
     let mut stream = deps.source.fetch_by_feature_ids(&port_binding, &ids).await?;
     let mut guard = WorkingSetGuard::new(working_set_bytes);
     let mut rows: Vec<KeyedRow> = Vec::new();
-    let mut returned: BTreeSet<u64> = BTreeSet::new();
+    let mut returned_counts: BTreeMap<u64, u32> = BTreeMap::new();
     while let Some(item) = stream.next().await {
         let row: RowBytes = item?;
-        returned.insert(row.feature_id);
+        *returned_counts.entry(row.feature_id).or_default() += 1;
         let geom_bytes_estimate = row.geometry.len() as u64;
+        let row_fingerprint = crate::snapshot::compute_row_fingerprint_for_row(&row);
         let feature = wkb_to_feature_geom(&row.geometry, row.feature_id)?;
         let attr_bytes: u64 = row.attributes.iter().map(|(k, _)| (k.len() + 16) as u64).sum();
         if let Err(observed) = guard.add(geom_bytes_estimate.saturating_add(attr_bytes).saturating_add(64)) {
@@ -244,6 +245,7 @@ async fn rebuild_binding_incremental(
             attrs: Arc::new(row.attributes),
             geom_bytes_estimate,
             key,
+            row_fingerprint,
         });
     }
 
@@ -266,21 +268,28 @@ async fn rebuild_binding_incremental(
                 if passes_min_size(&r.feature, level_plan.geometry_min_size_m) {
                     page_rows.push(KeyedRow {
                         feature: FeatureGeom {
-                            id: r.feature.id,
+                            user_id: r.feature.user_id,
                             bbox: r.feature.bbox,
                             geom: simplify(&r.feature.geom, level_plan.vertex_tolerance_m, binding_plan.simplifier),
                         },
                         attrs: r.attrs.clone(),
                         geom_bytes_estimate: r.geom_bytes_estimate,
                         key: r.key,
+                        row_fingerprint: r.row_fingerprint,
                     });
                 } else {
                     pruned_rows.push(r.clone());
                 }
             }
-            // page_rows ordering follows row arrival; flush_page reorders by
-            // feature_id internally so we don't need to pre-sort here.
-            page_rows.sort_by_key(|r| r.key);
+            // page_rows must arrive in deterministic slot order: flush_page
+            // walks the slice positionally and the position becomes the
+            // substrate primary key. matches the bootstrap ordering.
+            page_rows.sort_by(|a, b| {
+                a.key
+                    .cmp(&b.key)
+                    .then_with(|| a.feature.user_id.cmp(&b.feature.user_id))
+                    .then_with(|| a.row_fingerprint.cmp(&b.row_fingerprint))
+            });
 
             let page_key = mars_types::PageKey {
                 binding_id: binding_id.clone(),
@@ -324,9 +333,13 @@ async fn rebuild_binding_incremental(
         }
     }
 
-    // 5. refresh page-membership sidecar: take the prior sidecar entries,
-    //    drop every observed id (delete or move), re-add the still-present
-    //    feature ids with their newly computed keys.
+    // 5. refresh page-membership sidecar (multimap on user_id). drop every
+    //    observed user_id from the prior sidecar, then re-add one entry per
+    //    row the source actually returned. with bag semantics this folds
+    //    inserts, updates, and deletes uniformly: a user_id whose source
+    //    count drops to zero leaves the sidecar entirely; one whose count
+    //    grows accumulates new entries; rebalanced (geometry moved without
+    //    a new row count) cases land back at parity.
     let mut new_entries: Vec<(u64, HilbertKey)> = Vec::new();
     if let Some(sc) = sidecar {
         for (id, key) in sc.iter() {
@@ -336,11 +349,10 @@ async fn rebuild_binding_incremental(
         }
     }
     for r in &rows {
-        // only re-add ids we observed AND that the source returned. inserts
-        // and updates land here; deletes drop out because the source did
-        // not return them.
-        if binding_dirty.observed.contains(&r.feature.id) && returned.contains(&r.feature.id) {
-            new_entries.push((r.feature.id, r.key));
+        if binding_dirty.observed.contains(&r.feature.user_id)
+            && returned_counts.get(&r.feature.user_id).copied().unwrap_or(0) > 0
+        {
+            new_entries.push((r.feature.user_id, r.key));
         }
     }
     let sidecar_bytes: Bytes = encode_sidecar(&mut new_entries)?;
@@ -481,7 +493,12 @@ async fn execute_rebalance_one_binding(
 
     // union of hilbert ranges; sidecar lookup gives us the feature id set.
     let union_ranges: Vec<(HilbertKey, HilbertKey)> = source_pages.values().map(|p| p.hilbert_range).collect();
-    let feature_ids = sc.feature_ids_in_ranges(&union_ranges);
+    // bag semantics: dedup user_ids before the source fetch — a user_id
+    // that appears N times in the multimap should still be fetched once,
+    // since the source returns ALL its rows.
+    let mut feature_ids = sc.user_ids_in_ranges(&union_ranges);
+    feature_ids.sort_unstable();
+    feature_ids.dedup();
 
     // fetch rows.
     let port_binding = PortBinding::new(
@@ -503,6 +520,7 @@ async fn execute_rebalance_one_binding(
     while let Some(item) = stream.next().await {
         let row: RowBytes = item?;
         let geom_bytes_estimate = row.geometry.len() as u64;
+        let row_fingerprint = crate::snapshot::compute_row_fingerprint_for_row(&row);
         let feature = wkb_to_feature_geom(&row.geometry, row.feature_id)?;
         let attr_bytes: u64 = row.attributes.iter().map(|(k, _)| (k.len() + 16) as u64).sum();
         if let Err(observed) = guard.add(geom_bytes_estimate.saturating_add(attr_bytes).saturating_add(64)) {
@@ -520,9 +538,15 @@ async fn execute_rebalance_one_binding(
             attrs: Arc::new(row.attributes),
             geom_bytes_estimate,
             key,
+            row_fingerprint,
         });
     }
-    rows.sort_by_key(|r| r.key);
+    rows.sort_by(|a, b| {
+        a.key
+            .cmp(&b.key)
+            .then_with(|| a.feature.user_id.cmp(&b.feature.user_id))
+            .then_with(|| a.row_fingerprint.cmp(&b.row_fingerprint))
+    });
 
     // fresh PageId allocator per affected level.
     let mut next_page_id: HashMap<DecimationLevel, u64> = HashMap::new();
@@ -564,19 +588,25 @@ async fn execute_rebalance_one_binding(
                     if passes_min_size(&r.feature, level_plan.geometry_min_size_m) {
                         in_range_leveled.push(KeyedRow {
                             feature: FeatureGeom {
-                                id: r.feature.id,
+                                user_id: r.feature.user_id,
                                 bbox: r.feature.bbox,
                                 geom: simplify(&r.feature.geom, level_plan.vertex_tolerance_m, binding_plan.simplifier),
                             },
                             attrs: r.attrs.clone(),
                             geom_bytes_estimate: r.geom_bytes_estimate,
                             key: r.key,
+                            row_fingerprint: r.row_fingerprint,
                         });
                     } else {
                         in_range_pruned.push(r.clone());
                     }
                 }
-                in_range_leveled.sort_by_key(|r| r.key);
+                in_range_leveled.sort_by(|a, b| {
+                    a.key
+                        .cmp(&b.key)
+                        .then_with(|| a.feature.user_id.cmp(&b.feature.user_id))
+                        .then_with(|| a.row_fingerprint.cmp(&b.row_fingerprint))
+                });
                 in_range_pruned.sort_by_key(|r| r.key);
                 drop_page_with_sidecars(&page, &layer_plans, outcome);
                 if in_range_leveled.is_empty() || into == 0 {
@@ -657,13 +687,14 @@ async fn execute_rebalance_one_binding(
                     if passes_min_size(&r.feature, level_plan.geometry_min_size_m) {
                         merged_leveled.push(KeyedRow {
                             feature: FeatureGeom {
-                                id: r.feature.id,
+                                user_id: r.feature.user_id,
                                 bbox: r.feature.bbox,
                                 geom: simplify(&r.feature.geom, level_plan.vertex_tolerance_m, binding_plan.simplifier),
                             },
                             attrs: r.attrs.clone(),
                             geom_bytes_estimate: r.geom_bytes_estimate,
                             key: r.key,
+                            row_fingerprint: r.row_fingerprint,
                         });
                     } else {
                         merged_pruned.push(r.clone());
