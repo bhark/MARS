@@ -249,8 +249,7 @@ pub fn validate(config: &Config, config_dir: &Path) -> Result<(), ConfigError> {
             }
         }
         for (i, binding) in layer.sources.iter().enumerate() {
-            let declared: std::collections::BTreeSet<&str> =
-                binding.attributes.iter().map(String::as_str).collect();
+            let declared: std::collections::BTreeSet<&str> = binding.attributes.iter().map(String::as_str).collect();
             for name in &referenced {
                 if !declared.contains(name.as_str()) {
                     return Err(ConfigError::Invalid(format!(
@@ -351,11 +350,9 @@ fn validate_binding_levels(layer: &LayerId, idx: usize, binding: &SourceBinding)
             "layer {layer} source[{idx}] reconcile_every_cycles must be > 0"
         )));
     }
-    let warn_bytes = binding.resolved_sidecar_size_warn_bytes().map_err(|e| {
-        ConfigError::Invalid(format!(
-            "layer {layer} source[{idx}] sidecar_size_warn_bytes: {e}"
-        ))
-    })?;
+    let warn_bytes = binding
+        .resolved_sidecar_size_warn_bytes()
+        .map_err(|e| ConfigError::Invalid(format!("layer {layer} source[{idx}] sidecar_size_warn_bytes: {e}")))?;
     if warn_bytes == 0 {
         return Err(ConfigError::Invalid(format!(
             "layer {layer} source[{idx}] sidecar_size_warn_bytes must be > 0"
@@ -1130,10 +1127,7 @@ label_survival: follow_geometry
     #[test]
     fn reconcile_every_cycles_resolves_to_default() {
         let b = binding("buildings");
-        assert_eq!(
-            b.resolved_reconcile_every_cycles(),
-            DEFAULT_RECONCILE_EVERY_CYCLES
-        );
+        assert_eq!(b.resolved_reconcile_every_cycles(), DEFAULT_RECONCILE_EVERY_CYCLES);
         let mut b2 = binding("x");
         b2.reconcile_every_cycles = Some(7);
         assert_eq!(b2.resolved_reconcile_every_cycles(), 7);
@@ -1158,10 +1152,7 @@ label_survival: follow_geometry
         );
         let mut b2 = binding("x");
         b2.sidecar_size_warn_bytes = Some("12GiB".into());
-        assert_eq!(
-            b2.resolved_sidecar_size_warn_bytes().unwrap(),
-            12 * 1024 * 1024 * 1024
-        );
+        assert_eq!(b2.resolved_sidecar_size_warn_bytes().unwrap(), 12 * 1024 * 1024 * 1024);
     }
 
     #[test]
