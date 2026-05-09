@@ -10,7 +10,7 @@
 //! `Manifest::pages` doc). build-time validation re-checks the invariant and
 //! rejects malformed manifests at swap time rather than at first request.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -57,17 +57,15 @@ pub enum IndexError {
         /// index of the first entry that breaks the invariant.
         index: usize,
     },
-    /// a sidecar references a `(binding, level)` slice that is not present.
-    #[error("sidecar at index {index} references missing page slice ({binding}, L{level})")]
+    /// a sidecar references a `PageKey` that is not present in the manifest.
+    #[error("sidecar at index {index} references missing page {page_key:?}")]
     OrphanSidecar {
         /// index into `manifest.{class,label}_sidecars`.
         index: usize,
         /// kind of sidecar that orphaned.
         kind: LayerSidecarKind,
-        /// binding the sidecar's page key references.
-        binding: BindingId,
-        /// decimation level the sidecar's page key references.
-        level: u8,
+        /// page key the sidecar references but which has no matching `PageEntry`.
+        page_key: PageKey,
     },
     /// two sidecars of the same kind reference the same `(layer, page_key)` —
     /// the manifest writer must dedupe before commit.
@@ -95,8 +93,11 @@ impl PageIndex {
             .map(|(i, b)| (b.binding_id.clone(), i))
             .collect();
 
-        let class_sidecar_index = build_sidecar_index(&manifest.class_sidecars, LayerSidecarKind::Class, &page_slices)?;
-        let label_sidecar_index = build_sidecar_index(&manifest.label_sidecars, LayerSidecarKind::Label, &page_slices)?;
+        let valid_page_keys: HashSet<&PageKey> = manifest.pages.iter().map(|p| &p.key).collect();
+        let class_sidecar_index =
+            build_sidecar_index(&manifest.class_sidecars, LayerSidecarKind::Class, &valid_page_keys)?;
+        let label_sidecar_index =
+            build_sidecar_index(&manifest.label_sidecars, LayerSidecarKind::Label, &valid_page_keys)?;
 
         Ok(Self {
             page_slices,
@@ -203,16 +204,15 @@ fn page_sort_key(entry: &PageEntry) -> (&str, u8, u64) {
 fn build_sidecar_index(
     sidecars: &[LayerSidecarEntry],
     kind: LayerSidecarKind,
-    page_slices: &HashMap<(BindingId, DecimationLevel), Range<usize>>,
+    valid_page_keys: &HashSet<&PageKey>,
 ) -> Result<HashMap<(LayerId, PageKey), usize>, IndexError> {
     let mut out: HashMap<(LayerId, PageKey), usize> = HashMap::with_capacity(sidecars.len());
     for (i, sc) in sidecars.iter().enumerate() {
-        if !page_slices.contains_key(&(sc.page_key.binding_id.clone(), sc.page_key.level)) {
+        if !valid_page_keys.contains(&sc.page_key) {
             return Err(IndexError::OrphanSidecar {
                 index: i,
                 kind,
-                binding: sc.page_key.binding_id.clone(),
-                level: sc.page_key.level.get(),
+                page_key: sc.page_key.clone(),
             });
         }
         if out.insert((sc.layer_id.clone(), sc.page_key.clone()), i).is_some() {
@@ -463,6 +463,25 @@ mod tests {
         };
         m.class_sidecars
             .push(sidecar("layer-a", orphan_key, LayerSidecarKind::Class));
+        match PageIndex::build(&m) {
+            Err(IndexError::OrphanSidecar { kind, .. }) => assert_eq!(kind, LayerSidecarKind::Class),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn orphan_sidecar_with_valid_binding_level_but_unknown_page_id_rejected() {
+        // (binding, level) bucket exists but the specific page_id does not —
+        // a coarse bucket-only check would let this stale sidecar survive.
+        let pages = vec![page("a", 0, 0, 1)];
+        let mut m = manifest_with(pages.clone(), vec![]);
+        let stale = PageKey {
+            binding_id: pages[0].key.binding_id.clone(),
+            level: pages[0].key.level,
+            page_id: PageId::new(pages[0].key.page_id.get() + 999),
+        };
+        m.class_sidecars
+            .push(sidecar("layer-a", stale, LayerSidecarKind::Class));
         match PageIndex::build(&m) {
             Err(IndexError::OrphanSidecar { kind, .. }) => assert_eq!(kind, LayerSidecarKind::Class),
             other => panic!("unexpected: {other:?}"),
