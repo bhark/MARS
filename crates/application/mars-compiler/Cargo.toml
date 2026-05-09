@@ -32,8 +32,9 @@ thiserror          = { workspace = true }
 
 [dev-dependencies]
 mars-store         = { workspace = true, features = ["test-utils"] }
-tokio              = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tokio              = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 criterion          = { workspace = true }
+serde_yaml_ng      = { workspace = true }
 
 [[bench]]
 name    = "page_rebuild"

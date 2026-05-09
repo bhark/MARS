@@ -1,12 +1,10 @@
 //! mars compiler use-case.
 //!
-//! Phase B (LAZARUS): the cell-keyed substrate is retired with the v3
-//! manifest cut, and the snapshot / incremental implementations move to
-//! Phase C. The crate's public API surface (`Compiler`, `Deps`,
-//! `CompilerError`, `leader_lock_key`) stays in place so the bins keep
-//! compiling; runs publish an empty v3 manifest in lieu of real output.
-//! Tests that exercised the cell substrate are gone — the
-//! Phase C rewrite will reintroduce them against page-keyed plans.
+//! Page-keyed substrate. The compiler builds artifacts keyed by
+//! `(binding, decimation level, hilbert page range)`; `Compiler::run` is
+//! the long-running service entry point and orchestrates a snapshot
+//! bootstrap (when no manifest exists) followed by per-`compiler.window`
+//! incremental cycles fed by [`mars_source::ChangeFeed`].
 
 #![forbid(unsafe_code)]
 
@@ -29,7 +27,7 @@ use std::time::Duration;
 
 use mars_config::Config;
 use mars_observability::Metrics;
-use mars_source::{ChangeBatch, ChangeEvent, ChangeFeed, LeaderLock, LeaderLockGuard, Source};
+use mars_source::{ChangeBatch, ChangeEvent, ChangeFeed, ChangeSubscription, LeaderLock, LeaderLockGuard, Source};
 use mars_store::{ManifestStore, ObjectStore, StoreError};
 use mars_types::{BindingId, LevelMetadata, Manifest, PageEntry};
 use tokio_util::sync::CancellationToken;
@@ -218,6 +216,10 @@ impl Compiler {
     /// the resulting v3 manifest.
     pub async fn run_snapshot_once(&self, shutdown: CancellationToken) -> Result<u64, CompilerError> {
         let _guard = self.acquire_leader().await?;
+        self.apply_snapshot(&shutdown).await
+    }
+
+    async fn apply_snapshot(&self, shutdown: &CancellationToken) -> Result<u64, CompilerError> {
         let plan = plan::build_bootstrap_plan(&self.config)?;
         let prev_version = self.deps.manifest.current().await?.map_or(0, |m| m.version);
         let next_version = prev_version + 1;
@@ -232,7 +234,7 @@ impl Compiler {
             plan_budget_bytes,
         )
         .await?;
-        let v = publish_with_retry(self.deps.manifest.as_ref(), &manifest, &self.deps.metrics, &shutdown).await?;
+        let v = publish_with_retry(self.deps.manifest.as_ref(), &manifest, &self.deps.metrics, shutdown).await?;
         tracing::info!(
             version = v,
             bindings = manifest.bindings.len(),
@@ -469,20 +471,59 @@ impl Compiler {
         .await
     }
 
-    /// Long-running service mode. Bootstraps from an empty manifest, then
-    /// drives one cycle per `compiler.window`. Phase C.2.c first cut: this
-    /// is a one-shot orchestrator that runs to `shutdown`. Multi-batch
-    /// window-driven pulling (see LAZARUS §Update semantics) lands in a
-    /// follow-up commit; the per-cycle correctness lives entirely in
-    /// [`Self::run_cycle_once`].
+    /// Long-running service mode. Acquires the leader lock, runs a snapshot
+    /// bootstrap if no prior manifest exists, then drives one incremental
+    /// cycle per `compiler.window`, sourcing batches from
+    /// [`mars_source::ChangeFeed::subscribe`]. Returns when `shutdown` fires
+    /// or the change feed closes cleanly.
     pub async fn run(&self, shutdown: CancellationToken) -> Result<(), CompilerError> {
         let _guard = self.acquire_leader().await?;
+
         if self.deps.manifest.current().await?.is_none() {
-            let manifest = Manifest::empty(1, self.config.service.name.clone());
-            publish_with_retry(self.deps.manifest.as_ref(), &manifest, &self.deps.metrics, &shutdown).await?;
+            tokio::select! {
+                biased;
+                _ = shutdown.cancelled() => return Ok(()),
+                res = self.apply_snapshot(&shutdown) => { res?; }
+            }
+            if shutdown.is_cancelled() {
+                return Ok(());
+            }
         }
-        shutdown.cancelled().await;
-        Ok(())
+
+        let mut sub = self.deps.change_feed.subscribe().await.map_err(CompilerError::Source)?;
+
+        let window = self.config.compiler.window_dur()?;
+
+        loop {
+            let batches = match collect_batches(&mut *sub, window, &shutdown).await? {
+                CollectOutcome::Shutdown => {
+                    let _ = sub.shutdown().await;
+                    return Ok(());
+                }
+                CollectOutcome::FeedClosed => {
+                    tracing::info!("compiler: change feed closed; exiting service loop");
+                    let _ = sub.shutdown().await;
+                    return Ok(());
+                }
+                CollectOutcome::Batches(b) => b,
+            };
+
+            if batches.is_empty() {
+                continue;
+            }
+
+            let last_version = batches.iter().rev().find_map(|b| b.source_version.clone());
+            let v = self.apply_cycle(batches, &shutdown).await?;
+            sub.acknowledge(last_version.as_deref())
+                .await
+                .map_err(CompilerError::Source)?;
+            tracing::info!(version = v, "compiler: cycle manifest published");
+
+            if shutdown.is_cancelled() {
+                let _ = sub.shutdown().await;
+                return Ok(());
+            }
+        }
     }
 
     async fn acquire_leader(&self) -> Result<Box<dyn LeaderLockGuard>, CompilerError> {
@@ -695,6 +736,36 @@ fn merge_manifest(
         style_artifact: prior.style_artifact.clone(),
         source_version,
         epoch: next_version,
+    }
+}
+
+enum CollectOutcome {
+    Batches(Vec<ChangeBatch>),
+    FeedClosed,
+    Shutdown,
+}
+
+/// Drain the subscription until `window` elapses or shutdown fires. Returns
+/// every batch that arrived in the window. An empty batch list is a normal
+/// idle window.
+async fn collect_batches(
+    sub: &mut dyn ChangeSubscription,
+    window: Duration,
+    shutdown: &CancellationToken,
+) -> Result<CollectOutcome, CompilerError> {
+    let deadline = tokio::time::Instant::now() + window;
+    let mut batches: Vec<ChangeBatch> = Vec::new();
+    loop {
+        tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => return Ok(CollectOutcome::Shutdown),
+            _ = tokio::time::sleep_until(deadline) => return Ok(CollectOutcome::Batches(batches)),
+            next = sub.next_batch() => match next {
+                None => return Ok(CollectOutcome::FeedClosed),
+                Some(Err(e)) => return Err(CompilerError::Source(e)),
+                Some(Ok(b)) => batches.push(b),
+            }
+        }
     }
 }
 
