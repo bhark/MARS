@@ -455,6 +455,40 @@ async fn tool_inspect(path: &Path) -> Result<()> {
             Err(e) => return Err(e.into()),
         }
     }
+    // β.4: surface per-(layer, page) unmatched-slot diagnostic. when both
+    // geometry and class-assignment are present, the difference is the
+    // unmatched-slot count; β.2 should keep this at zero for single-layer-
+    // per-binding pages. when only one is present (page-only or sidecar-
+    // only artifact), report what's available so operators can cross-
+    // reference manually.
+    let geom_slots = match reader.section(mars_artifact::SectionKind::SpatialIndex) {
+        Ok(b) => Some(mars_artifact::SpatialIndex::open(b)?.len() as usize),
+        Err(mars_artifact::ArtifactError::SectionMissing(_)) => None,
+        Err(e) => return Err(e.into()),
+    };
+    let class_slots = match reader.section(mars_artifact::SectionKind::ClassAssignment) {
+        Ok(b) => Some(mars_artifact::decode_class_assignment(&b)?.len()),
+        Err(mars_artifact::ArtifactError::SectionMissing(_)) => None,
+        Err(e) => return Err(e.into()),
+    };
+    let label_slots = match reader.section(mars_artifact::SectionKind::LabelCandidates) {
+        Ok(b) => Some(mars_artifact::decode_label_candidates(&b)?.len()),
+        Err(mars_artifact::ArtifactError::SectionMissing(_)) => None,
+        Err(e) => return Err(e.into()),
+    };
+    if let Some(g) = geom_slots {
+        println!("geometry slots: {g}");
+    }
+    if let Some(c) = class_slots {
+        println!("class assignments: {c}");
+    }
+    if let Some(l) = label_slots {
+        println!("label candidates: {l}");
+    }
+    if let (Some(g), Some(c)) = (geom_slots, class_slots) {
+        let unmatched = g.saturating_sub(c);
+        println!("unmatched slots: {unmatched} (geom - class)");
+    }
     Ok(())
 }
 
