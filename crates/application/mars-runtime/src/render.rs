@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use futures_util::StreamExt;
+use futures_util::stream::FuturesUnordered;
 use mars_artifact::{
     ArtifactReader, FeatureGeom, GeomKind, LabelCandidate, LabelShape, SectionKind, SpatialIndex,
     decode_class_assignment, decode_label_candidates, decode_one_geom, decode_style_refs, iter_feature_index,
@@ -47,51 +48,27 @@ pub(crate) async fn render_plan(state: &RuntimeState, deps: &Deps, plan: &Render
             height: plan.height,
             background: None,
         };
+        // ζ.1: overlap per-layer work via FuturesUnordered, then reassemble in
+        // plan order so z-stacking and label collision priority stay
+        // deterministic regardless of completion order.
+        let mut futs: FuturesUnordered<_> = plan
+            .layers
+            .iter()
+            .enumerate()
+            .map(|(idx, layer_id)| render_one_layer(idx, layer_id, state, deps, plan, config, page_fetch_concurrency))
+            .collect();
+        let mut slots: Vec<Option<LayerOutput>> = (0..plan.layers.len()).map(|_| None).collect();
+        while let Some(res) = futs.next().await {
+            let (idx, out) = res?;
+            slots[idx] = out;
+        }
+        drop(futs);
+
         let mut all_ops: Vec<DrawOp> = Vec::new();
         let mut all_labels: Vec<PreparedLabel> = Vec::new();
-        for layer_id in &plan.layers {
-            let layer_span = info_span!("render.layer", name = %layer_id);
-            let layer_out =
-                async {
-                    let layer_cfg = lookup_layer(config, layer_id)?;
-                    let denom = crate::denom_from_plan(plan.bbox.width(), plan.width);
-                    let Some((binding_id, level)) = planning::pick_binding_and_level(layer_cfg, denom, state) else {
-                        // no binding covers this layer at this scale; render nothing.
-                        return Ok::<Option<LayerOutput>, RuntimeError>(None);
-                    };
-                    let binding = state.index.binding(&state.manifest, &binding_id).ok_or_else(|| {
-                        RuntimeError::InvalidManifest {
-                            reason: format!(
-                                "selected binding `{binding_id}` for layer `{layer}` is not in manifest",
-                                layer = layer_id
-                            ),
-                        }
-                    })?;
-                    let native_viewport = planning::reproject_viewport(plan.bbox, &plan.crs, &binding.native_crs)?;
-                    let pages = planning::resolve_pages(state, &binding_id, level, native_viewport);
-                    if pages.is_empty() {
-                        return Ok(None);
-                    }
-                    let out = render_layer_pages(
-                        deps,
-                        state,
-                        layer_id,
-                        binding,
-                        &pages,
-                        plan,
-                        layer_cfg.label_survival,
-                        deps.renderer.as_ref(),
-                        page_fetch_concurrency,
-                    )
-                    .await?;
-                    Ok(Some(out))
-                }
-                .instrument(layer_span)
-                .await?;
-            if let Some(layer_out) = layer_out {
-                all_ops.extend(layer_out.ops);
-                all_labels.extend(layer_out.labels);
-            }
+        for slot in slots.into_iter().flatten() {
+            all_ops.extend(slot.ops);
+            all_labels.extend(slot.labels);
         }
 
         // greedy collision over the accumulated label set: sort by priority
@@ -108,6 +85,60 @@ pub(crate) async fn render_plan(state: &RuntimeState, deps: &Deps, plan: &Render
         Ok(bytes)
     }
     .instrument(span)
+    .await
+}
+
+/// drive a single layer's pipeline (binding pick -> page resolve -> page
+/// fetch+decode). returns `(idx, None)` when the layer has no binding for
+/// this scale or no pages intersect the viewport. instrumented with the
+/// per-layer `render.layer` span so concurrent layers produce overlapping
+/// span entries when ζ.1's FuturesUnordered drives them.
+async fn render_one_layer(
+    idx: usize,
+    layer_id: &LayerId,
+    state: &RuntimeState,
+    deps: &Deps,
+    plan: &RenderPlan,
+    config: &mars_config::Config,
+    page_fetch_concurrency: usize,
+) -> Result<(usize, Option<LayerOutput>), RuntimeError> {
+    let layer_span = info_span!("render.layer", name = %layer_id);
+    async move {
+        let layer_cfg = lookup_layer(config, layer_id)?;
+        let denom = crate::denom_from_plan(plan.bbox.width(), plan.width);
+        let Some((binding_id, level)) = planning::pick_binding_and_level(layer_cfg, denom, state) else {
+            return Ok::<(usize, Option<LayerOutput>), RuntimeError>((idx, None));
+        };
+        let binding =
+            state
+                .index
+                .binding(&state.manifest, &binding_id)
+                .ok_or_else(|| RuntimeError::InvalidManifest {
+                    reason: format!(
+                        "selected binding `{binding_id}` for layer `{layer}` is not in manifest",
+                        layer = layer_id
+                    ),
+                })?;
+        let native_viewport = planning::reproject_viewport(plan.bbox, &plan.crs, &binding.native_crs)?;
+        let pages = planning::resolve_pages(state, &binding_id, level, native_viewport);
+        if pages.is_empty() {
+            return Ok((idx, None));
+        }
+        let out = render_layer_pages(
+            deps,
+            state,
+            layer_id,
+            binding,
+            &pages,
+            plan,
+            layer_cfg.label_survival,
+            deps.renderer.as_ref(),
+            page_fetch_concurrency,
+        )
+        .await?;
+        Ok((idx, Some(out)))
+    }
+    .instrument(layer_span)
     .await
 }
 

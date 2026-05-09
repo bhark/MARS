@@ -12,9 +12,16 @@
 #![allow(dead_code, unreachable_pub, clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::time::Duration;
 use std::time::SystemTime;
+
+use async_trait::async_trait;
+use bytes::Bytes;
+use mars_store::StoreError;
+use mars_types::{ArtifactKey, ContentHash};
 
 use mars_artifact::{
     ArtifactKind, ArtifactWriter, AttrValue, FeatureGeom, GeomKind, LabelCandidate, LabelShape, SpatialIndexBuilder,
@@ -479,4 +486,346 @@ fn default_style() -> Style {
         stroke_linecap: None,
         stroke_linejoin: None,
     }
+}
+
+// ---------- ζ.1 multi-layer fixture & sleeping-store decorator ----------
+
+/// wraps an `ObjectStore` and injects a per-key sleep on `get`. used in ζ.1
+/// integration tests to skew per-layer page-fetch completion order so the
+/// FuturesUnordered reassembly step is forced to reorder.
+pub struct SleepingStore {
+    inner: Arc<dyn ObjectStore>,
+    delays: HashMap<ArtifactKey, Duration>,
+}
+
+impl SleepingStore {
+    pub fn new(inner: Arc<dyn ObjectStore>, delays: HashMap<ArtifactKey, Duration>) -> Self {
+        Self { inner, delays }
+    }
+}
+
+#[async_trait]
+impl ObjectStore for SleepingStore {
+    async fn get(&self, key: &ArtifactKey, expected: ContentHash) -> Result<Bytes, StoreError> {
+        if let Some(d) = self.delays.get(key) {
+            tokio::time::sleep(*d).await;
+        }
+        self.inner.get(key, expected).await
+    }
+    async fn put(&self, key: &ArtifactKey, body: Bytes) -> Result<ContentHash, StoreError> {
+        self.inner.put(key, body).await
+    }
+    async fn delete(&self, key: &ArtifactKey) -> Result<(), StoreError> {
+        self.inner.delete(key).await
+    }
+    async fn list(&self, prefix: &str) -> Result<Vec<ArtifactKey>, StoreError> {
+        self.inner.list(prefix).await
+    }
+}
+
+/// shape returned by `build_multi_layer_fixture`. each layer i has style ref
+/// `layer_<i>__main`; the test uses these to verify draw-op order.
+pub struct MultiLayerFixture {
+    pub runtime: Arc<Runtime>,
+    pub render_log: Arc<Mutex<Vec<DrawOp>>>,
+    pub layer_ids: Vec<LayerId>,
+    /// page-object keys per layer, in `layer_ids` order. tests can build
+    /// per-layer delay maps off these.
+    pub page_keys: Vec<ArtifactKey>,
+}
+
+impl MultiLayerFixture {
+    pub fn render_plan(&self) -> RenderPlan {
+        RenderPlan {
+            layers: self.layer_ids.clone(),
+            bbox: Bbox::new(0.0, 0.0, (self.layer_ids.len() as f64) * 10.0 + 10.0, 100.0),
+            width: 64,
+            height: 64,
+            crs: CrsCode::new(REQUEST_CRS),
+            format: TImageFormat::Png,
+        }
+    }
+}
+
+/// build N independent layers, each with its own binding, page, single
+/// feature, and stylesheet entry `layer_<i>__main`. `store_decorator` wraps
+/// the underlying `InMemoryStore` so callers can inject per-key delays via
+/// `SleepingStore`.
+pub async fn build_multi_layer_fixture<F>(n_layers: usize, store_decorator: F) -> MultiLayerFixture
+where
+    F: FnOnce(Arc<dyn ObjectStore>, &[ArtifactKey]) -> Arc<dyn ObjectStore>,
+{
+    assert!(n_layers > 0);
+
+    let inner_store: Arc<dyn ObjectStore> = Arc::new(InMemoryStore::new());
+    let cache: Arc<dyn LocalCache> = Arc::new(InMemoryCache::new());
+
+    let mut layer_ids: Vec<LayerId> = Vec::with_capacity(n_layers);
+    let mut binding_ids: Vec<BindingId> = Vec::with_capacity(n_layers);
+    let mut bindings_meta: Vec<BindingMetadata> = Vec::with_capacity(n_layers);
+    let mut pages: Vec<PageEntry> = Vec::with_capacity(n_layers);
+    let mut class_sidecars: Vec<LayerSidecarEntry> = Vec::with_capacity(n_layers);
+    let mut page_object_keys: Vec<ArtifactKey> = Vec::with_capacity(n_layers);
+
+    for i in 0..n_layers {
+        let layer_id = LayerId::new(format!("layer_{i}"));
+        let binding_id = BindingId::try_new(format!("binding_{i}")).unwrap();
+
+        // each layer's feature occupies its own 10x10 cell. all cells together
+        // span `n_layers * 10 + 10` along x; render plan covers that bbox.
+        let xo = (i as f64) * 10.0;
+        let bbox = [xo as f32, 0.0_f32, (xo + 10.0) as f32, 10.0_f32];
+        let feature = FeatureGeom {
+            user_id: 1000 + i as u64,
+            bbox,
+            geom: GeomKind::Polygon(vec![vec![
+                (xo, 0.0),
+                (xo + 10.0, 0.0),
+                (xo + 10.0, 10.0),
+                (xo, 10.0),
+                (xo, 0.0),
+            ]]),
+        };
+        let page_bbox = Bbox::new(xo, 0.0, xo + 10.0, 10.0);
+
+        // page artifact
+        let mut spatial = SpatialIndexBuilder::new(mars_artifact::DEFAULT_NODE_SIZE).unwrap();
+        spatial.add(0u32, feature.bbox);
+        let spatial_bytes = spatial.finish().unwrap();
+        let attrs_pairs: Vec<(u32, Vec<u8>)> = vec![(
+            0u32,
+            encode_row(&[("name".to_string(), AttrValue::String(format!("feat-L{i}")))])
+                .unwrap()
+                .to_vec(),
+        )];
+        let mut writer = ArtifactWriter::new(ArtifactKind::Source);
+        writer
+            .add_spatial_index(spatial_bytes)
+            .add_geometry_payload(vec![feature])
+            .add_attributes(attrs_pairs)
+            .set_bbox(page_bbox)
+            .set_feature_count(1);
+        let page_bytes = writer.finish().unwrap();
+        let page_hash = mars_artifact::compute_content_hash(&page_bytes);
+
+        // class sidecar: slot 0 -> class 0 -> stylesheet "layer_<i>__main"
+        let style_refs = vec![format!("layer_{i}__main")];
+        let mut writer = ArtifactWriter::new(ArtifactKind::Layer);
+        writer
+            .add_class_assignment(&[(0u32, 0u16)])
+            .add_style_refs(&style_refs)
+            .set_bbox(page_bbox);
+        let class_bytes = writer.finish().unwrap();
+        let class_hash = mars_artifact::compute_content_hash(&class_bytes);
+
+        let page_key = PageKey {
+            binding_id: binding_id.clone(),
+            level: DecimationLevel::new(0),
+            page_id: PageId::new(1),
+        };
+        let class_entry = LayerSidecarEntry {
+            layer_id: layer_id.clone(),
+            page_key: page_key.clone(),
+            content_hash: class_hash,
+            size_bytes: class_bytes.len() as u64,
+            kind: LayerSidecarKind::Class,
+        };
+        let page_entry = PageEntry {
+            key: page_key.clone(),
+            content_hash: page_hash,
+            spatial_bbox: page_bbox,
+            hilbert_range: (HilbertKey::new(0), HilbertKey::new(u64::MAX)),
+            feature_count: 1,
+            size_bytes: page_bytes.len() as u64,
+        };
+
+        let page_obj_key = page_key.object_key(&page_hash).unwrap();
+        inner_store.put(&page_obj_key, page_bytes).await.unwrap();
+        inner_store
+            .put(&class_entry.object_key().unwrap(), class_bytes)
+            .await
+            .unwrap();
+
+        bindings_meta.push(BindingMetadata {
+            binding_id: binding_id.clone(),
+            source_table: format!("public.layer_{i}"),
+            native_crs: CrsCode::new(REQUEST_CRS),
+            feature_count_total: 1,
+            levels: vec![mars_types::LevelMetadata {
+                level: DecimationLevel::new(0),
+                vertex_tolerance_m: 0.0,
+                geometry_min_size_m: 0.0,
+                label_min_priority: 0,
+                page_count: 1,
+                combined_bbox: page_bbox,
+                hilbert_range_table: vec![(HilbertKey::new(0), HilbertKey::new(u64::MAX), PageId::new(1))],
+            }],
+            page_membership_sidecar: None,
+        });
+        pages.push(page_entry);
+        class_sidecars.push(class_entry);
+        page_object_keys.push(page_obj_key);
+        layer_ids.push(layer_id);
+        binding_ids.push(binding_id);
+    }
+
+    let manifest = Manifest {
+        format_version: MANIFEST_FORMAT_VERSION,
+        version: 1,
+        service: "test-multi".into(),
+        created_at: SystemTime::UNIX_EPOCH,
+        bindings: bindings_meta,
+        pages,
+        class_sidecars,
+        label_sidecars: Vec::new(),
+        style_artifact: None,
+        source_version: None,
+        epoch: 0,
+    };
+
+    let config = build_multi_layer_config(&layer_ids, &binding_ids);
+    let stylesheet = build_multi_layer_stylesheet(n_layers);
+    let state = RuntimeState::from_config_and_manifest(&config, stylesheet, manifest).unwrap();
+
+    // hand the inner store + page keys to the decorator so callers can build
+    // a delay map keyed off the actual object keys.
+    let store: Arc<dyn ObjectStore> = store_decorator(inner_store, &page_object_keys);
+
+    let render_log = Arc::new(Mutex::new(Vec::<DrawOp>::new()));
+    let renderer: Arc<dyn Renderer> = Arc::new(CapturingRenderer {
+        log: render_log.clone(),
+    });
+    let encoder: Arc<dyn Encoder> = Arc::new(StubEncoder);
+    let metrics = mars_observability::Metrics::new().unwrap();
+    let fonts = Arc::new(Fonts::with_default());
+    let deps = Deps {
+        store,
+        cache,
+        renderer,
+        encoder,
+        metrics,
+        fonts,
+    };
+    let runtime = Arc::new(Runtime::from_state(Arc::new(state), deps));
+
+    MultiLayerFixture {
+        runtime,
+        render_log,
+        layer_ids,
+        page_keys: page_object_keys,
+    }
+}
+
+fn build_multi_layer_config(layer_ids: &[LayerId], binding_ids: &[BindingId]) -> Config {
+    let mut size_per_band = BTreeMap::new();
+    size_per_band.insert("hi".into(), "1024m".into());
+    let layers: Vec<Layer> = layer_ids
+        .iter()
+        .zip(binding_ids.iter())
+        .enumerate()
+        .map(|(i, (lid, bid))| Layer {
+            name: lid.clone(),
+            title: format!("Layer {i}"),
+            abstract_: String::new(),
+            kind: "polygon".into(),
+            scale: None,
+            group: None,
+            enable_get_feature_info: true,
+            bbox: None,
+            sources: vec![SourceBinding {
+                scale: None,
+                band: None,
+                max_denom: None,
+                from: bid.as_str().into(),
+                geometry_column: "geom".into(),
+                id_column: None,
+                attributes: vec!["name".into()],
+                levels: None,
+                page_size_target_bytes: None,
+                reconcile_every_cycles: None,
+                sidecar_size_warn_bytes: None,
+                simplifier: None,
+            }],
+            classes: vec![Class {
+                name: "main".into(),
+                title: String::new(),
+                when: None,
+                style: ClassStyle::Inline(default_style()),
+            }],
+            label: None,
+            label_survival: LabelSurvival::Independent,
+        })
+        .collect();
+    Config {
+        service: ServiceMeta {
+            name: "test-multi".into(),
+            ..Default::default()
+        },
+        source: Source {
+            kind: "memory".into(),
+            dsn: "memory://".into(),
+            native_crs: CrsCode::new(REQUEST_CRS),
+            change_feed: None,
+            pool: Default::default(),
+        },
+        artifacts: Artifacts {
+            store: ArtifactStore {
+                kind: "fs".into(),
+                endpoint: None,
+                bucket: None,
+                prefix: None,
+                path: Some("/tmp".into()),
+                allow_http: false,
+            },
+            cache: ArtifactCache {
+                path: "/tmp".into(),
+                max_size: "1GiB".into(),
+                eviction: "lru".into(),
+                trust_path_hash: false,
+            },
+        },
+        scales: Scales {
+            bands: vec![Band {
+                name: "hi".into(),
+                max_denom: 25_000,
+            }],
+        },
+        cells: Cells {
+            grid: "regular".into(),
+            origin: [0.0, 0.0],
+            size_per_band,
+            extent: Some(Bbox::new(0.0, 0.0, 1000.0, 1000.0)),
+        },
+        interfaces: Interfaces::default(),
+        tile_matrix_sets: Default::default(),
+        reprojection: Default::default(),
+        styles: Default::default(),
+        layers,
+        observability: Observability::default(),
+        render: Render::default(),
+        compiler: Compiler::default(),
+    }
+}
+
+fn build_multi_layer_stylesheet(n_layers: usize) -> Stylesheet {
+    let mut ss = Stylesheet::default();
+    for i in 0..n_layers {
+        // distinct fill colour per layer so tests can recover layer index
+        // from the emitted DrawOp::Path style.
+        let style = Style {
+            fill: Some(Colour {
+                r: (10 * (i + 1)) as u8,
+                g: 0,
+                b: 0,
+                a: 255,
+            }),
+            stroke: None,
+            stroke_width: None,
+            stroke_dasharray: None,
+            stroke_linecap: None,
+            stroke_linejoin: None,
+        };
+        ss.geometry.insert(format!("layer_{i}__main"), Arc::new(style));
+    }
+    ss
 }
