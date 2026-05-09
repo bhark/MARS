@@ -149,6 +149,11 @@ pub fn validate(config: &mut Config, config_dir: &Path) -> Result<(), ConfigErro
         )));
     }
     let _ = config.compiler.rebalance.window_dur()?;
+    if config.render.page_fetch_concurrency == 0 {
+        return Err(ConfigError::Invalid(
+            "render.page_fetch_concurrency must be >= 1".into(),
+        ));
+    }
     if config.service.name.contains(' ') {
         return Err(ConfigError::Invalid(format!(
             "service.name {:?} must not contain spaces",

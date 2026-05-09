@@ -221,6 +221,12 @@ pub struct Render {
     /// backward compatibility.
     #[serde(default)]
     pub parallel_emit: ParallelEmit,
+    /// Maximum number of page artifacts fetched concurrently per layer
+    /// during a single render. The render and GFI paths preserve page-key
+    /// order across the fetch fan-out, so this caps in-flight store /
+    /// cache pressure without affecting determinism. Must be `>= 1`.
+    #[serde(default = "default_page_fetch_concurrency")]
+    pub page_fetch_concurrency: usize,
 }
 
 /// Configuration for the parallel geometry-emit pass.
@@ -262,6 +268,7 @@ impl Default for Render {
             png_compression: PngCompression::default(),
             decoded_geometry_cache: default_decoded_geometry_cache(),
             parallel_emit: ParallelEmit::default(),
+            page_fetch_concurrency: default_page_fetch_concurrency(),
         }
     }
 }
@@ -291,6 +298,10 @@ fn default_pixel_budget() -> String {
 
 fn default_decoded_geometry_cache() -> String {
     "256MiB".to_owned()
+}
+
+fn default_page_fetch_concurrency() -> usize {
+    16
 }
 
 /// Service identity. SPEC §5.2.

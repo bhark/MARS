@@ -11,7 +11,6 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use futures_util::StreamExt;
-use futures_util::stream::FuturesUnordered;
 use mars_artifact::{
     ArtifactReader, FeatureGeom, GeomKind, LabelCandidate, LabelShape, SectionKind, SpatialIndex,
     decode_class_assignment, decode_label_candidates, decode_one_geom, decode_style_refs, iter_feature_index,
@@ -53,6 +52,7 @@ fn fallback_style() -> Arc<Style> {
 /// hand back to the WMS / WMTS interface.
 pub(crate) async fn render_plan(state: &RuntimeState, deps: &Deps, plan: &RenderPlan) -> Result<Vec<u8>, RuntimeError> {
     let config = state.config_or_err()?;
+    let page_fetch_concurrency = config.render.page_fetch_concurrency.max(1);
     let canvas = Canvas {
         width: plan.width,
         height: plan.height,
@@ -93,6 +93,7 @@ pub(crate) async fn render_plan(state: &RuntimeState, deps: &Deps, plan: &Render
             &fallback,
             layer_cfg.label_survival,
             deps.renderer.as_ref(),
+            page_fetch_concurrency,
         )
         .await?;
         all_ops.extend(layer_out.ops);
@@ -136,21 +137,34 @@ async fn render_layer_pages(
     fallback: &Arc<Style>,
     label_survival: LabelSurvival,
     renderer: &dyn Renderer,
+    page_fetch_concurrency: usize,
 ) -> Result<LayerOutput, RuntimeError> {
-    let mut futs = FuturesUnordered::new();
-    for page in pages {
-        let store = deps.store.clone();
-        let cache = deps.cache.clone();
-        let entry = (*page).clone();
-        let class_entry = state
-            .index
-            .class_sidecar(&state.manifest, layer_id, &entry.key)
-            .cloned();
-        let label_entry = state
-            .index
-            .label_sidecar(&state.manifest, layer_id, &entry.key)
-            .cloned();
-        futs.push(async move {
+    // ordered-and-bounded fan-out: fetch up to `page_fetch_concurrency`
+    // pages in parallel but emit in input (page-key) order so draw-op
+    // sequencing and equal-priority label collisions stay deterministic.
+    // materialise per-page contexts up-front so the futures own all their
+    // captures and don't borrow into the input slice.
+    let contexts: Vec<_> = pages
+        .iter()
+        .map(|page| {
+            let entry = (*page).clone();
+            let class_entry = state
+                .index
+                .class_sidecar(&state.manifest, layer_id, &entry.key)
+                .cloned();
+            let label_entry = state
+                .index
+                .label_sidecar(&state.manifest, layer_id, &entry.key)
+                .cloned();
+            (entry, class_entry, label_entry)
+        })
+        .collect();
+    let store = deps.store.clone();
+    let cache = deps.cache.clone();
+    let fetches = contexts.into_iter().map(move |(entry, class_entry, label_entry)| {
+        let store = store.clone();
+        let cache = cache.clone();
+        async move {
             let page_bytes = fetch_page(&cache, &store, &entry).await?;
             let class_bytes = match &class_entry {
                 Some(e) => Some(fetch_sidecar(&cache, &store, e).await?),
@@ -161,14 +175,16 @@ async fn render_layer_pages(
                 None => None,
             };
             Ok::<_, RuntimeError>((entry, page_bytes, class_bytes, label_bytes))
-        });
-    }
+        }
+    });
+    let mut stream = futures_util::stream::iter(fetches).buffered(page_fetch_concurrency);
+
     let mut out = LayerOutput {
         ops: Vec::new(),
         labels: Vec::new(),
     };
     let same_crs = binding.native_crs.as_str() == plan.crs.as_str();
-    while let Some(res) = futs.next().await {
+    while let Some(res) = stream.next().await {
         let (entry, page_bytes, class_bytes, label_bytes) = res?;
         let DecodedPage {
             ops: mut page_ops,

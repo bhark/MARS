@@ -14,7 +14,6 @@
 
 use bytes::Bytes;
 use futures_util::StreamExt;
-use futures_util::stream::FuturesUnordered;
 use mars_artifact::{ArtifactReader, AttrValue, SectionKind, SpatialIndex, decode_row};
 use mars_config::Layer;
 use mars_types::{Bbox, BindingMetadata, LayerId, PageEntry};
@@ -50,6 +49,7 @@ pub(crate) async fn get_feature_info(
     point_px: (u32, u32),
 ) -> Result<Vec<LayerFeatureInfo>, RuntimeError> {
     let config = state.config_or_err()?;
+    let page_fetch_concurrency = config.render.page_fetch_concurrency.max(1);
     let world = pixel_to_world(point_px, plan.bbox, plan.width, plan.height);
     let request_bbox = pixel_buffered_bbox(world, plan.bbox, plan.width, plan.height);
 
@@ -75,7 +75,8 @@ pub(crate) async fn get_feature_info(
         if pages.is_empty() {
             continue;
         }
-        let layer_hits = collect_layer_hits(deps, layer_id, binding, &pages, native_bbox).await?;
+        let layer_hits =
+            collect_layer_hits(deps, layer_id, binding, &pages, native_bbox, page_fetch_concurrency).await?;
         hits.extend(layer_hits);
     }
     Ok(hits)
@@ -87,16 +88,21 @@ async fn collect_layer_hits(
     _binding: &BindingMetadata,
     pages: &[&PageEntry],
     native_bbox: Bbox,
+    page_fetch_concurrency: usize,
 ) -> Result<Vec<LayerFeatureInfo>, RuntimeError> {
-    let mut futs = FuturesUnordered::new();
-    for page in pages {
-        let store = deps.store.clone();
-        let cache = deps.cache.clone();
-        let entry = (*page).clone();
-        futs.push(async move { fetch_page(&cache, &store, &entry).await.map(|b| (entry, b)) });
-    }
+    // ordered-and-bounded fan-out: fetch in input order so hit ordering
+    // stays deterministic across cache/store latency variation.
+    let entries: Vec<PageEntry> = pages.iter().map(|p| (*p).clone()).collect();
+    let store = deps.store.clone();
+    let cache = deps.cache.clone();
+    let fetches = entries.into_iter().map(move |entry| {
+        let store = store.clone();
+        let cache = cache.clone();
+        async move { fetch_page(&cache, &store, &entry).await.map(|b| (entry, b)) }
+    });
+    let mut stream = futures_util::stream::iter(fetches).buffered(page_fetch_concurrency);
     let mut out: Vec<LayerFeatureInfo> = Vec::new();
-    while let Some(res) = futs.next().await {
+    while let Some(res) = stream.next().await {
         let (_entry, bytes) = res?;
         let mut page_hits = decode_page_hits(bytes, layer_id, native_bbox)?;
         out.append(&mut page_hits);
