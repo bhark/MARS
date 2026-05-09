@@ -149,13 +149,18 @@ pub enum CompilerError {
     /// LAZARUS bailout 5: lift the budget, point the scratch dir at a
     /// larger volume, or split the binding.
     #[error(
-        "bootstrap scratch budget exceeded: binding {binding} accumulated {observed_bytes} bytes \
+        "bootstrap scratch budget exceeded: binding {binding}{} accumulated {observed_bytes} bytes \
          (budget {budget_bytes}). lift compiler.bootstrap_scratch_budget_bytes, point \
-         bootstrap_scratch_dir at a larger volume, or split the binding."
+         bootstrap_scratch_dir at a larger volume, or split the binding.",
+        page_id.map(|p| format!(" page {}", p.get())).unwrap_or_default()
     )]
     ScratchBudgetExceeded {
         /// Affected binding id.
         binding: String,
+        /// Affected page id when the breach was observed inside a per-page
+        /// hydration loop. `None` when the breach is binding-scoped (e.g. a
+        /// bootstrap accumulator overflow, before page boundaries exist).
+        page_id: Option<mars_types::PageId>,
         /// Observed accumulated bytes at the point the budget was crossed.
         observed_bytes: u64,
         /// Configured scratch budget.
@@ -198,6 +203,9 @@ impl From<spill::SpillError> for CompilerError {
                 budget_bytes,
             } => CompilerError::ScratchBudgetExceeded {
                 binding,
+                // bootstrap accumulator overflows happen before the planner
+                // assigns page ids; surface no page_id rather than fabricating.
+                page_id: None,
                 observed_bytes,
                 budget_bytes,
             },

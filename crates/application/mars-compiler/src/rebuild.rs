@@ -79,12 +79,12 @@ pub struct RebuildOutcome {
 /// and (step 6) bootstrap-from-plan paths so all three hydrate rows
 /// identically.
 ///
-/// The caller passes the [`WorkingSetGuard`] so they can scope it (per
-/// page, per binding, etc.) and read its observed total afterwards.
+/// Memory budgets are enforced per-page by the caller (see
+/// [`enforce_page_budget`]) — the hydration step itself is unbounded
+/// because per-page guards catch single-page outliers and binding-wide
+/// pressure is bounded by the feature-id set the caller assembles.
 pub(crate) async fn hydrate_keyed_rows<'a>(
     mut stream: BoxStream<'a, Result<RowBytes, SourceError>>,
-    guard: &mut crate::external_sort::WorkingSetGuard,
-    binding_id: &str,
     combined_bbox: Bbox,
 ) -> Result<Vec<crate::snapshot::KeyedRow>, CompilerError> {
     let mut rows: Vec<crate::snapshot::KeyedRow> = Vec::new();
@@ -93,14 +93,6 @@ pub(crate) async fn hydrate_keyed_rows<'a>(
         let geom_bytes_estimate = row.geometry.len() as u64;
         let row_fingerprint = crate::snapshot::compute_row_fingerprint_for_row(&row);
         let feature = wkb_to_feature_geom(&row.geometry, row.feature_id)?;
-        let attr_bytes: u64 = row.attributes.iter().map(|(k, _)| (k.len() + 16) as u64).sum();
-        if let Err(observed) = guard.add(geom_bytes_estimate.saturating_add(attr_bytes).saturating_add(64)) {
-            return Err(CompilerError::ScratchBudgetExceeded {
-                binding: binding_id.to_string(),
-                observed_bytes: observed,
-                budget_bytes: guard.ceiling(),
-            });
-        }
         let cx = (f64::from(feature.bbox[0]) + f64::from(feature.bbox[2])) / 2.0;
         let cy = (f64::from(feature.bbox[1]) + f64::from(feature.bbox[3])) / 2.0;
         let key = crate::hilbert::key_from_centroid(cx, cy, combined_bbox);
@@ -113,6 +105,32 @@ pub(crate) async fn hydrate_keyed_rows<'a>(
         });
     }
     Ok(rows)
+}
+
+/// Sum the working-set bytes of `rows` against `working_set_bytes`. Trips
+/// [`CompilerError::ScratchBudgetExceeded`] with `Some(page_id)` when the
+/// running total crosses the ceiling. Mirrors the per-row formula
+/// [`hydrate_keyed_rows`] used to use, just measured per-page.
+pub(crate) fn enforce_page_budget(
+    rows: &[crate::snapshot::KeyedRow],
+    working_set_bytes: u64,
+    binding_id: &str,
+    page_id: PageId,
+) -> Result<(), CompilerError> {
+    let mut guard = WorkingSetGuard::new(working_set_bytes);
+    for r in rows {
+        let attr_bytes: u64 = r.attrs.iter().map(|(k, _)| (k.len() + 16) as u64).sum();
+        let est = r.geom_bytes_estimate.saturating_add(attr_bytes).saturating_add(64);
+        if let Err(observed) = guard.add(est) {
+            return Err(CompilerError::ScratchBudgetExceeded {
+                binding: binding_id.to_string(),
+                page_id: Some(page_id),
+                observed_bytes: observed,
+                budget_bytes: working_set_bytes,
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Run one rebuild pass for the given dirty set. Per-binding sidecar
@@ -262,8 +280,7 @@ async fn rebuild_binding_incremental(
         .map(|f| i64::try_from(*f).unwrap_or(i64::MAX))
         .collect();
     let stream = deps.source.fetch_by_feature_ids(&port_binding, &ids).await?;
-    let mut guard = WorkingSetGuard::new(working_set_bytes);
-    let rows = hydrate_keyed_rows(stream, &mut guard, binding_plan.binding_id.as_str(), combined_bbox).await?;
+    let rows = hydrate_keyed_rows(stream, combined_bbox).await?;
     let mut returned_counts: BTreeMap<u64, u32> = BTreeMap::new();
     for r in &rows {
         *returned_counts.entry(r.feature.user_id).or_default() += 1;
@@ -310,6 +327,15 @@ async fn rebuild_binding_incremental(
                     .then_with(|| a.feature.user_id.cmp(&b.feature.user_id))
                     .then_with(|| a.row_fingerprint.cmp(&b.row_fingerprint))
             });
+            // per-page working-set ceiling. checked over the leveled rows
+            // that actually flow into flush_page; pruned rows live on the
+            // pruned label sidecar tail and are intentionally excluded.
+            enforce_page_budget(
+                &page_rows,
+                working_set_bytes,
+                binding_plan.binding_id.as_str(),
+                *page_id,
+            )?;
 
             let page_key = mars_types::PageKey {
                 binding_id: binding_id.clone(),
@@ -535,8 +561,7 @@ async fn execute_rebalance_one_binding(
         .map(|f| i64::try_from(*f).unwrap_or(i64::MAX))
         .collect();
     let stream = deps.source.fetch_by_feature_ids(&port_binding, &ids).await?;
-    let mut guard = WorkingSetGuard::new(working_set_bytes);
-    let mut rows = hydrate_keyed_rows(stream, &mut guard, binding_plan.binding_id.as_str(), combined_bbox).await?;
+    let mut rows = hydrate_keyed_rows(stream, combined_bbox).await?;
     rows.sort_by(|a, b| {
         a.key
             .cmp(&b.key)
@@ -635,6 +660,12 @@ async fn execute_rebalance_one_binding(
                         slice.last().map(|x| x.key).unwrap_or(HilbertKey::min())
                     };
                     let pruned_slice = drain_pruned_through(&in_range_pruned, &mut pruned_idx, cap);
+                    enforce_page_budget(
+                        &slice,
+                        working_set_bytes,
+                        binding_plan.binding_id.as_str(),
+                        PageId::new(new_page_id),
+                    )?;
                     let entry = flush_page(deps, binding_plan, page.level, PageId::new(new_page_id), &slice).await?;
                     let mut class_acc = Vec::new();
                     let mut label_acc = Vec::new();
@@ -702,6 +733,12 @@ async fn execute_rebalance_one_binding(
                     continue;
                 }
                 let new_page_id = bump_page_id(&mut next_page_id, left.level);
+                enforce_page_budget(
+                    &merged_leveled,
+                    working_set_bytes,
+                    binding_plan.binding_id.as_str(),
+                    PageId::new(new_page_id),
+                )?;
                 let entry = flush_page(
                     deps,
                     binding_plan,

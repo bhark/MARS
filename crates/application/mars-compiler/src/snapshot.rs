@@ -1466,10 +1466,12 @@ mod tests {
         match err {
             CompilerError::ScratchBudgetExceeded {
                 binding,
+                page_id,
                 observed_bytes,
                 budget_bytes,
             } => {
                 assert_eq!(binding, "pts");
+                assert!(page_id.is_none(), "bootstrap accumulator overflow has no page context");
                 assert!(observed_bytes > budget_bytes);
                 assert_eq!(budget_bytes, 64);
             }
