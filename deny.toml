@@ -24,6 +24,7 @@ allow = [
     "Apache-2.0 WITH LLVM-exception",
     "BSD-2-Clause",
     "BSD-3-Clause",
+    "CDDL-1.0",
     "ISC",
     "Zlib",
     "MPL-2.0",
