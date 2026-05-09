@@ -27,17 +27,17 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use bytes::Bytes;
+use futures_core::stream::BoxStream;
 use futures_util::StreamExt;
 use mars_artifact::{FeatureGeom, compute_content_hash, wkb_to_feature_geom};
-use mars_source::{RowBytes, SourceBinding as PortBinding, SourceCollectionId};
+use mars_source::{RowBytes, SourceBinding as PortBinding, SourceCollectionId, SourceError};
 use mars_types::{
-    ArtifactEntry, BindingId, BindingMetadata, DecimationLevel, HilbertKey, LayerSidecarEntry, LevelMetadata, Manifest,
-    PageEntry, PageId,
+    ArtifactEntry, Bbox, BindingId, BindingMetadata, DecimationLevel, HilbertKey, LayerSidecarEntry, LevelMetadata,
+    Manifest, PageEntry, PageId,
 };
 
 use crate::decimate::{passes_min_size, simplify};
 use crate::external_sort::WorkingSetGuard;
-use crate::hilbert::key_from_centroid;
 use crate::incremental::{BindingDirty, DirtyPages};
 use crate::plan::{BootstrapPlan, LayerPlan, LevelPlan};
 use crate::rebalance::RebalanceOp;
@@ -72,6 +72,47 @@ pub struct RebuildOutcome {
     /// Refreshed binding metadata (level table + new page-membership
     /// sidecar reference). One entry per binding touched by the cycle.
     pub refreshed_bindings: Vec<BindingMetadata>,
+}
+
+/// Drain a row stream into deterministic-ordered [`KeyedRow`]s with hilbert
+/// keys assigned over `combined_bbox`. Shared by the incremental, rebalance,
+/// and (step 6) bootstrap-from-plan paths so all three hydrate rows
+/// identically.
+///
+/// The caller passes the [`WorkingSetGuard`] so they can scope it (per
+/// page, per binding, etc.) and read its observed total afterwards.
+pub(crate) async fn hydrate_keyed_rows<'a>(
+    mut stream: BoxStream<'a, Result<RowBytes, SourceError>>,
+    guard: &mut crate::external_sort::WorkingSetGuard,
+    binding_id: &str,
+    combined_bbox: Bbox,
+) -> Result<Vec<crate::snapshot::KeyedRow>, CompilerError> {
+    let mut rows: Vec<crate::snapshot::KeyedRow> = Vec::new();
+    while let Some(item) = stream.next().await {
+        let row: RowBytes = item?;
+        let geom_bytes_estimate = row.geometry.len() as u64;
+        let row_fingerprint = crate::snapshot::compute_row_fingerprint_for_row(&row);
+        let feature = wkb_to_feature_geom(&row.geometry, row.feature_id)?;
+        let attr_bytes: u64 = row.attributes.iter().map(|(k, _)| (k.len() + 16) as u64).sum();
+        if let Err(observed) = guard.add(geom_bytes_estimate.saturating_add(attr_bytes).saturating_add(64)) {
+            return Err(CompilerError::ScratchBudgetExceeded {
+                binding: binding_id.to_string(),
+                observed_bytes: observed,
+                budget_bytes: guard.ceiling(),
+            });
+        }
+        let cx = (f64::from(feature.bbox[0]) + f64::from(feature.bbox[2])) / 2.0;
+        let cy = (f64::from(feature.bbox[1]) + f64::from(feature.bbox[3])) / 2.0;
+        let key = crate::hilbert::key_from_centroid(cx, cy, combined_bbox);
+        rows.push(crate::snapshot::KeyedRow {
+            feature,
+            attrs: Arc::new(row.attributes),
+            geom_bytes_estimate,
+            key,
+            row_fingerprint,
+        });
+    }
+    Ok(rows)
 }
 
 /// Run one rebuild pass for the given dirty set. Per-binding sidecar
@@ -220,34 +261,12 @@ async fn rebuild_binding_incremental(
         .iter()
         .map(|f| i64::try_from(*f).unwrap_or(i64::MAX))
         .collect();
-    let mut stream = deps.source.fetch_by_feature_ids(&port_binding, &ids).await?;
+    let stream = deps.source.fetch_by_feature_ids(&port_binding, &ids).await?;
     let mut guard = WorkingSetGuard::new(working_set_bytes);
-    let mut rows: Vec<KeyedRow> = Vec::new();
+    let rows = hydrate_keyed_rows(stream, &mut guard, binding_plan.binding_id.as_str(), combined_bbox).await?;
     let mut returned_counts: BTreeMap<u64, u32> = BTreeMap::new();
-    while let Some(item) = stream.next().await {
-        let row: RowBytes = item?;
-        *returned_counts.entry(row.feature_id).or_default() += 1;
-        let geom_bytes_estimate = row.geometry.len() as u64;
-        let row_fingerprint = crate::snapshot::compute_row_fingerprint_for_row(&row);
-        let feature = wkb_to_feature_geom(&row.geometry, row.feature_id)?;
-        let attr_bytes: u64 = row.attributes.iter().map(|(k, _)| (k.len() + 16) as u64).sum();
-        if let Err(observed) = guard.add(geom_bytes_estimate.saturating_add(attr_bytes).saturating_add(64)) {
-            return Err(CompilerError::ScratchBudgetExceeded {
-                binding: binding_plan.binding_id.as_str().to_string(),
-                observed_bytes: observed,
-                budget_bytes: working_set_bytes,
-            });
-        }
-        let cx = (f64::from(feature.bbox[0]) + f64::from(feature.bbox[2])) / 2.0;
-        let cy = (f64::from(feature.bbox[1]) + f64::from(feature.bbox[3])) / 2.0;
-        let key = key_from_centroid(cx, cy, combined_bbox);
-        rows.push(KeyedRow {
-            feature,
-            attrs: Arc::new(row.attributes),
-            geom_bytes_estimate,
-            key,
-            row_fingerprint,
-        });
+    for r in &rows {
+        *returned_counts.entry(r.feature.user_id).or_default() += 1;
     }
 
     // 4. for every dirty page: filter rows whose key falls inside its prior
@@ -515,33 +534,9 @@ async fn execute_rebalance_one_binding(
         .iter()
         .map(|f| i64::try_from(*f).unwrap_or(i64::MAX))
         .collect();
-    let mut stream = deps.source.fetch_by_feature_ids(&port_binding, &ids).await?;
+    let stream = deps.source.fetch_by_feature_ids(&port_binding, &ids).await?;
     let mut guard = WorkingSetGuard::new(working_set_bytes);
-    let mut rows: Vec<KeyedRow> = Vec::new();
-    while let Some(item) = stream.next().await {
-        let row: RowBytes = item?;
-        let geom_bytes_estimate = row.geometry.len() as u64;
-        let row_fingerprint = crate::snapshot::compute_row_fingerprint_for_row(&row);
-        let feature = wkb_to_feature_geom(&row.geometry, row.feature_id)?;
-        let attr_bytes: u64 = row.attributes.iter().map(|(k, _)| (k.len() + 16) as u64).sum();
-        if let Err(observed) = guard.add(geom_bytes_estimate.saturating_add(attr_bytes).saturating_add(64)) {
-            return Err(CompilerError::ScratchBudgetExceeded {
-                binding: binding_plan.binding_id.as_str().to_string(),
-                observed_bytes: observed,
-                budget_bytes: working_set_bytes,
-            });
-        }
-        let cx = (f64::from(feature.bbox[0]) + f64::from(feature.bbox[2])) / 2.0;
-        let cy = (f64::from(feature.bbox[1]) + f64::from(feature.bbox[3])) / 2.0;
-        let key = key_from_centroid(cx, cy, combined_bbox);
-        rows.push(KeyedRow {
-            feature,
-            attrs: Arc::new(row.attributes),
-            geom_bytes_estimate,
-            key,
-            row_fingerprint,
-        });
-    }
+    let mut rows = hydrate_keyed_rows(stream, &mut guard, binding_plan.binding_id.as_str(), combined_bbox).await?;
     rows.sort_by(|a, b| {
         a.key
             .cmp(&b.key)
