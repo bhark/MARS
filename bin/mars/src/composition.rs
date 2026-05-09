@@ -278,6 +278,77 @@ mod tests {
     }
 
     #[test]
+    fn build_replication_topology_three_tier_layer_yields_three_collections() {
+        let cfg = cfg_with_layers(vec![Layer {
+            name: LayerId::new("bygning"),
+            title: String::new(),
+            abstract_: String::new(),
+            kind: "polygon".into(),
+            scale: None,
+            group: None,
+            enable_get_feature_info: false,
+            bbox: None,
+            sources: vec![
+                CfgBinding {
+                    scale: None,
+                    band: Some("hi".into()),
+                    max_denom: Some(8_000),
+                    from: "public.bygning".into(),
+                    geometry_column: "geom".into(),
+                    id_column: None,
+                    attributes: vec![],
+                    levels: None,
+                    page_size_target_bytes: None,
+                    reconcile_every_cycles: None,
+                    sidecar_size_warn_bytes: None,
+                    simplifier: None,
+                },
+                CfgBinding {
+                    scale: None,
+                    band: Some("hi".into()),
+                    max_denom: Some(10_000),
+                    from: "public.bygning_1m".into(),
+                    geometry_column: "geom".into(),
+                    id_column: None,
+                    attributes: vec![],
+                    levels: None,
+                    page_size_target_bytes: None,
+                    reconcile_every_cycles: None,
+                    sidecar_size_warn_bytes: None,
+                    simplifier: None,
+                },
+                CfgBinding {
+                    scale: None,
+                    band: Some("hi".into()),
+                    max_denom: Some(25_000),
+                    from: "public.bygning_2m".into(),
+                    geometry_column: "geom".into(),
+                    id_column: None,
+                    attributes: vec![],
+                    levels: None,
+                    page_size_target_bytes: None,
+                    reconcile_every_cycles: None,
+                    sidecar_size_warn_bytes: None,
+                    simplifier: None,
+                },
+            ],
+            classes: vec![Class {
+                name: "c".into(),
+                title: String::new(),
+                when: None,
+                style: ClassStyle::Ref { name: "x".into() },
+            }],
+            label: None,
+            label_survival: mars_config::LabelSurvival::Independent,
+        }]);
+        let topo = build_replication_topology(&cfg).unwrap();
+        assert_eq!(topo.collections.len(), 3);
+        assert!(topo.collections.iter().any(|c| c.table == "bygning"));
+        assert!(topo.collections.iter().any(|c| c.table == "bygning_1m"));
+        assert!(topo.collections.iter().any(|c| c.table == "bygning_2m"));
+    }
+
+    #[test]
     fn validate_change_feed_config_accepts_pgoutput_with_slot_and_publication() {
         let cfg = cfg_with_layers(vec![]);
         validate_change_feed_config(&cfg).unwrap();

@@ -758,6 +758,26 @@ mod tests {
     }
 
     #[test]
+    fn three_tier_layer_produces_three_binding_plans_and_three_layer_plans() {
+        let mut b0 = binding("a");
+        b0.band = Some("hi".into());
+        b0.max_denom = Some(8_000);
+        let mut b1 = binding("b");
+        b1.band = Some("hi".into());
+        b1.max_denom = Some(10_000);
+        let mut b2 = binding("c");
+        b2.band = Some("hi".into());
+        b2.max_denom = Some(25_000);
+        let cfg = config_with(vec![layer("l", vec![b0, b1, b2])]);
+        let plan = build_bootstrap_plan(&cfg).unwrap();
+        assert_eq!(plan.bindings.len(), 3, "expected 3 distinct BindingPlans");
+        assert_eq!(plan.layers.len(), 3, "expected 3 LayerPlans");
+        for lp in &plan.layers {
+            assert_eq!(lp.layer_id.as_str(), "l");
+        }
+    }
+
+    #[test]
     fn rejects_conflicting_layer_classes() {
         let b1 = binding("parcels");
         let b2 = binding("parcels");

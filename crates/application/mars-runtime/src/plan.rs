@@ -405,4 +405,51 @@ mod tests {
         let layer = cfg_layer("layer-a", vec![cfg_source("ghost", None)]);
         assert!(pick_binding_and_level(&layer, 1000, &state).is_none());
     }
+
+    #[test]
+    fn pick_binding_and_level_selects_tier_by_denom() {
+        let pages = vec![
+            page("t0", 0, 0, 1, Bbox::new(0.0, 0.0, 10.0, 10.0)),
+            page("t1", 0, 0, 2, Bbox::new(0.0, 0.0, 10.0, 10.0)),
+            page("t2", 0, 0, 3, Bbox::new(0.0, 0.0, 10.0, 10.0)),
+        ];
+        let bindings = vec![
+            binding_meta("t0", vec![level(0, 0.0)]),
+            binding_meta("t1", vec![level(0, 0.0)]),
+            binding_meta("t2", vec![level(0, 0.0)]),
+        ];
+        let state = state_with(pages, bindings);
+        let layer = cfg_layer(
+            "layer-a",
+            vec![
+                cfg_source(
+                    "t0",
+                    Some(ScaleWindow {
+                        min: None,
+                        max: Some(8_000),
+                    }),
+                ),
+                cfg_source(
+                    "t1",
+                    Some(ScaleWindow {
+                        min: Some(8_000),
+                        max: Some(10_000),
+                    }),
+                ),
+                cfg_source(
+                    "t2",
+                    Some(ScaleWindow {
+                        min: Some(10_000),
+                        max: Some(25_000),
+                    }),
+                ),
+            ],
+        );
+        let r0 = pick_binding_and_level(&layer, 5_000, &state).unwrap();
+        assert_eq!(r0.0.as_str(), "t0");
+        let r1 = pick_binding_and_level(&layer, 8_500, &state).unwrap();
+        assert_eq!(r1.0.as_str(), "t1");
+        let r2 = pick_binding_and_level(&layer, 12_000, &state).unwrap();
+        assert_eq!(r2.0.as_str(), "t2");
+    }
 }
