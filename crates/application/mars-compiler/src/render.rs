@@ -374,22 +374,47 @@ async fn rebuild_binding_incremental(
         *returned_counts.entry(r.feature.user_id).or_default() += 1;
     }
 
-    // 4. for every dirty page: filter rows whose key falls inside its prior
-    //    hilbert range, re-decimate per the level rules, emit page +
-    //    sidecars. empty pages are dropped (no tombstones).
+    // 3b. partition fetched rows into dirty pages per level. each row is
+    //     attributed to exactly one dirty page using the same placement rule
+    //     the rest of the system trusts. boundary duplicates are resolved by
+    //     lowest PageId so a key lands in exactly one page.
+    let mut partitioned: BTreeMap<(DecimationLevel, PageId), Vec<KeyedRow>> = BTreeMap::new();
+    for (level, dirty_pages) in &dirty_pages_by_level {
+        let level_meta =
+            prior_binding
+                .levels
+                .iter()
+                .find(|m| m.level == *level)
+                .ok_or(CompilerError::InvariantViolation {
+                    what: "rebuild: missing prior level metadata for partition",
+                })?;
+        let dirty_set: BTreeSet<PageId> = dirty_pages.iter().map(|(pid, _)| *pid).collect();
+        for r in &rows {
+            let mut candidates = crate::incremental::pages_for_key(level_meta, r.key);
+            candidates.retain(|pid| dirty_set.contains(pid));
+            if candidates.is_empty() {
+                continue;
+            }
+            // deterministic tie-breaker: lowest PageId.
+            candidates.sort_unstable();
+            let page_id = candidates[0];
+            partitioned.entry((*level, page_id)).or_default().push(r.clone());
+        }
+    }
+
+    // 4. for every dirty page: use the pre-partitioned rows, re-decimate
+    //    per the level rules, emit page + sidecars. empty pages are dropped.
     let layers: Vec<&LevelPlan> = binding_plan.levels.iter().collect();
     let layer_plans: Vec<&crate::plan::LayerPlan> = plan.layers_for(&binding_plan.binding_id).collect();
     for level_plan in &layers {
         let Some(dirty_pages) = dirty_pages_by_level.get(&level_plan.level) else {
             continue;
         };
-        for (page_id, (lo, hi)) in dirty_pages {
-            // partition rows in this page's hilbert range into leveled
-            // (passes min-size; rendered + paged) and pruned (fails min-size;
-            // contributes Independent label candidates only).
+        for (page_id, _) in dirty_pages {
             let mut page_rows: Vec<KeyedRow> = Vec::new();
             let mut pruned_rows: Vec<KeyedRow> = Vec::new();
-            for r in rows.iter().filter(|r| r.key >= *lo && r.key <= *hi) {
+            let page_source = partitioned.remove(&(level_plan.level, *page_id)).unwrap_or_default();
+            for r in page_source {
                 if passes_min_size(&r.feature, level_plan.geometry_min_size_m) {
                     page_rows.push(KeyedRow {
                         feature: FeatureGeom {
@@ -397,13 +422,13 @@ async fn rebuild_binding_incremental(
                             bbox: r.feature.bbox,
                             geom: simplify(&r.feature.geom, level_plan.vertex_tolerance_m, binding_plan.simplifier),
                         },
-                        attrs: r.attrs.clone(),
+                        attrs: r.attrs,
                         geom_bytes_estimate: r.geom_bytes_estimate,
                         key: r.key,
                         row_fingerprint: r.row_fingerprint,
                     });
                 } else {
-                    pruned_rows.push(r.clone());
+                    pruned_rows.push(r);
                 }
             }
             // page_rows must arrive in deterministic slot order: flush_page

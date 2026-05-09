@@ -235,7 +235,7 @@ impl<'a> IncrementalCycle<'a> {
     }
 }
 
-fn pages_for_key(level: &LevelMetadata, key: HilbertKey) -> Vec<PageId> {
+pub(crate) fn pages_for_key(level: &LevelMetadata, key: HilbertKey) -> Vec<PageId> {
     // table is sorted ascending by `range_lo`; partition_point gives us the
     // first row whose range starts strictly after `key`. walk back from
     // there collecting any entry whose range still covers `key`. PageId is
