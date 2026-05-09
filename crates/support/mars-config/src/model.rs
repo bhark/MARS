@@ -727,6 +727,13 @@ pub struct SourceBinding {
     /// LAZARUS §Bailout 4.
     #[serde(default)]
     pub sidecar_size_warn_bytes: Option<String>,
+    /// Geometry simplifier strategy applied at decimation time. `None`
+    /// resolves to [`SimplifierKind::Naive`] (Douglas-Peucker per part).
+    /// LAZARUS Phase E line 669: the switch is wired now so the Phase 0
+    /// topology-aware simplifier can plug in without further plumbing once
+    /// the spike lands.
+    #[serde(default)]
+    pub simplifier: Option<SimplifierKind>,
 }
 
 /// Default byte-budget target per page artifact (~5 MiB).
@@ -738,6 +745,22 @@ pub const DEFAULT_RECONCILE_EVERY_CYCLES: u32 = 24;
 /// Default sidecar size warning threshold (`8 GiB`). Above this the bailout
 /// in LAZARUS recommends switching the binding to `REPLICA IDENTITY FULL`.
 pub const DEFAULT_SIDECAR_SIZE_WARN_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+
+/// Geometry simplifier strategy. The strategy is per-binding because it
+/// reflects *how* simplification is performed; per-level *aggressiveness*
+/// is already controlled by [`DecimationLevelConfig::vertex_tolerance_m`].
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SimplifierKind {
+    /// Per-part Douglas-Peucker. The default; produces independent simplified
+    /// parts per feature without considering shared edges between features.
+    #[default]
+    Naive,
+    /// Topology-aware shared-edge simplification (LAZARUS Phase 0 spike).
+    /// Currently unimplemented; selecting this variant is rejected at
+    /// config validation with [`ConfigError::Invalid`].
+    TopologyAware,
+}
 
 impl SourceBinding {
     /// Split `from` into `(schema, table)`. Single-segment names route to
@@ -769,6 +792,12 @@ impl SourceBinding {
             Some(s) => units::parse_bytes(s),
             None => Ok(DEFAULT_SIDECAR_SIZE_WARN_BYTES),
         }
+    }
+
+    /// Resolve `simplifier` against the default ([`SimplifierKind::Naive`]).
+    #[must_use]
+    pub fn resolved_simplifier(&self) -> SimplifierKind {
+        self.simplifier.unwrap_or_default()
     }
 }
 

@@ -9,6 +9,7 @@
 //! the snapshot/rebuild pipelines call these for every (binding, level).
 
 use mars_artifact::{Coord, FeatureGeom, GeomKind};
+use mars_config::SimplifierKind;
 
 /// keep features whose bbox diagonal in canonical-CRS units is at least
 /// `min_size_m`. `min_size_m == 0.0` keeps every feature. used to skip the
@@ -31,6 +32,19 @@ pub fn passes_label_priority(priority: u16, min_priority: u32) -> bool {
     u32::from(priority) >= min_priority
 }
 
+/// dispatch entry. selects the simplifier strategy declared on the binding.
+/// `TopologyAware` is rejected at config validation (LAZARUS Phase E line
+/// 669); reaching it here is a config-validation bug.
+#[must_use]
+pub fn simplify(geom: &GeomKind, tolerance_m: f64, kind: SimplifierKind) -> GeomKind {
+    match kind {
+        SimplifierKind::Naive => simplify_naive(geom, tolerance_m),
+        SimplifierKind::TopologyAware => unreachable!(
+            "topology_aware simplifier reached decimate dispatch; config validation should have rejected it"
+        ),
+    }
+}
+
 /// douglas-peucker simplification. `tolerance_m == 0.0` returns the geometry
 /// unchanged. polygons run per-ring, lines per linestring, multi-* per part.
 /// points and multipoints are returned unchanged.
@@ -41,7 +55,7 @@ pub fn passes_label_priority(priority: u16, min_priority: u32) -> bool {
 /// avoids emitting topologically-degenerate output. callers that want
 /// coarse pruning rely on `passes_min_size` to drop tiny features first.
 #[must_use]
-pub fn simplify(geom: &GeomKind, tolerance_m: f64) -> GeomKind {
+pub fn simplify_naive(geom: &GeomKind, tolerance_m: f64) -> GeomKind {
     if tolerance_m <= 0.0 || !tolerance_m.is_finite() {
         return geom.clone();
     }
@@ -169,14 +183,14 @@ mod tests {
     #[test]
     fn simplify_zero_tolerance_no_op() {
         let g = GeomKind::LineString(vec![(0.0, 0.0), (1.0, 0.1), (2.0, 0.0)]);
-        let s = simplify(&g, 0.0);
+        let s = simplify_naive(&g, 0.0);
         assert_eq!(s, g);
     }
 
     #[test]
     fn simplify_collinear_line_drops_middle() {
         let g = GeomKind::LineString(vec![(0.0, 0.0), (1.0, 0.0), (2.0, 0.0), (3.0, 0.0)]);
-        let s = simplify(&g, 0.5);
+        let s = simplify_naive(&g, 0.5);
         match s {
             GeomKind::LineString(out) => assert_eq!(out, vec![(0.0, 0.0), (3.0, 0.0)]),
             _ => panic!("expected LineString"),
@@ -187,7 +201,7 @@ mod tests {
     fn simplify_keeps_significant_vertex() {
         // big midpoint deviation must be kept.
         let g = GeomKind::LineString(vec![(0.0, 0.0), (1.0, 5.0), (2.0, 0.0)]);
-        let s = simplify(&g, 1.0);
+        let s = simplify_naive(&g, 1.0);
         match s {
             GeomKind::LineString(out) => assert_eq!(out, vec![(0.0, 0.0), (1.0, 5.0), (2.0, 0.0)]),
             _ => panic!("expected LineString"),
@@ -206,7 +220,7 @@ mod tests {
             (0.0, 0.0),
         ];
         let g = GeomKind::Polygon(vec![ring]);
-        let s = simplify(&g, 0.5);
+        let s = simplify_naive(&g, 0.5);
         match s {
             GeomKind::Polygon(rings) => {
                 // (5, 10) is collinear with (10, 10) and (0, 10) so it must drop.
@@ -220,9 +234,9 @@ mod tests {
     #[test]
     fn simplify_preserves_points_and_multipoints() {
         let g = GeomKind::Point((1.0, 2.0));
-        assert_eq!(simplify(&g, 5.0), g);
+        assert_eq!(simplify_naive(&g, 5.0), g);
         let g = GeomKind::MultiPoint(vec![(1.0, 2.0), (3.0, 4.0)]);
-        assert_eq!(simplify(&g, 5.0), g);
+        assert_eq!(simplify_naive(&g, 5.0), g);
     }
 
     #[test]
@@ -231,10 +245,25 @@ mod tests {
         // otherwise drop interior vertices, but we preserve to avoid bad output.
         let ring = vec![(0.0, 0.0), (1.0, 0.0), (0.5, 0.5), (0.0, 0.0)];
         let g = GeomKind::Polygon(vec![ring.clone()]);
-        let s = simplify(&g, 100.0);
+        let s = simplify_naive(&g, 100.0);
         match s {
             GeomKind::Polygon(rings) => assert_eq!(rings[0], ring),
             _ => panic!("expected Polygon"),
         }
+    }
+
+    #[test]
+    fn dispatch_naive_matches_naive_directly() {
+        let g = GeomKind::LineString(vec![(0.0, 0.0), (1.0, 0.0), (2.0, 0.0), (3.0, 0.0)]);
+        let dispatched = simplify(&g, 0.5, SimplifierKind::Naive);
+        let direct = simplify_naive(&g, 0.5);
+        assert_eq!(dispatched, direct);
+    }
+
+    #[test]
+    #[should_panic(expected = "topology_aware simplifier")]
+    fn dispatch_topology_aware_panics_until_phase0() {
+        let g = GeomKind::LineString(vec![(0.0, 0.0), (1.0, 0.0)]);
+        let _ = simplify(&g, 0.5, SimplifierKind::TopologyAware);
     }
 }

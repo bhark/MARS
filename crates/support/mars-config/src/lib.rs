@@ -361,6 +361,15 @@ fn validate_binding_levels(layer: &LayerId, idx: usize, binding: &SourceBinding)
             "layer {layer} source[{idx}] sidecar_size_warn_bytes must be > 0"
         )));
     }
+    // LAZARUS Phase E line 669: the switch is wired now but `TopologyAware`
+    // is the Phase 0 spike, not yet implemented. Reject explicitly so
+    // operators see a clear error rather than a silent fallback to DP.
+    if matches!(binding.simplifier, Some(SimplifierKind::TopologyAware)) {
+        return Err(ConfigError::Invalid(format!(
+            "layer {layer} source[{idx}] simplifier: topology_aware is not yet implemented; \
+             omit the field or set simplifier: naive"
+        )));
+    }
     let Some(levels) = &binding.levels else {
         return Ok(());
     };
@@ -548,6 +557,7 @@ mod tests {
                 page_size_target_bytes: None,
                 reconcile_every_cycles: None,
                 sidecar_size_warn_bytes: None,
+                simplifier: None,
             }],
             classes: vec![crate::model::Class {
                 name: "primary".into(),
@@ -588,6 +598,7 @@ mod tests {
                 page_size_target_bytes: None,
                 reconcile_every_cycles: None,
                 sidecar_size_warn_bytes: None,
+                simplifier: None,
             }],
             classes: vec![],
             label: Some(LayerLabel {
@@ -860,6 +871,7 @@ label_survival: follow_geometry
             page_size_target_bytes: None,
             reconcile_every_cycles: None,
             sidecar_size_warn_bytes: None,
+            simplifier: None,
         }
     }
 
@@ -1036,6 +1048,37 @@ label_survival: follow_geometry
         assert_eq!(parsed.bootstrap_working_set().unwrap(), 4 * 1024 * 1024 * 1024);
         assert!(!parsed.rebalance.enabled);
         assert_eq!(parsed.rebalance.window_dur().unwrap().as_secs(), 24 * 3600);
+    }
+
+    #[test]
+    fn simplifier_defaults_to_naive() {
+        let b = binding("buildings");
+        assert_eq!(b.resolved_simplifier(), SimplifierKind::Naive);
+    }
+
+    #[test]
+    fn rejects_topology_aware_simplifier_until_phase0_lands() {
+        let mut cfg = minimal_config();
+        let mut b = binding("buildings");
+        b.simplifier = Some(SimplifierKind::TopologyAware);
+        cfg.layers = vec![layer_with_binding(b)];
+        let err = validate(&cfg, Path::new("."));
+        assert!(
+            matches!(&err, Err(ConfigError::Invalid(s)) if s.contains("topology_aware")),
+            "expected topology_aware rejection, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn simplifier_naive_yaml_roundtrip() {
+        let yaml = "naive";
+        let parsed: SimplifierKind = serde_yaml_ng::from_str(yaml).unwrap();
+        assert_eq!(parsed, SimplifierKind::Naive);
+        let yaml = "topology_aware";
+        let parsed: SimplifierKind = serde_yaml_ng::from_str(yaml).unwrap();
+        assert_eq!(parsed, SimplifierKind::TopologyAware);
+        let yaml = "guesswork";
+        assert!(serde_yaml_ng::from_str::<SimplifierKind>(yaml).is_err());
     }
 
     #[test]

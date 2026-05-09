@@ -268,7 +268,7 @@ async fn rebuild_binding_incremental(
                     feature: FeatureGeom {
                         id: r.feature.id,
                         bbox: r.feature.bbox,
-                        geom: simplify(&r.feature.geom, level_plan.vertex_tolerance_m),
+                        geom: simplify(&r.feature.geom, level_plan.vertex_tolerance_m, binding_plan.simplifier),
                     },
                     attrs: r.attrs.clone(),
                     geom_bytes_estimate: r.geom_bytes_estimate,

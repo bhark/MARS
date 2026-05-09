@@ -11,7 +11,7 @@
 //! decides what set of (binding, level) slices the snapshot has to emit.
 
 use mars_config::{
-    Config, DEFAULT_PAGE_SIZE_TARGET_BYTES, DecimationLevelConfig, LabelStyleAttach, Layer as CfgLayer,
+    Config, DEFAULT_PAGE_SIZE_TARGET_BYTES, DecimationLevelConfig, LabelStyleAttach, Layer as CfgLayer, SimplifierKind,
 };
 use mars_expr::{Expr, Template, parse, parse_template};
 use mars_style::{LabelStyle, LabelSurvival, Placement, default_placement};
@@ -95,6 +95,10 @@ pub struct BindingPlan {
     /// Cadence (in incremental cycles) of the full feature-id reconciliation
     /// pass. LAZARUS §Page-membership sidecar.
     pub reconcile_every_cycles: u32,
+    /// Geometry simplifier strategy applied to every page on snapshot and
+    /// rebuild. Resolved from
+    /// [`mars_config::SourceBinding::resolved_simplifier`]. LAZARUS Phase E.
+    pub simplifier: SimplifierKind,
 }
 
 /// One pre-parsed class entry on a [`LayerPlan`]. `when` parses once at
@@ -178,6 +182,7 @@ pub fn build_bootstrap_plan(cfg: &Config) -> Result<BootstrapPlan, PlanError> {
                 page_size_target_bytes: binding.resolved_page_size_target(),
                 sidecar_size_warn_bytes: sidecar_warn,
                 reconcile_every_cycles: binding.resolved_reconcile_every_cycles(),
+                simplifier: binding.resolved_simplifier(),
             };
 
             if let Some(existing) = bindings.iter().find(|b| b.binding_id == id) {
@@ -354,6 +359,12 @@ fn ensure_consistent(existing: &BindingPlan, candidate: &BindingPlan) -> Result<
             detail: "reconcile_every_cycles",
         });
     }
+    if existing.simplifier != candidate.simplifier {
+        return Err(PlanError::ConflictingBinding {
+            id: existing.binding_id.clone(),
+            detail: "simplifier",
+        });
+    }
     Ok(())
 }
 
@@ -436,6 +447,7 @@ mod tests {
             page_size_target_bytes: None,
             reconcile_every_cycles: None,
             sidecar_size_warn_bytes: None,
+            simplifier: None,
         }
     }
 

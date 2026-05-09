@@ -215,7 +215,7 @@ async fn emit_level(
         if !passes_min_size(&r.feature, level.geometry_min_size_m) {
             continue;
         }
-        let geom = simplify(&r.feature.geom, level.vertex_tolerance_m);
+        let geom = simplify(&r.feature.geom, level.vertex_tolerance_m, binding.simplifier);
         leveled.push(KeyedRow {
             feature: FeatureGeom {
                 id: r.feature.id,
@@ -810,6 +810,7 @@ mod tests {
             page_size_target_bytes: page_size,
             sidecar_size_warn_bytes: u64::MAX,
             reconcile_every_cycles: 24,
+            simplifier: mars_config::SimplifierKind::Naive,
         }
     }
 
@@ -943,6 +944,7 @@ mod tests {
             page_size_target_bytes: 5 * 1024 * 1024,
             sidecar_size_warn_bytes: u64::MAX,
             reconcile_every_cycles: 24,
+            simplifier: mars_config::SimplifierKind::Naive,
         };
         let plan = BootstrapPlan {
             bindings: vec![bp],

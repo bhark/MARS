@@ -133,6 +133,7 @@ fn binding_plan(id: &str, page_size: u64) -> BindingPlan {
         page_size_target_bytes: page_size,
         sidecar_size_warn_bytes: u64::MAX,
         reconcile_every_cycles: u32::MAX,
+        simplifier: mars_config::SimplifierKind::Naive,
     }
 }
 

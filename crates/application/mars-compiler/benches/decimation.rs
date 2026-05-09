@@ -8,7 +8,7 @@ use std::hint::black_box;
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use mars_artifact::{FeatureGeom, GeomKind};
-use mars_compiler::decimate::simplify;
+use mars_compiler::decimate::simplify_naive;
 
 const ROWS: usize = 100_000;
 const VERTEX_COUNT: usize = 24;
@@ -52,7 +52,7 @@ fn bench_decimation(c: &mut Criterion) {
         group.bench_function(format!("tol={tol}"), |b| {
             b.iter(|| {
                 for f in &features {
-                    black_box(simplify(&f.geom, tol));
+                    black_box(simplify_naive(&f.geom, tol));
                 }
             });
         });

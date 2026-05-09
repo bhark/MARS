@@ -366,6 +366,7 @@ fn build_minimal_config(layer_id: &LayerId, binding_id: &BindingId) -> Config {
                 page_size_target_bytes: None,
                 reconcile_every_cycles: None,
                 sidecar_size_warn_bytes: None,
+                simplifier: None,
             }],
             classes: vec![Class {
                 name: "main".into(),
