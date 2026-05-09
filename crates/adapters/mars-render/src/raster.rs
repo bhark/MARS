@@ -35,6 +35,17 @@ pub(crate) fn colour_to_tsk(c: Colour) -> Color {
     Color::from_rgba8(c.r, c.g, c.b, c.a)
 }
 
+/// true iff the path's AABB has non-zero extent on both axes. tiny-skia's
+/// `fill_path` rejects degenerate-bbox paths (collapsed to a point or a
+/// horizontal/vertical line) with a `log::warn`; gating here suppresses that
+/// noise for the common case of subpixel polygons after world->pixel
+/// projection. threshold mirrors tiny-skia's `SCALAR_NEARLY_ZERO` (1/4096).
+pub(crate) fn is_fillable(path: &tiny_skia::Path) -> bool {
+    const NEARLY_ZERO: f32 = 1.0 / 4096.0;
+    let b = path.bounds();
+    b.width() > NEARLY_ZERO && b.height() > NEARLY_ZERO
+}
+
 fn map_cap(c: SLineCap) -> LineCap {
     match c {
         SLineCap::Butt => LineCap::Butt,
@@ -64,7 +75,9 @@ pub(crate) fn draw_path(pm: &mut Pixmap, path: &PortPath, style: &Style) {
         return;
     };
 
-    if let Some(fill) = style.fill {
+    if let Some(fill) = style.fill
+        && is_fillable(&tsk_path)
+    {
         let mut paint = Paint::default();
         paint.set_color(colour_to_tsk(fill));
         paint.anti_alias = true;
@@ -196,5 +209,49 @@ fn composite_mask(pm: &mut Pixmap, mask: &GlyphMask, anchor: (f32, f32), colour:
             data[idx + 2] = pb.saturating_add(div255(u32::from(data[idx + 2]) * inv) as u8);
             data[idx + 3] = (a_src as u8).saturating_add(div255(u32::from(data[idx + 3]) * inv) as u8);
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use super::*;
+    use mars_render_port::Subpath;
+
+    fn build(points: Vec<(f32, f32)>, closed: bool) -> Option<tiny_skia::Path> {
+        build_path(&PortPath {
+            subpaths: vec![Subpath { points, closed }],
+        })
+    }
+
+    #[test]
+    fn build_path_drops_subpath_with_single_point() {
+        assert!(build(vec![(1.0, 2.0)], false).is_none());
+    }
+
+    #[test]
+    fn is_fillable_rejects_horizontal_line() {
+        let p = build(vec![(0.0, 5.0), (10.0, 5.0)], false).expect("path");
+        assert!(!is_fillable(&p));
+    }
+
+    #[test]
+    fn is_fillable_rejects_vertical_line() {
+        let p = build(vec![(5.0, 0.0), (5.0, 10.0)], false).expect("path");
+        assert!(!is_fillable(&p));
+    }
+
+    #[test]
+    fn is_fillable_rejects_collapsed_closed_polygon() {
+        // closed ring whose vertices all share the same y - typical of a tiny
+        // polygon flattened onto a pixel row by world->pixel projection.
+        let p = build(vec![(0.0, 7.0), (4.0, 7.0), (8.0, 7.0)], true).expect("path");
+        assert!(!is_fillable(&p));
+    }
+
+    #[test]
+    fn is_fillable_accepts_proper_polygon() {
+        let p = build(vec![(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)], true).expect("path");
+        assert!(is_fillable(&p));
     }
 }

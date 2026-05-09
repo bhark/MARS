@@ -347,6 +347,37 @@ mod tests {
     }
 
     #[test]
+    fn collapsed_polygon_fill_is_silently_skipped() {
+        // a closed ring whose vertices all share the same y (typical of a tiny
+        // polygon collapsed onto a pixel row by world->pixel projection at
+        // coarse zoom). tiny-skia's fill_path would log::warn + no-op; we
+        // gate ahead of it so the call never happens. behavioural check: the
+        // canvas remains empty (no fill drawn) and the renderer doesn't error.
+        let canvas = Canvas {
+            width: 32,
+            height: 32,
+            background: None,
+        };
+        let path = PortPath {
+            subpaths: vec![Subpath {
+                points: vec![(4.0, 16.0), (16.0, 16.0), (28.0, 16.0)],
+                closed: true,
+            }],
+        };
+        let ops = vec![DrawOp::Path {
+            path,
+            style: Arc::new(Style {
+                fill: Some(red()),
+                ..Default::default()
+            }),
+        }];
+        let png_bytes = render_png(canvas, &ops);
+        let (_, _, rgba) = decode(&png_bytes);
+        let opaque_count = rgba.chunks_exact(4).filter(|p| p[3] != 0).count();
+        assert_eq!(opaque_count, 0, "degenerate-bbox fill must paint nothing");
+    }
+
+    #[test]
     fn transparent_vs_opaque_background() {
         let c1 = Canvas {
             width: 4,
