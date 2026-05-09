@@ -1,24 +1,14 @@
 //! Bucketed Hilbert-key sort for bootstrap row sets.
 //!
-//! Two responsibilities:
-//!
-//! 1. enforce a configurable scratch budget so a binding whose row
-//!    accumulation outgrows operator-allocated scratch hits a clear, named
-//!    [`crate::CompilerError::ScratchBudgetExceeded`] instead of OOM-ing the
-//!    pod (LAZARUS bailout 5);
-//! 2. sort rows by `HilbertKey` using a top-bit bucket pass followed by
-//!    in-bucket comparison sort. The bucket structure is the same the
-//!    on-disk spill backend will use; once we have measured forvaltning2
-//!    on production data and a binding warrants the disk path, only the
-//!    bucket *materialisation* changes (memory `Vec` → memory-mapped temp
-//!    file). The ordering algorithm and tests carry over unchanged.
-//!
-//! Disk-backed external sort itself is a tracked carry-over: forvaltning2's
-//! largest binding fits the 4 GiB default working-set ceiling, and lifting
-//! it requires serialising `KeyedRow` (or re-streaming the source twice).
-//! Both options have non-trivial tradeoffs; we land them when measurement
-//! demands it, not before, and the operator-facing failure mode is
-//! explicit.
+//! Sorts rows by `HilbertKey` using a top-bit bucket pass followed by
+//! in-bucket comparison sort. The same bucket structure underpins the
+//! disk-backed spill: when the in-memory accumulator crosses
+//! `bootstrap_working_set_bytes * bootstrap_spill_threshold_fraction`
+//! the bootstrap path drains its tail into per-bucket spill files (see
+//! [`crate::spill`]). The ordering algorithm and the tests in this module
+//! are agnostic to the bucket *materialisation* — `Vec<KeyedRow>` for the
+//! in-memory hot path, on-disk frames in `crate::spill::BucketSpill` for
+//! the spilled path.
 
 use mars_types::HilbertKey;
 
@@ -26,8 +16,9 @@ use mars_types::HilbertKey;
 #[derive(Debug, Clone, Copy)]
 pub struct ExternalSortConfig {
     /// Working-set ceiling in bytes. The bootstrap accumulator drains its
-    /// in-memory tail to per-bucket spill files when crossed; the rebuild
-    /// path (which does not spill) fails with
+    /// in-memory tail to per-bucket spill files at
+    /// `working_set_bytes * spill_threshold_fraction`; the rebuild path
+    /// (which does not spill) fails with
     /// [`crate::CompilerError::ScratchBudgetExceeded`] on overflow.
     pub working_set_bytes: u64,
     /// Number of leading bits of the Hilbert key used for the bucket pass.

@@ -13,10 +13,12 @@
 //!   5. writes a per-binding page-membership sidecar (sorted by feature_id,
 //!      mmap'd) and folds it into the manifest atomically.
 //!
-//! out of scope here (C.2.c+):
-//! - bucketed external-merge sort for bindings whose row set exceeds RAM
-//!   (the LAZARUS plan calls for ~4 GiB working-set ceiling; in C.2.b we
-//!   keep the in-memory path and document the limitation).
+//! Bindings that exceed the in-memory working-set threshold spill into
+//! per-bucket disk files via [`crate::spill::BootstrapAccumulator`]; the
+//! page-sweep state in `emit_level` is fed one bucket at a time and the
+//! per-bucket pruned/leveled partitioning continues across boundaries.
+//!
+//! out of scope here:
 //! - rebuild from change-feed events (incremental.rs, sidecar lookups).
 //!
 //! `LabelSurvival::Independent`: a feature whose geometry is pruned at a

@@ -135,14 +135,18 @@ pub enum CompilerError {
         binding: String,
     },
     /// Bootstrap accumulated bytes exceeded the configured scratch budget.
-    /// Bootstrap streams source rows through a bucketed external sort whose
-    /// in-memory accumulator drains to per-bucket spill files when it crosses
+    /// The bucketed external sort drains its in-memory tail into per-bucket
+    /// spill files once accumulated row bytes cross
     /// `bootstrap_working_set_bytes * bootstrap_spill_threshold_fraction`.
-    /// This error fires when total spill bytes (or the in-memory accumulator
-    /// in the rebuild path, which keeps the same shape but does not spill)
-    /// cross `compiler.bootstrap_scratch_budget_bytes`. LAZARUS bailout 5:
-    /// lift the budget, point the scratch dir at a larger volume, or split
-    /// the binding.
+    /// This error fires when:
+    /// - total spill bytes (sum of all bucket file sizes) cross
+    ///   `compiler.bootstrap_scratch_budget_bytes` during bootstrap, OR
+    /// - the rebuild path's in-memory working-set guard (which does not
+    ///   spill — rebuild fetches a bounded feature-id set) crosses
+    ///   `bootstrap_working_set_bytes`.
+    ///
+    /// LAZARUS bailout 5: lift the budget, point the scratch dir at a
+    /// larger volume, or split the binding.
     #[error(
         "bootstrap scratch budget exceeded: binding {binding} accumulated {observed_bytes} bytes \
          (budget {budget_bytes}). lift compiler.bootstrap_scratch_budget_bytes, point \
