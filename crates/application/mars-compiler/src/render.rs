@@ -917,21 +917,14 @@ pub async fn rebuild_binding_from_plan<'a>(
         });
     }
 
-    // union of feature ids across every planned page in every level. one
-    // fetch_by_feature_ids call per binding -> the postgres adapter chunks
-    // 16 384 ids per SQL roundtrip internally.
-    let mut union_ids: BTreeSet<i64> = BTreeSet::new();
-    for level_pp in &page_plan.levels {
-        for planned in &level_pp.pages {
-            for id in &planned.feature_ids {
-                union_ids.insert(*id);
-            }
-        }
-    }
-    let ids: Vec<i64> = union_ids.into_iter().collect();
-    let stream = session.fetch_by_feature_ids(&ids).await?;
-    let rows = hydrate_keyed_rows(stream, page_plan.combined_bbox).await?;
-
+    // pass 2 hydrates one planned page at a time using the authoritative
+    // `feature_ids` set produced by pass 1. range-based filtering used to
+    // double-count rows whose hilbert key sat exactly on a page boundary
+    // (clusters with duplicate keys land in the inclusive (lo, hi) of both
+    // adjacent pages); the per-page id set is unambiguous. memory is
+    // bounded by the largest single page's row payload; the postgres
+    // adapter chunks the bigint[] argument at 16 384 ids internally so a
+    // typical page resolves in one SQL roundtrip.
     let layer_plans: Vec<&LayerPlan> = plan.layers_for(&binding_plan.binding_id).collect();
     let mut all_pages: Vec<PageEntry> = Vec::new();
     let mut levels_meta: Vec<LevelMetadata> = Vec::with_capacity(binding_plan.levels.len());
@@ -942,10 +935,12 @@ pub async fn rebuild_binding_from_plan<'a>(
         debug_assert_eq!(level_plan.level, level_pp.level);
         let mut level_pages: Vec<PageEntry> = Vec::new();
         for planned in &level_pp.pages {
-            let (lo, hi) = planned.hilbert_range;
+            let stream = session.fetch_by_feature_ids(&planned.feature_ids).await?;
+            let rows = hydrate_keyed_rows(stream, page_plan.combined_bbox).await?;
+
             let mut page_rows: Vec<KeyedRow> = Vec::new();
             let mut pruned_rows: Vec<KeyedRow> = Vec::new();
-            for r in rows.iter().filter(|r| r.key >= lo && r.key <= hi) {
+            for r in rows {
                 if crate::decimate::passes_min_size(&r.feature, level_plan.geometry_min_size_m) {
                     page_rows.push(KeyedRow {
                         feature: FeatureGeom {
@@ -963,7 +958,7 @@ pub async fn rebuild_binding_from_plan<'a>(
                         row_fingerprint: r.row_fingerprint,
                     });
                 } else {
-                    pruned_rows.push(r.clone());
+                    pruned_rows.push(r);
                 }
             }
             page_rows.sort_by(|a, b| {
