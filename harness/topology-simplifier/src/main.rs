@@ -6,6 +6,7 @@
 
 use clap::Parser;
 
+mod graph;
 mod ingest;
 
 #[derive(Debug, Parser)]
@@ -53,7 +54,19 @@ fn main() -> anyhow::Result<()> {
         stats.skipped_bad_hex,
         stats.skipped_bad_wkb,
     );
-    eprintln!("(graph + dp + reassemble + verify modules land in subsequent commits)");
-    let _ = geoms;
+    let (topo, gstats) = graph::build_topology(&geoms, args.quantise_mm);
+    eprintln!(
+        "graph: features={} rings={} vertices={} edges={} junctions={} arcs={} shared={} islands={}",
+        gstats.feature_count,
+        gstats.ring_count,
+        gstats.vertex_count,
+        gstats.edge_count,
+        gstats.junction_count,
+        gstats.arc_count,
+        gstats.shared_arc_count,
+        gstats.island_arc_count,
+    );
+    eprintln!("(dp + reassemble + verify modules land in subsequent commits)");
+    let _ = topo;
     Ok(())
 }
