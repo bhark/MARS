@@ -74,7 +74,7 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked --all-targets
 ./scripts/check-hexagonal-architecture.sh   # needs jq
-cargo deny check --all-features
+cargo deny check
 ```
 
 The end-to-end suite spins up a PostGIS container via `testcontainers` and needs Docker:
