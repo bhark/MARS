@@ -27,8 +27,6 @@ pub(crate) struct StyleDef {
     pub(crate) halo_width: Option<f32>,
 }
 
-
-
 #[derive(Debug, Default)]
 pub(crate) struct LayerSkeleton {
     pub(crate) name: String,
@@ -121,10 +119,7 @@ fn band_for_source(max_denom: Option<u64>, bands: &[(String, u64)]) -> String {
             .find(|(_, cap)| d <= *cap)
             .map(|(n, _)| n.clone())
             .unwrap_or_else(|| bands.last().map(|(n, _)| n.clone()).unwrap_or_default()),
-        None => bands
-            .last()
-            .map(|(n, _)| n.clone())
-            .unwrap_or_else(|| "default".into()),
+        None => bands.last().map(|(n, _)| n.clone()).unwrap_or_else(|| "default".into()),
     }
 }
 
@@ -203,18 +198,18 @@ pub(crate) fn render(skel: &Skeleton) -> String {
                     let _ = writeln!(out, "    font_size: {v}");
                 }
                 if let Some(ref v) = st.fill {
-                    let _ = writeln!(out, "    fill: {v}");
+                    let _ = writeln!(out, "    fill: {}", yaml_quote(v));
                 }
                 if let Some(ref c) = st.halo_color {
                     let w = st.halo_width.unwrap_or(1.0);
-                    let _ = writeln!(out, "    halo: {{ color: {c}, width: {w} }}");
+                    let _ = writeln!(out, "    halo: {{ color: {}, width: {w} }}", yaml_quote(c));
                 }
             } else {
                 if let Some(v) = &st.fill {
-                    let _ = writeln!(out, "    fill: {v}");
+                    let _ = writeln!(out, "    fill: {}", yaml_quote(v));
                 }
                 if let Some(v) = &st.stroke {
-                    let _ = writeln!(out, "    stroke: {v}");
+                    let _ = writeln!(out, "    stroke: {}", yaml_quote(v));
                 }
                 if let Some(v) = st.stroke_width {
                     let _ = writeln!(out, "    stroke_width: {v}");
@@ -223,10 +218,7 @@ pub(crate) fn render(skel: &Skeleton) -> String {
                     let _ = writeln!(
                         out,
                         "    stroke_dasharray: [{}]",
-                        arr.iter()
-                            .map(|f| f.to_string())
-                            .collect::<Vec<_>>()
-                            .join(", ")
+                        arr.iter().map(|f| f.to_string()).collect::<Vec<_>>().join(", ")
                     );
                 }
             }
@@ -279,19 +271,14 @@ pub(crate) fn render(skel: &Skeleton) -> String {
             if !layer.classes.is_empty() {
                 let _ = writeln!(out, "    classes:");
                 for cls in &layer.classes {
-                    let mut parts = vec![
-                        format!("name: {}", yaml_quote(&cls.name)),
-                    ];
+                    let mut parts = vec![format!("name: {}", yaml_quote(&cls.name))];
                     if let Some(title) = &cls.title {
                         parts.push(format!("title: {}", yaml_quote(title)));
                     }
                     if let Some(when) = &cls.when {
                         parts.push(format!("when: {}", yaml_quote(when)));
                     }
-                    parts.push(format!(
-                        "style: {{ type: ref, name: {} }}",
-                        yaml_quote(&cls.style_ref)
-                    ));
+                    parts.push(format!("style: {{ type: ref, name: {} }}", yaml_quote(&cls.style_ref)));
                     let _ = writeln!(out, "      - {{ {} }}", parts.join(", "));
                 }
             }

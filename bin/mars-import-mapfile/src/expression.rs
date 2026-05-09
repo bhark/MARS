@@ -207,10 +207,7 @@ impl<'a> Lexer<'a> {
             "NOT" => Token::Not,
             "IN" => Token::In,
             _ => {
-                return Err(ExpressionError::Unsupported {
-                    op: s,
-                    line: self.line,
-                });
+                return Err(ExpressionError::Unsupported { op: s, line: self.line });
             }
         };
         Ok(tok)
@@ -227,11 +224,7 @@ struct Parser<'a> {
 
 impl<'a> Parser<'a> {
     fn new(tokens: &'a [Token], line: usize) -> Self {
-        Self {
-            tokens,
-            pos: 0,
-            line,
-        }
+        Self { tokens, pos: 0, line }
     }
 
     fn parse_expr(&mut self) -> Result<Expr, ExpressionError> {
@@ -246,10 +239,7 @@ impl<'a> Parser<'a> {
         Ok(if args.len() == 1 {
             args.swap_remove(0)
         } else {
-            Expr::Logic {
-                op: LogicOp::Or,
-                args,
-            }
+            Expr::Logic { op: LogicOp::Or, args }
         })
     }
 
@@ -261,10 +251,7 @@ impl<'a> Parser<'a> {
         Ok(if args.len() == 1 {
             args.swap_remove(0)
         } else {
-            Expr::Logic {
-                op: LogicOp::And,
-                args,
-            }
+            Expr::Logic { op: LogicOp::And, args }
         })
     }
 
@@ -296,11 +283,7 @@ impl<'a> Parser<'a> {
                 lhs: Box::new(lhs),
                 list,
             };
-            if not {
-                Ok(Expr::Not(Box::new(inner)))
-            } else {
-                Ok(inner)
-            }
+            if not { Ok(Expr::Not(Box::new(inner))) } else { Ok(inner) }
         } else if not {
             Err(ExpressionError::Parse {
                 msg: "NOT without IN".to_string(),
@@ -469,11 +452,7 @@ mod tests {
 
     #[test]
     fn ne_and_eq() {
-        let e = parse_mapfile_expression(
-            "[geometristatus] <> 'Foreløbig' AND [bygningstype] = 'Drivhus'",
-            1,
-        )
-        .unwrap();
+        let e = parse_mapfile_expression("[geometristatus] <> 'Foreløbig' AND [bygningstype] = 'Drivhus'", 1).unwrap();
         assert_eq!(
             e,
             Expr::Logic {
@@ -496,16 +475,12 @@ mod tests {
 
     #[test]
     fn in_list() {
-        let e =
-            parse_mapfile_expression("[vejkategori] IN ('Hovedrute', 'Stor vej')", 1).unwrap();
+        let e = parse_mapfile_expression("[vejkategori] IN ('Hovedrute', 'Stor vej')", 1).unwrap();
         assert_eq!(
             e,
             Expr::In {
                 lhs: Box::new(Expr::Ident("vejkategori".into())),
-                list: vec![
-                    Literal::String("Hovedrute".into()),
-                    Literal::String("Stor vej".into()),
-                ],
+                list: vec![Literal::String("Hovedrute".into()), Literal::String("Stor vej".into()),],
             }
         );
     }

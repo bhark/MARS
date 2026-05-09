@@ -1,4 +1,4 @@
-//! integration tests: run the built binary against the bundled fixture.
+//! integration tests: run the built binary against the bundled fixtures.
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
 use std::path::PathBuf;
@@ -9,34 +9,35 @@ fn bin_path() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_mars-import-mapfile"))
 }
 
-fn fixture() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/minimal.map")
+fn fixture_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }
 
 #[test]
-fn produces_expected_skeleton() {
-    let out = Command::new(bin_path()).arg(fixture()).output().expect("run binary");
+fn produces_expected_yaml() {
+    let expected_path = fixture_dir().join("minimal.expected.yaml");
+    let expected = std::fs::read_to_string(&expected_path).expect("read minimal.expected.yaml");
+
+    let out = Command::new(bin_path())
+        .arg(fixture_dir().join("minimal.map"))
+        .output()
+        .expect("run binary");
     assert!(out.status.success(), "non-strict run should succeed");
-    let s = String::from_utf8(out.stdout).expect("utf8");
-    assert!(s.contains("service:"), "missing service: -- {s}");
-    assert!(s.contains("name: \"test\""), "missing service name -- {s}");
-    assert!(
-        s.contains("experimental scaffold") && s.contains("not a production config"),
-        "output must self-identify as a non-production scaffold -- {s}"
+
+    let stdout = String::from_utf8(out.stdout).expect("utf8");
+    assert_eq!(
+        stdout.trim(),
+        expected.trim(),
+        "stdout does not match {}. To regenerate: cargo run -p mars-import-mapfile -- tests/fixtures/minimal.map > tests/fixtures/minimal.expected.yaml",
+        expected_path.display()
     );
-    for layer in ["roads", "buildings", "labels"] {
-        assert!(
-            s.contains(&format!("hand-tune layer {layer}")),
-            "missing per-layer hand-tune marker for {layer} -- {s}"
-        );
-    }
 }
 
 #[test]
 fn strict_exits_two_on_unsupported() {
     let out = Command::new(bin_path())
         .arg("--strict")
-        .arg(fixture())
+        .arg(fixture_dir().join("strict.map"))
         .output()
         .expect("run binary");
     assert_eq!(

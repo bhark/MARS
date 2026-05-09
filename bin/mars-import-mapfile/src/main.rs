@@ -22,8 +22,7 @@ use tracing_subscriber::util::SubscriberInitExt as _;
 use tracing_subscriber::{EnvFilter, Layer};
 
 use crate::emitter::{
-    ClassSkeleton, LayerSkeleton, LabelSkeleton, Skeleton, SourceSkeleton, StyleDef, rgb_to_hex,
-    slugify,
+    ClassSkeleton, LabelSkeleton, LayerSkeleton, Skeleton, SourceSkeleton, StyleDef, rgb_to_hex, slugify,
 };
 use crate::scanner::{Token, block_range, is_block_opener, scan, scan_file};
 
@@ -98,8 +97,7 @@ fn main() -> Result<()> {
     let warn_count = Arc::new(AtomicUsize::new(0));
     install_tracing(warn_count.clone());
 
-    let tokens = scan_file(&cli.input)
-        .with_context(|| format!("scanning {}", cli.input.display()))?;
+    let tokens = scan_file(&cli.input).with_context(|| format!("scanning {}", cli.input.display()))?;
     let skeleton = translate_tokens(&tokens);
     let yaml = emitter::render(&skeleton);
 
@@ -322,14 +320,16 @@ fn handle_layer(body: &[Token], layer_line: usize, skel: &mut Skeleton) {
         }
     }
 
-    let geom_kind = layer_type.as_ref().and_then(|t| mapfile_type_to_geom(t).map(|s| s.to_string()));
+    let geom_kind = layer_type
+        .as_ref()
+        .and_then(|t| mapfile_type_to_geom(t).map(|s| s.to_string()));
 
     let (geometry_column, from_table) = parse_data(data.as_deref());
 
     let mut sources = Vec::new();
     if !scale_token_values.is_empty() {
         let gc = geometry_column.clone().unwrap_or_else(|| "geometri".into());
-                let id_col = processing_items.as_deref().and_then(guess_id_column);
+        let id_col = processing_items.as_deref().and_then(guess_id_column);
         let n = scale_token_values.len();
         for (idx, (_min_denom, table)) in scale_token_values.iter().enumerate() {
             let max_denom = if idx + 1 < n {
@@ -414,12 +414,7 @@ fn guess_id_column(items: &str) -> Option<String> {
         .find(|s| s.eq_ignore_ascii_case("ogc_fid"))
         .copied()
         .or_else(|| parts.iter().find(|s| s.eq_ignore_ascii_case("id")).copied())
-        .or_else(|| {
-            parts
-                .iter()
-                .find(|s| s.to_ascii_lowercase().ends_with("_fid"))
-                .copied()
-        })
+        .or_else(|| parts.iter().find(|s| s.to_ascii_lowercase().ends_with("_fid")).copied())
         .map(|s| s.to_string())
 }
 
@@ -579,19 +574,13 @@ fn parse_style_block(body: &[Token]) -> StyleBlock {
     for t in body {
         let kw = t.keyword.to_ascii_uppercase();
         match kw.as_str() {
-            "COLOR"
-                if t.args.len() >= 3 => {
-                if let (Ok(r), Ok(g), Ok(b)) =
-                    (t.args[0].parse(), t.args[1].parse(), t.args[2].parse())
-                {
+            "COLOR" if t.args.len() >= 3 => {
+                if let (Ok(r), Ok(g), Ok(b)) = (t.args[0].parse(), t.args[1].parse(), t.args[2].parse()) {
                     st.color = Some((r, g, b));
                 }
             }
-            "OUTLINECOLOR"
-                if t.args.len() >= 3 => {
-                if let (Ok(r), Ok(g), Ok(b)) =
-                    (t.args[0].parse(), t.args[1].parse(), t.args[2].parse())
-                {
+            "OUTLINECOLOR" if t.args.len() >= 3 => {
+                if let (Ok(r), Ok(g), Ok(b)) = (t.args[0].parse(), t.args[1].parse(), t.args[2].parse()) {
                     st.outlinecolor = Some((r, g, b));
                 }
             }
@@ -617,7 +606,10 @@ fn parse_style_block(body: &[Token]) -> StyleBlock {
     st
 }
 
-fn collapse_styles(styles: &[StyleBlock], line: usize) -> (Option<String>, Option<String>, Option<f32>, Option<Vec<f32>>) {
+fn collapse_styles(
+    styles: &[StyleBlock],
+    line: usize,
+) -> (Option<String>, Option<String>, Option<f32>, Option<Vec<f32>>) {
     if styles.len() > 1 {
         warn!(
             line = line,
@@ -639,12 +631,7 @@ fn collapse_styles(styles: &[StyleBlock], line: usize) -> (Option<String>, Optio
     (fill, stroke, width, dasharray)
 }
 
-fn parse_label(
-    body: &[Token],
-    _line: usize,
-    layer_name: &str,
-    skel: &mut Skeleton,
-) -> Option<LabelSkeleton> {
+fn parse_label(body: &[Token], _line: usize, layer_name: &str, skel: &mut Skeleton) -> Option<LabelSkeleton> {
     let mut text: Option<String> = None;
     let mut font: Option<String> = None;
     let mut size: Option<f32> = None;
@@ -658,19 +645,13 @@ fn parse_label(
             "TEXT" if text.is_none() => text = t.args.first().cloned(),
             "FONT" if font.is_none() => font = t.args.first().cloned(),
             "SIZE" => size = t.args.first().and_then(|a| a.parse().ok()),
-            "COLOR"
-                if t.args.len() >= 3 => {
-                if let (Ok(r), Ok(g), Ok(b)) =
-                    (t.args[0].parse(), t.args[1].parse(), t.args[2].parse())
-                {
+            "COLOR" if t.args.len() >= 3 => {
+                if let (Ok(r), Ok(g), Ok(b)) = (t.args[0].parse(), t.args[1].parse(), t.args[2].parse()) {
                     color = Some((r, g, b));
                 }
             }
-            "OUTLINECOLOR"
-                if t.args.len() >= 3 => {
-                if let (Ok(r), Ok(g), Ok(b)) =
-                    (t.args[0].parse(), t.args[1].parse(), t.args[2].parse())
-                {
+            "OUTLINECOLOR" if t.args.len() >= 3 => {
+                if let (Ok(r), Ok(g), Ok(b)) = (t.args[0].parse(), t.args[1].parse(), t.args[2].parse()) {
                     outlinecolor = Some((r, g, b));
                 }
             }
@@ -683,7 +664,9 @@ fn parse_label(
 
     let text = text?;
     let style_name = format!("label_{}", slugify(layer_name));
-    let fill = color.map(|(r, g, b)| rgb_to_hex(r, g, b)).unwrap_or_else(|| "#000000".into());
+    let fill = color
+        .map(|(r, g, b)| rgb_to_hex(r, g, b))
+        .unwrap_or_else(|| "#000000".into());
     // label styles are not deduped against geometry styles
     skel.styles.push(StyleDef {
         name: style_name.clone(),

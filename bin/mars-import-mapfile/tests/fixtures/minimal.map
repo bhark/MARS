@@ -1,32 +1,52 @@
 # minimal MapServer mapfile fixture for mars-import-mapfile tests
+# exercises SCALETOKEN, CLASS, EXPRESSION, STYLE, and LABEL emit paths
 MAP
   NAME "test"
   TITLE "Test Service"
   EXTENT -180 -90 180 90
   UNITS DD
 
-  SYMBOL
-    NAME "dot"
-    TYPE ELLIPSE
-    POINTS 1 1 END
-    FILLED TRUE
-  END
-
   LAYER
     NAME "roads"
     TYPE LINE
     STATUS ON
-  END
+    DATA "geometri FROM roads_table"
+    PROCESSING "ITEMS=ogc_fid,vejkategori"
+    MAXSCALEDENOM 50000
 
-  LAYER
-    NAME "buildings"
-    TYPE POLYGON
-    STATUS ON
-  END
+    SCALETOKEN
+      NAME "scale"
+      VALUES
+        "0" "roads_detailed"
+        "25000" "roads_simplified"
+      END
+    END
 
-  LAYER
-    NAME "labels"
-    TYPE POINT
-    STATUS ON
+    CLASS
+      NAME "main"
+      EXPRESSION ([vejkategori] = 'main')
+      STYLE
+        COLOR 190 190 190
+        WIDTH 1.6
+      END
+    END
+
+    CLASS
+      NAME "other"
+      EXPRESSION ([vejkategori] IN ('other', 'local'))
+      STYLE
+        COLOR 200 200 200
+        WIDTH 1.0
+      END
+    END
+
+    LABEL
+      TEXT "[vejkategori]"
+      FONT "sans"
+      SIZE 10
+      COLOR 0 0 0
+      OUTLINECOLOR 255 255 255
+      OUTLINEWIDTH 2.0
+    END
   END
 END

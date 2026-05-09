@@ -148,10 +148,7 @@ pub(crate) fn scan_file(path: &Path) -> Result<Vec<Token>, ScanError> {
     scan_file_recursive(path, &mut visited)
 }
 
-fn scan_file_recursive(
-    path: &Path,
-    visited: &mut HashSet<PathBuf>,
-) -> Result<Vec<Token>, ScanError> {
+fn scan_file_recursive(path: &Path, visited: &mut HashSet<PathBuf>) -> Result<Vec<Token>, ScanError> {
     let canonical = path.canonicalize().map_err(|e| ScanError::ReadInclude {
         path: path.to_path_buf(),
         source: e,
