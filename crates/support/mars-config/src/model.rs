@@ -711,7 +711,12 @@ pub struct SourceBinding {
     /// Scale window this binding is active in.
     #[serde(default)]
     pub scale: Option<ScaleWindow>,
-    /// Scale band this binding is materialised against.
+    /// Scale band this binding routes against. SPEC §7.3, §11 Glossary —
+    /// bands are routing rules, not substrate axes. At config validation,
+    /// `band` is folded into `scale` as the half-open denominator interval
+    /// `[prev_max, this_max)` derived from `scales.bands`, intersected with
+    /// any explicit `scale` bound. The renderer's binding picker reads only
+    /// `scale`; setting both `band` and a disjoint `scale` is rejected.
     #[serde(default)]
     pub band: Option<String>,
     /// Source table or relation.

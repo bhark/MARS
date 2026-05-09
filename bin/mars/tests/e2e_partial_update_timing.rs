@@ -83,8 +83,8 @@ async fn partial_update_cycle_within_5min() -> Result<()> {
         ),
     )
     .context("write fixture yaml")?;
-    let cfg: Config = mars_config::load(&cfg_path).context("load fixture")?;
-    mars_config::validate(&cfg, &config_dir(&cfg_path)).context("validate fixture")?;
+    let mut cfg: Config = mars_config::load(&cfg_path).context("load fixture")?;
+    mars_config::validate(&mut cfg, &config_dir(&cfg_path)).context("validate fixture")?;
 
     let topology = ReplicationTopology {
         collections: vec![CollectionTopology {

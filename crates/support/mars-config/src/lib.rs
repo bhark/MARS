@@ -95,16 +95,25 @@ pub fn load(path: impl AsRef<Path>) -> Result<Config, ConfigError> {
     Ok(config)
 }
 
-/// Validate a parsed configuration. Cross-cutting checks beyond serde:
+/// Validate a parsed configuration and resolve derived forms in place.
+///
+/// Cross-cutting checks beyond serde:
 /// - every layer's `style: { ref: ... }` resolves against `styles`;
 /// - every source binding's `band` (when set) exists in `scales.bands`;
 /// - every `cells.size_per_band` key matches a declared band;
 /// - every class `when:` parses via [`mars_expr::parse`].
 ///
+/// Resolution step: every source binding with `band: Some(name)` has its
+/// `scale: ScaleWindow` intersected with the band's half-open denominator
+/// interval (SPEC §7.3, §11 Glossary — bands are routing rules). Disjoint
+/// intersections are rejected so the renderer's binding picker, which
+/// consumes `source.scale` directly, sees the effective routing window
+/// without needing band knowledge.
+///
 /// `config_dir` is currently unused at validate time but accepted for symmetry
 /// and future-proofing - validation may grow filesystem checks (e.g. cache
 /// path writability) that require it.
-pub fn validate(config: &Config, config_dir: &Path) -> Result<(), ConfigError> {
+pub fn validate(config: &mut Config, config_dir: &Path) -> Result<(), ConfigError> {
     let _ = config_dir;
 
     if config.service.name.trim().is_empty() {
@@ -298,7 +307,79 @@ pub fn validate(config: &Config, config_dir: &Path) -> Result<(), ConfigError> {
         }
     }
 
+    resolve_band_routing(config)?;
+
     Ok(())
+}
+
+/// Fold each source binding's declared `band` into its `scale` window.
+/// Bands are ordered fine-to-coarse in `scales.bands`; band `i` covers
+/// the half-open denominator interval `[prev_max, this_max)` where
+/// `prev_max` is the previous band's `max_denom` (or `None` for band 0).
+/// The renderer routes purely on `source.scale`, so this step is what makes
+/// `band:` semantically active end-to-end.
+fn resolve_band_routing(config: &mut Config) -> Result<(), ConfigError> {
+    let mut band_windows: std::collections::BTreeMap<String, ScaleWindow> = std::collections::BTreeMap::new();
+    let mut prev_max: Option<u64> = None;
+    for band in &config.scales.bands {
+        band_windows.insert(
+            band.name.clone(),
+            ScaleWindow {
+                min: prev_max,
+                max: Some(band.max_denom),
+            },
+        );
+        prev_max = Some(band.max_denom);
+    }
+
+    for layer in &mut config.layers {
+        for (i, source) in layer.sources.iter_mut().enumerate() {
+            let Some(band_name) = source.band.as_ref() else {
+                continue;
+            };
+            let band_window = band_windows.get(band_name).ok_or_else(|| {
+                // band existence is already checked above; this branch is
+                // defensive and should be unreachable.
+                ConfigError::Invalid(format!(
+                    "layer {} source[{i}] band {band_name:?} not declared in scales.bands",
+                    layer.name
+                ))
+            })?;
+            let resolved = match &source.scale {
+                None => band_window.clone(),
+                Some(explicit) => intersect_scale_windows(explicit, band_window).ok_or_else(|| {
+                    ConfigError::Invalid(format!(
+                        "layer {} source[{i}] explicit scale window {:?} is disjoint from band {band_name:?} window {:?}",
+                        layer.name, explicit, band_window
+                    ))
+                })?,
+            };
+            source.scale = Some(resolved);
+        }
+    }
+
+    Ok(())
+}
+
+/// Intersect two half-open scale windows. `None` bounds act as ±infinity.
+/// Returns `None` if the intersection is empty (lo >= hi).
+fn intersect_scale_windows(a: &ScaleWindow, b: &ScaleWindow) -> Option<ScaleWindow> {
+    let min = match (a.min, b.min) {
+        (Some(x), Some(y)) => Some(x.max(y)),
+        (Some(x), None) | (None, Some(x)) => Some(x),
+        (None, None) => None,
+    };
+    let max = match (a.max, b.max) {
+        (Some(x), Some(y)) => Some(x.min(y)),
+        (Some(x), None) | (None, Some(x)) => Some(x),
+        (None, None) => None,
+    };
+    if let (Some(lo), Some(hi)) = (min, max)
+        && lo >= hi
+    {
+        return None;
+    }
+    Some(ScaleWindow { min, max })
 }
 
 /// Helper exposing the config-file directory so includes resolve relative to it.
@@ -523,7 +604,7 @@ mod tests {
         let mut cfg = minimal_config();
         cfg.service.name = String::new();
         assert!(matches!(
-            validate(&cfg, Path::new(".")),
+            validate(&mut cfg, Path::new(".")),
             Err(ConfigError::Invalid(ref s)) if s.contains("service.name")
         ));
     }
@@ -533,7 +614,7 @@ mod tests {
         let mut cfg = minimal_config();
         cfg.service.name = "foo bar".into();
         assert!(matches!(
-            validate(&cfg, Path::new(".")),
+            validate(&mut cfg, Path::new(".")),
             Err(ConfigError::Invalid(ref s)) if s.contains("spaces")
         ));
     }
@@ -543,7 +624,7 @@ mod tests {
         let mut cfg = minimal_config();
         cfg.source.native_crs = CrsCode::new("");
         assert!(matches!(
-            validate(&cfg, Path::new(".")),
+            validate(&mut cfg, Path::new(".")),
             Err(ConfigError::Invalid(ref s)) if s.contains("native_crs")
         ));
     }
@@ -556,7 +637,7 @@ mod tests {
             max_denom: 5000,
         });
         assert!(matches!(
-            validate(&cfg, Path::new(".")),
+            validate(&mut cfg, Path::new(".")),
             Err(ConfigError::Invalid(ref s)) if s.contains("duplicate band")
         ));
     }
@@ -566,7 +647,7 @@ mod tests {
         let mut cfg = minimal_config();
         cfg.cells.size_per_band.clear();
         assert!(matches!(
-            validate(&cfg, Path::new(".")),
+            validate(&mut cfg, Path::new(".")),
             Err(ConfigError::Invalid(ref s)) if s.contains("size_per_band")
         ));
     }
@@ -606,7 +687,7 @@ mod tests {
             label_survival: mars_style::LabelSurvival::Independent,
         }];
         assert!(matches!(
-            validate(&cfg, Path::new(".")),
+            validate(&mut cfg, Path::new(".")),
             Err(ConfigError::Invalid(ref s)) if s.contains("attribute") && s.contains("kind")
         ));
     }
@@ -653,7 +734,7 @@ mod tests {
             label_survival: mars_style::LabelSurvival::Independent,
         }];
         assert!(matches!(
-            validate(&cfg, Path::new(".")),
+            validate(&mut cfg, Path::new(".")),
             Err(ConfigError::Invalid(ref s)) if s.contains("attribute") && s.contains("kind")
         ));
     }
@@ -708,7 +789,7 @@ label_survival: follow_geometry
             label_survival: mars_style::LabelSurvival::Independent,
         }];
         assert!(matches!(
-            validate(&cfg, Path::new(".")),
+            validate(&mut cfg, Path::new(".")),
             Err(ConfigError::Invalid(ref s)) if s.contains("when: parse error")
         ));
     }
@@ -722,7 +803,7 @@ label_survival: follow_geometry
         });
         // size_per_band still only knows about "hi"
         assert!(matches!(
-            validate(&cfg, Path::new(".")),
+            validate(&mut cfg, Path::new(".")),
             Err(ConfigError::Invalid(ref s)) if s.contains("no entry") && s.contains("lo")
         ));
     }
@@ -758,7 +839,7 @@ label_survival: follow_geometry
             label_survival: mars_style::LabelSurvival::Independent,
         }];
         assert!(matches!(
-            validate(&cfg, Path::new(".")),
+            validate(&mut cfg, Path::new(".")),
             Err(ConfigError::Invalid(ref s)) if s.contains("more than once") && s.contains("default")
         ));
     }
@@ -839,7 +920,7 @@ label_survival: follow_geometry
             label_survival: mars_style::LabelSurvival::Independent,
         }];
         assert!(matches!(
-            validate(&cfg, Path::new(".")),
+            validate(&mut cfg, Path::new(".")),
             Err(ConfigError::Invalid(ref s)) if s.contains("placement does not match")
         ));
     }
@@ -876,7 +957,7 @@ label_survival: follow_geometry
             }),
             label_survival: mars_style::LabelSurvival::Independent,
         }];
-        assert!(validate(&cfg, Path::new(".")).is_ok());
+        assert!(validate(&mut cfg, Path::new(".")).is_ok());
     }
 
     fn layer_with_binding(binding: SourceBinding) -> Layer {
@@ -916,10 +997,10 @@ label_survival: follow_geometry
     fn accepts_simple_table_binding() {
         let mut cfg = minimal_config();
         cfg.layers = vec![layer_with_binding(binding("buildings"))];
-        assert!(validate(&cfg, Path::new(".")).is_ok());
+        assert!(validate(&mut cfg, Path::new(".")).is_ok());
 
         cfg.layers = vec![layer_with_binding(binding("public.buildings"))];
-        assert!(validate(&cfg, Path::new(".")).is_ok());
+        assert!(validate(&mut cfg, Path::new(".")).is_ok());
     }
 
     #[test]
@@ -931,7 +1012,7 @@ label_survival: follow_geometry
         ] {
             let mut cfg = minimal_config();
             cfg.layers = vec![layer_with_binding(binding(bad))];
-            let err = validate(&cfg, Path::new("."));
+            let err = validate(&mut cfg, Path::new("."));
             assert!(
                 matches!(&err, Err(ConfigError::Invalid(s)) if s.contains("single-table")),
                 "expected single-table rejection for {bad:?}, got {err:?}"
@@ -943,7 +1024,7 @@ label_survival: follow_geometry
     fn rejects_overdotted_from() {
         let mut cfg = minimal_config();
         cfg.layers = vec![layer_with_binding(binding("a.b.c"))];
-        let err = validate(&cfg, Path::new("."));
+        let err = validate(&mut cfg, Path::new("."));
         assert!(matches!(&err, Err(ConfigError::Invalid(s)) if s.contains("schema.table")));
     }
 
@@ -953,7 +1034,7 @@ label_survival: follow_geometry
         let mut b = binding("buildings");
         b.levels = Some(vec![]);
         cfg.layers = vec![layer_with_binding(b)];
-        let err = validate(&cfg, Path::new("."));
+        let err = validate(&mut cfg, Path::new("."));
         assert!(matches!(&err, Err(ConfigError::Invalid(s)) if s.contains("must not be empty")));
     }
 
@@ -976,7 +1057,7 @@ label_survival: follow_geometry
             },
         ]);
         cfg.layers = vec![layer_with_binding(b)];
-        let err = validate(&cfg, Path::new("."));
+        let err = validate(&mut cfg, Path::new("."));
         assert!(matches!(&err, Err(ConfigError::Invalid(s)) if s.contains("strictly greater")));
     }
 
@@ -991,7 +1072,7 @@ label_survival: follow_geometry
             label_min_priority: 0,
         }]);
         cfg.layers = vec![layer_with_binding(b)];
-        let err = validate(&cfg, Path::new("."));
+        let err = validate(&mut cfg, Path::new("."));
         assert!(matches!(&err, Err(ConfigError::Invalid(s)) if s.contains("vertex_tolerance_m")));
     }
 
@@ -1014,7 +1095,7 @@ label_survival: follow_geometry
             },
         ]);
         cfg.layers = vec![layer_with_binding(b)];
-        let err = validate(&cfg, Path::new("."));
+        let err = validate(&mut cfg, Path::new("."));
         assert!(
             matches!(&err, Err(ConfigError::Invalid(s)) if s.contains("vertex_tolerance_m") && s.contains(">= previous")),
             "expected monotone vertex_tolerance_m rejection, got {err:?}"
@@ -1040,7 +1121,7 @@ label_survival: follow_geometry
             },
         ]);
         cfg.layers = vec![layer_with_binding(b)];
-        let err = validate(&cfg, Path::new("."));
+        let err = validate(&mut cfg, Path::new("."));
         assert!(
             matches!(&err, Err(ConfigError::Invalid(s)) if s.contains("geometry_min_size_m") && s.contains(">= previous")),
             "expected monotone geometry_min_size_m rejection, got {err:?}"
@@ -1066,7 +1147,7 @@ label_survival: follow_geometry
             },
         ]);
         cfg.layers = vec![layer_with_binding(b)];
-        let err = validate(&cfg, Path::new("."));
+        let err = validate(&mut cfg, Path::new("."));
         assert!(
             matches!(&err, Err(ConfigError::Invalid(s)) if s.contains("label_min_priority") && s.contains(">= previous")),
             "expected monotone label_min_priority rejection, got {err:?}"
@@ -1098,7 +1179,7 @@ label_survival: follow_geometry
             },
         ]);
         cfg.layers = vec![layer_with_binding(b)];
-        assert!(validate(&cfg, Path::new(".")).is_ok());
+        assert!(validate(&mut cfg, Path::new(".")).is_ok());
     }
 
     #[test]
@@ -1107,7 +1188,7 @@ label_survival: follow_geometry
         let mut b = binding("buildings");
         b.page_size_target_bytes = Some(0);
         cfg.layers = vec![layer_with_binding(b)];
-        let err = validate(&cfg, Path::new("."));
+        let err = validate(&mut cfg, Path::new("."));
         assert!(matches!(&err, Err(ConfigError::Invalid(s)) if s.contains("page_size_target_bytes")));
     }
 
@@ -1126,7 +1207,7 @@ label_survival: follow_geometry
         let mut b = binding("buildings");
         b.reconcile_every_cycles = Some(0);
         cfg.layers = vec![layer_with_binding(b)];
-        let err = validate(&cfg, Path::new("."));
+        let err = validate(&mut cfg, Path::new("."));
         assert!(matches!(&err, Err(ConfigError::Invalid(s)) if s.contains("reconcile_every_cycles")));
     }
 
@@ -1145,7 +1226,7 @@ label_survival: follow_geometry
         let mut b = binding("buildings");
         b.sidecar_size_warn_bytes = Some("twelve gigs".into());
         cfg.layers = vec![layer_with_binding(b)];
-        let err = validate(&cfg, Path::new("."));
+        let err = validate(&mut cfg, Path::new("."));
         assert!(matches!(&err, Err(ConfigError::Invalid(s)) if s.contains("sidecar_size_warn_bytes")));
     }
 
@@ -1165,7 +1246,7 @@ label_survival: follow_geometry
     fn rejects_zero_compile_page_working_set() {
         let mut cfg = minimal_config();
         cfg.compiler.compile_page_working_set_bytes = "0".into();
-        let err = validate(&cfg, Path::new("."));
+        let err = validate(&mut cfg, Path::new("."));
         assert!(matches!(&err, Err(ConfigError::Invalid(s)) if s.contains("compile_page_working_set_bytes")));
     }
 
@@ -1173,7 +1254,7 @@ label_survival: follow_geometry
     fn rejects_zero_compile_plan_budget() {
         let mut cfg = minimal_config();
         cfg.compiler.compile_plan_budget_bytes = "0".into();
-        let err = validate(&cfg, Path::new("."));
+        let err = validate(&mut cfg, Path::new("."));
         assert!(matches!(&err, Err(ConfigError::Invalid(s)) if s.contains("compile_plan_budget_bytes")));
     }
 
@@ -1181,7 +1262,7 @@ label_survival: follow_geometry
     fn rejects_unparsable_compile_plan_budget() {
         let mut cfg = minimal_config();
         cfg.compiler.compile_plan_budget_bytes = "lots".into();
-        let err = validate(&cfg, Path::new("."));
+        let err = validate(&mut cfg, Path::new("."));
         assert!(err.is_err());
     }
 
@@ -1189,7 +1270,7 @@ label_survival: follow_geometry
     fn rejects_unparsable_rebalance_window() {
         let mut cfg = minimal_config();
         cfg.compiler.rebalance.window = "every other Sunday".into();
-        let err = validate(&cfg, Path::new("."));
+        let err = validate(&mut cfg, Path::new("."));
         assert!(err.is_err());
     }
 
@@ -1217,7 +1298,7 @@ label_survival: follow_geometry
         let mut b = binding("buildings");
         b.simplifier = Some(SimplifierKind::TopologyAware);
         cfg.layers = vec![layer_with_binding(b)];
-        let err = validate(&cfg, Path::new("."));
+        let err = validate(&mut cfg, Path::new("."));
         assert!(
             matches!(&err, Err(ConfigError::Invalid(s)) if s.contains("topology_aware")),
             "expected topology_aware rejection, got {err:?}"
@@ -1255,8 +1336,116 @@ label_survival: follow_geometry
         };
         cfg.layers = vec![layer.clone(), layer];
         assert!(matches!(
-            validate(&cfg, Path::new(".")),
+            validate(&mut cfg, Path::new(".")),
             Err(ConfigError::Invalid(ref s)) if s.contains("duplicate layer")
         ));
+    }
+
+    fn two_band_config() -> Config {
+        let mut cfg = minimal_config();
+        cfg.scales.bands = vec![
+            Band {
+                name: "hi".into(),
+                max_denom: 25_000,
+            },
+            Band {
+                name: "mid".into(),
+                max_denom: 250_000,
+            },
+        ];
+        cfg.cells.size_per_band.insert("mid".into(), "4096m".into());
+        cfg
+    }
+
+    #[test]
+    fn band_resolves_to_scale_window_for_first_band() {
+        let mut cfg = two_band_config();
+        let mut b = binding("buildings");
+        b.band = Some("hi".into());
+        cfg.layers = vec![layer_with_binding(b)];
+        validate(&mut cfg, Path::new(".")).expect("validate");
+        let scale = cfg.layers[0].sources[0].scale.as_ref().expect("scale set");
+        assert_eq!(scale.min, None);
+        assert_eq!(scale.max, Some(25_000));
+    }
+
+    #[test]
+    fn band_resolves_to_scale_window_for_middle_band() {
+        let mut cfg = two_band_config();
+        let mut b = binding("buildings");
+        b.band = Some("mid".into());
+        cfg.layers = vec![layer_with_binding(b)];
+        validate(&mut cfg, Path::new(".")).expect("validate");
+        let scale = cfg.layers[0].sources[0].scale.as_ref().expect("scale set");
+        assert_eq!(scale.min, Some(25_000));
+        assert_eq!(scale.max, Some(250_000));
+    }
+
+    #[test]
+    fn band_intersects_with_explicit_scale() {
+        let mut cfg = two_band_config();
+        let mut b = binding("buildings");
+        b.band = Some("mid".into());
+        b.scale = Some(ScaleWindow {
+            min: Some(50_000),
+            max: Some(200_000),
+        });
+        cfg.layers = vec![layer_with_binding(b)];
+        validate(&mut cfg, Path::new(".")).expect("validate");
+        let scale = cfg.layers[0].sources[0].scale.as_ref().expect("scale set");
+        assert_eq!(scale.min, Some(50_000));
+        assert_eq!(scale.max, Some(200_000));
+    }
+
+    #[test]
+    fn band_disjoint_with_explicit_scale_rejected() {
+        let mut cfg = two_band_config();
+        let mut b = binding("buildings");
+        b.band = Some("hi".into());
+        // hi covers [0, 25_000); explicit window starts at 50_000.
+        b.scale = Some(ScaleWindow {
+            min: Some(50_000),
+            max: Some(100_000),
+        });
+        cfg.layers = vec![layer_with_binding(b)];
+        let err = validate(&mut cfg, Path::new(".")).unwrap_err();
+        assert!(
+            matches!(err, ConfigError::Invalid(ref s) if s.contains("disjoint")),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn band_intersects_with_open_explicit_scale() {
+        let mut cfg = two_band_config();
+        let mut b = binding("buildings");
+        b.band = Some("mid".into());
+        // explicit min only; expect mid window's max to win and explicit min
+        // to clamp the lower edge above the band's natural min.
+        b.scale = Some(ScaleWindow {
+            min: Some(100_000),
+            max: None,
+        });
+        cfg.layers = vec![layer_with_binding(b)];
+        validate(&mut cfg, Path::new(".")).expect("validate");
+        let scale = cfg.layers[0].sources[0].scale.as_ref().expect("scale set");
+        assert_eq!(scale.min, Some(100_000));
+        assert_eq!(scale.max, Some(250_000));
+    }
+
+    #[test]
+    fn no_band_leaves_explicit_scale_untouched() {
+        let mut cfg = two_band_config();
+        let mut b = binding("buildings");
+        b.band = None;
+        b.scale = Some(ScaleWindow {
+            min: Some(10),
+            max: Some(20),
+        });
+        cfg.layers = vec![layer_with_binding(b)];
+        validate(&mut cfg, Path::new(".")).expect("validate");
+        let scale = cfg.layers[0].sources[0].scale.as_ref().expect("scale set");
+        assert_eq!(scale.min, Some(10));
+        assert_eq!(scale.max, Some(20));
     }
 }

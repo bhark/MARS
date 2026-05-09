@@ -149,8 +149,8 @@ async fn parcels_mini_matrix() -> Result<()> {
     let cfg_path = cfg_dir.path().join("mars.yaml");
     std::fs::write(&cfg_path, yaml).context("write rendered yaml")?;
 
-    let cfg: Config = mars_config::load(&cfg_path).context("load fixture config")?;
-    mars_config::validate(&cfg, &config_dir(&cfg_path)).context("validate fixture config")?;
+    let mut cfg: Config = mars_config::load(&cfg_path).context("load fixture config")?;
+    mars_config::validate(&mut cfg, &config_dir(&cfg_path)).context("validate fixture config")?;
 
     if let Err(e) = run_compile(&cfg).await {
         dump_logs(&container).await;

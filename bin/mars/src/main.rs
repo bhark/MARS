@@ -419,8 +419,8 @@ fn flatten_join(res: Result<Result<()>, tokio::task::JoinError>, what: &str) -> 
 // ---------- tooling ----------
 
 async fn tool_validate(path: &Path) -> Result<()> {
-    let cfg = mars_config::load(path).with_context(|| format!("load {}", path.display()))?;
-    mars_config::validate(&cfg, &config_dir(path)).context("validate")?;
+    let mut cfg = mars_config::load(path).with_context(|| format!("load {}", path.display()))?;
+    mars_config::validate(&mut cfg, &config_dir(path)).context("validate")?;
     println!("ok");
     Ok(())
 }
@@ -461,8 +461,8 @@ async fn tool_inspect(path: &Path) -> Result<()> {
 // ---------- composition helpers ----------
 
 fn load_and_validate(path: &Path) -> Result<Config> {
-    let cfg = mars_config::load(path).with_context(|| format!("load {}", path.display()))?;
-    mars_config::validate(&cfg, &config_dir(path)).context("validate config")?;
+    let mut cfg = mars_config::load(path).with_context(|| format!("load {}", path.display()))?;
+    mars_config::validate(&mut cfg, &config_dir(path)).context("validate config")?;
     Ok(cfg)
 }
 

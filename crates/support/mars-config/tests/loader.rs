@@ -15,7 +15,7 @@ fn fixtures_dir() -> PathBuf {
 #[test]
 fn loads_minimal_fixture() {
     let path = fixtures_dir().join("demo_minimal.yaml");
-    let cfg = load(&path).expect("load minimal");
+    let mut cfg = load(&path).expect("load minimal");
     assert_eq!(cfg.service.name, "demo");
     assert_eq!(cfg.scales.bands.len(), 1);
     assert_eq!(cfg.layers.len(), 1);
@@ -27,7 +27,7 @@ fn loads_minimal_fixture() {
     let sizes = cfg.cells.size_per_band_m().unwrap();
     assert!((sizes["hi"] - 4096.0).abs() < f64::EPSILON);
 
-    validate(&cfg, &fixtures_dir()).expect("validate minimal");
+    validate(&mut cfg, &fixtures_dir()).expect("validate minimal");
 }
 
 #[test]
@@ -39,7 +39,7 @@ fn missing_style_ref_is_rejected() {
     } else {
         panic!("expected ref");
     }
-    let err = validate(&cfg, &fixtures_dir()).unwrap_err();
+    let err = validate(&mut cfg, &fixtures_dir()).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("bygning"), "error should name layer: {msg}");
     assert!(msg.contains("no_such_style"), "error should name style: {msg}");
@@ -51,7 +51,7 @@ fn non_metric_canonical_crs_is_rejected() {
     let mut cfg = load(&path).unwrap();
     // EPSG:4326 is geographic (lat/lon, degrees) — must be refused at load time.
     cfg.source.native_crs = mars_types::CrsCode::new("EPSG:4326");
-    let err = validate(&cfg, &fixtures_dir()).unwrap_err();
+    let err = validate(&mut cfg, &fixtures_dir()).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("metric"), "error should mention metric: {msg}");
     assert!(msg.contains("EPSG:4326"), "error should name the rejected crs: {msg}");
@@ -62,7 +62,7 @@ fn unknown_band_in_source_binding_is_rejected() {
     let path = fixtures_dir().join("demo_minimal.yaml");
     let mut cfg = load(&path).unwrap();
     cfg.layers[0].sources[0].band = Some("ghost".into());
-    let err = validate(&cfg, &fixtures_dir()).unwrap_err();
+    let err = validate(&mut cfg, &fixtures_dir()).unwrap_err();
     assert!(err.to_string().contains("ghost"));
 }
 

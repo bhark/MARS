@@ -80,8 +80,8 @@ async fn snapshot_bootstrap_e2e() -> Result<()> {
         ),
     )
     .context("write fixture yaml")?;
-    let cfg: Config = mars_config::load(&cfg_path).context("load fixture")?;
-    mars_config::validate(&cfg, &config_dir(&cfg_path)).context("validate fixture")?;
+    let mut cfg: Config = mars_config::load(&cfg_path).context("load fixture")?;
+    mars_config::validate(&mut cfg, &config_dir(&cfg_path)).context("validate fixture")?;
 
     let source = Arc::new(
         PgSource::connect(PgConfig {

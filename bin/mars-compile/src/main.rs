@@ -30,12 +30,12 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     runtime.block_on(async move {
-        let cfg = mars_config::load(&cli.config).with_context(|| format!("load {}", cli.config.display()))?;
+        let mut cfg = mars_config::load(&cli.config).with_context(|| format!("load {}", cli.config.display()))?;
         let log_level = cfg.observability.log_level.clone();
         if let Err(e) = mars_observability::init_tracing(false, log_level.as_deref()) {
             eprintln!("warning: tracing init failed: {e}");
         }
-        mars_config::validate(&cfg, &config_dir(&cli.config)).context("validate config")?;
+        mars_config::validate(&mut cfg, &config_dir(&cli.config)).context("validate config")?;
         run_snapshot(cfg).await
     })
 }
