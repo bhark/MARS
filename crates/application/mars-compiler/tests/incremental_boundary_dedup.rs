@@ -22,7 +22,8 @@ use mars_compiler::render::rebuild_pages;
 use mars_compiler::sidecar::SidecarReader;
 use mars_observability::Metrics;
 use mars_source::{
-    AttrValue, CompileSession, LeaderLock, LeaderLockGuard, RowBytes, Source, SourceBinding as PortBinding, SourceError,
+    AttrValue, CompileSession, LeaderLock, LeaderLockGuard, RowBytes, Source, SourceBinding as PortBinding,
+    SourceError, SourceRowKey,
 };
 use mars_store::mem::{InMemoryPublisher, InMemoryStore};
 use mars_types::{
@@ -44,6 +45,7 @@ fn row(id: u64, x: f64, y: f64) -> RowBytes {
         feature_id: id,
         geometry: point_wkb(x, y),
         attributes: vec![("name".into(), AttrValue::String(format!("p{id}")))],
+        row_key: SourceRowKey::ZERO,
     }
 }
 
@@ -259,6 +261,7 @@ async fn boundary_key_row_appears_in_exactly_one_dirty_page() {
         dirty,
         4 * 1024 * 1024 * 1024,
         8 * 1024 * 1024 * 1024,
+        4 * 1024 * 1024 * 1024,
     )
     .await
     .unwrap();

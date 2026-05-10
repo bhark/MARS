@@ -22,10 +22,11 @@ use mars_compiler::{Deps, run_snapshot_from_plan};
 
 const BENCH_WORKING_SET: u64 = 8 * 1024 * 1024 * 1024;
 const BENCH_PLAN_BUDGET: u64 = 8 * 1024 * 1024 * 1024;
+const BENCH_IN_FLIGHT_BUDGET: u64 = 8 * 1024 * 1024 * 1024;
 use mars_observability::Metrics;
 use mars_source::{
     AttrValue, ChangeEvent, ChangeFeed, ChangeSubscription, GeometryEnvelope, LeaderLock, LeaderLockGuard, RowBytes,
-    Source, SourceBinding as PortBinding, SourceCollectionId, SourceError,
+    Source, SourceBinding as PortBinding, SourceCollectionId, SourceError, SourceRowKey,
 };
 use mars_store::ManifestStore;
 use mars_store::mem::{InMemoryPublisher, InMemoryStore};
@@ -46,6 +47,7 @@ fn row(id: u64, x: f64, y: f64) -> RowBytes {
         feature_id: id,
         geometry: point_wkb(x, y),
         attributes: vec![("name".into(), AttrValue::String(format!("p{id}")))],
+        row_key: SourceRowKey::ZERO,
     }
 }
 
@@ -167,9 +169,18 @@ async fn build_fixture(n_features: usize, page_size: u64) -> Fixture {
         bindings: vec![binding_plan("points", page_size)],
         layers: vec![],
     };
-    let prior = run_snapshot_from_plan(&deps, &plan, "bench".into(), 1, BENCH_WORKING_SET, BENCH_PLAN_BUDGET, 1)
-        .await
-        .unwrap();
+    let prior = run_snapshot_from_plan(
+        &deps,
+        &plan,
+        "bench".into(),
+        1,
+        BENCH_WORKING_SET,
+        BENCH_PLAN_BUDGET,
+        BENCH_IN_FLIGHT_BUDGET,
+        1,
+    )
+    .await
+    .unwrap();
     let binding_id = BindingId::try_new("points").unwrap();
     let sidecar_ref = prior
         .bindings
@@ -248,6 +259,7 @@ fn bench_page_rebuild(c: &mut Criterion) {
                         dirty,
                         BENCH_WORKING_SET,
                         BENCH_PLAN_BUDGET,
+                        BENCH_IN_FLIGHT_BUDGET,
                     )
                     .await
                     .unwrap();

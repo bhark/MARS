@@ -185,7 +185,9 @@ mod tests {
     use futures_core::stream::BoxStream;
     use futures_util::stream;
     use mars_observability::Metrics;
-    use mars_source::{ChangeFeed, ChangeSubscription, LeaderLock, LeaderLockGuard, RowBytes, Source, SourceError};
+    use mars_source::{
+        ChangeFeed, ChangeSubscription, LeaderLock, LeaderLockGuard, RowBytes, Source, SourceError, SourceRowKey,
+    };
     use mars_store::ManifestStore;
     use mars_store::stub::{NotImplementedManifestStore, NotImplementedStore};
     use mars_types::{CrsCode, DecimationLevel, HilbertKey};
@@ -306,6 +308,7 @@ mod tests {
                 feature_id: 5,
                 geometry: point_wkb(50.0, 50.0),
                 attributes: vec![],
+                row_key: SourceRowKey::ZERO,
             }],
         );
         let source = ReconcileSource {
@@ -368,16 +371,19 @@ mod tests {
                     feature_id: 7,
                     geometry: point_wkb(10.0, 10.0),
                     attributes: vec![],
+                    row_key: SourceRowKey::ZERO,
                 },
                 RowBytes {
                     feature_id: 7,
                     geometry: point_wkb(20.0, 20.0),
                     attributes: vec![],
+                    row_key: SourceRowKey::ZERO,
                 },
                 RowBytes {
                     feature_id: 7,
                     geometry: point_wkb(30.0, 30.0),
                     attributes: vec![],
+                    row_key: SourceRowKey::ZERO,
                 },
             ],
         );

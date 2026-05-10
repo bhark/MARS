@@ -3,12 +3,13 @@
 //! boundaries by accumulated WKB byte length.
 //!
 //! The output [`PagePlan`] carries per-level page boundaries plus the
-//! member feature ids. Pass 2 (`render::rebuild_pages` driven by
-//! `BindingWork::FromPlan`) hydrates each planned page via
-//! [`mars_source::CompileSession::fetch_by_feature_ids`] and re-emits the
-//! artifact + sidecars, exactly as the incremental rebuild path does
-//! today. The two passes share a single `REPEATABLE READ` snapshot, so
-//! the row set is identical between the planner and the renderer.
+//! member feature ids and snapshot-stable row keys. Pass 2 streams the
+//! bound table once via
+//! [`mars_source::CompileSession::fetch_full_table_streaming`] and
+//! buckets rows into the planned pages by joining each row's
+//! [`SourceRowKey`] against the page's `row_keys`. The two passes share a
+//! single `REPEATABLE READ` snapshot, so the row set is identical
+//! between the planner and the renderer.
 //!
 //! Memory: each [`PlanRow`] is fixed-size; pass-1 footprint is bounded by
 //! `row_count * size_of::<PlanRow>()`. The caller passes a hard plan
@@ -49,8 +50,10 @@ pub struct LevelPagePlan {
     pub pages: Vec<PlannedPage>,
 }
 
-/// One planned page. Pass 2 fetches `feature_ids`, re-keys, re-decimates,
-/// emits the page artifact + sidecars.
+/// One planned page. Pass 2 streams the full table once per binding and
+/// buckets rows into the planned pages by joining `row_keys` against each
+/// row's [`SourceRowKey`]; `feature_ids` is kept parallel for diagnostics
+/// and downstream consumers.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlannedPage {
     /// Assigned by pass 1 in plan order, level-local.
@@ -61,6 +64,11 @@ pub struct PlannedPage {
     /// Member feature ids in pass-1 sort order. Non-unique allowed (a
     /// source row exploded into multiple parts shares one feature id).
     pub feature_ids: Vec<i64>,
+    /// Snapshot-stable row identities, parallel to and same length as
+    /// `feature_ids`. Pass 2 routes streamed rows to pages via this set;
+    /// duplicate `feature_ids` are disambiguated cleanly because each
+    /// physical row has its own key.
+    pub row_keys: Vec<SourceRowKey>,
     /// Sum of pass-1 byte estimates over the page; diagnostic. Pass 2's
     /// final on-disk page size will differ (decimation reduces line /
     /// polygon bytes, no-op for points).
@@ -194,6 +202,7 @@ fn sweep_pages(rows: &[PlanRow], target_bytes: u64) -> Vec<PlannedPage> {
     }
     let mut next_id: u64 = 0;
     let mut current_ids: Vec<i64> = Vec::new();
+    let mut current_keys: Vec<SourceRowKey> = Vec::new();
     let mut current_lo = rows[0].hilbert_key;
     let mut current_hi = rows[0].hilbert_key;
     let mut current_bytes: u64 = 0;
@@ -208,6 +217,7 @@ fn sweep_pages(rows: &[PlanRow], target_bytes: u64) -> Vec<PlannedPage> {
                 page_id: PageId::new(next_id),
                 hilbert_range: (current_lo, current_hi),
                 feature_ids: std::mem::take(&mut current_ids),
+                row_keys: std::mem::take(&mut current_keys),
                 estimated_bytes: current_bytes,
             });
             next_id = next_id.saturating_add(1);
@@ -220,12 +230,14 @@ fn sweep_pages(rows: &[PlanRow], target_bytes: u64) -> Vec<PlannedPage> {
         current_hi = r.hilbert_key;
         current_bytes = current_bytes.saturating_add(est);
         current_ids.push(r.feature_id);
+        current_keys.push(r.row_key);
     }
     if !current_ids.is_empty() {
         pages.push(PlannedPage {
             page_id: PageId::new(next_id),
             hilbert_range: (current_lo, current_hi),
             feature_ids: current_ids,
+            row_keys: current_keys,
             estimated_bytes: current_bytes,
         });
     }
@@ -306,9 +318,8 @@ mod tests {
             let drained = std::mem::take(&mut self.summaries);
             Ok(Box::pin(stream::iter(drained.into_iter().map(Ok))))
         }
-        async fn fetch_by_feature_ids<'a>(
+        async fn fetch_full_table_streaming<'a>(
             &'a mut self,
-            _ids: &'a [i64],
         ) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError> {
             Ok(Box::pin(stream::empty()))
         }

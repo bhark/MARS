@@ -152,6 +152,26 @@ pub enum CompilerError {
         /// Configured working-set ceiling.
         budget_bytes: u64,
     },
+    /// Pass-2 in-flight page buffers crossed the per-binding ceiling.
+    /// Streamed rows are bucketed into the planned pages and pages
+    /// eager-flush on completion, but rows arriving in non-spatial-cluster
+    /// order can leave many pages partially full at once. Resolution: lift
+    /// `compiler.compile_in_flight_pages_budget_bytes`, lower
+    /// `compiler.compile_binding_parallelism`, or cluster the source table
+    /// on a hilbert / spatial index so completed pages flush sooner.
+    #[error(
+        "compile in-flight pages budget exceeded: binding {binding} accumulated {observed_bytes} bytes \
+         (budget {budget_bytes}). lift compiler.compile_in_flight_pages_budget_bytes, lower \
+         compiler.compile_binding_parallelism, or cluster the source table to flush pages sooner."
+    )]
+    CompileMemoryBudgetExceeded {
+        /// Affected binding id.
+        binding: String,
+        /// Observed accumulated bytes at the point the budget was crossed.
+        observed_bytes: u64,
+        /// Configured in-flight pages budget.
+        budget_bytes: u64,
+    },
     /// Pass-1 page planning observed more rows than the in-memory plan
     /// budget allows. Trips before the planner allocates beyond its
     /// configured ceiling so the operator gets a clean ceiling rather than
@@ -245,6 +265,7 @@ impl Compiler {
         let next_version = prev_version + 1;
         let working_set_bytes = self.config.compiler.compile_page_working_set()?;
         let plan_budget_bytes = self.config.compiler.compile_plan_budget()?;
+        let in_flight_budget_bytes = self.config.compiler.compile_in_flight_pages_budget()?;
         let binding_parallelism = self.config.compiler.compile_binding_parallelism;
         let manifest = run_snapshot_from_plan(
             &self.deps,
@@ -253,6 +274,7 @@ impl Compiler {
             next_version,
             working_set_bytes,
             plan_budget_bytes,
+            in_flight_budget_bytes,
             binding_parallelism,
         )
         .await?;
@@ -390,6 +412,7 @@ impl Compiler {
         // rebuild dirty pages.
         let working_set_bytes = self.config.compiler.compile_page_working_set()?;
         let plan_budget_bytes = self.config.compiler.compile_plan_budget()?;
+        let in_flight_budget_bytes = self.config.compiler.compile_in_flight_pages_budget()?;
         let started = std::time::Instant::now();
         let outcome = render::rebuild_pages(
             &self.deps,
@@ -399,6 +422,7 @@ impl Compiler {
             dirty,
             working_set_bytes,
             plan_budget_bytes,
+            in_flight_budget_bytes,
         )
         .await?;
         self.deps.metrics.observe_compiler_rebuild_duration(started.elapsed());
@@ -600,6 +624,7 @@ impl Compiler {
 /// up to `binding_parallelism` (each holds one pooled connection in
 /// `REPEATABLE READ`); the operator must size `source.pool.max_size`
 /// accordingly. Returns the manifest for the caller to publish.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_snapshot_from_plan(
     deps: &Deps,
     bootstrap: &plan::BootstrapPlan,
@@ -607,6 +632,7 @@ pub async fn run_snapshot_from_plan(
     manifest_version: u64,
     working_set_bytes: u64,
     plan_budget_bytes: u64,
+    in_flight_budget_bytes: u64,
     binding_parallelism: usize,
 ) -> Result<Manifest, CompilerError> {
     use futures_util::StreamExt;
@@ -623,6 +649,7 @@ pub async fn run_snapshot_from_plan(
         binding_plan: &plan::BindingPlan,
         working_set_bytes: u64,
         plan_budget_bytes: u64,
+        in_flight_budget_bytes: u64,
     ) -> Result<BindingOutput, CompilerError> {
         let port_binding = PortBinding::new(
             SourceCollectionId::new(binding_plan.binding_id.as_str()),
@@ -649,6 +676,7 @@ pub async fn run_snapshot_from_plan(
                 &page_plan,
                 session.as_mut(),
                 working_set_bytes,
+                in_flight_budget_bytes,
             )
             .await
         }
@@ -698,6 +726,7 @@ pub async fn run_snapshot_from_plan(
                 binding_plan,
                 working_set_bytes,
                 plan_budget_bytes,
+                in_flight_budget_bytes,
             ));
         }
         match pending.next().await {

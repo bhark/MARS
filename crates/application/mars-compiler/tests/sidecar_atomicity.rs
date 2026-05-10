@@ -29,10 +29,11 @@ use mars_compiler::{Deps, run_snapshot_from_plan};
 
 const TEST_WORKING_SET: u64 = 4 * 1024 * 1024 * 1024;
 const TEST_PLAN_BUDGET: u64 = 8 * 1024 * 1024 * 1024;
+const TEST_IN_FLIGHT_BUDGET: u64 = 4 * 1024 * 1024 * 1024;
 use mars_observability::Metrics;
 use mars_source::{
     AttrValue, ChangeEvent, ChangeFeed, ChangeSubscription, GeometryEnvelope, LeaderLock, LeaderLockGuard, RowBytes,
-    Source, SourceBinding as PortBinding, SourceCollectionId, SourceError,
+    Source, SourceBinding as PortBinding, SourceCollectionId, SourceError, SourceRowKey,
 };
 use mars_store::mem::{InMemoryPublisher, InMemoryStore};
 use mars_store::{ManifestStore, ObjectStore, StoreError};
@@ -54,6 +55,7 @@ fn row(id: u64, x: f64, y: f64) -> RowBytes {
         feature_id: id,
         geometry: point_wkb(x, y),
         attributes: vec![("name".into(), AttrValue::String(format!("p{id}")))],
+        row_key: SourceRowKey::ZERO,
     }
 }
 
@@ -374,9 +376,18 @@ async fn rebuild_cycle_is_atomic_under_put_fault_injection() {
             bindings: vec![binding_plan("points", 1024)],
             layers: vec![],
         };
-        let bootstrap = run_snapshot_from_plan(&deps, &plan, "test".into(), 1, TEST_WORKING_SET, TEST_PLAN_BUDGET, 1)
-            .await
-            .unwrap();
+        let bootstrap = run_snapshot_from_plan(
+            &deps,
+            &plan,
+            "test".into(),
+            1,
+            TEST_WORKING_SET,
+            TEST_PLAN_BUDGET,
+            TEST_IN_FLIGHT_BUDGET,
+            1,
+        )
+        .await
+        .unwrap();
         manifest_store.publish(&bootstrap).await.unwrap();
         let _ = run_one_rebuild_cycle(&deps, &source, &plan, &bootstrap).await.unwrap();
         let counter = injector.counter.lock().unwrap();
@@ -408,6 +419,7 @@ async fn rebuild_cycle_is_atomic_under_put_fault_injection() {
             1,
             TEST_WORKING_SET,
             TEST_PLAN_BUDGET,
+            TEST_IN_FLIGHT_BUDGET,
             1,
         )
         .await
@@ -483,6 +495,16 @@ async fn run_one_rebuild_cycle(
     })?;
     let dirty = cycle.finish();
 
-    let outcome = rebuild_pages(deps, plan, prior, &sidecars, dirty, TEST_WORKING_SET, TEST_PLAN_BUDGET).await?;
+    let outcome = rebuild_pages(
+        deps,
+        plan,
+        prior,
+        &sidecars,
+        dirty,
+        TEST_WORKING_SET,
+        TEST_PLAN_BUDGET,
+        TEST_IN_FLIGHT_BUDGET,
+    )
+    .await?;
     Ok(merge(prior, &outcome, prior.version + 1))
 }

@@ -24,10 +24,11 @@ use mars_compiler::{Deps, run_snapshot_from_plan};
 
 const TEST_WORKING_SET: u64 = 4 * 1024 * 1024 * 1024;
 const TEST_PLAN_BUDGET: u64 = 8 * 1024 * 1024 * 1024;
+const TEST_IN_FLIGHT_BUDGET: u64 = 4 * 1024 * 1024 * 1024;
 use mars_observability::Metrics;
 use mars_source::{
     AttrValue, ChangeFeed, ChangeSubscription, LeaderLock, LeaderLockGuard, RowBytes, Source,
-    SourceBinding as PortBinding, SourceError,
+    SourceBinding as PortBinding, SourceError, SourceRowKey,
 };
 use mars_store::ObjectStore;
 use mars_store::mem::{InMemoryPublisher, InMemoryStore};
@@ -47,6 +48,7 @@ fn row(id: u64, x: f64, y: f64) -> RowBytes {
         feature_id: id,
         geometry: point_wkb(x, y),
         attributes: vec![("name".into(), AttrValue::String(format!("p{id}")))],
+        row_key: SourceRowKey::ZERO,
     }
 }
 
@@ -171,9 +173,18 @@ async fn rebalance_candidates_flags_oversize_page() {
         bindings: vec![binding_plan("points", 100 * 1024 * 1024)],
         layers: vec![],
     };
-    let manifest = run_snapshot_from_plan(&deps, &plan, "test".into(), 1, TEST_WORKING_SET, TEST_PLAN_BUDGET, 1)
-        .await
-        .unwrap();
+    let manifest = run_snapshot_from_plan(
+        &deps,
+        &plan,
+        "test".into(),
+        1,
+        TEST_WORKING_SET,
+        TEST_PLAN_BUDGET,
+        TEST_IN_FLIGHT_BUDGET,
+        1,
+    )
+    .await
+    .unwrap();
     let binding_id = BindingId::try_new("points").unwrap();
     let level0_pages: Vec<PageEntry> = manifest
         .pages
@@ -210,9 +221,18 @@ async fn execute_rebalance_split_preserves_feature_ids_and_balances_sizes() {
         bindings: vec![binding_plan("points", 100 * 1024 * 1024)],
         layers: vec![],
     };
-    let manifest = run_snapshot_from_plan(&deps, &plan, "test".into(), 1, TEST_WORKING_SET, TEST_PLAN_BUDGET, 1)
-        .await
-        .unwrap();
+    let manifest = run_snapshot_from_plan(
+        &deps,
+        &plan,
+        "test".into(),
+        1,
+        TEST_WORKING_SET,
+        TEST_PLAN_BUDGET,
+        TEST_IN_FLIGHT_BUDGET,
+        1,
+    )
+    .await
+    .unwrap();
     let binding_id = BindingId::try_new("points").unwrap();
     let level0_meta = manifest.bindings[0].levels[0].clone();
     let level0_pages: Vec<PageEntry> = manifest

@@ -1,11 +1,14 @@
 //! Test-only adapters for the unified compile pipeline.
 //!
 //! [`FullScanCompileSession`] wraps any [`Source`] into a [`CompileSession`]
-//! by streaming `fetch_full_table_streaming` for pass-1 summaries and
-//! `fetch_by_feature_ids` for pass-2 hydration. Used by integration tests
-//! and benches whose fakes don't open a real snapshot transaction; the
+//! by streaming the underlying table for both pass-1 (geometry summaries)
+//! and pass-2 (full-table hydration). Used by integration tests and
+//! benches whose fakes don't open a real snapshot transaction; the
 //! production postgres adapter overrides `Source::open_compile_session`
 //! with the real REPEATABLE READ session.
+//!
+//! Both passes synthesise the same `row_key = (feature_id, fnv1a64(geom))`
+//! so the route join in `rebuild_binding_from_plan` matches across them.
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -46,11 +49,19 @@ impl<'a> CompileSession for FullScanCompileSession<'a> {
         Ok(Box::pin(mapped))
     }
 
-    async fn fetch_by_feature_ids<'b>(
+    async fn fetch_full_table_streaming<'b>(
         &'b mut self,
-        ids: &'b [i64],
     ) -> Result<BoxStream<'b, Result<RowBytes, SourceError>>, SourceError> {
-        self.source.fetch_by_feature_ids(self.binding, ids).await
+        let stream = self.source.fetch_full_table_streaming(self.binding).await?;
+        // synthesise row_key identically to summary_from_row_bytes so pass-1
+        // and pass-2 keys join.
+        let mapped = stream.map(|item| {
+            item.map(|mut row| {
+                row.row_key = synth_row_key(row.feature_id, &row.geometry);
+                row
+            })
+        });
+        Ok(Box::pin(mapped))
     }
 
     async fn commit(self: Box<Self>) -> Result<(), SourceError> {
@@ -76,15 +87,22 @@ fn summary_from_row_bytes(row: RowBytes) -> Result<RowSummary, SourceError> {
     })?;
     let geom_byte_length = u32::try_from(row.geometry.len()).unwrap_or(u32::MAX);
     let feature_id = i64::try_from(row.feature_id).unwrap_or(i64::MAX);
-    let mut key = [0u8; 16];
-    key[..8].copy_from_slice(&row.feature_id.to_le_bytes());
-    key[8..].copy_from_slice(&fnv1a64(geom_bytes(&row.geometry)).to_le_bytes());
     Ok(RowSummary {
         feature_id,
         bbox: feature.bbox,
         geom_byte_length,
-        row_key: SourceRowKey::from_bytes(key),
+        row_key: synth_row_key(row.feature_id, &row.geometry),
     })
+}
+
+/// `(feature_id, fnv1a64(geom))` packed into a 16-byte key. Shared by
+/// pass-1 summary synthesis and pass-2 full-table streaming so the route
+/// join in `rebuild_binding_from_plan` finds matching keys.
+fn synth_row_key(feature_id: u64, geometry: &Bytes) -> SourceRowKey {
+    let mut key = [0u8; 16];
+    key[..8].copy_from_slice(&feature_id.to_le_bytes());
+    key[8..].copy_from_slice(&fnv1a64(geom_bytes(geometry)).to_le_bytes());
+    SourceRowKey::from_bytes(key)
 }
 
 fn geom_bytes(b: &Bytes) -> &[u8] {

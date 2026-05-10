@@ -26,13 +26,14 @@ use mars_config::{
 use mars_observability::Metrics;
 use mars_source::{
     AttrValue, ChangeFeed, ChangeSubscription, CompileSession, LeaderLock, LeaderLockGuard, RowBytes,
-    Source as PortSource, SourceBinding as PortBinding, SourceError,
+    Source as PortSource, SourceBinding as PortBinding, SourceError, SourceRowKey,
 };
 use mars_store::mem::{InMemoryPublisher, InMemoryStore};
 use mars_types::{Bbox, CrsCode, LayerId};
 
 const WORKING_SET: u64 = 4 * 1024 * 1024 * 1024;
 const PLAN_BUDGET: u64 = 8 * 1024 * 1024 * 1024;
+const IN_FLIGHT_BUDGET: u64 = 4 * 1024 * 1024 * 1024;
 
 fn point_wkb(x: f64, y: f64) -> Bytes {
     let mut v = Vec::with_capacity(21);
@@ -48,6 +49,7 @@ fn row(id: u64, x: f64, y: f64) -> RowBytes {
         feature_id: id,
         geometry: point_wkb(x, y),
         attributes: vec![("vejkategori".into(), AttrValue::String("Stor vej".into()))],
+        row_key: SourceRowKey::ZERO,
     }
 }
 
@@ -234,9 +236,18 @@ async fn multi_band_same_binding_emits_one_class_sidecar_per_page() {
         metrics: Metrics::new().unwrap(),
     };
 
-    let m = run_snapshot_from_plan(&deps, &plan, "test".into(), 1, WORKING_SET, PLAN_BUDGET, 1)
-        .await
-        .expect("snapshot");
+    let m = run_snapshot_from_plan(
+        &deps,
+        &plan,
+        "test".into(),
+        1,
+        WORKING_SET,
+        PLAN_BUDGET,
+        IN_FLIGHT_BUDGET,
+        1,
+    )
+    .await
+    .expect("snapshot");
 
     assert!(!m.class_sidecars.is_empty(), "fixture must produce sidecars");
     let mut seen: HashSet<(String, _)> = HashSet::new();

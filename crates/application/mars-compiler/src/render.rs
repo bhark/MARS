@@ -1,16 +1,17 @@
 //! Page emission and rebalance executor for the unified compile pipeline.
 //!
-//! This module is pass 2 of the unified compile flow. Bootstrap and
-//! incremental cycles both land here: bootstrap drives it via
-//! [`rebuild_binding_from_plan`] using a [`crate::page_plan::PagePlan`]
-//! produced from a freshly opened compile session, while the incremental
-//! cycle drives it via [`rebuild_pages`] against the dirty set produced by
-//! [`crate::incremental::IncrementalCycle`] and the prior manifest. Both
-//! paths fetch member feature ids through
-//! [`mars_source::CompileSession::fetch_by_feature_ids`], re-decimate per
-//! level, and re-emit page artifacts plus class / label sidecars; the
-//! incremental path additionally refreshes the per-binding page-membership
-//! sidecar so the next cycle's old-side lookups resolve correctly.
+//! This module is pass 2 of the unified compile flow. Bootstrap drives it
+//! via [`rebuild_binding_from_plan`] which streams the bound table once
+//! per binding through
+//! [`mars_source::CompileSession::fetch_full_table_streaming`] and buckets
+//! rows into the planned (level, page_id) targets keyed on
+//! [`mars_source::SourceRowKey`]; completed pages eager-flush, simplify,
+//! emit artifacts, and write class / label sidecars. The incremental
+//! cycle drives [`rebuild_pages`] against the dirty set produced by
+//! [`crate::incremental::IncrementalCycle`] and the prior manifest using
+//! the stateless [`mars_source::Source::fetch_by_feature_ids`] surface; it
+//! additionally refreshes the per-binding page-membership sidecar so the
+//! next cycle's old-side lookups resolve correctly.
 //!
 //! Truncate fall-back: when a binding is marked truncated the executor
 //! delegates to the bootstrap path for that binding only, so a single
@@ -35,7 +36,7 @@ use mars_artifact::{
     ArtifactKind, ArtifactWriter, AttrValue as ArtAttrValue, FeatureGeom, LabelCandidate, MAX_ROW_BYTES,
     SpatialIndexBuilder, compute_content_hash, encode_row, wkb_to_feature_geom,
 };
-use mars_source::{AttrValue, RowBytes, SourceBinding as PortBinding, SourceCollectionId, SourceError};
+use mars_source::{AttrValue, RowBytes, SourceBinding as PortBinding, SourceCollectionId, SourceError, SourceRowKey};
 use mars_types::{
     ArtifactEntry, ArtifactKey, Bbox, BindingId, BindingMetadata, ContentHash, DecimationLevel, HilbertKey,
     LayerSidecarEntry, LayerSidecarKind, LevelMetadata, Manifest, PageEntry, PageId, PageKey,
@@ -142,6 +143,7 @@ pub(crate) fn enforce_page_budget(
 /// `working_set_bytes` is the per-page hydrated-row ceiling (pass-2);
 /// `plan_budget_bytes` caps the pass-1 page-planner allocation when the
 /// truncate path runs the unified compile pipeline against a binding.
+#[allow(clippy::too_many_arguments)]
 pub async fn rebuild_pages(
     deps: &Deps,
     plan: &BootstrapPlan,
@@ -150,6 +152,7 @@ pub async fn rebuild_pages(
     dirty: DirtyPages,
     working_set_bytes: u64,
     plan_budget_bytes: u64,
+    in_flight_budget_bytes: u64,
 ) -> Result<RebuildOutcome, CompilerError> {
     let mut outcome = RebuildOutcome::default();
     for (binding_id, binding_dirty) in dirty.per_binding {
@@ -161,6 +164,7 @@ pub async fn rebuild_pages(
                 &binding_id,
                 working_set_bytes,
                 plan_budget_bytes,
+                in_flight_budget_bytes,
                 &mut outcome,
             )
             .await?;
@@ -192,6 +196,7 @@ pub async fn rebuild_pages(
 /// the unified compile pipeline. Drops every prior page + sidecar of the
 /// binding so the new plan replaces them cleanly even when the new page
 /// count differs from the old one.
+#[allow(clippy::too_many_arguments)]
 async fn rebuild_binding_truncate(
     deps: &Deps,
     plan: &BootstrapPlan,
@@ -199,6 +204,7 @@ async fn rebuild_binding_truncate(
     binding_id: &BindingId,
     working_set_bytes: u64,
     plan_budget_bytes: u64,
+    in_flight_budget_bytes: u64,
     outcome: &mut RebuildOutcome,
 ) -> Result<(), CompilerError> {
     let binding_plan =
@@ -251,6 +257,7 @@ async fn rebuild_binding_truncate(
             &page_plan,
             session.as_mut(),
             working_set_bytes,
+            in_flight_budget_bytes,
         )
         .await
     }
@@ -941,6 +948,7 @@ fn bump_page_id(map: &mut HashMap<DecimationLevel, u64>, level: DecimationLevel)
 /// The session must be freshly opened against `binding_plan`; the plan was
 /// built from its pass-1 scan and pass-2 here re-uses the same snapshot
 /// transaction.
+#[allow(clippy::too_many_arguments)]
 pub async fn rebuild_binding_from_plan<'a>(
     deps: &Deps,
     plan: &BootstrapPlan,
@@ -948,6 +956,7 @@ pub async fn rebuild_binding_from_plan<'a>(
     page_plan: &PagePlan,
     session: &mut (dyn mars_source::CompileSession + 'a),
     working_set_bytes: u64,
+    in_flight_budget_bytes: u64,
 ) -> Result<BindingOutput, CompilerError> {
     if page_plan.feature_count_total == 0 {
         return Ok(BindingOutput {
@@ -979,118 +988,160 @@ pub async fn rebuild_binding_from_plan<'a>(
         "compile.rebuild.start",
     );
 
-    // pass 2 hydrates one planned page at a time using the authoritative
-    // `feature_ids` set produced by pass 1. range-based filtering used to
-    // double-count rows whose hilbert key sat exactly on a page boundary
-    // (clusters with duplicate keys land in the inclusive (lo, hi) of both
-    // adjacent pages); the per-page id set is unambiguous. memory is
-    // bounded by the largest single page's row payload; the postgres
-    // adapter chunks the bigint[] argument at 16 384 ids internally so a
-    // typical page resolves in one SQL roundtrip.
+    // pass-2 streams the bound table once per binding and buckets rows
+    // into the planned (level, page_id) targets via SourceRowKey. one
+    // sequential heap scan replaces the historical per-page WHERE id =
+    // ANY($1) pattern, whose heap-walk cost dominated compile time on
+    // large bindings. each row decodes its WKB exactly once and Arc::clones
+    // its attribute payload across multi-level fanout. completed pages
+    // eager-flush so partial buffers don't pile up.
     let layer_plans: Vec<&LayerPlan> = plan.layers_for(&binding_plan.binding_id).collect();
-    let mut all_pages: Vec<PageEntry> = Vec::new();
-    let mut levels_meta: Vec<LevelMetadata> = Vec::with_capacity(binding_plan.levels.len());
+
+    type RouteList = Vec<(usize, PageId)>;
+    let total_planned: usize = page_plan
+        .levels
+        .iter()
+        .map(|l| l.pages.iter().map(|p| p.row_keys.len()).sum::<usize>())
+        .sum();
+    let mut targets: HashMap<SourceRowKey, RouteList> = HashMap::with_capacity(total_planned);
+    let mut expected: HashMap<(usize, PageId), usize> = HashMap::new();
+    for (lvl_idx, level_pp) in page_plan.levels.iter().enumerate() {
+        for planned in &level_pp.pages {
+            if planned.row_keys.len() != planned.feature_ids.len() {
+                return Err(CompilerError::InvariantViolation {
+                    what: "rebuild_from_plan: planned row_keys / feature_ids length mismatch",
+                });
+            }
+            expected.insert((lvl_idx, planned.page_id), planned.row_keys.len());
+            for rk in &planned.row_keys {
+                targets.entry(*rk).or_default().push((lvl_idx, planned.page_id));
+            }
+        }
+    }
+
+    let mut partial: HashMap<(usize, PageId), Vec<KeyedRow>> = HashMap::new();
+    let mut pruned: HashMap<(usize, PageId), Vec<KeyedRow>> = HashMap::new();
+    let mut received: HashMap<(usize, PageId), usize> = HashMap::new();
+    let mut page_bytes: HashMap<(usize, PageId), u64> = HashMap::new();
+    let mut in_flight_bytes: u64 = 0;
+    let mut levels_pages: Vec<Vec<PageEntry>> = vec![Vec::new(); binding_plan.levels.len()];
     let mut class_sidecars: Vec<LayerSidecarEntry> = Vec::new();
     let mut label_sidecars: Vec<LayerSidecarEntry> = Vec::new();
 
-    for (level_plan, level_pp) in binding_plan.levels.iter().zip(&page_plan.levels) {
-        debug_assert_eq!(level_plan.level, level_pp.level);
-        let level_started = std::time::Instant::now();
-        tracing::info!(
-            target: "mars_compiler::compile",
-            binding = %binding_plan.binding_id,
-            level = level_plan.level.get(),
-            pages = level_pp.pages.len(),
-            "compile.level.start",
-        );
-        let mut level_pages: Vec<PageEntry> = Vec::new();
-        for planned in &level_pp.pages {
-            let stream = session.fetch_by_feature_ids(&planned.feature_ids).await?;
-            let rows = hydrate_keyed_rows(stream, page_plan.combined_bbox).await?;
+    let mut stream = session.fetch_full_table_streaming().await?;
+    while let Some(item) = stream.next().await {
+        let row: RowBytes = item?;
+        // a row whose pass-1 bbox failed every level's filter has no route
+        // and is silently skipped.
+        let Some(routes) = targets.get(&row.row_key).cloned() else {
+            continue;
+        };
 
-            let mut page_rows: Vec<KeyedRow> = Vec::new();
-            let mut pruned_rows: Vec<KeyedRow> = Vec::new();
-            for r in rows {
-                if crate::decimate::passes_min_size(&r.feature, level_plan.geometry_min_size_m) {
-                    page_rows.push(KeyedRow {
-                        feature: FeatureGeom {
-                            user_id: r.feature.user_id,
-                            bbox: r.feature.bbox,
-                            geom: crate::decimate::simplify(
-                                &r.feature.geom,
-                                level_plan.vertex_tolerance_m,
-                                binding_plan.simplifier,
-                            ),
-                        },
-                        attrs: r.attrs.clone(),
-                        geom_bytes_estimate: r.geom_bytes_estimate,
-                        key: r.key,
-                        row_fingerprint: r.row_fingerprint,
+        let geom_bytes_estimate = row.geometry.len() as u64;
+        let row_fingerprint = compute_row_fingerprint_from_wkb(&row.geometry);
+        let feature = wkb_to_feature_geom(&row.geometry, row.feature_id)?;
+        let cx = (f64::from(feature.bbox[0]) + f64::from(feature.bbox[2])) / 2.0;
+        let cy = (f64::from(feature.bbox[1]) + f64::from(feature.bbox[3])) / 2.0;
+        let key = crate::hilbert::key_from_centroid(cx, cy, page_plan.combined_bbox);
+        let attrs = Arc::new(row.attributes);
+        let attr_bytes: u64 = attrs.iter().map(|(k, _)| (k.len() + 16) as u64).sum();
+        let kr_bytes = geom_bytes_estimate.saturating_add(attr_bytes).saturating_add(64);
+
+        for (lvl_idx, page_id) in routes {
+            let level_plan = &binding_plan.levels[lvl_idx];
+            let kr = if passes_min_size(&feature, level_plan.geometry_min_size_m) {
+                let simplified = simplify(&feature.geom, level_plan.vertex_tolerance_m, binding_plan.simplifier);
+                Some(KeyedRow {
+                    feature: FeatureGeom {
+                        user_id: feature.user_id,
+                        bbox: feature.bbox,
+                        geom: simplified,
+                    },
+                    attrs: attrs.clone(),
+                    geom_bytes_estimate,
+                    key,
+                    row_fingerprint,
+                })
+            } else {
+                None
+            };
+            match kr {
+                Some(kr) => {
+                    partial.entry((lvl_idx, page_id)).or_default().push(kr);
+                }
+                None => {
+                    pruned.entry((lvl_idx, page_id)).or_default().push(KeyedRow {
+                        feature: feature.clone(),
+                        attrs: attrs.clone(),
+                        geom_bytes_estimate,
+                        key,
+                        row_fingerprint,
                     });
-                } else {
-                    pruned_rows.push(r);
                 }
             }
-            page_rows.sort_by(|a, b| {
-                a.key
-                    .cmp(&b.key)
-                    .then_with(|| a.feature.user_id.cmp(&b.feature.user_id))
-                    .then_with(|| a.row_fingerprint.cmp(&b.row_fingerprint))
-            });
-            // β.2: drop rows no layer's class chain matches before geometry
-            // emit; binding-scoped metric tracks the count.
-            let (page_rows, dropped_unmatched) = filter_unmatched_rows(page_rows, &layer_plans);
-            if dropped_unmatched > 0 {
-                deps.metrics
-                    .inc_compiler_features_unmatched(binding_plan.binding_id.as_str(), dropped_unmatched);
+            *page_bytes.entry((lvl_idx, page_id)).or_insert(0) += kr_bytes;
+            in_flight_bytes = in_flight_bytes.saturating_add(kr_bytes);
+
+            let r = received.entry((lvl_idx, page_id)).or_insert(0);
+            *r += 1;
+            // page complete: drain its buffers, write the artifact + sidecars,
+            // and reclaim its working-set footprint.
+            if *r == expected[&(lvl_idx, page_id)] {
+                let kept = partial.remove(&(lvl_idx, page_id)).unwrap_or_default();
+                let dropped = pruned.remove(&(lvl_idx, page_id)).unwrap_or_default();
+                let bytes = page_bytes.remove(&(lvl_idx, page_id)).unwrap_or(0);
+                in_flight_bytes = in_flight_bytes.saturating_sub(bytes);
+                flush_one_page(
+                    deps,
+                    binding_plan,
+                    lvl_idx,
+                    page_id,
+                    kept,
+                    dropped,
+                    &layer_plans,
+                    working_set_bytes,
+                    &mut levels_pages,
+                    &mut class_sidecars,
+                    &mut label_sidecars,
+                )
+                .await?;
             }
-            enforce_page_budget(
-                &page_rows,
-                working_set_bytes,
-                binding_plan.binding_id.as_str(),
-                planned.page_id,
-            )?;
-            if page_rows.is_empty() {
-                // pruned-only page: drop entirely, matches incremental contract.
-                continue;
-            }
-            let page_started = std::time::Instant::now();
-            let row_count = page_rows.len();
-            let entry = flush_page(deps, binding_plan, level_plan.level, planned.page_id, &page_rows).await?;
-            let mut class_acc: Vec<LayerSidecarEntry> = Vec::new();
-            let mut label_acc: Vec<LayerSidecarEntry> = Vec::new();
-            emit_layer_sidecars(
-                deps,
-                level_plan,
-                &entry,
-                &page_rows,
-                &pruned_rows,
-                &layer_plans,
-                &mut class_acc,
-                &mut label_acc,
-            )
-            .await?;
-            tracing::info!(
-                target: "mars_compiler::compile",
-                binding = %binding_plan.binding_id,
-                level = level_plan.level.get(),
-                page_id = planned.page_id.get(),
-                rows = row_count,
-                bytes = entry.size_bytes,
-                elapsed_ms = page_started.elapsed().as_millis() as u64,
-                "compile.page.flush",
-            );
-            level_pages.push(entry);
-            class_sidecars.append(&mut class_acc);
-            label_sidecars.append(&mut label_acc);
         }
+
+        if in_flight_bytes > in_flight_budget_bytes {
+            return Err(CompilerError::CompileMemoryBudgetExceeded {
+                binding: binding_plan.binding_id.as_str().to_string(),
+                observed_bytes: in_flight_bytes,
+                budget_bytes: in_flight_budget_bytes,
+            });
+        }
+    }
+
+    // short-stream guard: every (level, page_id) must have hit its expected
+    // count; rolling back via the snapshot would otherwise leave silent
+    // gaps in the binding's substrate.
+    for (route, exp) in &expected {
+        let got = received.get(route).copied().unwrap_or(0);
+        if got != *exp {
+            return Err(CompilerError::InvariantViolation {
+                what: "rebuild_from_plan: full-table stream returned fewer rows than the snapshot plan",
+            });
+        }
+    }
+
+    // build per-level metadata in plan order, restoring the level summary
+    // events that the per-level loop used to emit.
+    let mut levels_meta: Vec<LevelMetadata> = Vec::with_capacity(binding_plan.levels.len());
+    let mut all_pages: Vec<PageEntry> = Vec::new();
+    for (lvl_idx, level_plan) in binding_plan.levels.iter().enumerate() {
+        let mut level_pages = std::mem::take(&mut levels_pages[lvl_idx]);
+        level_pages.sort_by_key(|p| p.key.page_id);
         tracing::info!(
             target: "mars_compiler::compile",
             binding = %binding_plan.binding_id,
             level = level_plan.level.get(),
             pages_emitted = level_pages.len(),
-            elapsed_ms = level_started.elapsed().as_millis() as u64,
-            "compile.level.end",
+            "compile.level.summary",
         );
         levels_meta.push(LevelMetadata {
             level: level_plan.level,
@@ -1154,6 +1205,67 @@ pub async fn rebuild_binding_from_plan<'a>(
         "compile.rebuild.end",
     );
     Ok(output)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn flush_one_page(
+    deps: &Deps,
+    binding_plan: &BindingPlan,
+    lvl_idx: usize,
+    page_id: PageId,
+    page_rows: Vec<KeyedRow>,
+    pruned_rows: Vec<KeyedRow>,
+    layer_plans: &[&LayerPlan],
+    working_set_bytes: u64,
+    levels_pages: &mut [Vec<PageEntry>],
+    class_sidecars: &mut Vec<LayerSidecarEntry>,
+    label_sidecars: &mut Vec<LayerSidecarEntry>,
+) -> Result<(), CompilerError> {
+    let level_plan = &binding_plan.levels[lvl_idx];
+    let mut page_rows = page_rows;
+    page_rows.sort_by(|a, b| {
+        a.key
+            .cmp(&b.key)
+            .then_with(|| a.feature.user_id.cmp(&b.feature.user_id))
+            .then_with(|| a.row_fingerprint.cmp(&b.row_fingerprint))
+    });
+    // β.2: drop rows no layer's class chain matches before geometry emit.
+    let (page_rows, dropped_unmatched) = filter_unmatched_rows(page_rows, layer_plans);
+    if dropped_unmatched > 0 {
+        deps.metrics
+            .inc_compiler_features_unmatched(binding_plan.binding_id.as_str(), dropped_unmatched);
+    }
+    enforce_page_budget(&page_rows, working_set_bytes, binding_plan.binding_id.as_str(), page_id)?;
+    if page_rows.is_empty() {
+        // pruned-only page: drop entirely, matches incremental contract.
+        return Ok(());
+    }
+    let page_started = std::time::Instant::now();
+    let row_count = page_rows.len();
+    let entry = flush_page(deps, binding_plan, level_plan.level, page_id, &page_rows).await?;
+    emit_layer_sidecars(
+        deps,
+        level_plan,
+        &entry,
+        &page_rows,
+        &pruned_rows,
+        layer_plans,
+        class_sidecars,
+        label_sidecars,
+    )
+    .await?;
+    tracing::info!(
+        target: "mars_compiler::compile",
+        binding = %binding_plan.binding_id,
+        level = level_plan.level.get(),
+        page_id = page_id.get(),
+        rows = row_count,
+        bytes = entry.size_bytes,
+        elapsed_ms = page_started.elapsed().as_millis() as u64,
+        "compile.page.flush",
+    );
+    levels_pages[lvl_idx].push(entry);
+    Ok(())
 }
 
 /// Recompute level metadata after pages were replaced or dropped. Pure;

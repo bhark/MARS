@@ -23,7 +23,7 @@ use mars_compiler::{Deps, run_snapshot_from_plan};
 use mars_observability::Metrics;
 use mars_source::{
     AttrValue, ChangeFeed, ChangeSubscription, CompileSession, LeaderLock, LeaderLockGuard, RowBytes, Source,
-    SourceBinding as PortBinding, SourceError,
+    SourceBinding as PortBinding, SourceError, SourceRowKey,
 };
 use mars_store::ObjectStore;
 use mars_store::mem::{InMemoryPublisher, InMemoryStore};
@@ -31,6 +31,7 @@ use mars_types::{BindingId, CrsCode, DecimationLevel};
 
 const WORKING_SET: u64 = 4 * 1024 * 1024 * 1024;
 const PLAN_BUDGET: u64 = 8 * 1024 * 1024 * 1024;
+const IN_FLIGHT_BUDGET: u64 = 4 * 1024 * 1024 * 1024;
 
 fn point_wkb(x: f64, y: f64) -> Bytes {
     let mut v = Vec::with_capacity(21);
@@ -46,6 +47,7 @@ fn row(id: u64, x: f64, y: f64) -> RowBytes {
         feature_id: id,
         geometry: point_wkb(x, y),
         attributes: vec![("name".into(), AttrValue::String(format!("p{id}")))],
+        row_key: SourceRowKey::ZERO,
     }
 }
 
@@ -169,12 +171,30 @@ async fn unified_compile_is_deterministic_across_runs() {
         layers: vec![],
     };
 
-    let m_a = run_snapshot_from_plan(&deps_a, &plan, "test".into(), 1, WORKING_SET, PLAN_BUDGET, 1)
-        .await
-        .unwrap();
-    let m_b = run_snapshot_from_plan(&deps_b, &plan, "test".into(), 1, WORKING_SET, PLAN_BUDGET, 1)
-        .await
-        .unwrap();
+    let m_a = run_snapshot_from_plan(
+        &deps_a,
+        &plan,
+        "test".into(),
+        1,
+        WORKING_SET,
+        PLAN_BUDGET,
+        IN_FLIGHT_BUDGET,
+        1,
+    )
+    .await
+    .unwrap();
+    let m_b = run_snapshot_from_plan(
+        &deps_b,
+        &plan,
+        "test".into(),
+        1,
+        WORKING_SET,
+        PLAN_BUDGET,
+        IN_FLIGHT_BUDGET,
+        1,
+    )
+    .await
+    .unwrap();
 
     assert!(m_a.pages.len() > 1, "fixture must produce multiple pages");
     assert_eq!(m_a.bindings, m_b.bindings, "binding metadata must match exactly");
@@ -206,11 +226,13 @@ async fn rows_with_identical_geometry_but_different_attrs_are_slot_equivalent() 
             feature_id: 1,
             geometry: geom.clone(),
             attributes: vec![("name".into(), AttrValue::String("alpha".into()))],
+            row_key: SourceRowKey::ZERO,
         },
         RowBytes {
             feature_id: 2,
             geometry: geom,
             attributes: vec![("name".into(), AttrValue::String("beta".into()))],
+            row_key: SourceRowKey::ZERO,
         },
     ];
     let (deps, _store) = make_deps(rows);
@@ -218,9 +240,18 @@ async fn rows_with_identical_geometry_but_different_attrs_are_slot_equivalent() 
         bindings: vec![binding_plan("points", 64 * 1024)],
         layers: vec![],
     };
-    let manifest = run_snapshot_from_plan(&deps, &plan, "test".into(), 1, WORKING_SET, PLAN_BUDGET, 1)
-        .await
-        .unwrap();
+    let manifest = run_snapshot_from_plan(
+        &deps,
+        &plan,
+        "test".into(),
+        1,
+        WORKING_SET,
+        PLAN_BUDGET,
+        IN_FLIGHT_BUDGET,
+        1,
+    )
+    .await
+    .unwrap();
     let total: u64 = manifest.pages.iter().map(|p| p.feature_count).sum();
     assert_eq!(total, 2, "both rows must land in the substrate");
 }
@@ -232,9 +263,18 @@ async fn unified_compile_against_empty_source_yields_zero_pages() {
         bindings: vec![binding_plan("points", 4 * 1024)],
         layers: vec![],
     };
-    let manifest = run_snapshot_from_plan(&deps, &plan, "test".into(), 1, WORKING_SET, PLAN_BUDGET, 1)
-        .await
-        .unwrap();
+    let manifest = run_snapshot_from_plan(
+        &deps,
+        &plan,
+        "test".into(),
+        1,
+        WORKING_SET,
+        PLAN_BUDGET,
+        IN_FLIGHT_BUDGET,
+        1,
+    )
+    .await
+    .unwrap();
     assert_eq!(manifest.pages.len(), 0);
     assert_eq!(manifest.bindings.len(), 1);
     assert_eq!(manifest.bindings[0].feature_count_total, 0);

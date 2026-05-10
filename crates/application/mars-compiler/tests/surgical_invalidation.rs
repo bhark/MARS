@@ -25,10 +25,11 @@ use mars_compiler::{Deps, run_snapshot_from_plan};
 
 const TEST_WORKING_SET: u64 = 4 * 1024 * 1024 * 1024;
 const TEST_PLAN_BUDGET: u64 = 8 * 1024 * 1024 * 1024;
+const TEST_IN_FLIGHT_BUDGET: u64 = 4 * 1024 * 1024 * 1024;
 use mars_observability::Metrics;
 use mars_source::{
     AttrValue, ChangeEvent, ChangeFeed, ChangeSubscription, CompileSession, GeometryEnvelope, LeaderLock,
-    LeaderLockGuard, RowBytes, Source, SourceBinding as PortBinding, SourceCollectionId, SourceError,
+    LeaderLockGuard, RowBytes, Source, SourceBinding as PortBinding, SourceCollectionId, SourceError, SourceRowKey,
 };
 use mars_store::ObjectStore;
 use mars_store::mem::{InMemoryPublisher, InMemoryStore};
@@ -48,6 +49,7 @@ fn row(id: u64, x: f64, y: f64) -> RowBytes {
         feature_id: id,
         geometry: point_wkb(x, y),
         attributes: vec![("name".into(), AttrValue::String(format!("p{id}")))],
+        row_key: SourceRowKey::ZERO,
     }
 }
 
@@ -201,9 +203,18 @@ async fn surgical_invalidation_rebuilds_only_dirty_pages() {
     };
 
     // bootstrap
-    let bootstrap = run_snapshot_from_plan(&deps, &plan, "test".into(), 1, TEST_WORKING_SET, TEST_PLAN_BUDGET, 1)
-        .await
-        .unwrap();
+    let bootstrap = run_snapshot_from_plan(
+        &deps,
+        &plan,
+        "test".into(),
+        1,
+        TEST_WORKING_SET,
+        TEST_PLAN_BUDGET,
+        TEST_IN_FLIGHT_BUDGET,
+        1,
+    )
+    .await
+    .unwrap();
     assert!(
         bootstrap.pages.len() >= 3,
         "fixture must produce >= 3 pages to exercise cross-page moves; got {}",
@@ -358,6 +369,7 @@ async fn surgical_invalidation_rebuilds_only_dirty_pages() {
         dirty,
         TEST_WORKING_SET,
         TEST_PLAN_BUDGET,
+        TEST_IN_FLIGHT_BUDGET,
     )
     .await
     .unwrap();
