@@ -3,7 +3,7 @@
 MARS is a fast, cloud-first and Kubernetes-friendly single binary for serving WMS and WMTS. It takes a novel approach to self-organizing caching on several tiers, to make scalable WMS/WMTS cheaper, faster and considerably less painful. 
 
 > [!WARNING]
-> This is a pre-alpha WIP. It is NOT suitable for production use. 
+> This is a WIP. It is NOT suitable for production use. 
 
 ## What?
 

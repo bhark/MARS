@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-MARS is pre-alpha. Only the latest tagged release receives security fixes.
+MARS is early WIP. Only the latest tagged release receives security fixes.
 
 ## Reporting a vulnerability
 

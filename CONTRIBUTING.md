@@ -1,6 +1,6 @@
 # Contributing to MARS
 
-Thank you for considering a contribution. MARS is in pre-alpha; the public surface, internal modules, and on-disk artifact format are all still in motion.
+Thank you for considering a contribution. MARS is early WIP; the public surface, internal modules, and on-disk artifact format are all still in motion.
 
 ## Toolchain
 
