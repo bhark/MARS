@@ -17,6 +17,10 @@ spec:
       labels:
         app.kubernetes.io/component: postgis
     spec:
+      # podman kube play does not synthesize a DNS alias from a K8s Service.
+      # set hostname so the pod is reachable as `mars-postgis` on mars.network,
+      # matching the Service name used in PG_DSN and the seed wait-loop.
+      hostname: mars-postgis
       containers:
         - name: postgis
           image: docker.io/postgis/postgis:18-3.6
