@@ -1,0 +1,7 @@
+layer	table	geometry_column	id_column	attributes
+land	e2e_source.land	geom	id	-
+water	e2e_source.water	geom	id	-
+settlements	e2e_source.settlements	geom	id	-
+roads	e2e_source.roads	geom	id	kind
+buildings	e2e_source.buildings	geom	id	kind,status
+waterways	e2e_source.waterways	geom	id	width_class

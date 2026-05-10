@@ -1,6 +1,6 @@
 //! mars-import-mapfile: opinionated translator from MapServer mapfile to MARS YAML.
 //!
-//! coverage is the subset exercised by the forvaltning2 diff harness.
+//! coverage is the subset exercised by the parity harness.
 //! Synchronous; no tokio.
 
 mod emitter;

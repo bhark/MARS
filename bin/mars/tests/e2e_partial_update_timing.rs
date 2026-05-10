@@ -1,6 +1,6 @@
 //! Step 13 (LAZARUS Phase C closing gate 2): partial-update cycle timing.
 //!
-//! Bootstraps a 100k-feature forvaltning2-stand-in fixture, then drives
+//! Bootstraps a 100k-feature production stand-in fixture, then drives
 //! one cycle over a synthetic 1k-event edit batch (insert/update/delete
 //! mix), recording the wall-clock time. Gate: ≤ 5 min.
 //!

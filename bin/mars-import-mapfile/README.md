@@ -3,7 +3,7 @@
 Translates a MapServer mapfile to a MARS YAML service config.
 
 The translator is **opinionated** and covers the subset of mapfile
-constructs the forvaltning2 diff harness fixture exercises. Anything
+constructs the parity harness fixture exercises. Anything
 outside that subset is logged as a warning and either skipped or emitted
 as a `# TODO: hand-translate` placeholder.
 
@@ -57,34 +57,6 @@ CLASSITEM-driven CLASS NAME / EXPRESSION (where the class matches
 against a layer-level CLASSITEM rather than naming a column) is **not**
 modelled; expressions of this shape come through as bare literals
 (e.g. `when: "'12-'"`) and need hand reconciliation.
-
-## Operator runbook: forvaltning2 fixture
-
-The `bin/mars/tests/fixtures/forvaltning2/service.yaml` is a curated
-subset of the upstream mapfile. Operator workflow when the upstream
-moves:
-
-1. Update the ref pointer in `mapfile-source.md`.
-2. Run the regeneration script:
-   ```sh
-   MARS_FORVALTNING2_MAPFILE=/path/to/wms.map \
-     ./scripts/regenerate-forvaltning2-fixture.sh
-   ```
-   This invokes the importer with the six `--include-layer` flags
-   matching the harness layers (Landpolygon, Soe, Byomraade, Vejmidte,
-   Bygning, Vandloebsmidte) and prints a unified diff against the
-   committed fixture.
-3. Reconcile the diff against
-   `bin/mars/tests/fixtures/forvaltning2/HANDSTRIP.md`. New deltas
-   inside the strip set are expected; deltas outside it indicate
-   either an upstream schema change (table/column rename, new class)
-   or an importer bug.
-4. Re-run the diff capture against MapServer to validate the parity
-   budget still holds; only then commit the updated fixture.
-
-The mapfile lives in a separate, operator-local repository and is not
-vendored here; this CI check is operator-side, not GitHub Actions. The
-script requires `MARS_FORVALTNING2_MAPFILE` (or `--mapfile PATH`).
 
 ## Architecture
 

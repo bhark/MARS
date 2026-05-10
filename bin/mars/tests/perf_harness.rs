@@ -7,7 +7,7 @@
 //!   * gfi phase: N sequential `get_feature_info` calls → p50/p95
 //!
 //! parcels-mini is small; the absolute numbers will be optimistic vs a
-//! production-class fixture (forvaltning2 or similar), but the methodology
+//! production-class fixture, but the methodology
 //! is what §19 needs. operator-driven cluster captures land via
 //! `mars-diff-capture --load`; this harness keeps the host-side ratchet
 //! honest under e2e CI.
@@ -201,7 +201,7 @@ async fn parcels_mini_perf_harness() -> Result<()> {
     report.push_str("\n## §19 cells covered host-side\n\n");
     report.push_str("- GetMap p50/p95 warm, high zoom: see latency table.\n");
     report.push_str("- Throughput per pod, mixed: see throughput table.\n\n");
-    report.push_str("Cells deferred to operator capture (cluster-side, against forvaltning2):\n\n");
+    report.push_str("Cells deferred to operator capture (cluster-side, against production data):\n\n");
     report.push_str("- GetMap p50 warm, low zoom (regional).\n");
     report.push_str("- GetMap p50 warm, country-wide z=8.\n");
     report.push_str("- GetTile p50 cache hit / miss (final-tile cache; needs WMTS path coverage).\n");

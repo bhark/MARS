@@ -17,7 +17,7 @@
 //!     // sorted by (user_id ascending, hilbert_key ascending);
 //!     // user_id may repeat
 //! ```
-//! 16 bytes per entry -> ~800 MiB at 50M entries (forvaltning2-class).
+//! 16 bytes per entry -> ~800 MiB at 50M entries (production-class).
 
 use bytes::Bytes;
 use mars_types::HilbertKey;

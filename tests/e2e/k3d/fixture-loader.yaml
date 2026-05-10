@@ -1,0 +1,78 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fixture-contract
+  namespace: mars-e2e
+data:
+  assert-fixture.sql: |
+    SELECT to_regclass('e2e_source.land') IS NOT NULL AS land;
+    SELECT to_regclass('e2e_source.water') IS NOT NULL AS water;
+    SELECT to_regclass('e2e_source.settlements') IS NOT NULL AS settlements;
+    SELECT to_regclass('e2e_source.roads') IS NOT NULL AS roads;
+    SELECT to_regclass('e2e_source.buildings') IS NOT NULL AS buildings;
+    SELECT to_regclass('e2e_source.waterways') IS NOT NULL AS waterways;
+    DO $$
+    DECLARE
+      missing text[];
+    BEGIN
+      SELECT array_agg(name) INTO missing
+      FROM (VALUES
+        ('e2e_source.land'),
+        ('e2e_source.water'),
+        ('e2e_source.settlements'),
+        ('e2e_source.roads'),
+        ('e2e_source.buildings'),
+        ('e2e_source.waterways')
+      ) AS required(name)
+      WHERE to_regclass(name) IS NULL;
+      IF missing IS NOT NULL THEN
+        RAISE EXCEPTION 'fixture missing required tables: %', array_to_string(missing, ', ');
+      END IF;
+    END $$;
+  create-replication.sql: |
+    DROP PUBLICATION IF EXISTS mars_e2e_pub;
+    SELECT pg_drop_replication_slot('mars_e2e_slot')
+    WHERE EXISTS (SELECT 1 FROM pg_replication_slots WHERE slot_name = 'mars_e2e_slot');
+    CREATE PUBLICATION mars_e2e_pub FOR TABLE
+      e2e_source.land,
+      e2e_source.water,
+      e2e_source.settlements,
+      e2e_source.roads,
+      e2e_source.buildings,
+      e2e_source.waterways;
+    SELECT pg_create_logical_replication_slot('mars_e2e_slot', 'pgoutput');
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: fixture-loader
+  namespace: mars-e2e
+  labels:
+    app.kubernetes.io/name: fixture-loader
+spec:
+  restartPolicy: Never
+  containers:
+    - name: loader
+      image: postgis/postgis:18-3.6
+      imagePullPolicy: IfNotPresent
+      command:
+        - sleep
+        - infinity
+      env:
+        - name: PG_DSN
+          valueFrom:
+            secretKeyRef:
+              name: postgis
+              key: PG_DSN
+        - name: PGPASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: postgis
+              key: POSTGRES_PASSWORD
+      volumeMounts:
+        - name: fixture-contract
+          mountPath: /fixture
+  volumes:
+    - name: fixture-contract
+      configMap:
+        name: fixture-contract

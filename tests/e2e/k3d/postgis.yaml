@@ -1,0 +1,74 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgis
+  namespace: mars-e2e
+type: Opaque
+stringData:
+  POSTGRES_DB: mars
+  POSTGRES_USER: mars
+  POSTGRES_PASSWORD: mars
+  PG_DSN: postgres://mars:mars@postgis.mars-e2e.svc.cluster.local:5432/mars?sslmode=disable
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgis
+  namespace: mars-e2e
+spec:
+  selector:
+    app.kubernetes.io/name: postgis
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgis
+  namespace: mars-e2e
+spec:
+  serviceName: postgis
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgis
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgis
+    spec:
+      containers:
+        - name: postgis
+          image: postgis/postgis:18-3.6
+          imagePullPolicy: IfNotPresent
+          args:
+            - -c
+            - wal_level=logical
+            - -c
+            - max_replication_slots=8
+            - -c
+            - max_wal_senders=8
+          envFrom:
+            - secretRef:
+                name: postgis
+          ports:
+            - name: postgres
+              containerPort: 5432
+          readinessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - mars
+                - -d
+                - mars
+            initialDelaySeconds: 5
+            periodSeconds: 2
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: data
+          emptyDir: {}

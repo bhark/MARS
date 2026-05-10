@@ -1,6 +1,6 @@
 //! decimation throughput bench. measures `decimate::simplify` per row at
 //! three tolerance levels against a synthetic 100k-row vec of mid-vertex-
-//! count linestrings (a forvaltning2-class building outline shape).
+//! count linestrings (a production-class building outline shape).
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 

@@ -1,0 +1,65 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: garage-admin-token
+  namespace: mars-e2e
+type: Opaque
+stringData:
+  admin-token: mars-e2e-admin-token
+---
+apiVersion: garage.rajsingh.info/v1beta1
+kind: GarageCluster
+metadata:
+  name: mars-e2e-garage
+  namespace: mars-e2e
+spec:
+  replicas: 1
+  zone: local
+  replication:
+    factor: 1
+  admin:
+    adminTokenSecretRef:
+      name: garage-admin-token
+      key: admin-token
+  storage:
+    data:
+      size: 5Gi
+      storageClassName: local-path
+    metadata:
+      size: 1Gi
+      storageClassName: local-path
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+    seccompProfile:
+      type: RuntimeDefault
+---
+apiVersion: garage.rajsingh.info/v1beta1
+kind: GarageBucket
+metadata:
+  name: mars-e2e-artifacts
+  namespace: mars-e2e
+spec:
+  clusterRef:
+    name: mars-e2e-garage
+    namespace: mars-e2e
+  quotas:
+    maxSize: 4Gi
+---
+apiVersion: garage.rajsingh.info/v1beta1
+kind: GarageKey
+metadata:
+  name: mars-e2e-artifacts-writer
+  namespace: mars-e2e
+spec:
+  clusterRef:
+    name: mars-e2e-garage
+    namespace: mars-e2e
+  bucketPermissions:
+    - bucketRef:
+        name: mars-e2e-artifacts
+      read: true
+      write: true
+      owner: true

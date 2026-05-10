@@ -1,0 +1,45 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: manifest-current-check
+  namespace: mars-e2e
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: check
+          image: amazon/aws-cli:2
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: mars-e2e-artifacts-writer
+                  key: access-key-id
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: mars-e2e-artifacts-writer
+                  key: secret-access-key
+            - name: AWS_DEFAULT_REGION
+              value: garage
+            - name: AWS_EC2_METADATA_DISABLED
+              value: "true"
+          command:
+            - sh
+            - -ec
+            - |
+              endpoint="http://mars-e2e-garage.mars-e2e.svc.cluster.local:3900"
+              bucket="mars-e2e-artifacts"
+              key="local-e2e/manifests/current"
+              for i in $(seq 1 450); do
+                if aws --endpoint-url "$endpoint" s3api get-object --bucket "$bucket" --key "$key" /tmp/current >/dev/null 2>&1; then
+                  grep -Eq '^v[0-9]+$' /tmp/current
+                  exit 0
+                fi
+                sleep 2
+              done
+              echo "manifest pointer not published at s3://${bucket}/${key}" >&2
+              exit 1
