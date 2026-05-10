@@ -1,0 +1,16 @@
+[Unit]
+Description=MARS e2e config and secrets
+
+[Kube]
+Yaml=%h/.local/share/mars-e2e/manifests/config.yaml
+Network=mars-e2e.network
+
+# config.yaml is ConfigMap + Secret only - no Pod for the Quadlet-default
+# service container to attach to, so Type=notify never receives readiness.
+# treat as oneshot resource-creation.
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,14 @@
+[Unit]
+Description=MARS e2e PostGIS
+Requires=mars-e2e-config.service
+After=mars-e2e-config.service
+
+[Kube]
+Yaml=%h/.local/share/mars-e2e/manifests/postgis.yaml
+Network=mars-e2e.network
+
+[Service]
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
