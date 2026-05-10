@@ -35,18 +35,12 @@ COPY crates ./crates
 
 RUN cargo build --release --locked -p mars
 
-FROM debian:bookworm-slim
+FROM gcr.io/distroless/cc-debian12:nonroot
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-       ca-certificates \
-       libsqlite3-0 \
-    && rm -rf /var/lib/apt/lists/*
-
+# proj-sys links sqlite dynamically; distroless/cc doesn't ship it
+COPY --from=builder /usr/lib/x86_64-linux-gnu/libsqlite3.so.0 \
+                    /usr/lib/x86_64-linux-gnu/libsqlite3.so.0
 COPY --from=builder /src/target/release/mars /usr/local/bin/mars
-COPY docker/entrypoint.sh /usr/local/bin/mars-entrypoint
-RUN chmod +x /usr/local/bin/mars-entrypoint
 
-# entrypoint starts as root, chowns MARS_DATA_DIRS, drops to 65532 via
-# setpriv. do NOT set USER here - that would defeat the bootstrap.
-ENTRYPOINT ["/usr/local/bin/mars-entrypoint"]
+USER nonroot:nonroot
+ENTRYPOINT ["/usr/local/bin/mars"]
