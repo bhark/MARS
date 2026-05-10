@@ -13,6 +13,5 @@
   way["natural"~"^(wood|scrub|heath|moor|grassland|fell|bare_rock|scree|shingle|sand|mud)$"]({{bbox}});
   way["landuse"~"^(forest|meadow|farmland|orchard|vineyard|reservoir|basin|industrial|commercial|retail)$"]({{bbox}});
 );
-out body;
->;
-out skel qt;
+(._;>;);
+out;
