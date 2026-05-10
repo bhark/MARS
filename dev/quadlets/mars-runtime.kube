@@ -6,6 +6,9 @@ After=mars-compiler.service
 [Kube]
 Yaml=%h/.local/share/mars-dev/manifests/runtime.yaml
 Network=mars.network
+# pre-load mars-config ConfigMap; podman kube play does not persist
+# ConfigMaps across plays the way it does Secrets.
+ConfigMap=%h/.local/share/mars-dev/manifests/mars-config-cm.yaml
 
 [Service]
 Restart=on-failure

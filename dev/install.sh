@@ -36,6 +36,18 @@ for app in config postgis seed compiler runtime viewer; do
     fi
 done
 
+# podman kube play only persists Secrets across plays; ConfigMaps must be
+# inlined or pre-loaded per play via --configmap. extract mars-config into
+# its own file so compiler/runtime .kube units can pre-load it via
+# Quadlet's ConfigMap= directive.
+yq ea \
+    'select(.kind == "ConfigMap" and .metadata.name == "mars-config")' \
+    "$RENDERED" > "$MANIFEST_DIR/mars-config-cm.yaml"
+if ! [ -s "$MANIFEST_DIR/mars-config-cm.yaml" ]; then
+    echo "install: ERROR: extracted mars-config ConfigMap is empty" >&2
+    exit 1
+fi
+
 for f in "$SCRIPT_DIR/quadlets/"*; do
     ln -sfn "$f" "$QUADLET_DIR/$(basename "$f")"
 done
