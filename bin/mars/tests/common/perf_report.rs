@@ -76,8 +76,8 @@ pub enum Validity {
     /// 2-10 pp gap; comparison is suspect (likely partial layer exclusion).
     /// reported as a warning; not enforced.
     Suspect,
-    /// gap above 10 pp, or MS effectively empty (under 0.5%). reported as
-    /// info; not enforced. this is the "MapServer can't render this" bucket.
+    /// gap above 10 pp. reported as info; not enforced. this is the
+    /// "MapServer can't render this" / large divergence bucket.
     Invalid,
     /// coverage missing on either side (older bundle / capture failure).
     Unknown,
@@ -98,9 +98,6 @@ pub fn classify(c: &CaseResult) -> Validity {
     let (Some(mars), Some(ms)) = (c.mars_coverage, c.mapserver_coverage) else {
         return Validity::Unknown;
     };
-    if ms < 0.005 {
-        return Validity::Invalid;
-    }
     let gap = (mars - ms).abs();
     if gap > 0.10 {
         Validity::Invalid
@@ -111,7 +108,58 @@ pub fn classify(c: &CaseResult) -> Validity {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn case(mars: Option<f64>, ms: Option<f64>) -> CaseResult {
+        CaseResult {
+            name: "t".into(),
+            layers: Vec::new(),
+            bbox: [0.0; 4],
+            width: 0,
+            height: 0,
+            crs: String::new(),
+            format: String::new(),
+            scale_denom: None,
+            tolerance: 0,
+            max_diff_ratio: 0.0,
+            mars: SideTimings::default(),
+            mapserver: SideTimings::default(),
+            mars_coverage: mars,
+            mapserver_coverage: ms,
+        }
+    }
+
+    #[test]
+    fn both_empty_is_fair_not_invalid() {
+        // both renderers agree there's nothing in-bbox -> perfect parity.
+        assert_eq!(classify(&case(Some(0.0), Some(0.0))), Validity::Fair);
+    }
+
+    #[test]
+    fn mars_paints_ms_empty_is_invalid() {
+        assert_eq!(classify(&case(Some(0.20), Some(0.0))), Validity::Invalid);
+    }
+
+    #[test]
+    fn small_gap_is_fair() {
+        assert_eq!(classify(&case(Some(0.50), Some(0.51))), Validity::Fair);
+    }
+
+    #[test]
+    fn medium_gap_is_suspect() {
+        assert_eq!(classify(&case(Some(0.20), Some(0.25))), Validity::Suspect);
+    }
+
+    #[test]
+    fn missing_coverage_is_unknown() {
+        assert_eq!(classify(&case(None, Some(0.5))), Validity::Unknown);
+        assert_eq!(classify(&case(Some(0.5), None)), Validity::Unknown);
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
 pub struct SideTimings {
     #[serde(default)]
     pub samples_ms: Vec<f64>,
