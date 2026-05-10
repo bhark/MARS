@@ -385,6 +385,8 @@ async fn rebuild_cycle_is_atomic_under_put_fault_injection() {
             TEST_PLAN_BUDGET,
             TEST_IN_FLIGHT_BUDGET,
             1,
+            &std::env::temp_dir(),
+            256,
         )
         .await
         .unwrap();
@@ -421,6 +423,8 @@ async fn rebuild_cycle_is_atomic_under_put_fault_injection() {
             TEST_PLAN_BUDGET,
             TEST_IN_FLIGHT_BUDGET,
             1,
+            &std::env::temp_dir(),
+            256,
         )
         .await
         .unwrap();
@@ -504,6 +508,8 @@ async fn run_one_rebuild_cycle(
         TEST_WORKING_SET,
         TEST_PLAN_BUDGET,
         TEST_IN_FLIGHT_BUDGET,
+        &std::env::temp_dir(),
+        256,
     )
     .await?;
     Ok(merge(prior, &outcome, prior.version + 1))

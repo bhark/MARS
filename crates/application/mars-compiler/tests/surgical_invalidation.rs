@@ -212,6 +212,8 @@ async fn surgical_invalidation_rebuilds_only_dirty_pages() {
         TEST_PLAN_BUDGET,
         TEST_IN_FLIGHT_BUDGET,
         1,
+        &std::env::temp_dir(),
+        256,
     )
     .await
     .unwrap();
@@ -370,6 +372,8 @@ async fn surgical_invalidation_rebuilds_only_dirty_pages() {
         TEST_WORKING_SET,
         TEST_PLAN_BUDGET,
         TEST_IN_FLIGHT_BUDGET,
+        &std::env::temp_dir(),
+        256,
     )
     .await
     .unwrap();

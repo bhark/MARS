@@ -19,6 +19,7 @@ pub mod rebalance;
 pub mod reconcile;
 pub mod render;
 pub mod sidecar;
+pub(crate) mod spill;
 pub mod testing;
 
 use std::collections::HashMap;
@@ -172,6 +173,18 @@ pub enum CompilerError {
         /// Configured in-flight pages budget.
         budget_bytes: u64,
     },
+    /// Pass-2 disk-spill primitive failed (filesystem I/O, malformed
+    /// spill file). Spill is a fallback path inside one process; failures
+    /// are not user-recoverable and surface as a typed compile error.
+    #[error("compile spill: {what}: {source}")]
+    Spill {
+        /// Stable short label naming the failed step (open, write, flush,
+        /// drain, etc).
+        what: &'static str,
+        /// Underlying I/O error.
+        #[source]
+        source: std::io::Error,
+    },
     /// Pass-1 page planning observed more rows than the in-memory plan
     /// budget allows. Trips before the planner allocates beyond its
     /// configured ceiling so the operator gets a clean ceiling rather than
@@ -267,6 +280,8 @@ impl Compiler {
         let plan_budget_bytes = self.config.compiler.compile_plan_budget()?;
         let in_flight_budget_bytes = self.config.compiler.compile_in_flight_pages_budget()?;
         let binding_parallelism = self.config.compiler.compile_binding_parallelism;
+        let spill_dir = self.config.compiler.compile_spill_dir_path();
+        let spill_open_file_limit = self.config.compiler.compile_spill_open_file_limit;
         let manifest = run_snapshot_from_plan(
             &self.deps,
             &plan,
@@ -276,6 +291,8 @@ impl Compiler {
             plan_budget_bytes,
             in_flight_budget_bytes,
             binding_parallelism,
+            &spill_dir,
+            spill_open_file_limit,
         )
         .await?;
         let v = publish_with_retry(self.deps.manifest.as_ref(), &manifest, &self.deps.metrics, shutdown).await?;
@@ -413,6 +430,8 @@ impl Compiler {
         let working_set_bytes = self.config.compiler.compile_page_working_set()?;
         let plan_budget_bytes = self.config.compiler.compile_plan_budget()?;
         let in_flight_budget_bytes = self.config.compiler.compile_in_flight_pages_budget()?;
+        let spill_dir = self.config.compiler.compile_spill_dir_path();
+        let spill_open_file_limit = self.config.compiler.compile_spill_open_file_limit;
         let started = std::time::Instant::now();
         let outcome = render::rebuild_pages(
             &self.deps,
@@ -423,6 +442,8 @@ impl Compiler {
             working_set_bytes,
             plan_budget_bytes,
             in_flight_budget_bytes,
+            &spill_dir,
+            spill_open_file_limit,
         )
         .await?;
         self.deps.metrics.observe_compiler_rebuild_duration(started.elapsed());
@@ -634,6 +655,8 @@ pub async fn run_snapshot_from_plan(
     plan_budget_bytes: u64,
     in_flight_budget_bytes: u64,
     binding_parallelism: usize,
+    spill_dir: &std::path::Path,
+    spill_open_file_limit: usize,
 ) -> Result<Manifest, CompilerError> {
     use futures_util::StreamExt;
     use mars_source::{SourceBinding as PortBinding, SourceCollectionId};
@@ -650,6 +673,8 @@ pub async fn run_snapshot_from_plan(
         working_set_bytes: u64,
         plan_budget_bytes: u64,
         in_flight_budget_bytes: u64,
+        spill_dir: &std::path::Path,
+        spill_open_file_limit: usize,
     ) -> Result<BindingOutput, CompilerError> {
         let port_binding = PortBinding::new(
             SourceCollectionId::new(binding_plan.binding_id.as_str()),
@@ -677,6 +702,8 @@ pub async fn run_snapshot_from_plan(
                 session.as_mut(),
                 working_set_bytes,
                 in_flight_budget_bytes,
+                spill_dir,
+                spill_open_file_limit,
             )
             .await
         }
@@ -727,6 +754,8 @@ pub async fn run_snapshot_from_plan(
                 working_set_bytes,
                 plan_budget_bytes,
                 in_flight_budget_bytes,
+                spill_dir,
+                spill_open_file_limit,
             ));
         }
         match pending.next().await {

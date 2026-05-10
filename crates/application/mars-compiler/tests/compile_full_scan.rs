@@ -210,6 +210,8 @@ async fn duplicate_feature_id_routes_distinct_rows() {
         &mut session,
         4 * 1024 * 1024,
         4 * 1024 * 1024,
+        &std::env::temp_dir(),
+        256,
     )
     .await
     .unwrap();
@@ -244,6 +246,8 @@ async fn unrelated_rows_in_stream_are_skipped() {
         &mut session,
         4 * 1024 * 1024,
         4 * 1024 * 1024,
+        &std::env::temp_dir(),
+        256,
     )
     .await
     .unwrap();
@@ -277,6 +281,8 @@ async fn short_stream_trips_invariant_violation() {
         &mut session,
         4 * 1024 * 1024,
         4 * 1024 * 1024,
+        &std::env::temp_dir(),
+        256,
     )
     .await
     .unwrap_err();
@@ -286,14 +292,12 @@ async fn short_stream_trips_invariant_violation() {
     );
 }
 
-/// Tight in-flight budget: a binding whose only page would buffer past the
-/// ceiling before flushing trips the typed budget error. Using a 1-byte
-/// budget guarantees the very first row pushes accumulated bytes over.
+/// Tight in-flight budget triggers the disk-spill fallback rather than
+/// erroring. The page still emits correctly: the spill round-trip
+/// preserves rows byte-for-byte and `flush_one_page` re-sorts before
+/// encoding so on-disk output is identical to the in-memory path.
 #[tokio::test]
-async fn budget_overrun_yields_typed_error() {
-    // two rows at distinct keys, both routed to the same page; page
-    // completes only after the second arrives, so the first row's bytes
-    // sit in the partial buffer past the budget.
+async fn budget_overrun_spills_and_completes() {
     let r1 = row(1, 0.0, 0.0, 0x1111_1111_1111_1111);
     let r2 = row(2, 1.0, 1.0, 0x2222_2222_2222_2222);
 
@@ -306,27 +310,19 @@ async fn budget_overrun_yields_typed_error() {
     };
     let mut session = ScriptedSession { rows: vec![r1, r2] };
 
-    let err = rebuild_binding_from_plan(
+    let out = rebuild_binding_from_plan(
         &deps,
         &plan,
         &bp,
         &page_plan,
         &mut session,
         4 * 1024 * 1024,
-        1, // 1-byte in-flight budget
+        1, // 1-byte trigger forces spill on the very first row
+        &std::env::temp_dir(),
+        256,
     )
     .await
-    .unwrap_err();
-    match err {
-        CompilerError::CompileMemoryBudgetExceeded {
-            binding,
-            observed_bytes,
-            budget_bytes,
-        } => {
-            assert_eq!(binding, "points");
-            assert!(observed_bytes >= 1);
-            assert_eq!(budget_bytes, 1);
-        }
-        other => panic!("expected CompileMemoryBudgetExceeded, got {other:?}"),
-    }
+    .unwrap();
+    assert_eq!(out.pages.len(), 1);
+    assert_eq!(out.pages[0].feature_count, 2);
 }

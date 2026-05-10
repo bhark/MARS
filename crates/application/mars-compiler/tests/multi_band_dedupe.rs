@@ -245,6 +245,8 @@ async fn multi_band_same_binding_emits_one_class_sidecar_per_page() {
         PLAN_BUDGET,
         IN_FLIGHT_BUDGET,
         1,
+        &std::env::temp_dir(),
+        256,
     )
     .await
     .expect("snapshot");

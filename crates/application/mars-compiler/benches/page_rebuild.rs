@@ -178,6 +178,8 @@ async fn build_fixture(n_features: usize, page_size: u64) -> Fixture {
         BENCH_PLAN_BUDGET,
         BENCH_IN_FLIGHT_BUDGET,
         1,
+        &std::env::temp_dir(),
+        256,
     )
     .await
     .unwrap();
@@ -260,6 +262,8 @@ fn bench_page_rebuild(c: &mut Criterion) {
                         BENCH_WORKING_SET,
                         BENCH_PLAN_BUDGET,
                         BENCH_IN_FLIGHT_BUDGET,
+                        &std::env::temp_dir(),
+                        256,
                     )
                     .await
                     .unwrap();

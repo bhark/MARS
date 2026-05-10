@@ -153,6 +153,8 @@ pub async fn rebuild_pages(
     working_set_bytes: u64,
     plan_budget_bytes: u64,
     in_flight_budget_bytes: u64,
+    spill_dir: &std::path::Path,
+    spill_open_file_limit: usize,
 ) -> Result<RebuildOutcome, CompilerError> {
     let mut outcome = RebuildOutcome::default();
     for (binding_id, binding_dirty) in dirty.per_binding {
@@ -165,6 +167,8 @@ pub async fn rebuild_pages(
                 working_set_bytes,
                 plan_budget_bytes,
                 in_flight_budget_bytes,
+                spill_dir,
+                spill_open_file_limit,
                 &mut outcome,
             )
             .await?;
@@ -205,6 +209,8 @@ async fn rebuild_binding_truncate(
     working_set_bytes: u64,
     plan_budget_bytes: u64,
     in_flight_budget_bytes: u64,
+    spill_dir: &std::path::Path,
+    spill_open_file_limit: usize,
     outcome: &mut RebuildOutcome,
 ) -> Result<(), CompilerError> {
     let binding_plan =
@@ -258,6 +264,8 @@ async fn rebuild_binding_truncate(
             session.as_mut(),
             working_set_bytes,
             in_flight_budget_bytes,
+            spill_dir,
+            spill_open_file_limit,
         )
         .await
     }
@@ -957,6 +965,8 @@ pub async fn rebuild_binding_from_plan<'a>(
     session: &mut (dyn mars_source::CompileSession + 'a),
     working_set_bytes: u64,
     in_flight_budget_bytes: u64,
+    spill_dir: &std::path::Path,
+    spill_open_file_limit: usize,
 ) -> Result<BindingOutput, CompilerError> {
     if page_plan.feature_count_total == 0 {
         return Ok(BindingOutput {
@@ -1027,6 +1037,7 @@ pub async fn rebuild_binding_from_plan<'a>(
     let mut levels_pages: Vec<Vec<PageEntry>> = vec![Vec::new(); binding_plan.levels.len()];
     let mut class_sidecars: Vec<LayerSidecarEntry> = Vec::new();
     let mut label_sidecars: Vec<LayerSidecarEntry> = Vec::new();
+    let mut spill = crate::spill::SpillManager::new(spill_dir, spill_open_file_limit)?;
 
     let mut stream = session.fetch_full_table_streaming().await?;
     while let Some(item) = stream.next().await {
@@ -1049,46 +1060,73 @@ pub async fn rebuild_binding_from_plan<'a>(
 
         for (lvl_idx, page_id) in routes {
             let level_plan = &binding_plan.levels[lvl_idx];
-            let kr = if passes_min_size(&feature, level_plan.geometry_min_size_m) {
+            let (kept_row, pruned_row) = if passes_min_size(&feature, level_plan.geometry_min_size_m) {
                 let simplified = simplify(&feature.geom, level_plan.vertex_tolerance_m, binding_plan.simplifier);
-                Some(KeyedRow {
-                    feature: FeatureGeom {
-                        user_id: feature.user_id,
-                        bbox: feature.bbox,
-                        geom: simplified,
-                    },
-                    attrs: attrs.clone(),
-                    geom_bytes_estimate,
-                    key,
-                    row_fingerprint,
-                })
+                (
+                    Some(KeyedRow {
+                        feature: FeatureGeom {
+                            user_id: feature.user_id,
+                            bbox: feature.bbox,
+                            geom: simplified,
+                        },
+                        attrs: attrs.clone(),
+                        geom_bytes_estimate,
+                        key,
+                        row_fingerprint,
+                    }),
+                    None,
+                )
             } else {
-                None
-            };
-            match kr {
-                Some(kr) => {
-                    partial.entry((lvl_idx, page_id)).or_default().push(kr);
-                }
-                None => {
-                    pruned.entry((lvl_idx, page_id)).or_default().push(KeyedRow {
+                (
+                    None,
+                    Some(KeyedRow {
                         feature: feature.clone(),
                         attrs: attrs.clone(),
                         geom_bytes_estimate,
                         key,
                         row_fingerprint,
-                    });
+                    }),
+                )
+            };
+
+            if spill.is_spilled(lvl_idx, page_id) {
+                // page already on disk: append directly, no in-flight bookkeeping.
+                if let Some(r) = &kept_row {
+                    spill.append(lvl_idx, page_id, crate::spill::SpillKind::Kept, r)?;
                 }
+                if let Some(r) = &pruned_row {
+                    spill.append(lvl_idx, page_id, crate::spill::SpillKind::Pruned, r)?;
+                }
+            } else {
+                if let Some(kr) = kept_row {
+                    partial.entry((lvl_idx, page_id)).or_default().push(kr);
+                }
+                if let Some(kr) = pruned_row {
+                    pruned.entry((lvl_idx, page_id)).or_default().push(kr);
+                }
+                *page_bytes.entry((lvl_idx, page_id)).or_insert(0) += kr_bytes;
+                in_flight_bytes = in_flight_bytes.saturating_add(kr_bytes);
             }
-            *page_bytes.entry((lvl_idx, page_id)).or_insert(0) += kr_bytes;
-            in_flight_bytes = in_flight_bytes.saturating_add(kr_bytes);
 
             let r = received.entry((lvl_idx, page_id)).or_insert(0);
             *r += 1;
-            // page complete: drain its buffers, write the artifact + sidecars,
-            // and reclaim its working-set footprint.
+            // page complete: drain its buffers (memory and/or spill), write
+            // the artifact + sidecars, reclaim its working-set footprint.
             if *r == expected[&(lvl_idx, page_id)] {
-                let kept = partial.remove(&(lvl_idx, page_id)).unwrap_or_default();
-                let dropped = pruned.remove(&(lvl_idx, page_id)).unwrap_or_default();
+                let (kept, dropped) = if spill.is_spilled(lvl_idx, page_id) {
+                    let (mut k, mut d) = spill.drain(lvl_idx, page_id)?;
+                    if let Some(extra) = partial.remove(&(lvl_idx, page_id)) {
+                        k.extend(extra);
+                    }
+                    if let Some(extra) = pruned.remove(&(lvl_idx, page_id)) {
+                        d.extend(extra);
+                    }
+                    (k, d)
+                } else {
+                    let k = partial.remove(&(lvl_idx, page_id)).unwrap_or_default();
+                    let d = pruned.remove(&(lvl_idx, page_id)).unwrap_or_default();
+                    (k, d)
+                };
                 let bytes = page_bytes.remove(&(lvl_idx, page_id)).unwrap_or(0);
                 in_flight_bytes = in_flight_bytes.saturating_sub(bytes);
                 flush_one_page(
@@ -1108,12 +1146,12 @@ pub async fn rebuild_binding_from_plan<'a>(
             }
         }
 
+        // soft trigger: when the in-memory partial-page set crosses the
+        // budget, evict everything to per-page spill files. subsequent rows
+        // for those pages append directly to disk.
         if in_flight_bytes > in_flight_budget_bytes {
-            return Err(CompilerError::CompileMemoryBudgetExceeded {
-                binding: binding_plan.binding_id.as_str().to_string(),
-                observed_bytes: in_flight_bytes,
-                budget_bytes: in_flight_budget_bytes,
-            });
+            let evicted = spill.flush_all_partials(&mut partial, &mut pruned, &mut page_bytes)?;
+            in_flight_bytes = in_flight_bytes.saturating_sub(evicted);
         }
     }
 
@@ -1195,6 +1233,7 @@ pub async fn rebuild_binding_from_plan<'a>(
         class_sidecars,
         label_sidecars,
     };
+    let spill_metrics = spill.metrics();
     tracing::info!(
         target: "mars_compiler::compile",
         binding = %binding_plan.binding_id,
@@ -1202,6 +1241,10 @@ pub async fn rebuild_binding_from_plan<'a>(
         pages = output.pages.len(),
         class_sidecars = output.class_sidecars.len(),
         label_sidecars = output.label_sidecars.len(),
+        spill_triggered = spill_metrics.triggered,
+        spill_bytes_written = spill_metrics.bytes_written,
+        spill_bytes_read = spill_metrics.bytes_read,
+        spill_files_active_peak = spill_metrics.files_active_peak,
         "compile.rebuild.end",
     );
     Ok(output)

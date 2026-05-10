@@ -182,6 +182,8 @@ async fn rebalance_candidates_flags_oversize_page() {
         TEST_PLAN_BUDGET,
         TEST_IN_FLIGHT_BUDGET,
         1,
+        &std::env::temp_dir(),
+        256,
     )
     .await
     .unwrap();
@@ -230,6 +232,8 @@ async fn execute_rebalance_split_preserves_feature_ids_and_balances_sizes() {
         TEST_PLAN_BUDGET,
         TEST_IN_FLIGHT_BUDGET,
         1,
+        &std::env::temp_dir(),
+        256,
     )
     .await
     .unwrap();

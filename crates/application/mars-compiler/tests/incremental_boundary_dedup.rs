@@ -262,6 +262,8 @@ async fn boundary_key_row_appears_in_exactly_one_dirty_page() {
         4 * 1024 * 1024 * 1024,
         8 * 1024 * 1024 * 1024,
         4 * 1024 * 1024 * 1024,
+        &std::env::temp_dir(),
+        256,
     )
     .await
     .unwrap();

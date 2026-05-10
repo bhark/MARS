@@ -180,6 +180,8 @@ async fn unified_compile_is_deterministic_across_runs() {
         PLAN_BUDGET,
         IN_FLIGHT_BUDGET,
         1,
+        &std::env::temp_dir(),
+        256,
     )
     .await
     .unwrap();
@@ -192,6 +194,8 @@ async fn unified_compile_is_deterministic_across_runs() {
         PLAN_BUDGET,
         IN_FLIGHT_BUDGET,
         1,
+        &std::env::temp_dir(),
+        256,
     )
     .await
     .unwrap();
@@ -249,6 +253,8 @@ async fn rows_with_identical_geometry_but_different_attrs_are_slot_equivalent() 
         PLAN_BUDGET,
         IN_FLIGHT_BUDGET,
         1,
+        &std::env::temp_dir(),
+        256,
     )
     .await
     .unwrap();
@@ -272,6 +278,8 @@ async fn unified_compile_against_empty_source_yields_zero_pages() {
         PLAN_BUDGET,
         IN_FLIGHT_BUDGET,
         1,
+        &std::env::temp_dir(),
+        256,
     )
     .await
     .unwrap();

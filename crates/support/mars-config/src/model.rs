@@ -90,17 +90,36 @@ pub struct Compiler {
     /// sidecar / object-store I/O.
     #[serde(default = "default_compile_binding_parallelism")]
     pub compile_binding_parallelism: usize,
-    /// In-flight pass-2 buffer ceiling per binding. Pass 2 streams the
-    /// whole table once per binding and buckets rows into the planned
-    /// pages; pages eager-flush on completion, but at any instant the
-    /// summed footprint of partially-filled pages must stay under this
-    /// ceiling. Crossing it trips
-    /// [`CompilerError::CompileMemoryBudgetExceeded`]. Unit-suffixed
-    /// byte literal (`256MiB`).
+    /// Soft trigger threshold for pass-2 disk spill, per binding. Pass 2
+    /// streams the whole table once per binding and buckets rows into the
+    /// planned pages; pages eager-flush on completion. When the summed
+    /// footprint of partially-filled in-memory pages crosses this
+    /// threshold, the compiler spills all current partial buffers to
+    /// per-page files under [`compile_spill_dir`] and continues. Pages
+    /// that complete before the trigger fires never touch disk.
+    /// Unit-suffixed byte literal (`256MiB`).
     ///
-    /// [`CompilerError::CompileMemoryBudgetExceeded`]: https://docs.rs/mars-compiler
+    /// [`compile_spill_dir`]: Self::compile_spill_dir
     #[serde(default = "default_compile_in_flight_pages_budget")]
     pub compile_in_flight_pages_budget_bytes: String,
+    /// Directory used as scratch for pass-2 disk spill files. Each binding
+    /// gets a uniquely-named subdirectory underneath, removed at session
+    /// end (success or failure). When unset, resolves to
+    /// `${TMPDIR}/mars-compile-spill`. The directory must be writable and
+    /// have headroom for the worst-case spilled hydrated payload across
+    /// concurrent bindings — typical sizing is a few GiB per spilling
+    /// binding, multiplied by [`compile_binding_parallelism`].
+    ///
+    /// [`compile_binding_parallelism`]: Self::compile_binding_parallelism
+    #[serde(default)]
+    pub compile_spill_dir: Option<String>,
+    /// Maximum number of spill files held open at once. The compiler keeps
+    /// recently-written spill files open for buffered append; older entries
+    /// are flushed and closed when the limit is reached. Sized for typical
+    /// `compile_binding_parallelism` × per-binding active page set; raise
+    /// if profiling shows reopen syscall churn dominating the spill path.
+    #[serde(default = "default_compile_spill_open_file_limit")]
+    pub compile_spill_open_file_limit: usize,
     /// Opportunistic rebalance settings (split / merge under size or
     /// bbox-dilation drift).
     #[serde(default)]
@@ -116,6 +135,8 @@ impl Default for Compiler {
             compile_plan_budget_bytes: default_compile_plan_budget(),
             compile_binding_parallelism: default_compile_binding_parallelism(),
             compile_in_flight_pages_budget_bytes: default_compile_in_flight_pages_budget(),
+            compile_spill_dir: None,
+            compile_spill_open_file_limit: default_compile_spill_open_file_limit(),
             rebalance: Rebalance::default(),
         }
     }
@@ -141,6 +162,17 @@ impl Compiler {
     pub fn compile_in_flight_pages_budget(&self) -> Result<u64, ConfigError> {
         units::parse_bytes(&self.compile_in_flight_pages_budget_bytes)
     }
+
+    /// Resolve `compile_spill_dir` against the platform default
+    /// (`${TMPDIR}/mars-compile-spill`). Pure path computation; does not
+    /// create the directory.
+    #[must_use]
+    pub fn compile_spill_dir_path(&self) -> std::path::PathBuf {
+        match &self.compile_spill_dir {
+            Some(s) => std::path::PathBuf::from(s),
+            None => std::env::temp_dir().join("mars-compile-spill"),
+        }
+    }
 }
 
 fn default_compiler_window() -> String {
@@ -161,6 +193,10 @@ fn default_compile_binding_parallelism() -> usize {
 
 fn default_compile_in_flight_pages_budget() -> String {
     "256MiB".to_owned()
+}
+
+fn default_compile_spill_open_file_limit() -> usize {
+    256
 }
 
 /// Opportunistic rebalance settings. LAZARUS §Rebalance: rebalance is
