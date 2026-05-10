@@ -1,0 +1,40 @@
+name: e2e
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    tags: ['v*']
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  testcontainers:
+    name: in-process e2e (testcontainers)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.95.0
+      - uses: Swatinem/rust-cache@v2
+      - name: install proj build deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential clang cmake pkg-config libsqlite3-dev sqlite3
+      - name: cargo test --features e2e
+        env:
+          MARS_E2E: "1"
+        run: cargo test -p mars --features e2e --locked -- --nocapture
+
+  # the Quadlet stack (scripts/run-e2e.sh) drives rootless podman via
+  # `systemctl --user`, which is not reliable on github-hosted runners
+  # without extra dbus/linger setup. tracked as a follow-up; in the meantime
+  # the in-process testcontainers job covers the same code paths.
