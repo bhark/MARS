@@ -5,6 +5,24 @@ metadata:
 spec:
   template:
     spec:
+      initContainers:
+        - name: chown-data-dirs
+          image: docker.io/library/busybox:stable
+          imagePullPolicy: IfNotPresent
+          command: ["chown", "-R", "65532:65532", "/cache"]
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+            runAsNonRoot: false
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "FOWNER"]
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: cache
+              mountPath: /cache
       containers:
         - name: runtime
           imagePullPolicy: IfNotPresent
