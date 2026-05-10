@@ -107,7 +107,8 @@ pub fn build_store_and_publisher(cfg: &Config) -> Result<(Arc<dyn ObjectStore>, 
                 access_key_id: None,
                 secret_access_key: None,
                 allow_http: endpoint_is_plaintext,
-                allow_non_atomic_publish: false,
+                allow_non_atomic_publish: cfg.artifacts.store.allow_non_atomic_publish,
+                conditional_put: cfg.artifacts.store.conditional_put.clone(),
             };
             let store_inner = S3Store::from_config(&s3).context("open s3 store")?;
             let publisher: Arc<dyn ManifestStore> = Arc::new(

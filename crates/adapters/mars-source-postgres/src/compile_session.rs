@@ -42,9 +42,23 @@ impl PgCompileSession {
         let full_sql = build_full_table_query(&binding)?;
 
         let object = pool.get().await.map_err(|e| SourceError::backend("pool checkout", e))?;
-        // snapshot isolation across pass-1 + pass-2 scans.
+        // snapshot isolation across pass-1 + pass-2 scans. pass-2 is a single
+        // unbounded streaming scan whose wall-clock equals the consumer's
+        // processing time for the whole binding; the pool-level
+        // statement_timeout (sized for ad-hoc / replication paths) is the
+        // wrong instrument for it. SET LOCAL clears the cap for this txn only
+        // and self-resets at COMMIT/ROLLBACK -- no leak to the next checkout.
+        // max_parallel_workers_per_gather=0 + synchronize_seqscans=off pin the
+        // pass-2 heap scan to a single worker emitting rows in (tableoid,
+        // block, offset) ascending order, which matches the BE row_key byte
+        // order so the cursor walk in mars-compiler stays monotonic.
         object
-            .batch_execute("BEGIN ISOLATION LEVEL REPEATABLE READ")
+            .batch_execute(
+                "BEGIN ISOLATION LEVEL REPEATABLE READ; \
+                 SET LOCAL statement_timeout = 0; \
+                 SET LOCAL max_parallel_workers_per_gather = 0; \
+                 SET LOCAL synchronize_seqscans = off",
+            )
             .await
             .map_err(|e| SourceError::backend("begin compile session", e))?;
 
@@ -194,13 +208,16 @@ fn parse_ctid(s: &str) -> Result<(u32, u16), SourceError> {
 }
 
 /// Pack `(tableoid, block, offset)` into the 16-byte `SourceRowKey`. Layout:
-/// `tableoid (u32 LE) || block (u32 LE) || offset (u16 LE) || pad (6B 0)`.
-/// 10 useful bytes; padding reserved for future routing metadata.
+/// `tableoid (u32 BE) || block (u32 BE) || offset (u16 BE) || pad (6B 0)`.
+/// 10 useful bytes; padding reserved for future routing metadata. BE so
+/// lexicographic byte order on the key equals numeric `(tableoid, block,
+/// offset)` order, matching the single-worker heap-scan emission order
+/// pinned by the pass-2 compile session.
 fn pack_row_key(tableoid: u32, block: u32, offset: u16) -> SourceRowKey {
     let mut k = [0u8; 16];
-    k[0..4].copy_from_slice(&tableoid.to_le_bytes());
-    k[4..8].copy_from_slice(&block.to_le_bytes());
-    k[8..10].copy_from_slice(&offset.to_le_bytes());
+    k[0..4].copy_from_slice(&tableoid.to_be_bytes());
+    k[4..8].copy_from_slice(&block.to_be_bytes());
+    k[8..10].copy_from_slice(&offset.to_be_bytes());
     SourceRowKey::from_bytes(k)
 }
 
@@ -334,9 +351,20 @@ mod tests {
     fn pack_row_key_layout() {
         let k = super::pack_row_key(0x0011_2233, 0xaabb_ccdd, 0xeeff);
         let b = k.as_bytes();
-        assert_eq!(&b[0..4], &0x0011_2233u32.to_le_bytes());
-        assert_eq!(&b[4..8], &0xaabb_ccddu32.to_le_bytes());
-        assert_eq!(&b[8..10], &0xeeffu16.to_le_bytes());
+        assert_eq!(&b[0..4], &0x0011_2233u32.to_be_bytes());
+        assert_eq!(&b[4..8], &0xaabb_ccddu32.to_be_bytes());
+        assert_eq!(&b[8..10], &0xeeffu16.to_be_bytes());
         assert_eq!(&b[10..], &[0u8; 6]);
+    }
+
+    #[test]
+    fn pack_row_key_lex_order_matches_numeric_order() {
+        let lo = super::pack_row_key(1, 1, 1);
+        let mid = super::pack_row_key(1, 1, 2);
+        let hi = super::pack_row_key(1, 2, 0);
+        let top = super::pack_row_key(2, 0, 0);
+        assert!(lo.as_bytes() < mid.as_bytes());
+        assert!(mid.as_bytes() < hi.as_bytes());
+        assert!(hi.as_bytes() < top.as_bytes());
     }
 }

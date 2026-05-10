@@ -24,6 +24,8 @@ artifacts:
     bucket: mars-e2e-artifacts
     prefix: local-e2e
     allow_http: true
+    conditional_put: disabled
+    allow_non_atomic_publish: true
   cache:
     path: /cache
     max_size: 512MiB

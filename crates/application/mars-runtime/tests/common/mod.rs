@@ -383,6 +383,7 @@ fn build_minimal_config(layer_id: &LayerId, binding_id: &BindingId, label_surviv
                 prefix: None,
                 path: Some("/tmp".into()),
                 allow_http: false,
+                ..Default::default()
             },
             cache: ArtifactCache {
                 path: "/tmp".into(),
@@ -776,6 +777,7 @@ fn build_multi_layer_config(layer_ids: &[LayerId], binding_ids: &[BindingId]) ->
                 prefix: None,
                 path: Some("/tmp".into()),
                 allow_http: false,
+                ..Default::default()
             },
             cache: ArtifactCache {
                 path: "/tmp".into(),

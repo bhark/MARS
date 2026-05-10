@@ -2,8 +2,9 @@
 //!
 //! intentionally string-based: the result is meant to be hand-edited.
 
-use std::collections::BTreeSet;
 use std::fmt::Write as _;
+
+use tracing::warn;
 
 #[derive(Debug, Default)]
 pub(crate) struct Skeleton {
@@ -88,45 +89,128 @@ pub(crate) fn rgb_to_hex(r: u8, g: u8, b: u8) -> String {
     format!("#{r:02x}{g:02x}{b:02x}")
 }
 
-/// derive band names from the set of max_denom_exclusive breakpoints.
-fn derive_bands(layers: &[LayerSkeleton]) -> Vec<(String, u64)> {
-    let mut breakpoints: BTreeSet<u64> = BTreeSet::new();
-    for layer in layers {
-        for src in &layer.sources {
-            if let Some(d) = src.max_denom_exclusive {
-                breakpoints.insert(d);
-            }
+/// default scale-band ladder used when `--bands` is not supplied.
+/// caps are denom upper bounds (exclusive). the overview cap is finite
+/// (1:10_000_000) — large enough for a country-wide view, small enough to
+/// render cleanly in YAML; operators that need a wider ladder pass `--bands`.
+pub(crate) fn default_bands() -> Vec<(String, u64)> {
+    vec![
+        ("detail".into(), 2_500),
+        ("hi".into(), 12_500),
+        ("mid".into(), 50_000),
+        ("lo".into(), 250_000),
+        ("overview".into(), 10_000_000),
+    ]
+}
+
+/// expand an ordered ladder of caps into bands carrying their lower bound too.
+/// band i covers `[prev_cap, cap)`; band 0's lower bound is 0.
+struct BandWindow<'a> {
+    name: &'a str,
+    min: u64,
+    cap: u64,
+}
+
+fn band_windows(bands: &[(String, u64)]) -> Vec<BandWindow<'_>> {
+    let mut out = Vec::with_capacity(bands.len());
+    let mut prev: u64 = 0;
+    for (name, cap) in bands {
+        out.push(BandWindow {
+            name: name.as_str(),
+            min: prev,
+            cap: *cap,
+        });
+        prev = *cap;
+    }
+    out
+}
+
+/// per-tier emission inside a single band for a single layer.
+struct EmittedTier<'a> {
+    src: &'a SourceSkeleton,
+    /// `None` = last tier of this band (no `max_denom_exclusive` rendered).
+    max_denom: Option<u64>,
+}
+
+/// for each band, compute the tier-set this layer contributes.
+/// returns `(band_name, Vec<EmittedTier>)` per band that the layer fully covers.
+/// bands the layer only partially covers are dropped with a warn.
+fn split_layer_into_bands<'a>(
+    layer: &'a LayerSkeleton,
+    windows: &[BandWindow<'a>],
+) -> Vec<(&'a str, Vec<EmittedTier<'a>>)> {
+    if layer.sources.is_empty() {
+        return Vec::new();
+    }
+
+    // contiguous source intervals within a layer: [prev_max, this_max).
+    // first source starts at 0; an open-ended `max_denom_exclusive` is u64::MAX.
+    let mut intervals: Vec<(u64, u64, &SourceSkeleton)> = Vec::with_capacity(layer.sources.len());
+    let mut prev: u64 = 0;
+    for src in &layer.sources {
+        let this = src.max_denom_exclusive.unwrap_or(u64::MAX);
+        if this <= prev {
+            warn!(
+                layer = %layer.name,
+                prev_max = prev,
+                this_max = this,
+                "layer sources not in strictly increasing max_denom order; skipping later tier"
+            );
+            continue;
         }
+        intervals.push((prev, this, src));
+        prev = this;
     }
-    if breakpoints.is_empty() {
-        return vec![("default".into(), u64::MAX)];
+    if intervals.is_empty() {
+        return Vec::new();
     }
-    let sorted: Vec<u64> = breakpoints.into_iter().collect();
-    let names = ["detail", "hi", "mid", "lo", "overview"];
-    let mut bands = Vec::new();
-    for (i, &d) in sorted.iter().enumerate() {
-        let name = match names.get(i) {
-            Some(n) => (*n).to_string(),
-            None => format!("extra{}", i - names.len() + 1),
-        };
-        bands.push((name, d));
-    }
-    bands
-}
+    let layer_min = intervals.first().map(|(m, _, _)| *m).unwrap_or(0);
+    let layer_max = intervals.last().map(|(_, m, _)| *m).unwrap_or(0);
 
-/// assign each source to the smallest band whose cap covers its max_denom.
-fn band_for_source(max_denom: Option<u64>, bands: &[(String, u64)]) -> String {
-    match max_denom {
-        Some(d) => bands
+    let mut out: Vec<(&str, Vec<EmittedTier>)> = Vec::new();
+    for w in windows {
+        // skip bands the layer doesn't intersect at all.
+        if w.cap <= layer_min || w.min >= layer_max {
+            continue;
+        }
+        // partial coverage: layer doesn't fully span [w.min, w.cap).
+        if layer_min > w.min || layer_max < w.cap {
+            warn!(
+                layer = %layer.name,
+                band = %w.name,
+                band_min = w.min,
+                band_cap = w.cap,
+                layer_min,
+                layer_max,
+                "layer partially overlaps band; dropping (validator requires full band coverage)"
+            );
+            continue;
+        }
+
+        // collect the source intervals that intersect this band.
+        let in_band: Vec<&(u64, u64, &SourceSkeleton)> = intervals
             .iter()
-            .find(|(_, cap)| d <= *cap)
-            .map(|(n, _)| n.clone())
-            .unwrap_or_else(|| bands.last().map(|(n, _)| n.clone()).unwrap_or_default()),
-        None => bands.last().map(|(n, _)| n.clone()).unwrap_or_else(|| "default".into()),
+            .filter(|(lo, hi, _)| *hi > w.min && *lo < w.cap)
+            .collect();
+
+        let n = in_band.len();
+        let mut tiers: Vec<EmittedTier> = Vec::with_capacity(n);
+        for (idx, (_lo, hi, src)) in in_band.iter().enumerate() {
+            let is_last = idx + 1 == n;
+            let effective = (*hi).min(w.cap);
+            let max_denom = if is_last && effective == w.cap {
+                None
+            } else {
+                Some(effective)
+            };
+            tiers.push(EmittedTier { src, max_denom });
+        }
+        out.push((w.name, tiers));
     }
+    out
 }
 
-pub(crate) fn render(skel: &Skeleton) -> String {
+pub(crate) fn render(skel: &Skeleton, bands: &[(String, u64)]) -> String {
     let mut out = String::new();
     out.push_str("# Generated by mars-import-mapfile\n");
     out.push_str("# Operator metadata below uses ${VAR:-default} placeholders.\n");
@@ -159,10 +243,9 @@ pub(crate) fn render(skel: &Skeleton) -> String {
     let _ = writeln!(out);
 
     // scales / cells
-    let bands = derive_bands(&skel.layers);
     let _ = writeln!(out, "scales:");
     let _ = writeln!(out, "  bands:");
-    for (name, cap) in &bands {
+    for (name, cap) in bands {
         let _ = writeln!(out, "    - {{ name: {name}, max_denom_exclusive: {cap} }}");
     }
     let _ = writeln!(out);
@@ -170,7 +253,7 @@ pub(crate) fn render(skel: &Skeleton) -> String {
     let _ = writeln!(out, "  grid: regular");
     let _ = writeln!(out, "  origin: [0, 0]");
     let _ = writeln!(out, "  size_per_band:");
-    for (name, _) in &bands {
+    for (name, _) in bands {
         let _ = writeln!(out, "    {name}: ${{MARS_CELL_SIZE:-1024m}}");
     }
     let _ = writeln!(out, "  extent:");
@@ -230,6 +313,7 @@ pub(crate) fn render(skel: &Skeleton) -> String {
     }
 
     // layers
+    let windows = band_windows(bands);
     let _ = writeln!(out, "layers:");
     if skel.layers.is_empty() {
         let _ = writeln!(out, "  []");
@@ -243,31 +327,34 @@ pub(crate) fn render(skel: &Skeleton) -> String {
                 let _ = writeln!(out, "    type: {kind}");
             }
 
-            if !layer.sources.is_empty() {
+            let band_tiers = split_layer_into_bands(layer, &windows);
+            if !band_tiers.is_empty() {
                 let _ = writeln!(out, "    sources:");
-                for src in &layer.sources {
-                    let band = band_for_source(src.max_denom_exclusive, &bands);
-                    let mut parts = vec![
-                        format!("band: {band}"),
-                        format!("from: {}", yaml_quote(&src.from)),
-                        format!("geometry_column: {}", yaml_quote(&src.geometry_column)),
-                    ];
-                    if let Some(ref id) = src.id_column {
-                        parts.push(format!("id_column: {}", yaml_quote(id)));
+                for (band_name, tiers) in &band_tiers {
+                    for tier in tiers {
+                        let src = tier.src;
+                        let mut parts = vec![
+                            format!("band: {band_name}"),
+                            format!("from: {}", yaml_quote(&src.from)),
+                            format!("geometry_column: {}", yaml_quote(&src.geometry_column)),
+                        ];
+                        if let Some(ref id) = src.id_column {
+                            parts.push(format!("id_column: {}", yaml_quote(id)));
+                        }
+                        if let Some(d) = tier.max_denom {
+                            parts.push(format!("max_denom_exclusive: {d}"));
+                        }
+                        if !src.attributes.is_empty() {
+                            let attrs = src
+                                .attributes
+                                .iter()
+                                .map(|a| yaml_quote(a))
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            parts.push(format!("attributes: [{attrs}]"));
+                        }
+                        let _ = writeln!(out, "      - {{ {} }}", parts.join(", "));
                     }
-                    if let Some(d) = src.max_denom_exclusive {
-                        parts.push(format!("max_denom_exclusive: {d}"));
-                    }
-                    if !src.attributes.is_empty() {
-                        let attrs = src
-                            .attributes
-                            .iter()
-                            .map(|a| yaml_quote(a))
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        parts.push(format!("attributes: [{attrs}]"));
-                    }
-                    let _ = writeln!(out, "      - {{ {} }}", parts.join(", "));
                 }
             }
 
@@ -311,37 +398,83 @@ pub(crate) fn render(skel: &Skeleton) -> String {
 mod tests {
     use super::*;
 
-    #[test]
-    fn derive_bands_from_sources() {
-        let layer = LayerSkeleton {
-            sources: vec![
-                SourceSkeleton {
-                    max_denom_exclusive: Some(25000),
-                    from: "t1".into(),
-                    geometry_column: "g".into(),
-                    id_column: None,
-                    attributes: vec![],
-                },
-                SourceSkeleton {
-                    max_denom_exclusive: Some(50000),
-                    from: "t2".into(),
-                    geometry_column: "g".into(),
-                    id_column: None,
-                    attributes: vec![],
-                },
-            ],
-            ..Default::default()
-        };
-        let bands = derive_bands(&[layer]);
-        assert_eq!(bands, vec![("detail".into(), 25000), ("hi".into(), 50000)]);
+    fn src(max: Option<u64>, from: &str) -> SourceSkeleton {
+        SourceSkeleton {
+            max_denom_exclusive: max,
+            from: from.into(),
+            geometry_column: "g".into(),
+            id_column: None,
+            attributes: vec![],
+        }
+    }
+
+    fn ladder() -> Vec<(String, u64)> {
+        vec![
+            ("detail".into(), 2_500),
+            ("hi".into(), 12_500),
+            ("mid".into(), 50_000),
+            ("lo".into(), 250_000),
+            ("overview".into(), u64::MAX),
+        ]
     }
 
     #[test]
-    fn band_for_source_selects_smallest_covering() {
-        let bands = vec![("detail".into(), 25000u64), ("hi".into(), 50000)];
-        assert_eq!(band_for_source(Some(10000), &bands), "detail");
-        assert_eq!(band_for_source(Some(25000), &bands), "detail");
-        assert_eq!(band_for_source(Some(30000), &bands), "hi");
-        assert_eq!(band_for_source(None, &bands), "hi");
+    fn single_open_source_emits_one_tier_per_band() {
+        let layer = LayerSkeleton {
+            name: "all".into(),
+            sources: vec![src(None, "t")],
+            ..Default::default()
+        };
+        let bands = ladder();
+        let windows = band_windows(&bands);
+        let out = split_layer_into_bands(&layer, &windows);
+        assert_eq!(out.len(), 5);
+        for (_, tiers) in &out {
+            assert_eq!(tiers.len(), 1);
+            assert!(tiers[0].max_denom.is_none(), "single-tier band should omit max");
+        }
+    }
+
+    #[test]
+    fn scaletoken_tiers_split_within_a_band() {
+        // SCALETOKEN: [0, 1000) -> t0, [1000, MAX) -> t1.
+        let layer = LayerSkeleton {
+            name: "buildings".into(),
+            sources: vec![src(Some(1_000), "t0"), src(None, "t1")],
+            ..Default::default()
+        };
+        let bands = ladder();
+        let windows = band_windows(&bands);
+        let out = split_layer_into_bands(&layer, &windows);
+        let detail = out.iter().find(|(n, _)| *n == "detail").expect("detail band");
+        assert_eq!(detail.1.len(), 2);
+        assert_eq!(detail.1[0].max_denom, Some(1_000));
+        assert_eq!(detail.1[0].src.from, "t0");
+        assert!(detail.1[1].max_denom.is_none());
+        assert_eq!(detail.1[1].src.from, "t1");
+        // every other band has only t1, single-tier, no max.
+        for (name, tiers) in &out {
+            if *name == "detail" {
+                continue;
+            }
+            assert_eq!(tiers.len(), 1);
+            assert_eq!(tiers[0].src.from, "t1");
+            assert!(tiers[0].max_denom.is_none());
+        }
+    }
+
+    #[test]
+    fn partial_band_coverage_is_dropped() {
+        // layer caps at 25000 — covers detail and hi fully, mid only partially.
+        let layer = LayerSkeleton {
+            name: "x".into(),
+            sources: vec![src(Some(25_000), "t")],
+            ..Default::default()
+        };
+        let bands = ladder();
+        let windows = band_windows(&bands);
+        let out = split_layer_into_bands(&layer, &windows);
+        let names: Vec<&str> = out.iter().map(|(n, _)| *n).collect();
+        assert_eq!(names, vec!["detail", "hi"]);
     }
 }

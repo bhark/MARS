@@ -226,8 +226,9 @@ async fn duplicate_feature_id_routes_distinct_rows() {
 }
 
 /// Stream produces a row whose key is in no plan target -- routes to no
-/// page, drops silently. Then yields all expected rows so the short-stream
-/// invariant doesn't trip.
+/// page, drops silently. The rows are emitted in monotonic key order to
+/// honour the route-cursor's forward-walk contract (the live pass-2 SQL
+/// is pinned to single-worker heap-scan order so this matches production).
 #[tokio::test]
 async fn unrelated_rows_in_stream_are_skipped() {
     let routed = row(1, 0.0, 0.0, 0x1111_1111_1111_1111);
@@ -241,7 +242,7 @@ async fn unrelated_rows_in_stream_are_skipped() {
         layers: vec![],
     };
     let mut session = ScriptedSession {
-        rows: vec![unrelated, routed],
+        rows: vec![routed, unrelated],
     };
 
     let out = rebuild_binding_from_plan(

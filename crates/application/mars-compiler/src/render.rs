@@ -1029,6 +1029,21 @@ pub async fn rebuild_binding_from_plan<'a>(
             }
         }
     }
+    // freeze the build-phase route table into a single sorted file and
+    // walk it as a forward cursor alongside the pass-2 row stream. the
+    // pass-2 SQL is pinned to single-worker heap-scan order (BE row_key
+    // == numeric tableoid/block/offset ascending), so the cursor is
+    // strictly monotonic in the row_key space.
+    let (mut targets, freeze_stats) = targets.freeze()?;
+    tracing::info!(
+        target: "mars_compiler::compile",
+        binding = %binding_plan.binding_id,
+        entries_total = freeze_stats.entries_total,
+        runs_merged = freeze_stats.runs_merged,
+        bytes_written = freeze_stats.bytes_written,
+        elapsed_ms = freeze_stats.elapsed_ms,
+        "compile.route_index.freeze",
+    );
 
     let mut partial: HashMap<(usize, PageId), Vec<KeyedRow>> = HashMap::new();
     let mut pruned: HashMap<(usize, PageId), Vec<KeyedRow>> = HashMap::new();
@@ -1052,7 +1067,7 @@ pub async fn rebuild_binding_from_plan<'a>(
         let row: RowBytes = item?;
         // a row whose pass-1 bbox failed every level's filter has no route
         // and is silently skipped.
-        let Some(routes) = targets.lookup(&row.row_key)? else {
+        let Some(routes) = targets.advance_to(&row.row_key)? else {
             continue;
         };
 

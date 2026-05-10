@@ -27,6 +27,11 @@ pub struct S3Config {
     /// When true, fall back to non-atomic manifest publish if the backend
     /// does not support conditional put. Defaults to false (fail loudly).
     pub allow_non_atomic_publish: bool,
+    /// Override conditional-put behaviour. `None` or `"etag"` uses standard
+    /// If-Match / If-None-Match headers (the object_store default). `"disabled"`
+    /// turns conditional puts off entirely, mapping them to `NotImplemented`
+    /// so the `allow_non_atomic_publish` fallback can take over.
+    pub conditional_put: Option<String>,
 }
 
 impl S3Config {
@@ -43,6 +48,16 @@ impl S3Config {
         if let (Some(ak), Some(sk)) = (&self.access_key_id, &self.secret_access_key) {
             b = b.with_access_key_id(ak).with_secret_access_key(sk);
         }
+        match self.conditional_put.as_deref() {
+            Some("disabled") => {
+                b = b.with_conditional_put(object_store::aws::S3ConditionalPut::Disabled);
+            }
+            Some("etag") | None => {}
+            Some(other) => {
+                // unsupported values are handled at validation time; ignore here.
+                let _ = other;
+            }
+        }
         b
     }
 
@@ -53,6 +68,14 @@ impl S3Config {
         }
         if self.region.is_empty() {
             return Err(StoreError::Backend("s3: region is required".into()));
+        }
+        match self.conditional_put.as_deref() {
+            Some("etag") | Some("disabled") | None => {}
+            Some(other) => {
+                return Err(StoreError::Backend(format!(
+                    "s3: conditional_put must be 'etag' or 'disabled', got '{other}'"
+                )));
+            }
         }
         Ok(())
     }

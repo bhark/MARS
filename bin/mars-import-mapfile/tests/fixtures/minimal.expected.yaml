@@ -24,8 +24,11 @@ artifacts:
 
 scales:
   bands:
-    - { name: detail, max_denom_exclusive: 25000 }
-    - { name: hi, max_denom_exclusive: 50000 }
+    - { name: detail, max_denom_exclusive: 2500 }
+    - { name: hi, max_denom_exclusive: 12500 }
+    - { name: mid, max_denom_exclusive: 50000 }
+    - { name: lo, max_denom_exclusive: 250000 }
+    - { name: overview, max_denom_exclusive: 10000000 }
 
 cells:
   grid: regular
@@ -33,6 +36,9 @@ cells:
   size_per_band:
     detail: ${MARS_CELL_SIZE:-1024m}
     hi: ${MARS_CELL_SIZE:-1024m}
+    mid: ${MARS_CELL_SIZE:-1024m}
+    lo: ${MARS_CELL_SIZE:-1024m}
+    overview: ${MARS_CELL_SIZE:-1024m}
   extent:
     min_x: ${MARS_EXTENT_MIN_X:-0}
     min_y: ${MARS_EXTENT_MIN_Y:-0}
@@ -65,8 +71,10 @@ layers:
   - name: "roads"
     type: line
     sources:
-      - { band: detail, from: "roads_detailed", geometry_column: "geometri", id_column: "OGC_FID", max_denom_exclusive: 25000, attributes: ["vejkategori"] }
-      - { band: hi, from: "roads_simplified", geometry_column: "geometri", id_column: "OGC_FID", max_denom_exclusive: 50000, attributes: ["vejkategori"] }
+      - { band: detail, from: "roads_detailed", geometry_column: "geometri", id_column: "OGC_FID", attributes: ["vejkategori"] }
+      - { band: hi, from: "roads_detailed", geometry_column: "geometri", id_column: "OGC_FID", attributes: ["vejkategori"] }
+      - { band: mid, from: "roads_detailed", geometry_column: "geometri", id_column: "OGC_FID", max_denom_exclusive: 25000, attributes: ["vejkategori"] }
+      - { band: mid, from: "roads_simplified", geometry_column: "geometri", id_column: "OGC_FID", attributes: ["vejkategori"] }
     classes:
       - { name: "main", title: "main", when: "vejkategori = 'main'", style: { type: ref, name: "line_roads_main" } }
       - { name: "other", title: "other", when: "vejkategori IN ('other', 'local')", style: { type: ref, name: "line_roads_other" } }

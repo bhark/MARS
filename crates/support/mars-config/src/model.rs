@@ -223,7 +223,7 @@ fn default_compile_plan_budget() -> String {
 }
 
 fn default_compile_binding_parallelism() -> usize {
-    4
+    2
 }
 
 fn default_compile_in_flight_pages_budget() -> String {
@@ -534,6 +534,16 @@ pub struct ArtifactStore {
     /// silently drop TLS. Useful for local minio/moto fixtures only.
     #[serde(default)]
     pub allow_http: bool,
+    /// When true, fall back to non-atomic manifest publish if the backend
+    /// does not support conditional put. Defaults to false (fail loudly).
+    #[serde(default)]
+    pub allow_non_atomic_publish: bool,
+    /// Override conditional-put behaviour in the object_store S3 client.
+    /// `etag` (default) uses If-Match / If-None-Match. `disabled` turns
+    /// conditional puts off entirely, which is needed for backends such as
+    /// Garage that do not enforce these headers.
+    #[serde(default)]
+    pub conditional_put: Option<String>,
 }
 
 /// Local artifact cache config.

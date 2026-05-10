@@ -44,6 +44,49 @@ struct Cli {
     /// include only layers whose NAME matches one of these values (repeatable).
     #[arg(long = "include-layer")]
     include_layers: Vec<String>,
+    /// override the default scale-band ladder.
+    /// format: `name:cap,name:cap,...` with strictly-increasing caps; the
+    /// final cap may be `max` to mean unbounded. example:
+    /// `detail:2500,hi:12500,mid:50000,lo:250000,overview:max`.
+    #[arg(long = "bands", value_parser = parse_bands_arg)]
+    bands: Option<Vec<(String, u64)>>,
+}
+
+/// parse the `--bands` CLI value into an ordered ladder.
+fn parse_bands_arg(s: &str) -> Result<Vec<(String, u64)>, String> {
+    let mut out = Vec::new();
+    let mut prev: Option<u64> = None;
+    for (idx, part) in s.split(',').enumerate() {
+        let entry = part.trim();
+        let Some((name, cap_str)) = entry.split_once(':') else {
+            return Err(format!("band entry {idx} {entry:?} missing `:`"));
+        };
+        let name = name.trim();
+        let cap_str = cap_str.trim();
+        if name.is_empty() {
+            return Err(format!("band entry {idx} has empty name"));
+        }
+        let cap: u64 = if cap_str.eq_ignore_ascii_case("max") {
+            u64::MAX
+        } else {
+            cap_str
+                .parse()
+                .map_err(|e| format!("band entry {idx} cap {cap_str:?}: {e}"))?
+        };
+        if let Some(p) = prev
+            && cap <= p
+        {
+            return Err(format!(
+                "band caps must strictly increase; entry {idx} cap {cap} <= previous {p}"
+            ));
+        }
+        prev = Some(cap);
+        out.push((name.to_string(), cap));
+    }
+    if out.is_empty() {
+        return Err("--bands must declare at least one band".into());
+    }
+    Ok(out)
 }
 
 /// keywords whose presence we don't translate yet. some are block openers,
@@ -107,7 +150,8 @@ fn main() -> Result<()> {
         Some(cli.include_layers.into_iter().map(|s| s.to_lowercase()).collect())
     };
     let skeleton = translate_tokens(&tokens, include_layers.as_ref());
-    let yaml = emitter::render(&skeleton);
+    let bands = cli.bands.unwrap_or_else(emitter::default_bands);
+    let yaml = emitter::render(&skeleton, &bands);
 
     match &cli.output {
         Some(p) => fs::write(p, &yaml).with_context(|| format!("writing {}", p.display()))?,
@@ -256,7 +300,7 @@ fn handle_layer(
                 if let Some(arg) = t.args.first() {
                     match arg.parse::<f64>() {
                         Ok(v) if v.is_finite() && v >= 0.0 => {
-                            let n = v as u64;
+                            let n = normalize_n_plus_one(v as u64);
                             if kw == "MINSCALEDENOM" {
                                 _min_scale_denom = Some(n);
                             } else {
@@ -459,10 +503,11 @@ fn parse_scale_token(body: &[Token]) -> Vec<(u64, String)> {
         if t.keyword.eq_ignore_ascii_case("END") {
             break;
         }
-        let min = match t.keyword.parse::<f64>() {
+        let raw = match t.keyword.parse::<f64>() {
             Ok(v) if v.is_finite() && v >= 0.0 => v as u64,
             _ => continue,
         };
+        let min = normalize_n_plus_one(raw);
         if let Some(table) = t.args.first() {
             let cleaned = strip_using(table).trim().trim_matches('"').to_string();
             if !cleaned.is_empty() {
@@ -471,6 +516,22 @@ fn parse_scale_token(body: &[Token]) -> Vec<(u64, String)> {
         }
     }
     out
+}
+
+/// canonicalize MapServer's `MINSCALEDENOM = N+1` half-open convention.
+/// when `n - 1` lands cleanly on a "round" base (10000, 5000, 1000, 500, 100),
+/// snap down. conservative — values not on a round base are left alone.
+fn normalize_n_plus_one(n: u64) -> u64 {
+    if n <= 1 {
+        return n;
+    }
+    const BASES: &[u64] = &[10_000, 5_000, 1_000, 500, 100];
+    for &base in BASES {
+        if (n - 1) >= base && (n - 1).is_multiple_of(base) {
+            return n - 1;
+        }
+    }
+    n
 }
 
 #[derive(Debug, Default)]
@@ -866,6 +927,53 @@ END
         assert_eq!(skel.service_name.as_deref(), Some("x"));
         assert_eq!(skel.layers.len(), 1);
         assert_eq!(skel.layers[0].name, "l1");
+    }
+
+    #[test]
+    fn normalize_n_plus_one_handles_round_bases() {
+        assert_eq!(normalize_n_plus_one(0), 0);
+        assert_eq!(normalize_n_plus_one(1), 1);
+        assert_eq!(normalize_n_plus_one(101), 100);
+        assert_eq!(normalize_n_plus_one(2_501), 2_500);
+        assert_eq!(normalize_n_plus_one(25_001), 25_000);
+        assert_eq!(normalize_n_plus_one(100_001), 100_000);
+        // not on a round base — left alone.
+        assert_eq!(normalize_n_plus_one(2_502), 2_502);
+        assert_eq!(normalize_n_plus_one(123), 123);
+    }
+
+    #[test]
+    fn parse_scale_token_normalizes_n_plus_one() {
+        let src = r#"
+MAP
+  NAME "demo"
+  LAYER
+    NAME "buildings"
+    TYPE POLYGON
+    DATA "geometri FROM buildings_table"
+    SCALETOKEN
+      NAME "scale"
+      VALUES
+        "0" "buildings_0"
+        "25001" "buildings_1"
+      END
+    END
+  END
+END
+"#;
+        let skel = translate(src);
+        let layer = &skel.layers[0];
+        assert_eq!(layer.sources[0].max_denom_exclusive, Some(25_000));
+    }
+
+    #[test]
+    fn parse_bands_arg_validates_strict_increase() {
+        assert!(parse_bands_arg("a:100,b:50").is_err());
+        let ok = parse_bands_arg("a:100,b:200,c:max").unwrap();
+        assert_eq!(
+            ok,
+            vec![("a".into(), 100u64), ("b".into(), 200u64), ("c".into(), u64::MAX),]
+        );
     }
 
     #[test]

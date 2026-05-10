@@ -132,8 +132,8 @@ mod tests {
                     bucket: None,
                     prefix: None,
                     path: Some("/tmp".into()),
-
                     allow_http: false,
+                    ..Default::default()
                 },
                 cache: ArtifactCache {
                     path: "/tmp".into(),

@@ -458,6 +458,7 @@ mod tests {
                     prefix: None,
                     path: Some("/tmp".into()),
                     allow_http: false,
+                    ..Default::default()
                 },
                 cache: mars_config::ArtifactCache {
                     path: "/tmp".into(),

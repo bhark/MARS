@@ -97,10 +97,13 @@ fn summary_from_row_bytes(row: RowBytes) -> Result<RowSummary, SourceError> {
 
 /// `(feature_id, fnv1a64(geom))` packed into a 16-byte key. Shared by
 /// pass-1 summary synthesis and pass-2 full-table streaming so the route
-/// join in `rebuild_binding_from_plan` finds matching keys.
+/// join in `rebuild_binding_from_plan` finds matching keys. `feature_id`
+/// is BE so ascending `feature_id` produces ascending lex byte order;
+/// test fakes that yield rows sorted by `feature_id` then satisfy the
+/// pass-2 cursor's monotonic-advance contract.
 fn synth_row_key(feature_id: u64, geometry: &Bytes) -> SourceRowKey {
     let mut key = [0u8; 16];
-    key[..8].copy_from_slice(&feature_id.to_le_bytes());
+    key[..8].copy_from_slice(&feature_id.to_be_bytes());
     key[8..].copy_from_slice(&fnv1a64(geom_bytes(geometry)).to_le_bytes());
     SourceRowKey::from_bytes(key)
 }
