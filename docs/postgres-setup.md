@@ -2,7 +2,7 @@
 
 The compiler streams logical replication via `pgoutput` from the source PostgreSQL instance. This document is the operator runbook: what the service expects, how to configure the DB, and the failure modes the service surfaces if something is missing.
 
-The technical contract is owned by `SPEC.md` §8.2.1. This document does not override it; it spells out the day-1 setup steps and the day-2 diagnostics.
+This document is the day-1 setup steps and day-2 diagnostics. The authoritative contract is the `mars-source-postgres` adapter and its config schema in `mars-config`.
 
 ## What the service expects
 

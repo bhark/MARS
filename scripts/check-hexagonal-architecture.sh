@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# enforces hexagonal architecture rules (ARCHITECTURE.md §3).
+# enforces hexagonal architecture rules.
 #
 # checks:
 #   1. domain/port crates must not have normal-kind deps on runtime / I/O crates
@@ -244,7 +244,7 @@ fi
 if (( violations > 0 )); then
     echo
     echo "$violations hexagonal architecture violation(s) found." >&2
-    echo "see ARCHITECTURE.md §3 (dependency rule) and §3.1 (async-boundary rule)." >&2
+    echo "domain <- ports <- {adapters, application, interfaces} <- bin; async lives outside domain/ports." >&2
     exit 1
 fi
 

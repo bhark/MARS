@@ -122,5 +122,3 @@ If you find yourself fighting these rules, that is the signal to step back: the 
 ### Licensing
 
 MARS is dual-licensed under [Apache 2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT) at your option. By contributing, you agree to license your contribution under the same terms.
-
-

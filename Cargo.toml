@@ -31,11 +31,8 @@ members = [
 
 # fuzz crate excluded from workspace builds: it requires nightly + libfuzzer
 # linker flags. Run via `cargo +nightly fuzz run <target>`; see fuzz/README.md.
-# topology-simplifier is an operator-driven spike with its own
-# [workspace]; not part of the main build.
 exclude = [
     "fuzz",
-    "harness/topology-simplifier",
 ]
 
 [workspace.package]
