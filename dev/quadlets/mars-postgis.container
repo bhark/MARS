@@ -5,7 +5,7 @@ Description=MARS local PostGIS
 Image=docker.io/postgis/postgis:18-3.6
 ContainerName=mars-postgis
 Network=mars.network
-Volume=postgis-data.volume:/var/lib/postgresql/data
+Volume=postgis-data.volume:/var/lib/postgresql
 Volume=%h/.local/share/mars-dev/postgis/init.sql:/docker-entrypoint-initdb.d/00-init.sql:ro,Z
 Environment=POSTGRES_DB=mars POSTGRES_USER=mars POSTGRES_PASSWORD=mars
 Exec=postgres -c wal_level=logical -c max_replication_slots=8 -c max_wal_senders=8
