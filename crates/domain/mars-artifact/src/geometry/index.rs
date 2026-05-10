@@ -9,10 +9,8 @@ use super::{GeomType, GT_MULTIPOINT, GT_MULTIPOLYGON, GT_MULTILINESTRING, GT_POI
 /// `user_id` is non-key data (a source row may produce multiple features that
 /// share the same user_id). Per-page primary key is positional: the entry's
 /// position in the index (`feature_idx`) is what attrs/class/label sidecars
-/// join against. Stride 33 is unaligned: the index is decoded by copying each
-/// field through `from_le_bytes`. Zero-copy cast to `&[FeatureEntry]` is NOT
-/// supported with the current stride. SPEC §9.3 must be amended in a future
-/// format-bump pass.
+/// join against. Stride 33 is unaligned, so the decoder copies each field
+/// through `from_le_bytes` rather than zero-copy casting to `&[FeatureEntry]`.
 pub(crate) const FEATURE_INDEX_ENTRY_LEN: usize = 8 + 4 * 4 + 1 + 4 + 4;
 
 /// One feature's index entry: user_id (data), approximate bbox, and pointer

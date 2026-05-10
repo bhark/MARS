@@ -53,6 +53,23 @@ Directory region (at `dir_offset`, sorted ascending by feature_idx):
 `count × [u32 feature_idx][u32 byte_offset]` — slot is the per-page primary
 key; user_id is not used here.
 
+### per-row attribute block
+Little-endian, lengths as `u32`:
+
+```
+block  := count:u32, entry*
+entry  := name_len:u32, name:utf8, tag:u8, payload
+tag    := 0 Null | 1 Bool | 2 Int | 3 Float | 4 String
+payload:
+  Null    -> (none)
+  Bool    -> u8 (0 | 1)
+  Int     -> i64 LE
+  Float   -> f64 LE (IEEE 754 bits)
+  String  -> u32 len, utf8 bytes
+```
+
+A single row block is bounded at 64 KiB.
+
 ## class_assignment section (layer artifacts)
 `u32 count`, then `count × [u32 feature_idx][u16 class_index]` sorted
 ascending by feature_idx. Sparse: only slots that match a class appear.

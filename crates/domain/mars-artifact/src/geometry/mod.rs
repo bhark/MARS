@@ -1,10 +1,7 @@
 //! geometry payload v1 codec. see FORMAT.md.
 //!
-//! ZERO-COPY CAVEAT: SPEC §9.3 promises that `geometry_index` can be mmap'd
-//! and zero-copy cast to a typed slice. This is NOT possible with the current
-//! 33-byte stride per `FEATURE_INDEX_ENTRY_LEN` (no field is naturally aligned
-//! after the leading u64). The decoder copies each field via
-//! `from_le_bytes`. SPEC §9.3 must be amended in a future format-bump pass.
+//! the 33-byte feature index stride is unaligned, so the decoder copies each
+//! field via `from_le_bytes` rather than zero-casting to a typed slice.
 
 mod builder;
 mod codec;
