@@ -65,6 +65,6 @@ done
 
 echo "seed: creating publication"
 psql "${PG_DSN}" -v ON_ERROR_STOP=1 \
-    -c "CREATE PUBLICATION ${PUBLICATION} FOR ALL TABLES IN SCHEMA ${SCHEMA}"
+    -c "CREATE PUBLICATION ${PUBLICATION} FOR TABLES IN SCHEMA ${SCHEMA}"
 
 echo "seed: done"
