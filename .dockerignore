@@ -1,0 +1,6 @@
+target/
+.git/
+fuzz/
+dev/
+tests/e2e/k3d/
+*.sql.gz
