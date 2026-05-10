@@ -26,6 +26,7 @@ members = [
     "bin/mars-import-mapfile",
     "bin/mars-compile",
     "bin/mars-bin-shared",
+    "bin/mars-diff-capture",
 ]
 
 # fuzz crate excluded from workspace builds: it requires nightly + libfuzzer
