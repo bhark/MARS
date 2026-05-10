@@ -19,7 +19,7 @@ use mars_types::{ArtifactKey, ContentHash, Manifest};
 /// Errors from the storage subsystem.
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
-    /// The adapter does not implement this method yet (Phase 0 stubs).
+    /// The adapter does not implement this method yet (stub).
     #[error("not implemented: {what}")]
     NotImplemented {
         /// Human-readable name of the unimplemented operation.

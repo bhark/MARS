@@ -11,7 +11,7 @@
 //!     -> per-feature binary search + Stylesheet lookup
 //!     -> DrawOp::Path build (subpath rasterisation in pixel space)
 //!
-//! lazarus phase a's `spatial_index_feature_prep_combined` benches the
+//! `spatial_index_feature_prep_combined` benches the
 //! artifact-internal subset; this is the runtime-level superset, including
 //! the artifact envelope reads and the sidecar join. gate (informational):
 //! ≤ 2 ms warm at 40k features × 500 hits, same-CRS.

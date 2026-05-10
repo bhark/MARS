@@ -32,7 +32,7 @@ use bytes::Bytes;
 use crate::ArtifactError;
 
 /// default node size (children per node). flatbush default; per-binding
-/// configurable from phase b onward.
+/// configurable per binding.
 pub const DEFAULT_NODE_SIZE: u16 = 16;
 
 const MAGIC: &[u8; 4] = b"SPIX";

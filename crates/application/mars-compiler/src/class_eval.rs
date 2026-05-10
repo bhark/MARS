@@ -88,7 +88,7 @@ pub struct LabelSpec<'a> {
 /// at this level, or `None` when its geometry was pruned by the level's
 /// `passes_min_size` filter.
 ///
-/// LAZARUS §Decimation: with `Independent` the label survives even when
+/// Decimation: with `Independent` the label survives even when
 /// the geometry is pruned (prevents floating-anchor-with-no-feature at
 /// low zoom); with `FollowGeometry` the label is dropped alongside.
 #[must_use]

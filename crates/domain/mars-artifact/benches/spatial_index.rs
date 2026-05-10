@@ -1,6 +1,6 @@
 //! microbenches for the packed hilbert r-tree.
 //!
-//! gates phase a of the lazarus substrate pivot. the r-tree query alone
+//! R-tree query benchmarks. the r-tree query alone
 //! must beat a linear walk over the same inputs by ≥ 50× at typical
 //! viewport selectivity on 40k-feature pages.
 
@@ -125,7 +125,7 @@ fn bench_brute_force_baseline(c: &mut Criterion) {
 
 /// linear bbox-filter walk over the GeometryPayload feature index.
 /// SpatialIndex's R-tree is the substitute; this is the comparator the
-/// LAZARUS Phase A gate measures against.
+/// Comparator for the R-tree query benchmark.
 fn bench_geometry_payload_linear_walk(c: &mut Criterion) {
     let mut group = c.benchmark_group("spatial_index_geometry_payload_linear_walk");
     let n = SMALL;
@@ -219,7 +219,7 @@ fn bench_query_dilated_bbox(c: &mut Criterion) {
 ///     -> decode_one_geom against the geometry payload's coord area
 ///     -> binary-search a sorted (feature_id, class_index) array
 ///
-/// target: ≤ 2 ms warm. fail → format reconsideration (lazarus bailout #2).
+/// target: ≤ 2 ms warm. fail → format reconsideration.
 fn bench_feature_prep_combined(c: &mut Criterion) {
     let mut group = c.benchmark_group("spatial_index_feature_prep_combined");
     let n = SMALL;

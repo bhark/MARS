@@ -1,18 +1,12 @@
 //! Port traits for source databases and change feeds.
 //!
 //! `Source` is the read interface used by the compiler to materialise
-//! geometries and attributes per page (page-keyed, LAZARUS Phase C+).
-//! `ChangeFeed` is the subscription interface that produces dirty-page
-//! events (SPEC §8.2). Both are runtime-agnostic - concrete adapters live
-//! in `crates/adapters/mars-source-*`.
+//! geometries and attributes per page. `ChangeFeed` is the subscription
+//! interface that produces dirty-page events (SPEC §8.2). Both are
+//! runtime-agnostic - concrete adapters live in `crates/adapters/mars-source-*`.
 //!
-//! Phase B note: the cell-keyed surface is retired with the v3 substrate
-//! cut; Phase C reintroduces page-keyed `fetch_full_table_streaming` and
-//! `fetch_by_feature_ids` (the latter on `Source` only) plus a
-//! `ChangeEvent` payload that carries the geometry envelope so the
-//! compiler can derive Hilbert keys directly. `CompileSession` exposes a
-//! snapshot-stable `fetch_full_table_streaming` that reuses the pass-1
-//! transaction.
+//! `CompileSession` exposes a snapshot-stable `fetch_full_table_streaming`
+//! that reuses the pass-1 transaction.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
@@ -261,13 +255,12 @@ pub enum AttrValue {
     String(String),
 }
 
-/// Read-side port. Phase C surface (LAZARUS):
+/// Read-side port.
 /// - `fetch_full_table_streaming(binding)` for snapshot bootstrap, and
 /// - `fetch_by_feature_ids(binding, ids)` for incremental page rebuilds
 ///   (`WHERE id_column = ANY($1)`; bag-valued — sources are allowed to
 ///   return multiple rows per id, in which case the compiler treats each
-///   row as a distinct substrate feature for rendering purposes) — added
-///   in Phase C.2.
+///   row as a distinct substrate feature for rendering purposes).
 #[async_trait]
 pub trait Source: Send + Sync + 'static {
     /// Stream every row of `binding`'s table in undefined order. Cursor /

@@ -360,8 +360,8 @@ async fn rebuild_cycle_is_atomic_under_put_fault_injection() {
         .map(|i| row(i, f64::from(i as u32) * 30.0, f64::from(i as u32) * 30.0))
         .collect();
 
-    // first run: how many `put` calls does a clean cycle issue? we use this
-    // as the upper bound on N for fault injection.
+    // first run: how many `put` calls does a clean cycle issue? used as the
+    // upper bound on N for fault injection.
     let baseline_puts = {
         let source = Arc::new(FakeSource::with_rows(initial.clone()));
         let raw = Arc::new(InMemoryStore::new());

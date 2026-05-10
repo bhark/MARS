@@ -234,7 +234,7 @@ fn default_compile_spill_open_file_limit() -> usize {
     256
 }
 
-/// Opportunistic rebalance settings. LAZARUS §Rebalance: rebalance is
+/// Opportunistic rebalance settings. Rebalance is
 /// decoupled from the hot edit path; it runs at most once per binding per
 /// maintenance window or on operator command.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -642,8 +642,8 @@ pub struct Band {
 }
 
 /// Cell grid configuration. **Deprecated:** retained only for backward
-/// compatibility with fixtures from the cell-keyed substrate. The page-keyed
-/// substrate does not consume any of these fields.
+/// compatibility with earlier fixtures. The page-keyed substrate does not
+/// consume any of these fields.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Cells {
     /// Grid kind. Ignored.
@@ -856,8 +856,7 @@ pub struct Layer {
     #[serde(default)]
     pub label: Option<LayerLabel>,
     /// Label-survival policy across decimation levels. Default `Independent`
-    /// (label retained even when geometry is pruned at the level). LAZARUS
-    /// §Decimation.
+    /// (label retained even when geometry is pruned at the level).
     #[serde(default)]
     pub label_survival: LabelSurvival,
 }
@@ -915,7 +914,7 @@ pub struct SourceBinding {
     pub attributes: Vec<String>,
     /// Per-decimation-level decimation rules for this binding. When unset,
     /// the compiler defaults to a single level-0 (raw) materialisation.
-    /// LAZARUS Phase C substrate: the snapshot emits one page set per level,
+    /// The snapshot emits one page set per level,
     /// pruned by `geometry_min_size_m` and simplified to `vertex_tolerance_m`.
     #[serde(default)]
     pub levels: Option<Vec<DecimationLevelConfig>>,
@@ -925,7 +924,7 @@ pub struct SourceBinding {
     pub page_size_target_bytes: Option<u64>,
     /// Cadence (in incremental cycles) of the full-source feature-id
     /// reconciliation pass that heals drift from missed change events
-    /// (slot rewinds, pgoutput gaps). LAZARUS §Page-membership sidecar.
+    /// (slot rewinds, pgoutput gaps). Page-membership sidecar.
     /// `None` resolves to the substrate default (24).
     #[serde(default)]
     pub reconcile_every_cycles: Option<u32>,
@@ -933,14 +932,13 @@ pub struct SourceBinding {
     /// mandated for this binding. Operators see a runbook-pointing warning
     /// when the encoded sidecar exceeds this size. Unit-suffixed byte
     /// literal (`8GiB`). `None` resolves to the substrate default.
-    /// LAZARUS §Bailout 4.
+    /// Exceeding this threshold triggers a warning to consider REPLICA IDENTITY FULL.
     #[serde(default)]
     pub sidecar_size_warn_bytes: Option<String>,
     /// Geometry simplifier strategy applied at decimation time. `None`
     /// resolves to [`SimplifierKind::Naive`] (Douglas-Peucker per part).
-    /// LAZARUS Phase E line 669: the switch is wired now so the Phase 0
-    /// topology-aware simplifier can plug in without further plumbing once
-    /// the spike lands.
+    /// The switch is wired so the topology-aware simplifier can plug in
+    /// without further plumbing once the spike lands.
     #[serde(default)]
     pub simplifier: Option<SimplifierKind>,
 }
@@ -952,7 +950,7 @@ pub const DEFAULT_PAGE_SIZE_TARGET_BYTES: u64 = 5 * 1024 * 1024;
 pub const DEFAULT_RECONCILE_EVERY_CYCLES: u32 = 24;
 
 /// Default sidecar size warning threshold (`8 GiB`). Above this the bailout
-/// in LAZARUS recommends switching the binding to `REPLICA IDENTITY FULL`.
+/// recommends switching the binding to `REPLICA IDENTITY FULL`.
 pub const DEFAULT_SIDECAR_SIZE_WARN_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 
 /// Geometry simplifier strategy. The strategy is per-binding because it
@@ -965,7 +963,7 @@ pub enum SimplifierKind {
     /// parts per feature without considering shared edges between features.
     #[default]
     Naive,
-    /// Topology-aware shared-edge simplification (LAZARUS Phase 0 spike).
+    /// Topology-aware shared-edge simplification (spike).
     /// Currently unimplemented; selecting this variant is rejected at
     /// config validation with [`ConfigError::Invalid`].
     TopologyAware,
@@ -1011,7 +1009,7 @@ impl SourceBinding {
 }
 
 /// Per-decimation-level rules driving page emission for one binding.
-/// LAZARUS §244-256: each level produces a render set (geometry pruned by
+/// Each level produces a render set (geometry pruned by
 /// `geometry_min_size_m`, simplified to `vertex_tolerance_m`) and a label
 /// set (candidates retained at or above `label_min_priority`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

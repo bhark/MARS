@@ -1,8 +1,8 @@
 //! atomic manifest publisher (SPEC §8.5).
 //!
 //! writes `manifests/v{N}.json` first, then swaps `manifests/current` to point
-//! at it. each write is a temp-file-in-same-directory + fsync + rename. if we
-//! die between the body write and the pointer swap, `current` still references
+//! at it. each write is a temp-file-in-same-directory + fsync + rename. if the
+//! process dies between the body write and the pointer swap, `current` still references
 //! the previous version - never a partial.
 
 use std::path::{Path, PathBuf};
@@ -102,7 +102,7 @@ impl FsPublisher {
             .await
             .map_err(|e| StoreError::Backend(format!("read manifest {pointer}: {e}")))?;
         // exact-match version gate: v3 is a clean cut from v1/v2, no
-        // tolerance for "accept anything <= max" — see LAZARUS Phase B.
+        // tolerance for "accept anything <= max" — see manifest version handling.
         // peek format_version before the full decode so structural drift
         // in older payloads surfaces as UnsupportedManifestVersion rather
         // than as a generic serde error.

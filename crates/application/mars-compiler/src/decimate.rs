@@ -1,6 +1,6 @@
 //! per-level decimation filters for the snapshot / rebuild paths.
 //!
-//! LAZARUS §Decimation: each level emits a render set (geometry pruned by
+//! Decimation: each level emits a render set (geometry pruned by
 //! `geometry_min_size_m` and simplified to `vertex_tolerance_m`) and a label
 //! set (kept above `label_min_priority`, with survival across levels driven
 //! by the layer's `LabelSurvival` policy).
@@ -34,15 +34,15 @@ pub fn passes_min_size_bbox(bbox: [f32; 4], min_size_m: f64) -> bool {
 }
 
 /// keep label candidates whose `priority` is at or above `min_priority`.
-/// matches LAZARUS §Decimation `label_min_priority` semantics.
+/// matches decimation `label_min_priority` semantics.
 #[must_use]
 pub fn passes_label_priority(priority: u16, min_priority: u32) -> bool {
     u32::from(priority) >= min_priority
 }
 
 /// dispatch entry. selects the simplifier strategy declared on the binding.
-/// `TopologyAware` is rejected at config validation (LAZARUS Phase E line
-/// 669); reaching it here is a config-validation bug.
+/// `TopologyAware` is rejected at config validation (not yet implemented);
+/// reaching it here is a config-validation bug.
 #[must_use]
 pub fn simplify(geom: &GeomKind, tolerance_m: f64, kind: SimplifierKind) -> GeomKind {
     match kind {

@@ -11,8 +11,8 @@
 //! supported by every heap-backed relation; the page planner uses the key as
 //! the terminal sort tier after `(hilbert_key, feature_id)` and pass-2
 //! buckets streamed rows into planned pages by joining on it. A single
-//! sequential scan replaces the historical per-page `WHERE id = ANY($1)`
-//! pattern, whose heap-walk cost dominated compile time on large bindings.
+//! sequential scan avoids per-page `WHERE id = ANY($1)` round-trips,
+//! whose heap-walk cost dominated compile time on large bindings.
 
 use async_trait::async_trait;
 use deadpool_postgres::Object;

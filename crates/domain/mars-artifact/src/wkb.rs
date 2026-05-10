@@ -62,7 +62,7 @@ pub fn wkb_bbox(wkb: &[u8]) -> Result<Bbox, WkbError> {
 /// and consistent with the Hilbert keying used by the compiler — the curve
 /// is parameterised over the binding's combined bbox extent, so the
 /// centroid only ever needs to be a stable point inside the geometry's
-/// envelope, not an area-weighted true centroid. LAZARUS Phase C.
+/// envelope, not an area-weighted true centroid.
 pub fn wkb_centroid(wkb: &[u8]) -> Result<[f64; 2], WkbError> {
     let bbox = wkb_bbox(wkb)?;
     Ok([(bbox.min_x + bbox.max_x) * 0.5, (bbox.min_y + bbox.max_y) * 0.5])

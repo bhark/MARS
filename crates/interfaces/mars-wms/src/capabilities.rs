@@ -1,7 +1,7 @@
 //! WMS 1.3.0 GetCapabilities document. SPEC §12.
 //!
-//! We render a minimal, valid 1.3.0 capabilities body; format conformance is a
-//! Phase 2 concern. The output is built per manifest swap so newly published
+//! Renders a minimal, valid 1.3.0 capabilities body; format conformance is a
+//! future concern. The output is built per manifest swap so newly published
 //! layer bboxes show up without restarting.
 
 use std::collections::HashMap;
@@ -70,10 +70,10 @@ pub fn capabilities_xml(cfg: &Config, manifest: &Manifest) -> Result<String, Wms
     w.write_event(Event::Start(BytesStart::new("Layer"))).map_err(xml_err)?;
     text_element(&mut w, "Title", &cfg.service.title)?;
 
-    // canonical-only crs advertisement: we emit bbox values without a per-crs
-    // transform, so listing every allowlist entry would lie about what's
-    // available. once we round-trip BBOX through the reprojection allowlist
-    // we can advertise the full set again.
+    // canonical-only crs advertisement: bbox values are emitted without a
+    // per-crs transform, so listing every allowlist entry would lie about
+    // what's available. once BBOX round-trips through the reprojection
+    // allowlist the full set can be advertised again.
     text_element(&mut w, "CRS", cfg.source.native_crs.as_str())?;
 
     if let Some(bb) = root_bbox {
@@ -115,9 +115,8 @@ pub fn capabilities_xml(cfg: &Config, manifest: &Manifest) -> Result<String, Wms
     })
 }
 
-/// per-layer bbox from config. phase-b drops the cell-walking unioner with the
-/// substrate cut; phase-d re-derives bboxes from the v3 page entries via the
-/// per-binding `combined_bbox` summary plus the layer-to-binding mapping.
+/// per-layer bbox from config. bboxes are derived from the per-binding
+/// `combined_bbox` summary plus the layer-to-binding mapping.
 fn derive_layer_bboxes(cfg: &Config, _manifest: &Manifest) -> HashMap<LayerId, Bbox> {
     let mut out: HashMap<LayerId, Bbox> = HashMap::new();
     for layer in &cfg.layers {
@@ -288,7 +287,7 @@ layers:
         let cfg = minimal_cfg();
         let m = Manifest::empty(1, cfg.service.name.clone());
         let xml = capabilities_xml(&cfg, &m).unwrap();
-        // we only emit values in the canonical crs, so the advertised CRS
+        // only values in the canonical crs are emitted, so the advertised CRS
         // list and BoundingBox CRS must reflect only that.
         assert!(xml.contains("<CRS>EPSG:25832</CRS>"));
         assert!(!xml.contains("<CRS>EPSG:4326</CRS>"));

@@ -63,7 +63,7 @@ pub struct RebuildOutcome {
     /// manifest with the same key.
     pub replacement_pages: Vec<PageEntry>,
     /// Pages that became empty after the rebuild and should be dropped
-    /// from the manifest. LAZARUS: "a missing page is a missing page;
+    /// from the manifest. A missing page is a missing page;
     /// no tombstones."
     pub dropped_pages: Vec<mars_types::PageKey>,
     /// Class sidecars rewritten this cycle.
@@ -552,7 +552,7 @@ async fn rebuild_binding_incremental(
             binding = binding_plan.binding_id.as_str(),
             size_bytes = sidecar_size,
             threshold_bytes = sidecar_warn_bytes,
-            "page-membership sidecar exceeds warning threshold; consider REPLICA IDENTITY FULL for this binding (LAZARUS bailout 4)"
+            "page-membership sidecar exceeds warning threshold; consider REPLICA IDENTITY FULL for this binding"
         );
         deps.metrics
             .inc_compiler_sidecar_threshold_warning(binding_plan.binding_id.as_str());
@@ -561,7 +561,7 @@ async fn rebuild_binding_incremental(
     let sidecar_key = membership_sidecar_object_key(binding_plan.binding_id.as_str(), &sidecar_hash)?;
     deps.store.put(&sidecar_key, sidecar_bytes).await?;
 
-    // 6. compute refreshed level metadata. for now we keep prior level
+    // 6. compute refreshed level metadata. for now keep prior level
     //    metadata's combined_bbox + page count, but recompute the hilbert
     //    range table per level by walking the manifest's pages (prior +
     //    replacement set, minus drops). that requires the cycle entry
@@ -1242,7 +1242,7 @@ pub async fn rebuild_binding_from_plan<'a>(
             binding = binding_plan.binding_id.as_str(),
             size_bytes = sidecar_size,
             threshold_bytes = binding_plan.sidecar_size_warn_bytes,
-            "page-membership sidecar exceeds warning threshold; consider REPLICA IDENTITY FULL for this binding (LAZARUS bailout 4)"
+            "page-membership sidecar exceeds warning threshold; consider REPLICA IDENTITY FULL for this binding"
         );
         deps.metrics
             .inc_compiler_sidecar_threshold_warning(binding_plan.binding_id.as_str());

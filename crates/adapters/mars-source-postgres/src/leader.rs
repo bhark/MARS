@@ -1,7 +1,7 @@
 //! `LeaderLock` impl backed by postgres session-scoped advisory locks.
 //!
 //! `pg_try_advisory_lock(int8)` is non-blocking and held for the lifetime of
-//! the session. We `take` a connection out of the deadpool so it is detached
+//! the session. Takes a connection out of the deadpool so it is detached
 //! from the pool entirely; on guard drop, the wrapped `ClientWrapper` is
 //! dropped, which aborts the connection task, closing the session and
 //! releasing the lock at the server. Belt-and-braces: we also try

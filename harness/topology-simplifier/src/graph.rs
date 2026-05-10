@@ -439,7 +439,7 @@ mod tests {
         // on P2 is one undirected edge {(10,0),(10,10)}, on P1 it is two
         // edges {(10,0),(10,5)} and {(10,5),(10,10)}. so the edge sets don't
         // align and there is NO shared arc. seam-violation territory; here
-        // we just assert the topology reflects it.
+        // assert the topology reflects it.
         let p1 = poly(
             1,
             vec![

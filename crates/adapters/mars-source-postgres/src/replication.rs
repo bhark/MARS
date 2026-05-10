@@ -79,9 +79,8 @@ pub(crate) async fn subscribe(
     transport::run(cfg, topology).await
 }
 
-// phase-c: cells_for_bbox retired with the v3 substrate cut. the change-feed
-// translator now surfaces the row's bbox/centroid in the ChangeEvent payload,
-// from which the compiler derives the affected HilbertKey directly.
+// change-feed translator surfaces the row's bbox/centroid in the ChangeEvent
+// payload, from which the compiler derives the affected HilbertKey directly.
 
 /// Cache mapping pgoutput relation oid to the `CollectionTopology` plus
 /// the index of the geometry column inside the relation's column list. The
@@ -134,5 +133,5 @@ mod tests {
         assert!(t.find("public", "buildings").is_none());
     }
 
-    // phase-c: cells_for_bbox tests retired with the v3 substrate cut.
+    // cells_for_bbox tests retired.
 }

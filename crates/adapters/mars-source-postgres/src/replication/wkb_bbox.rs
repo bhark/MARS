@@ -1,9 +1,8 @@
 //! Thin shim around `mars_artifact::wkb` for the pgoutput translator.
 //!
-//! Phase G removes this module outright and the translator imports
-//! `mars_artifact::wkb` directly. We keep the shim through the rest of
-//! Phase C so the translator's call sites and any remaining replication
-//! tests do not churn alongside the substrate cut.
+//! Future work removes this module outright and the translator imports
+//! `mars_artifact::wkb` directly. The shim stays until the migration
+//! stabilises so call sites and replication tests do not churn.
 
 pub(crate) use mars_artifact::{wkb_bbox as bbox_of, wkb_centroid as centroid_of};
 

@@ -108,9 +108,9 @@ fn write_service_provider<W: std::io::Write>(w: &mut Writer<W>, cfg: &Config) ->
 }
 
 fn write_operations_metadata<W: std::io::Write>(w: &mut Writer<W>) -> Result<(), WmtsError> {
-    // we list the operations we serve but do not advertise OnlineResource
-    // URLs - the bin doesn't know its public hostname. clients fall back to
-    // the request URL they reached us on, which is the common practice.
+    // list the operations served but do not advertise OnlineResource URLs -
+    // the bin doesn't know its public hostname. clients fall back to the
+    // request URL they reached the service on, which is the common practice.
     w.write_event(Event::Start(BytesStart::new("ows:OperationsMetadata")))
         .map_err(xml_err)?;
     for op in ["GetCapabilities", "GetTile"] {

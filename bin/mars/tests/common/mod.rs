@@ -89,16 +89,8 @@ impl fmt::Display for Channels {
 pub enum DiffError {
     DecodeActual(String),
     DecodeGolden(String),
-    DimensionMismatch {
-        aw: u32,
-        ah: u32,
-        gw: u32,
-        gh: u32,
-    },
-    FormatMismatch {
-        a: Channels,
-        g: Channels,
-    },
+    DimensionMismatch { aw: u32, ah: u32, gw: u32, gh: u32 },
+    FormatMismatch { a: Channels, g: Channels },
     UnsupportedColor(String),
 }
 
@@ -156,9 +148,7 @@ fn decode_png(bytes: &[u8]) -> Result<Decoded, String> {
     let mut reader = decoder.read_info().map_err(|e| format!("png header: {e}"))?;
     let info = reader.info().clone();
     let mut buf = vec![0u8; reader.output_buffer_size().unwrap_or(0)];
-    let frame = reader
-        .next_frame(&mut buf)
-        .map_err(|e| format!("png frame: {e}"))?;
+    let frame = reader.next_frame(&mut buf).map_err(|e| format!("png frame: {e}"))?;
     buf.truncate(frame.buffer_size());
     if info.bit_depth as u8 != 8 {
         return Err(format!("unsupported png bit depth: {:?}", info.bit_depth));
@@ -179,9 +169,7 @@ fn decode_png(bytes: &[u8]) -> Result<Decoded, String> {
 fn decode_jpeg(bytes: &[u8]) -> Result<Decoded, String> {
     let mut dec = zune_jpeg::JpegDecoder::new(std::io::Cursor::new(bytes));
     let pixels = dec.decode().map_err(|e| format!("jpeg decode: {e}"))?;
-    let info = dec
-        .info()
-        .ok_or_else(|| "jpeg decode produced no info".to_string())?;
+    let info = dec.info().ok_or_else(|| "jpeg decode produced no info".to_string())?;
     let cs = dec.output_colorspace();
     let channels = match cs {
         Some(zune_jpeg::zune_core::colorspace::ColorSpace::RGB) => Channels::Rgb,
@@ -274,8 +262,10 @@ pub fn diff_pngs_with_radius(
                 let off = idx * stride;
                 let pa = &a.pixels[off..off + stride];
                 let pg = &g.pixels[off..off + stride];
-                let a_match_in_g = neighborhood_has_match(pa, &g.pixels, width, height, x, y, radius, stride, tolerance);
-                let g_match_in_a = neighborhood_has_match(pg, &a.pixels, width, height, x, y, radius, stride, tolerance);
+                let a_match_in_g =
+                    neighborhood_has_match(pa, &g.pixels, width, height, x, y, radius, stride, tolerance);
+                let g_match_in_a =
+                    neighborhood_has_match(pg, &a.pixels, width, height, x, y, radius, stride, tolerance);
                 if !(a_match_in_g && g_match_in_a) {
                     count = count.saturating_add(1);
                 }

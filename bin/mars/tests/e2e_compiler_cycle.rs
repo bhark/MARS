@@ -1,4 +1,4 @@
-//! Step 12 (LAZARUS Phase C closing gate 1): end-to-end change-feed cycle.
+//! End-to-end change-feed cycle.
 //!
 //! Boots a postgis container with logical replication enabled, bootstraps
 //! a small fixture, then drives one explicit cycle:

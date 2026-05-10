@@ -1,8 +1,7 @@
 //! tag-prefixed binary encoding for a row's attribute block.
 //!
-//! TODO: replace with apache arrow ipc per SPEC §9.3. lives next to the
-//! geometry codec because both encode artifact-side payloads; moving it
-//! later is purely a port-vocabulary change.
+//! TODO: Arrow IPC per SPEC §9.3. Currently lives with the geometry codec
+//! as both encode artifact payloads.
 //!
 //! on-disk contract (little-endian, lengths as `u32`):
 //!   block := count:u32, entry*

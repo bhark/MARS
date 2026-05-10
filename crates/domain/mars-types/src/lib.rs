@@ -498,14 +498,14 @@ impl ImageFormat {
     }
 }
 
-/// manifest v3 data-transfer object. SPEC §8.5 / §9.2 (post-LAZARUS).
+/// manifest v3 data-transfer object. SPEC §8.5 / §9.2.
 ///
 /// substrate is `(binding × decimation_level × page)`. each render-time page
 /// lookup is a binary search of `pages` (sorted by `(binding_id, level,
 /// hilbert_range.0)`) plus a bounded linear scan for spatial-bbox hits.
 /// `format_version` is bumped on incompatible changes to this struct; v3
 /// readers reject anything other than the current value (no floor, no
-/// "accept `<= max`" — that contract was retired with the substrate cut).
+/// "accept `<= max`" — that contract was retired).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Manifest {
     /// On-disk format version of this manifest envelope. Exact-match only.

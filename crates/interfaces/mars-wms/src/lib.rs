@@ -1,6 +1,6 @@
 //! WMS 1.3.0 interface adapter. SPEC §12.
 //!
-//! Phase 0 covers `GetMap` and `GetCapabilities` only. SLD / SLD_BODY,
+//! Covers `GetMap` and `GetCapabilities` only. SLD / SLD_BODY,
 //! GetFeatureInfo and GetLegendGraphic are deferred.
 
 #![forbid(unsafe_code)]

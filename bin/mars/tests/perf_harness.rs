@@ -160,7 +160,7 @@ async fn parcels_mini_perf_harness() -> Result<()> {
 
     let cases = cases();
     let mut report = String::new();
-    report.push_str("# MARS Phase F host-side §19 measurements\n\n");
+    report.push_str("# MARS host-side performance measurements\n\n");
     report.push_str(&format!(
         "Fixture: parcels-mini. Latency: {LATENCY_SAMPLES} samples after {LATENCY_WARMUP} warmup.\n"
     ));
@@ -209,7 +209,7 @@ async fn parcels_mini_perf_harness() -> Result<()> {
     report.push_str("- GetMap p50 warm, country-wide z=8.\n");
     report.push_str("- GetTile p50 cache hit / miss (final-tile cache; needs WMTS path coverage).\n");
     report.push_str("- GetFeatureInfo p50 (parcels-mini fixture has GFI disabled by default).\n");
-    report.push_str("- Compile change-to-publish: see Phase C close-out (~279 ms / 100k features × 1k events).\n");
+    report.push_str("- Compile change-to-publish: see compiler close-out (~279 ms / 100k features × 1k events).\n");
 
     eprintln!("{report}");
     if let Some(path) = std::env::var_os("MARS_PERF_REPORT") {

@@ -10,7 +10,7 @@
 //!
 //! Substrate-shape correctness gate; size is moderate (FEATURE_COUNT below)
 //! to keep CI runtime under a minute. Larger soak-test loads are
-//! operator-driven, not CI-driven, per the LAZARUS C.1 risk note.
+//! operator-driven, not CI-driven.
 
 #![cfg(feature = "e2e")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]

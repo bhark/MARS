@@ -140,7 +140,7 @@ pub enum CompilerError {
     /// Per-page hydrated working set crossed the configured ceiling. The
     /// rebuild path fetches a bounded feature-id set per page and asserts
     /// the hydrated rows stay under `compile_page_working_set_bytes`.
-    /// LAZARUS bailout 5: lift the budget, or split the binding.
+    /// Bailout: lift the budget, or split the binding.
     #[error(
         "compile working-set exceeded: binding {binding}{} accumulated {observed_bytes} bytes \
          (budget {budget_bytes}). lift compiler.compile_page_working_set_bytes or split the binding.",
@@ -320,8 +320,7 @@ impl Compiler {
     /// `batches` from a [`mars_source::ChangeSubscription`] and acking
     /// downstream once this returns.
     ///
-    /// LAZARUS Phase C.2.c: this is the cycle entry point for the
-    /// page-keyed substrate.
+    /// Cycle entry point for the page-keyed substrate.
     pub async fn run_cycle_once(&self, batches: Vec<ChangeBatch>) -> Result<u64, CompilerError> {
         let _guard = self.acquire_leader().await?;
         self.apply_cycle(batches, &CancellationToken::new()).await

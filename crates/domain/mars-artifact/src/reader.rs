@@ -238,7 +238,7 @@ impl ArtifactReader {
     }
 
     /// zero-copy slice of an uncompressed section payload by kind. v1 rejects
-    /// any section flagged compressed (reserved for phase 1).
+    /// any section flagged compressed (reserved for future use).
     pub fn section(&self, kind: SectionKind) -> Result<Bytes, ArtifactError> {
         let target = kind.as_u16();
         let entry = self

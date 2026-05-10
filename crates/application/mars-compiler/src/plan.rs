@@ -108,14 +108,14 @@ pub struct BindingPlan {
     /// path emits a runbook-pointing warning. Resolved from
     /// [`mars_config::SourceBinding::sidecar_size_warn_bytes`] via
     /// [`mars_config::SourceBinding::resolved_sidecar_size_warn_bytes`].
-    /// LAZARUS bailout 4.
+    /// Exceeding this threshold triggers a warning to consider REPLICA IDENTITY FULL.
     pub sidecar_size_warn_bytes: u64,
     /// Cadence (in incremental cycles) of the full feature-id reconciliation
-    /// pass. LAZARUS §Page-membership sidecar.
+    /// pass. Page-membership sidecar.
     pub reconcile_every_cycles: u32,
     /// Geometry simplifier strategy applied to every page on snapshot and
     /// rebuild. Resolved from
-    /// [`mars_config::SourceBinding::resolved_simplifier`]. LAZARUS Phase E.
+    /// [`mars_config::SourceBinding::resolved_simplifier`].
     pub simplifier: SimplifierKind,
 }
 
@@ -711,7 +711,7 @@ mod tests {
     /// load -> validate -> propagate. exercises that per-level decimation
     /// values declared on a binding survive the full pipeline into the
     /// compiler's BindingPlan in declaration order. closes the gap noted
-    /// during the LAZARUS Phase E audit (line 671) where no test covered
+    /// during the decimation audit where no test covered
     /// the propagation end-to-end.
     #[test]
     fn binding_plan_carries_decimation_levels_in_order() {

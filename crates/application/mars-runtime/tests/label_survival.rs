@@ -1,4 +1,4 @@
-//! runtime label-survival audit (LAZARUS Phase E line 670). orphan label
+//! runtime label-survival audit. orphan label
 //! candidates - slot-bearing labels whose `feature_idx` is out of range for
 //! the page's geometry section - are kept under `Independent` and dropped
 //! under `FollowGeometry`. the runtime is the defensive layer here; the

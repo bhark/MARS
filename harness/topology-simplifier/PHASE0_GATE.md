@@ -1,4 +1,4 @@
-# Phase 0 gate
+# Gate findings
 
 This is the spike's findings file. The harness's `GATE: PASS/FAIL` line
 evaluates the criteria in the *Criteria* section below; the *Findings*
@@ -70,8 +70,7 @@ The integration follow-up plan must include three workstreams, not one:
    rebuild's neighbourhood semantics; drop the
    `SimplifierKind::TopologyAware` config rejection.
 
-2. **Bring the spilled external-sort backend forward** (LAZARUS:775-786,
-   currently deferred). 8.5 GiB peak RSS on the reference fixture is
+2. **Bring the spilled external-sort backend forward** (currently deferred). 8.5 GiB peak RSS on the reference fixture is
    already past the 4 GiB working-set ceiling; cadastre-scale bindings
    won't fit otherwise. The integration cannot land without it.
 

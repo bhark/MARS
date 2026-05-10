@@ -33,7 +33,7 @@ use mars_store_s3::{S3Config, S3Publisher, S3Store};
 pub async fn build_pg_source(cfg: &Config, topology: Option<ReplicationTopology>) -> Result<Arc<PgSource>> {
     if cfg.source.kind != "postgis" {
         return Err(anyhow!(
-            "source.type='{}' is not supported in Phase 0; only 'postgis'",
+            "source.type='{}' is not supported; only 'postgis' is implemented",
             cfg.source.kind
         ));
     }

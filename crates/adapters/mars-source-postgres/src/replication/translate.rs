@@ -217,7 +217,7 @@ fn extract_geom_bytes<'a>(tuple: &'a Tuple<'a>, idx: usize) -> Result<Cow<'a, [u
 
 fn envelope_from_tuple(tuple: &Tuple<'_>, geom_idx: usize) -> Result<GeometryEnvelope, SourceError> {
     let geom = extract_geom_bytes(tuple, geom_idx)?;
-    // todo phase g: consolidate this duplicate wkb walker with mars-artifact.
+    // TODO: consolidate this duplicate wkb walker with mars-artifact.
     let bbox = bbox_of(&geom).map_err(|e| SourceError::backend("wkb bbox", e))?;
     let centroid = centroid_of(&geom).map_err(|e| SourceError::backend("wkb centroid", e))?;
     Ok(GeometryEnvelope { centroid, bbox })

@@ -9,7 +9,7 @@
 //! `flush_page` / `emit_layer_sidecars` so split/merge results commit through
 //! the same [`crate::render::RebuildOutcome`] shape as a regular cycle.
 //!
-//! LAZARUS: opportunistic, not tightly tuned. the goal is to keep page sizes
+//! Opportunistic, not tightly tuned. the goal is to keep page sizes
 //! within an order of magnitude of target without the heuristics ever
 //! becoming load-bearing for cycle latency.
 
@@ -24,7 +24,7 @@ pub const SIZE_HI_FACTOR: f64 = 1.5;
 pub const BBOX_DILATION_FACTOR: f64 = 4.0;
 
 /// per-dimension cell scale used as a proxy for "expected hilbert-cell area".
-/// LAZARUS plan note: `cell_area ≈ (hi - lo) / 2^32 * combined_bbox_area`.
+/// `cell_area ≈ (hi - lo) / 2^32 * combined_bbox_area`.
 const HILBERT_CELL_DENOM: f64 = 4_294_967_296.0; // 2^32
 
 /// one rebalance action against a (binding × level).

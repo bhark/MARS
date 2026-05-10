@@ -36,9 +36,8 @@ pub use model::*;
 pub use mars_style::{LabelStyle, LabelSurvival, Placement, PolygonStrategy};
 
 mars_types::impl_string_newtype!(
-    /// Scale-band identifier used in binding configuration (post-LAZARUS
-    /// Phase B). No longer a substrate axis; binding configs name a
-    /// `ScaleBand` to declare which decimation level applies for which
+    /// Scale-band identifier used in binding configuration. Binding configs
+    /// name a `ScaleBand` to declare which decimation level applies for which
     /// scale window. WMTS TMS uses its own `mars_grid::BandName` instead.
     pub ScaleBand
 );
@@ -512,7 +511,7 @@ fn resolve_band_routing(config: &mut Config) -> Result<(), ConfigError> {
     }
 
     for layer in &mut config.layers {
-        // collect (band, idx) pairs so we can index mutably later.
+        // collect (band, idx) pairs for mutable indexing later.
         let mut by_band: std::collections::BTreeMap<String, Vec<usize>> = std::collections::BTreeMap::new();
         for (idx, source) in layer.sources.iter().enumerate() {
             if let Some(band) = source.band.clone() {
@@ -584,7 +583,7 @@ pub fn config_dir(path: &Path) -> PathBuf {
 }
 
 /// Reject `from:` strings that are not a single change-feed-mappable table.
-/// LAZARUS §39-41 documents the v1 restriction: a binding must point at one
+/// v1 restriction: a binding must point at one
 /// real table or a single-table view so pgoutput events map to a single
 /// feature_id. Multi-table joins, embedded SELECTs, or compound DDL fragments
 /// are rejected here, far from the snapshot path that would otherwise fail
@@ -640,9 +639,9 @@ fn validate_binding_levels(layer: &LayerId, idx: usize, binding: &SourceBinding)
             "layer {layer} source[{idx}] sidecar_size_warn_bytes must be > 0"
         )));
     }
-    // LAZARUS Phase E line 669: the switch is wired now but `TopologyAware`
-    // is the Phase 0 spike, not yet implemented. Reject explicitly so
-    // operators see a clear error rather than a silent fallback to DP.
+    // Topology-aware simplification is not yet implemented. `TopologyAware`
+    // is the spike target, not yet ready. Reject explicitly so operators see
+    // a clear error rather than a silent fallback to naive DP.
     if matches!(binding.simplifier, Some(SimplifierKind::TopologyAware)) {
         return Err(ConfigError::Invalid(format!(
             "layer {layer} source[{idx}] simplifier: topology_aware is not yet implemented; \

@@ -186,7 +186,7 @@ pub enum PolygonStrategy {
     InnerSkeleton,
 }
 
-/// Per-layer label-survival policy across decimation levels. LAZARUS §Decimation:
+/// Per-layer label-survival policy across decimation levels.
 /// at low zoom we may prune a feature's geometry but still want its label. The
 /// default `Independent` keeps the label candidate alive even when geometry is
 /// dropped at this level (prevents the floating town-name regression).

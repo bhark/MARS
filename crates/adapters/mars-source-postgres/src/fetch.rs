@@ -1,9 +1,8 @@
 //! Per-call SQL builder.
 //!
-//! Phase B note: cell-keyed `fetch_cell` / `fetch_cells` were retired with
-//! the v3 substrate cut. Phase C reintroduces page-keyed entry points
-//! (`fetch_full_table_streaming` for bootstrap, `fetch_by_feature_ids` for
-//! incremental rebuild) on top of the same SQL builder + row decoder.
+//! Page-keyed entry points (`fetch_full_table_streaming` for bootstrap,
+//! `fetch_by_feature_ids` for incremental rebuild) on top of the same SQL
+//! builder + row decoder.
 
 #![allow(dead_code)]
 

@@ -1,7 +1,7 @@
 //! PostgreSQL adapter for `mars-source`.
 //!
 //! Two strategies behind the same `ChangeFeed` trait:
-//! - `pgoutput` logical decoding (default; SPEC §8.2.1) — Phase 1.
+//! - `pgoutput` logical decoding (default; SPEC §8.2.1).
 //! - Polling fallback under the `polling` feature (SPEC §8.2.2; second-class).
 //!
 //! This crate also owns the lowering of `mars-expr::Expr` to a parameterised
@@ -294,6 +294,4 @@ pub enum SqlParam {
     Text(String),
 }
 
-// phase-c: cell-keyed e2e tests retired with the v3 substrate cut. Phase D
-// reintroduces page-keyed e2e coverage in `crates/bin/mars` under the
-// `e2e` feature.
+// page-keyed e2e coverage lives in `crates/bin/mars` under the `e2e` feature.

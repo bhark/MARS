@@ -1,4 +1,4 @@
-# topology-simplifier (Phase 0 spike)
+# topology-simplifier (spike)
 
 Operator-driven harness for evaluating mapshaper-style topology-aware
 polygon simplification on a local polygon fixture (e.g. a cadastre dump).

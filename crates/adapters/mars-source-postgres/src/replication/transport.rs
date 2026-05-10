@@ -35,7 +35,7 @@ use super::{RelationCache, ReplicationTopology, pgoutput};
 use crate::PgConfig;
 
 /// Per-commit batch buffer size handed to the consumer-side `mpsc`.
-/// pgwire-replication maintains its own buffer in front of this; we keep
+/// pgwire-replication maintains its own buffer in front of this; keep
 /// ours small because the compiler drives a windowed batching loop and
 /// therefore does not benefit from deep buffering here.
 const BATCH_CHANNEL_CAPACITY: usize = 64;
@@ -348,7 +348,7 @@ fn build_replication_config(cfg: &PgConfig) -> Result<ReplicationConfig, SourceE
         publication: cfg.publication.clone(),
         // Lsn(0) tells the server to resume from the slot's confirmed_flush_lsn.
         // SPEC §8.3 ack semantics: this is what makes replay-on-reconnect work
-        // without us needing to remember the cursor anywhere except the slot.
+        // without needing to remember the cursor anywhere except the slot.
         start_lsn: Lsn::ZERO,
         stop_at_lsn: None,
         buffer_events: WORKER_EVENT_BUFFER,

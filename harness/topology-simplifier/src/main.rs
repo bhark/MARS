@@ -17,7 +17,7 @@ mod verify;
 use timing::{StageTimings, fmt_stage_normalised, peak_rss_kib};
 
 #[derive(Debug, Parser)]
-#[command(name = "topology-simplifier", about = "Phase 0 topology-aware simplification spike")]
+#[command(name = "topology-simplifier", about = "topology-aware simplification spike")]
 struct Args {
     /// path to TSV (id\thex_ewkb) polygon fixture dump
     #[arg(long)]

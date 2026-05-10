@@ -1,4 +1,4 @@
-//! Step 13 (LAZARUS Phase C closing gate 2): partial-update cycle timing.
+//! Partial-update cycle timing.
 //!
 //! Bootstraps a 100k-feature production stand-in fixture, then drives
 //! one cycle over a synthetic 1k-event edit batch (insert/update/delete
@@ -37,7 +37,7 @@ const SLOT: &str = "mars_timing_slot";
 const PUB: &str = "mars_timing_pub";
 const FIXTURE_ROWS: i64 = 100_000;
 const EDIT_BATCH: i64 = 1_000;
-/// Hard ceiling per LAZARUS gate.
+/// Hard ceiling for partial-update cycle timing.
 const GATE_BUDGET: Duration = Duration::from_secs(5 * 60);
 
 #[tokio::test(flavor = "multi_thread")]

@@ -1,6 +1,6 @@
 //! WMS 1.3.0 KVP request parsing.
 //!
-//! Phase 0 covers `GetMap` and `GetCapabilities`. Other request kinds reject
+//! Covers `GetMap` and `GetCapabilities`. Other request kinds reject
 //! with `WmsError::NotImplemented` so they round-trip to an XML exception in
 //! the edge.
 //!
@@ -211,9 +211,9 @@ fn parse_format(raw: &str) -> Result<ImageFormat, WmsError> {
 /// order, BBOX is `miny,minx,maxy,maxx` (lat,lon ordering). For CRSes with
 /// east/north axis order it is the natural `minx,miny,maxx,maxy`.
 ///
-/// Phase 0 ships a small allowlist; EPSG:4326 is the canonical lat/lon case.
+/// Ships a small CRS allowlist; EPSG:4326 is the canonical lat/lon case.
 /// EPSG:25832 and EPSG:3857 are east/north. Adding more is a one-line edit;
-/// upstream PROJ axis introspection lands with reprojection in Phase 1.
+/// upstream PROJ axis introspection lands with reprojection in a future release.
 fn is_lat_lon_order(crs: &str) -> bool {
     matches!(crs, "EPSG:4326" | "urn:ogc:def:crs:EPSG::4326")
 }

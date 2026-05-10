@@ -88,9 +88,9 @@ enum Tool {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // tracing-subscriber's global registry can only be installed once; we read
+    // tracing-subscriber's global registry can only be installed once; read
     // observability settings from the config when a service mode is selected,
-    // otherwise we fall back to plain text / default level for tooling.
+    // otherwise fall back to plain text / default level for tooling.
     let (json, log_level) = observability_prefs(&cli);
     if let Err(e) = mars_observability::init_tracing(json, log_level.as_deref()) {
         eprintln!("warning: tracing init failed: {e}");

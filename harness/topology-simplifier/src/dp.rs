@@ -4,7 +4,7 @@
 //! crates/application/mars-compiler/src/decimate.rs:106-147. it's copied here
 //! rather than imported because the harness is workspace-excluded; the kernel
 //! is small and stable, the duplication is intentional and called out in the
-//! Phase 0 plan.
+//! plan.
 //!
 //! arcs come in canonical-direction vertex-id sequence; DP runs on the
 //! materialised Coord sequence. open arcs keep their endpoints fixed. closed

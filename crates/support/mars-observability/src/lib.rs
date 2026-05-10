@@ -328,7 +328,7 @@ impl Metrics {
 
     /// Increment the page-membership sidecar threshold-warning counter for
     /// `binding`. Operators see this metric when the encoded sidecar
-    /// crosses the configured size warning threshold (LAZARUS bailout 4).
+    /// crosses the configured size warning threshold.
     pub fn inc_compiler_sidecar_threshold_warning(&self, binding: &str) {
         self.inner
             .compiler_sidecar_threshold_warnings

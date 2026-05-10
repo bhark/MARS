@@ -2,7 +2,7 @@
 //!
 //! Pure functions called from both compiler and runtime. No I/O.
 //!
-//! Post-LAZARUS Phase B, `Cell` and `BandName` here are the WMTS-TMS-side
+//! `Cell` and `BandName` here are the WMTS-TMS-side
 //! concepts. They are intentionally separate from the substrate (which is
 //! page-keyed, not cell-keyed) and from `mars-config::ScaleBand` (the
 //! binding-configuration concept). Application code that bridges TMS and
