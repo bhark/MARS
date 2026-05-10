@@ -1,71 +1,88 @@
 -- osm2pgsql flex output mapping to the e2e_source schema.
 -- Produces: land, water, settlements, roads, buildings, waterways
 -- with id, geom, and the documented attribute columns.
+--
+-- Tables are projected to EPSG:25832 (ETRS89 / UTM zone 32N) on load,
+-- so downstream consumers see geometry in the target SRID without a
+-- post-load reprojection step. flex output does not create indexes
+-- implicitly, so each table declares an explicit GIST on geom.
+
+local SRID = 25832
 
 local land = osm2pgsql.define_table{
     name = 'land',
     ids = { type = 'any', id_column = 'id', type_column = 'osm_type' },
     columns = {
-        { column = 'geom', type = 'geometry', projection = 4326 },
-    }
+        { column = 'geom', type = 'geometry', projection = SRID },
+    },
+    indexes = {
+        { column = 'geom', method = 'gist' },
+    },
 }
 
 local water = osm2pgsql.define_table{
     name = 'water',
     ids = { type = 'any', id_column = 'id', type_column = 'osm_type' },
     columns = {
-        { column = 'geom', type = 'geometry', projection = 4326 },
-    }
+        { column = 'geom', type = 'geometry', projection = SRID },
+    },
+    indexes = {
+        { column = 'geom', method = 'gist' },
+    },
 }
 
 local settlements = osm2pgsql.define_table{
     name = 'settlements',
     ids = { type = 'any', id_column = 'id', type_column = 'osm_type' },
     columns = {
-        { column = 'geom', type = 'geometry', projection = 4326 },
-    }
+        { column = 'geom', type = 'geometry', projection = SRID },
+    },
+    indexes = {
+        { column = 'geom', method = 'gist' },
+    },
 }
 
 local roads = osm2pgsql.define_table{
     name = 'roads',
     ids = { type = 'way', id_column = 'id' },
     columns = {
-        { column = 'geom', type = 'linestring', projection = 4326 },
+        { column = 'geom', type = 'linestring', projection = SRID },
         { column = 'kind', type = 'text' },
-    }
+    },
+    indexes = {
+        { column = 'geom', method = 'gist' },
+    },
 }
 
 local buildings = osm2pgsql.define_table{
     name = 'buildings',
     ids = { type = 'way', id_column = 'id' },
     columns = {
-        { column = 'geom', type = 'geometry', projection = 4326 },
+        { column = 'geom', type = 'geometry', projection = SRID },
         { column = 'kind', type = 'text' },
         { column = 'status', type = 'text' },
-    }
+    },
+    indexes = {
+        { column = 'geom', method = 'gist' },
+    },
 }
 
 local waterways = osm2pgsql.define_table{
     name = 'waterways',
     ids = { type = 'way', id_column = 'id' },
     columns = {
-        { column = 'geom', type = 'linestring', projection = 4326 },
+        { column = 'geom', type = 'linestring', projection = SRID },
         { column = 'width_class', type = 'text' },
-    }
+    },
+    indexes = {
+        { column = 'geom', method = 'gist' },
+    },
 }
 
 local function is_area(tags)
     return tags.area ~= 'no' and (
         tags.natural or tags.landuse or tags.waterway == 'riverbank'
     )
-end
-
-function osm2pgsql.process_node(object)
-    local tags = object.tags
-    if tags.place then
-        -- approximate settlement as a small buffer around the node
-        -- osm2pgsql can't buffer nodes in lua easily; skip for v1
-    end
 end
 
 function osm2pgsql.process_way(object)
