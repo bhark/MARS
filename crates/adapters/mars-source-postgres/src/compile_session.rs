@@ -5,17 +5,16 @@
 //! the unified compile pipeline see the same row set. Adapter side of the
 //! `mars_source::CompileSession` port.
 //!
-//! Pass-1 embeds a `md5(ST_AsBinary(geom))`-derived u64 digest in
-//! `RowSummary::geom_digest` server-side. md5 ships with every Postgres
-//! install (no extension dependency); the digest is a page-planner sort
-//! tiebreaker, not a security boundary, so md5's collision profile is
-//! more than sufficient.
+//! Pass-1 emits `(tableoid, ctid)` as the snapshot-stable row identity
+//! packed into a [`SourceRowKey`]. Both columns are read-only system
+//! columns supported by every heap-backed relation; the page planner
+//! uses the key as the terminal sort tier after `(hilbert_key, feature_id)`.
 
 use async_trait::async_trait;
 use deadpool_postgres::Object;
 use futures_core::stream::BoxStream;
 use futures_util::StreamExt;
-use mars_source::{CompileSession, RowBytes, RowSummary, SourceBinding, SourceError};
+use mars_source::{CompileSession, RowBytes, RowSummary, SourceBinding, SourceError, SourceRowKey};
 use tokio_postgres::types::ToSql;
 
 use crate::fetch::decode_row_pub;
@@ -142,37 +141,73 @@ fn decode_summary(row: &tokio_postgres::Row) -> Result<RowSummary, SourceError> 
     let id: i64 = row
         .try_get::<_, i64>(0)
         .map_err(|e| SourceError::backend("decode_summary id", e))?;
+    let tableoid: u32 = row
+        .try_get::<_, u32>(1)
+        .map_err(|e| SourceError::backend("decode_summary tableoid", e))?;
+    let ctid_text: &str = row
+        .try_get::<_, &str>(2)
+        .map_err(|e| SourceError::backend("decode_summary ctid", e))?;
     let xmin: f32 = row
-        .try_get::<_, f32>(1)
+        .try_get::<_, f32>(3)
         .map_err(|e| SourceError::backend("decode_summary xmin", e))?;
     let ymin: f32 = row
-        .try_get::<_, f32>(2)
+        .try_get::<_, f32>(4)
         .map_err(|e| SourceError::backend("decode_summary ymin", e))?;
     let xmax: f32 = row
-        .try_get::<_, f32>(3)
+        .try_get::<_, f32>(5)
         .map_err(|e| SourceError::backend("decode_summary xmax", e))?;
     let ymax: f32 = row
-        .try_get::<_, f32>(4)
+        .try_get::<_, f32>(6)
         .map_err(|e| SourceError::backend("decode_summary ymax", e))?;
     let len: i32 = row
-        .try_get::<_, i32>(5)
+        .try_get::<_, i32>(7)
         .map_err(|e| SourceError::backend("decode_summary len", e))?;
-    let digest: i64 = row
-        .try_get::<_, i64>(6)
-        .map_err(|e| SourceError::backend("decode_summary digest", e))?;
     let geom_byte_length = u32::try_from(len.max(0))
         .map_err(|_| SourceError::backend_msg("decode_summary", "octet_length out of u32 range"))?;
+    let (block, offset) = parse_ctid(ctid_text)?;
     Ok(RowSummary {
         feature_id: id,
         bbox: [xmin, ymin, xmax, ymax],
         geom_byte_length,
-        // Postgres bit(64)::bigint = signed BE bit-cast; reinterpret to u64.
-        geom_digest: digest as u64,
+        row_key: pack_row_key(tableoid, block, offset),
     })
 }
 
-/// Pass-1 SQL: `SELECT id, ST_XMin(geom), ST_YMin, ST_XMax, ST_YMax,
-/// octet_length(ST_AsBinary(geom)), md5_be64(ST_AsBinary(geom)) FROM s.t`.
+/// Parse postgres' textual ctid `(block,offset)` into its numeric parts.
+/// Block is `BlockNumber` (u32); offset is `OffsetNumber` (u16); both are
+/// non-negative.
+fn parse_ctid(s: &str) -> Result<(u32, u16), SourceError> {
+    let inner = s
+        .strip_prefix('(')
+        .and_then(|s| s.strip_suffix(')'))
+        .ok_or_else(|| SourceError::backend_msg("decode_summary ctid", format!("malformed ctid {s:?}")))?;
+    let (block_s, offset_s) = inner
+        .split_once(',')
+        .ok_or_else(|| SourceError::backend_msg("decode_summary ctid", format!("ctid missing comma {s:?}")))?;
+    let block: u32 = block_s
+        .parse()
+        .map_err(|e: std::num::ParseIntError| SourceError::backend("decode_summary ctid block", e))?;
+    let offset: u16 = offset_s
+        .parse()
+        .map_err(|e: std::num::ParseIntError| SourceError::backend("decode_summary ctid offset", e))?;
+    Ok((block, offset))
+}
+
+/// Pack `(tableoid, block, offset)` into the 16-byte `SourceRowKey`. Layout:
+/// `tableoid (u32 LE) || block (u32 LE) || offset (u16 LE) || pad (6B 0)`.
+/// 10 useful bytes; padding reserved for future routing metadata.
+fn pack_row_key(tableoid: u32, block: u32, offset: u16) -> SourceRowKey {
+    let mut k = [0u8; 16];
+    k[0..4].copy_from_slice(&tableoid.to_le_bytes());
+    k[4..8].copy_from_slice(&block.to_le_bytes());
+    k[8..10].copy_from_slice(&offset.to_le_bytes());
+    SourceRowKey::from_bytes(k)
+}
+
+/// Pass-1 SQL: `SELECT id, tableoid, ctid, ST_XMin(geom), ST_YMin, ST_XMax,
+/// ST_YMax, octet_length(ST_AsBinary(geom)) FROM s.t`. The combined
+/// `(tableoid, ctid)` pair is the snapshot-stable row identity used as
+/// the page planner's terminal sort tier.
 fn build_summary_query(binding: &SourceBinding) -> Result<String, SourceError> {
     let id_q = quote_ident(&binding.id_column)?;
     let geom_q = quote_ident(&binding.geometry_column)?;
@@ -180,12 +215,13 @@ fn build_summary_query(binding: &SourceBinding) -> Result<String, SourceError> {
     let table_q = quote_ident(&binding.from_table)?;
     Ok(format!(
         "SELECT {id_q}::int8, \
+                tableoid::oid, \
+                ctid::text, \
                 ST_XMin({geom_q})::float4, \
                 ST_YMin({geom_q})::float4, \
                 ST_XMax({geom_q})::float4, \
                 ST_YMax({geom_q})::float4, \
-                octet_length(ST_AsBinary({geom_q}))::int4, \
-                (('x' || substr(md5(ST_AsBinary({geom_q})), 1, 16))::bit(64))::bigint \
+                octet_length(ST_AsBinary({geom_q}))::int4 \
          FROM {schema_q}.{table_q}"
     ))
 }
@@ -227,7 +263,34 @@ mod tests {
         let sql = build_summary_query(&b).unwrap();
         assert!(sql.contains("ST_XMin(\"geom\")::float4"));
         assert!(sql.contains("octet_length(ST_AsBinary(\"geom\"))::int4"));
-        assert!(sql.contains("substr(md5(ST_AsBinary(\"geom\")), 1, 16)"));
+        assert!(sql.contains("tableoid::oid"));
+        assert!(sql.contains("ctid::text"));
+        assert!(!sql.contains("md5"));
         assert!(sql.contains("FROM \"public\".\"t\""));
+    }
+
+    #[test]
+    fn parse_ctid_round_trips() {
+        let (b, o) = super::parse_ctid("(0,1)").unwrap();
+        assert_eq!((b, o), (0, 1));
+        let (b, o) = super::parse_ctid("(4294967295,65535)").unwrap();
+        assert_eq!((b, o), (u32::MAX, u16::MAX));
+    }
+
+    #[test]
+    fn parse_ctid_rejects_garbage() {
+        assert!(super::parse_ctid("0,1").is_err());
+        assert!(super::parse_ctid("(0)").is_err());
+        assert!(super::parse_ctid("(x,y)").is_err());
+    }
+
+    #[test]
+    fn pack_row_key_layout() {
+        let k = super::pack_row_key(0x0011_2233, 0xaabb_ccdd, 0xeeff);
+        let b = k.as_bytes();
+        assert_eq!(&b[0..4], &0x0011_2233u32.to_le_bytes());
+        assert_eq!(&b[4..8], &0xaabb_ccddu32.to_le_bytes());
+        assert_eq!(&b[8..10], &0xeeffu16.to_le_bytes());
+        assert_eq!(&b[10..], &[0u8; 6]);
     }
 }

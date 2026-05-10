@@ -16,7 +16,7 @@
 //! before the planner allocates beyond it.
 
 use futures_util::StreamExt;
-use mars_source::{CompileSession, RowSummary};
+use mars_source::{CompileSession, RowSummary, SourceRowKey};
 use mars_types::{Bbox, DecimationLevel, HilbertKey, PageId};
 
 use crate::CompilerError;
@@ -67,13 +67,13 @@ pub struct PlannedPage {
     pub estimated_bytes: u64,
 }
 
-/// fixed-size pass-1 record. ~48 bytes including padding.
+/// fixed-size pass-1 record.
 #[derive(Debug, Clone, Copy)]
 struct PlanRow {
     feature_id: i64,
     bbox: [f32; 4],
     geom_byte_length: u32,
-    geom_digest: u64,
+    row_key: SourceRowKey,
     hilbert_key: HilbertKey,
 }
 
@@ -115,7 +115,7 @@ pub async fn compute_page_plan(
                 feature_id: s.feature_id,
                 bbox: s.bbox,
                 geom_byte_length: s.geom_byte_length,
-                geom_digest: s.geom_digest,
+                row_key: s.row_key,
                 hilbert_key: HilbertKey::min(),
             });
             feature_count_total = feature_count_total.saturating_add(1);
@@ -143,13 +143,17 @@ pub async fn compute_page_plan(
             .filter(|r| passes_min_size_bbox(r.bbox, level.geometry_min_size_m))
             .copied()
             .collect();
-        // (hilbert_key, feature_id, geom_digest) — same triple the per-page
-        // sort uses in rebuild.rs so boundary-edge ties resolve identically.
+        // (hilbert_key, feature_id, row_key). row_key is unique within the
+        // snapshot, so this triple is strictly sortable; pass-2 page sort
+        // shares the same prefix `(hilbert_key, feature_id)`. boundary-edge
+        // ties on the prefix shuffle within their page (today they shuffle
+        // across runs anyway — pass-1 md5 vs pass-2 BLAKE3 disagree); the
+        // page assignment itself stays deterministic.
         level_rows.sort_by(|a, b| {
             a.hilbert_key
                 .cmp(&b.hilbert_key)
                 .then_with(|| a.feature_id.cmp(&b.feature_id))
-                .then_with(|| a.geom_digest.cmp(&b.geom_digest))
+                .then_with(|| a.row_key.cmp(&b.row_key))
         });
         let pages = sweep_pages(&level_rows, binding.page_size_target_bytes);
         levels.push(LevelPagePlan {
@@ -341,13 +345,15 @@ mod tests {
         }
     }
 
-    fn summary(id: i64, x: f32, y: f32, len: u32, digest: u64) -> RowSummary {
+    fn summary(id: i64, x: f32, y: f32, len: u32, key_seed: u64) -> RowSummary {
+        let mut k = [0u8; 16];
+        k[..8].copy_from_slice(&key_seed.to_le_bytes());
         RowSummary {
             feature_id: id,
             // zero-area bbox at (x, y).
             bbox: [x, y, x, y],
             geom_byte_length: len,
-            geom_digest: digest,
+            row_key: SourceRowKey::from_bytes(k),
         }
     }
 
@@ -407,37 +413,37 @@ mod tests {
                 feature_id: 1,
                 bbox: [0.0, 0.0, 0.5, 0.5],
                 geom_byte_length: 32,
-                geom_digest: 1,
+                row_key: SourceRowKey::from_bytes([1; 16]),
             },
             RowSummary {
                 feature_id: 2,
                 bbox: [10.0, 10.0, 110.0, 110.0],
                 geom_byte_length: 32,
-                geom_digest: 2,
+                row_key: SourceRowKey::from_bytes([2; 16]),
             },
             RowSummary {
                 feature_id: 3,
                 bbox: [0.1, 0.1, 0.2, 0.2],
                 geom_byte_length: 32,
-                geom_digest: 3,
+                row_key: SourceRowKey::from_bytes([3; 16]),
             },
             RowSummary {
                 feature_id: 4,
                 bbox: [200.0, 200.0, 300.0, 300.0],
                 geom_byte_length: 32,
-                geom_digest: 4,
+                row_key: SourceRowKey::from_bytes([4; 16]),
             },
             RowSummary {
                 feature_id: 5,
                 bbox: [0.3, 0.3, 0.4, 0.4],
                 geom_byte_length: 32,
-                geom_digest: 5,
+                row_key: SourceRowKey::from_bytes([5; 16]),
             },
             RowSummary {
                 feature_id: 6,
                 bbox: [400.0, 400.0, 500.0, 500.0],
                 geom_byte_length: 32,
-                geom_digest: 6,
+                row_key: SourceRowKey::from_bytes([6; 16]),
             },
         ];
         let mut sess: Box<dyn CompileSession> = Box::new(FakeSession { summaries });

@@ -295,8 +295,38 @@ pub trait Source: Send + Sync + 'static {
     }
 }
 
+/// Opaque per-row identity stable within a single `CompileSession`'s
+/// snapshot. Adapters populate per their backing store; the postgres
+/// adapter packs `tableoid` then `BlockNumber` then `OffsetNumber` (10
+/// useful bytes, zero-padded). 16 bytes leaves room for future
+/// row-routing metadata without a port-wide widening.
+///
+/// The page planner uses it as a strict tiebreaker after
+/// `(hilbert_key, feature_id)` to make pass-1 sort fully deterministic
+/// without a server-side digest pass over the geometry bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SourceRowKey([u8; 16]);
+
+impl SourceRowKey {
+    /// Build a key from its 16-byte representation.
+    #[must_use]
+    pub const fn from_bytes(b: [u8; 16]) -> Self {
+        Self(b)
+    }
+
+    /// Borrow the raw 16-byte representation.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; 16] {
+        &self.0
+    }
+
+    /// Zero key. Useful as a placeholder in fakes / tests where adapter
+    /// row identity is not modeled.
+    pub const ZERO: Self = Self([0u8; 16]);
+}
+
 /// Per-row geometry summary produced by [`CompileSession::fetch_geometry_summary`].
-/// Bbox + byte length + a stable digest of the geometry bytes — exactly the
+/// Bbox + byte length + a snapshot-stable row identity — exactly the
 /// fixed-size record the pass-1 page planner needs.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RowSummary {
@@ -307,14 +337,9 @@ pub struct RowSummary {
     /// Length of the encoded geometry in bytes; pass 1 uses this as the
     /// per-row contribution to the page-byte sweep.
     pub geom_byte_length: u32,
-    /// Stable u64 digest of the geometry bytes computed server-side
-    /// (currently MD5 truncated to 64 bits). Used as a planning-time
-    /// tie-breaker after `(hilbert_key, feature_id)`. Pass 2 hashes
-    /// hydrated geometry independently with a different algorithm; the
-    /// two digests are not expected to match. Per-page row assignment is
-    /// driven by `PlannedPage.feature_ids`, so digest agreement across
-    /// passes is not load-bearing for correctness.
-    pub geom_digest: u64,
+    /// Snapshot-stable row identity. Used as the page planner's terminal
+    /// sort tier after `(hilbert_key, feature_id)`.
+    pub row_key: SourceRowKey,
 }
 
 /// Compile-time session bound to one `SourceBinding`. Holds a connection in
@@ -324,10 +349,9 @@ pub struct RowSummary {
 /// `&mut self` on the streaming methods enforces one stream at a time:
 /// callers drain (or drop) one stream before opening the next.
 ///
-/// `RowSummary::geom_digest` is produced by pass 1 server-side and consumed
-/// by the page planner for boundary-edge tiebreaking. Pass 2 hashes hydrated
-/// geometry independently for its own bookkeeping; the two digests are not
-/// expected to match.
+/// `RowSummary::row_key` carries an opaque snapshot-stable row identity
+/// (Postgres: `tableoid + ctid`) used by the page planner as the terminal
+/// sort tier after `(hilbert_key, feature_id)`.
 #[async_trait]
 pub trait CompileSession: Send + Sync {
     /// Stream a per-row geometry summary across the bound table. Pass 1

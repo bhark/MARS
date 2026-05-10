@@ -12,7 +12,7 @@ use bytes::Bytes;
 use futures_core::stream::BoxStream;
 use futures_util::StreamExt;
 use mars_artifact::wkb_to_feature_geom;
-use mars_source::{CompileSession, RowBytes, RowSummary, Source, SourceBinding, SourceError};
+use mars_source::{CompileSession, RowBytes, RowSummary, Source, SourceBinding, SourceError, SourceRowKey};
 
 /// `CompileSession` wrapper that derives summaries by re-decoding WKB on
 /// the client. Not snapshot-isolated — only correct when the underlying
@@ -65,6 +65,10 @@ impl<'a> CompileSession for FullScanCompileSession<'a> {
 /// Decode a `RowBytes` into a `RowSummary` by extracting the bbox via the
 /// shared WKB decoder. `feature_id` casts saturating into i64 (the postgres
 /// adapter validates the cast upstream; tests use small ids).
+///
+/// `row_key` is synthesised from `(feature_id, fnv1a64(geometry))` because
+/// the test source has no tableoid/ctid notion; the fnv tail keeps two
+/// rows that share a feature_id but differ in geometry distinguishable.
 fn summary_from_row_bytes(row: RowBytes) -> Result<RowSummary, SourceError> {
     let feature = wkb_to_feature_geom(&row.geometry, row.feature_id).map_err(|e| SourceError::Backend {
         what: "wkb decode (test session)",
@@ -72,11 +76,14 @@ fn summary_from_row_bytes(row: RowBytes) -> Result<RowSummary, SourceError> {
     })?;
     let geom_byte_length = u32::try_from(row.geometry.len()).unwrap_or(u32::MAX);
     let feature_id = i64::try_from(row.feature_id).unwrap_or(i64::MAX);
+    let mut key = [0u8; 16];
+    key[..8].copy_from_slice(&row.feature_id.to_le_bytes());
+    key[8..].copy_from_slice(&fnv1a64(geom_bytes(&row.geometry)).to_le_bytes());
     Ok(RowSummary {
         feature_id,
         bbox: feature.bbox,
         geom_byte_length,
-        geom_digest: fnv1a64(geom_bytes(&row.geometry)),
+        row_key: SourceRowKey::from_bytes(key),
     })
 }
 
