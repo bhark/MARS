@@ -8,9 +8,11 @@
 -- implicitly, so each table declares an explicit GIST on geom.
 
 local SRID = 25832
+local SCHEMA = 'e2e_source'
 
 local land = osm2pgsql.define_table{
     name = 'land',
+    schema = SCHEMA,
     ids = { type = 'any', id_column = 'id', type_column = 'osm_type' },
     columns = {
         { column = 'geom', type = 'geometry', projection = SRID },
@@ -22,6 +24,7 @@ local land = osm2pgsql.define_table{
 
 local water = osm2pgsql.define_table{
     name = 'water',
+    schema = SCHEMA,
     ids = { type = 'any', id_column = 'id', type_column = 'osm_type' },
     columns = {
         { column = 'geom', type = 'geometry', projection = SRID },
@@ -33,6 +36,7 @@ local water = osm2pgsql.define_table{
 
 local settlements = osm2pgsql.define_table{
     name = 'settlements',
+    schema = SCHEMA,
     ids = { type = 'any', id_column = 'id', type_column = 'osm_type' },
     columns = {
         { column = 'geom', type = 'geometry', projection = SRID },
@@ -44,6 +48,7 @@ local settlements = osm2pgsql.define_table{
 
 local roads = osm2pgsql.define_table{
     name = 'roads',
+    schema = SCHEMA,
     ids = { type = 'way', id_column = 'id' },
     columns = {
         { column = 'geom', type = 'linestring', projection = SRID },
@@ -56,6 +61,7 @@ local roads = osm2pgsql.define_table{
 
 local buildings = osm2pgsql.define_table{
     name = 'buildings',
+    schema = SCHEMA,
     ids = { type = 'way', id_column = 'id' },
     columns = {
         { column = 'geom', type = 'geometry', projection = SRID },
@@ -69,6 +75,7 @@ local buildings = osm2pgsql.define_table{
 
 local waterways = osm2pgsql.define_table{
     name = 'waterways',
+    schema = SCHEMA,
     ids = { type = 'way', id_column = 'id' },
     columns = {
         { column = 'geom', type = 'linestring', projection = SRID },

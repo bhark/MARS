@@ -4,7 +4,8 @@ set -eu
 OSM_BBOX="${OSM_BBOX:-9.5,55.6,10.7,56.0}"
 PG_DSN="${PG_DSN:-postgres://mars:mars@mars-postgis/mars}"
 PUBLICATION="${PUBLICATION:-mars_local_pub}"
-SCHEMA="${SCHEMA:-e2e_source}"
+# must match `SCHEMA` in osm-mapping.lua
+SCHEMA="e2e_source"
 CACHE_DIR="/cache"
 OSM_FILE="${CACHE_DIR}/osm-extract.osm"
 PBF_FILE="${CACHE_DIR}/osm-extract.osm.pbf"
@@ -40,11 +41,11 @@ CREATE SCHEMA ${SCHEMA};
 SQL
 
 echo "seed: loading into PostGIS (projecting to EPSG:25832 on load)"
+# osm2pgsql 1.8 lacks --schema; the lua mapping pins each table to ${SCHEMA}.
 osm2pgsql \
     --create \
     --slim \
     --drop \
-    --schema="${SCHEMA}" \
     --output=flex \
     --style=/work/osm-mapping.lua \
     -d "${PG_DSN}" \
