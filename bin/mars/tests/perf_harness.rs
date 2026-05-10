@@ -64,6 +64,7 @@ fn cases() -> Vec<PerfCase> {
                 height: 512,
                 crs: CrsCode::new("EPSG:25832"),
                 format: ImageFormat::Png,
+                scale_pixel_size_m: mars_runtime::OGC_STANDARDIZED_PIXEL_SIZE_M,
             },
         },
         PerfCase {
@@ -75,6 +76,7 @@ fn cases() -> Vec<PerfCase> {
                 height: 256,
                 crs: CrsCode::new("EPSG:25832"),
                 format: ImageFormat::Png,
+                scale_pixel_size_m: mars_runtime::OGC_STANDARDIZED_PIXEL_SIZE_M,
             },
         },
         PerfCase {
@@ -86,6 +88,7 @@ fn cases() -> Vec<PerfCase> {
                 height: 256,
                 crs: CrsCode::new("EPSG:25832"),
                 format: ImageFormat::Png,
+                scale_pixel_size_m: mars_runtime::OGC_STANDARDIZED_PIXEL_SIZE_M,
             },
         },
     ]

@@ -109,6 +109,7 @@ impl Fixture {
             height: 64,
             crs: CrsCode::new(REQUEST_CRS),
             format: TImageFormat::Png,
+            scale_pixel_size_m: mars_runtime::OGC_STANDARDIZED_PIXEL_SIZE_M,
         }
     }
 }
@@ -544,6 +545,7 @@ impl MultiLayerFixture {
             height: 64,
             crs: CrsCode::new(REQUEST_CRS),
             format: TImageFormat::Png,
+            scale_pixel_size_m: mars_runtime::OGC_STANDARDIZED_PIXEL_SIZE_M,
         }
     }
 }

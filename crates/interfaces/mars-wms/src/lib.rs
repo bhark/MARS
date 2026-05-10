@@ -63,6 +63,10 @@ pub struct WmsConfig {
     pub max_layers: usize,
     /// maximum absolute value of any bbox coordinate.
     pub max_bbox_coord: f64,
+    /// Standardised pixel size in metres derived from `service.scale_dpi`.
+    /// Drives the OGC scale-denominator calc; an in-request `&DPI=`
+    /// parameter overrides this per-request.
+    pub scale_pixel_size_m: f64,
 }
 
 impl WmsConfig {
@@ -94,6 +98,7 @@ impl WmsConfig {
             max_pixels: wms.and_then(|w| w.max_pixels).unwrap_or(DEFAULT_MAX_PIXELS),
             max_layers: DEFAULT_MAX_LAYERS,
             max_bbox_coord: DEFAULT_MAX_BBOX_COORD,
+            scale_pixel_size_m: cfg.service.scale_pixel_size_m(),
         }
     }
 }

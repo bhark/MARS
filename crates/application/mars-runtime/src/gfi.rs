@@ -59,8 +59,10 @@ pub(crate) async fn get_feature_info(
         if !layer_cfg.enable_get_feature_info {
             continue;
         }
-        let denom = crate::denom_from_plan(plan.bbox.width(), plan.width);
-        let Some((binding_id, level)) = planning::pick_binding_and_level(layer_cfg, denom, state) else {
+        let denom = crate::denom_from_plan(plan.bbox.width(), plan.width, plan.scale_pixel_size_m);
+        let Some((binding_id, level)) =
+            planning::pick_binding_and_level(layer_cfg, denom, plan.scale_pixel_size_m, state)
+        else {
             continue;
         };
         let binding =

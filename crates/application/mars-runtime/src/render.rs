@@ -105,8 +105,10 @@ async fn render_one_layer(
     let layer_span = info_span!("render.layer", name = %layer_id);
     async move {
         let layer_cfg = lookup_layer(config, layer_id)?;
-        let denom = crate::denom_from_plan(plan.bbox.width(), plan.width);
-        let Some((binding_id, level)) = planning::pick_binding_and_level(layer_cfg, denom, state) else {
+        let denom = crate::denom_from_plan(plan.bbox.width(), plan.width, plan.scale_pixel_size_m);
+        let Some((binding_id, level)) =
+            planning::pick_binding_and_level(layer_cfg, denom, plan.scale_pixel_size_m, state)
+        else {
             return Ok::<(usize, Option<LayerOutput>), RuntimeError>((idx, None));
         };
         let binding =

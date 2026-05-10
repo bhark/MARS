@@ -177,7 +177,20 @@ pub struct RenderPlan {
     pub crs: CrsCode,
     /// Output image format.
     pub format: ImageFormat,
+    /// Standardised pixel size in metres used to compute the scale
+    /// denominator from `(bbox, width)`. WMS adapters source this from
+    /// `service.scale_dpi` (default 96 dpi → ≈ 0.0002645833 m/pixel),
+    /// optionally overridden per-request by `&DPI=`. WMTS adapters set
+    /// it to the OGC reference [`OGC_STANDARDIZED_PIXEL_SIZE_M`] because
+    /// TileMatrixSet scale denominators are spec-fixed at that value.
+    pub scale_pixel_size_m: f64,
 }
+
+/// OGC reference standardised pixel size: 0.28 mm = 90.7142857 dpi. WMTS
+/// requires this exactly; WMS uses [`ServiceMeta::scale_pixel_size_m`].
+///
+/// [`ServiceMeta::scale_pixel_size_m`]: mars_config::ServiceMeta::scale_pixel_size_m
+pub const OGC_STANDARDIZED_PIXEL_SIZE_M: f64 = 0.000_28;
 
 /// The runtime service.
 pub struct Runtime {
@@ -331,13 +344,17 @@ impl Runtime {
 /// Compute the rendered image's denominator at the configured viewport.
 /// Pure helper; exposed so the WMS / WMTS interface code can resolve
 /// `<scaleHint>` style decisions without going through `Runtime`.
+///
+/// `m_per_pixel` is the standardised pixel size used to interpret the
+/// denominator. Use [`OGC_STANDARDIZED_PIXEL_SIZE_M`] for OGC-pure
+/// behaviour; pass the value derived from `service.scale_dpi` for parity
+/// with deployments that pin a different DPI (typically 96).
 #[must_use]
-pub fn denom_from_plan(bbox_width: f64, width_px: u32) -> u32 {
-    if !bbox_width.is_finite() || bbox_width <= 0.0 || width_px == 0 {
+pub fn denom_from_plan(bbox_width: f64, width_px: u32, m_per_pixel: f64) -> u32 {
+    if !bbox_width.is_finite() || bbox_width <= 0.0 || width_px == 0 || !m_per_pixel.is_finite() || m_per_pixel <= 0.0 {
         return u32::MAX;
     }
-    // 0.00028 m/pixel is the OGC reference at 90 dpi.
-    let denom = bbox_width / (f64::from(width_px) * 0.000_28);
+    let denom = bbox_width / (f64::from(width_px) * m_per_pixel);
     if !denom.is_finite() || denom < 0.0 || denom > f64::from(u32::MAX) {
         u32::MAX
     } else {

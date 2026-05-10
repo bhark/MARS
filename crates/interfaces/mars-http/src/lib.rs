@@ -553,6 +553,7 @@ mod tests {
             max_pixels: 16_000_000,
             max_layers: 100,
             max_bbox_coord: 1e9,
+            scale_pixel_size_m: 0.0254 / 96.0,
         }
     }
 

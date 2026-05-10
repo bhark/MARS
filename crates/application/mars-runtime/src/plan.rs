@@ -17,10 +17,12 @@ use crate::state::RuntimeState;
 /// pick.
 const PIXEL_SUBSAMPLE_K: f64 = 0.5;
 
-/// OGC reference: 0.00028 m/pixel at 90 dpi (matches `denom_from_plan`).
-const OGC_M_PER_PIXEL_AT_90DPI: f64 = 0.000_28;
-
 /// pick the binding and decimation level for `layer` at `request_denom`.
+///
+/// `m_per_pixel` is the standardised pixel size the caller used to derive
+/// `request_denom` — typically [`crate::OGC_STANDARDIZED_PIXEL_SIZE_M`] or
+/// the value implied by `service.scale_dpi`. Inverting it here keeps the
+/// level-pick threshold consistent with the routing denom.
 ///
 /// returns `None` when no binding's `ScaleWindow` covers the request denom,
 /// when the matching binding is absent from the manifest, or when the
@@ -30,9 +32,10 @@ const OGC_M_PER_PIXEL_AT_90DPI: f64 = 0.000_28;
 pub fn pick_binding_and_level(
     layer: &Layer,
     request_denom: u32,
+    m_per_pixel: f64,
     state: &RuntimeState,
 ) -> Option<(BindingId, DecimationLevel)> {
-    let pixel_size_m = pixel_size_at_denom(request_denom);
+    let pixel_size_m = pixel_size_at_denom(request_denom, m_per_pixel);
     for source in &layer.sources {
         if !scale_window_covers(source.scale.as_ref(), request_denom) {
             continue;
@@ -151,8 +154,8 @@ fn scale_window_covers(window: Option<&ScaleWindow>, denom: u32) -> bool {
     true
 }
 
-fn pixel_size_at_denom(denom: u32) -> f64 {
-    f64::from(denom) * OGC_M_PER_PIXEL_AT_90DPI
+fn pixel_size_at_denom(denom: u32, m_per_pixel: f64) -> f64 {
+    f64::from(denom) * m_per_pixel
 }
 
 fn bbox_intersects(a: Bbox, b: Bbox) -> bool {
@@ -358,7 +361,7 @@ mod tests {
         let bindings = vec![binding_meta("a", vec![level(0, 0.0)])];
         let state = state_with(pages, bindings);
         let layer = cfg_layer("layer-a", vec![cfg_source("a", None)]);
-        let resolved = pick_binding_and_level(&layer, 1000, &state).unwrap();
+        let resolved = pick_binding_and_level(&layer, 1000, crate::OGC_STANDARDIZED_PIXEL_SIZE_M, &state).unwrap();
         assert_eq!(resolved.0.as_str(), "a");
         assert_eq!(resolved.1.get(), 0);
     }
@@ -393,9 +396,9 @@ mod tests {
                 ),
             ],
         );
-        let at_high = pick_binding_and_level(&layer, 1000, &state).unwrap();
+        let at_high = pick_binding_and_level(&layer, 1000, crate::OGC_STANDARDIZED_PIXEL_SIZE_M, &state).unwrap();
         assert_eq!(at_high.0.as_str(), "hi");
-        let at_low = pick_binding_and_level(&layer, 5000, &state).unwrap();
+        let at_low = pick_binding_and_level(&layer, 5000, crate::OGC_STANDARDIZED_PIXEL_SIZE_M, &state).unwrap();
         assert_eq!(at_low.0.as_str(), "lo");
     }
 
@@ -403,7 +406,7 @@ mod tests {
     fn pick_binding_and_level_none_when_no_binding_in_manifest() {
         let state = state_with(vec![], vec![]);
         let layer = cfg_layer("layer-a", vec![cfg_source("ghost", None)]);
-        assert!(pick_binding_and_level(&layer, 1000, &state).is_none());
+        assert!(pick_binding_and_level(&layer, 1000, crate::OGC_STANDARDIZED_PIXEL_SIZE_M, &state).is_none());
     }
 
     #[test]
@@ -445,11 +448,11 @@ mod tests {
                 ),
             ],
         );
-        let r0 = pick_binding_and_level(&layer, 5_000, &state).unwrap();
+        let r0 = pick_binding_and_level(&layer, 5_000, crate::OGC_STANDARDIZED_PIXEL_SIZE_M, &state).unwrap();
         assert_eq!(r0.0.as_str(), "t0");
-        let r1 = pick_binding_and_level(&layer, 8_500, &state).unwrap();
+        let r1 = pick_binding_and_level(&layer, 8_500, crate::OGC_STANDARDIZED_PIXEL_SIZE_M, &state).unwrap();
         assert_eq!(r1.0.as_str(), "t1");
-        let r2 = pick_binding_and_level(&layer, 12_000, &state).unwrap();
+        let r2 = pick_binding_and_level(&layer, 12_000, crate::OGC_STANDARDIZED_PIXEL_SIZE_M, &state).unwrap();
         assert_eq!(r2.0.as_str(), "t2");
     }
 }

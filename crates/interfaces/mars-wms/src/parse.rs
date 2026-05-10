@@ -115,6 +115,15 @@ fn parse_get_map_inner(kvp: &Kvp, cfg: &WmsConfig) -> Result<RenderPlan, WmsErro
         });
     }
 
+    // optional `&DPI=` (or `&MAP_RESOLUTION=`, MapServer's name) overrides
+    // the service-default scale dpi for this one request. lets clients pin
+    // their own display dpi when computing scale-window routing without
+    // touching service config.
+    let scale_pixel_size_m = match parse_optional_dpi(kvp)? {
+        Some(dpi) => 0.0254 / dpi,
+        None => cfg.scale_pixel_size_m,
+    };
+
     Ok(RenderPlan {
         layers,
         bbox,
@@ -122,7 +131,28 @@ fn parse_get_map_inner(kvp: &Kvp, cfg: &WmsConfig) -> Result<RenderPlan, WmsErro
         height,
         crs,
         format,
+        scale_pixel_size_m,
     })
+}
+
+fn parse_optional_dpi(kvp: &Kvp) -> Result<Option<f64>, WmsError> {
+    let raw = match kvp.get("dpi").or_else(|| kvp.get("map_resolution")) {
+        Some(s) if !s.is_empty() => s,
+        _ => return Ok(None),
+    };
+    let dpi: f64 = raw
+        .parse()
+        .map_err(|e: std::num::ParseFloatError| WmsError::InvalidParam {
+            name: "dpi",
+            reason: e.to_string(),
+        })?;
+    if !dpi.is_finite() || dpi <= 0.0 {
+        return Err(WmsError::InvalidParam {
+            name: "dpi",
+            reason: "must be a positive, finite number".into(),
+        });
+    }
+    Ok(Some(dpi))
 }
 
 // ---------- helpers ----------
@@ -246,6 +276,7 @@ mod tests {
             max_pixels: 16_000_000,
             max_layers: 100,
             max_bbox_coord: 1e9,
+            scale_pixel_size_m: 0.0254 / 96.0,
         }
     }
 
@@ -261,6 +292,32 @@ mod tests {
         assert_eq!(plan.bbox.max_y, 400.0);
         assert_eq!(plan.crs.as_str(), "EPSG:25832");
         assert_eq!(plan.format, ImageFormat::Png);
+        // no &DPI=, expect cfg default (96).
+        assert!((plan.scale_pixel_size_m - 0.0254 / 96.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn dpi_override_per_request() {
+        let q = "request=GetMap&version=1.3.0&layers=a&crs=EPSG:25832&\
+                 bbox=0,0,1,1&width=1&height=1&format=image/png&dpi=72";
+        let plan = parse_get_map(q, &cfg()).unwrap();
+        assert!((plan.scale_pixel_size_m - 0.0254 / 72.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn map_resolution_alias_accepted() {
+        let q = "request=GetMap&version=1.3.0&layers=a&crs=EPSG:25832&\
+                 bbox=0,0,1,1&width=1&height=1&format=image/png&map_resolution=120";
+        let plan = parse_get_map(q, &cfg()).unwrap();
+        assert!((plan.scale_pixel_size_m - 0.0254 / 120.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn dpi_invalid_rejected() {
+        let q = "request=GetMap&version=1.3.0&layers=a&crs=EPSG:25832&\
+                 bbox=0,0,1,1&width=1&height=1&format=image/png&dpi=-5";
+        let err = parse_get_map(q, &cfg()).unwrap_err();
+        assert!(matches!(err, WmsError::InvalidParam { name: "dpi", .. }));
     }
 
     #[test]

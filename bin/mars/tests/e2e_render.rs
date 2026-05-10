@@ -123,6 +123,7 @@ async fn end_to_end_compile_and_render() -> Result<()> {
         height: RENDER_PX / 2,
         crs: CrsCode::new("EPSG:25832"),
         format: ImageFormat::Png,
+        scale_pixel_size_m: mars_runtime::OGC_STANDARDIZED_PIXEL_SIZE_M,
     };
     let png_bytes = match runtime.render(&plan).await {
         Ok(b) => b,

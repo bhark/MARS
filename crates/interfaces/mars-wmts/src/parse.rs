@@ -105,6 +105,10 @@ fn parse_get_tile_inner(kvp: &Kvp, cfg: &WmtsConfig) -> Result<RenderPlan, WmtsE
         height: h,
         crs: tms.crs.clone(),
         format,
+        // WMTS scale denominators are spec-fixed at the OGC standardised
+        // pixel size; honouring service.scale_dpi here would desync routing
+        // from the TileMatrixSet definition.
+        scale_pixel_size_m: mars_runtime::OGC_STANDARDIZED_PIXEL_SIZE_M,
     })
 }
 
