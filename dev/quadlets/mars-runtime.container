@@ -1,0 +1,24 @@
+[Unit]
+Description=MARS local runtime
+Requires=mars-compiler.service
+After=mars-compiler.service
+
+[Container]
+Image=localhost/mars:dev
+ContainerName=mars-runtime
+Network=mars.network
+PublishPort=8080:8080
+Volume=%h/.local/share/mars-dev/config/mars.yaml:/etc/mars/mars.yaml:ro,Z
+Volume=artifact-store.volume:/var/lib/mars/store:ro
+Volume=runtime-cache.volume:/cache
+Environment=PG_DSN=postgres://mars:mars@mars-postgis/mars
+Exec=--mode runtime --config /etc/mars/mars.yaml
+HealthCmd=/usr/local/bin/mars healthcheck --url http://127.0.0.1:8080/readyz
+HealthInterval=5s
+HealthRetries=24
+
+[Service]
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

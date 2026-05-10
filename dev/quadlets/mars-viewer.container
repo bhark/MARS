@@ -1,0 +1,13 @@
+[Unit]
+Description=MARS local viewer
+Requires=mars-runtime.service
+After=mars-runtime.service
+
+[Container]
+Image=localhost/mars-viewer:dev
+ContainerName=mars-viewer
+Network=mars.network
+PublishPort=5173:80
+
+[Install]
+WantedBy=default.target

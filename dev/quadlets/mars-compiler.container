@@ -1,0 +1,21 @@
+[Unit]
+Description=MARS local compiler
+Requires=mars-seed.service
+After=mars-seed.service
+
+[Container]
+Image=localhost/mars:dev
+ContainerName=mars-compiler
+Network=mars.network
+Volume=%h/.local/share/mars-dev/config/mars.yaml:/etc/mars/mars.yaml:ro,Z
+Volume=artifact-store.volume:/var/lib/mars/store
+Volume=compiler-cache.volume:/cache
+Volume=compiler-work.volume:/work
+Environment=PG_DSN=postgres://mars:mars@mars-postgis/mars
+Exec=--mode compiler --config /etc/mars/mars.yaml
+
+[Service]
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,13 @@
+FROM docker.io/alpine:3.21
+
+RUN apk add --no-cache \
+    osm2pgsql \
+    curl \
+    jq \
+    postgresql16-client \
+    py3-osmium
+
+WORKDIR /work
+COPY fetch-and-load.sh overpass-query.txt osm-mapping.lua ./
+
+ENTRYPOINT ["/bin/sh", "/work/fetch-and-load.sh"]

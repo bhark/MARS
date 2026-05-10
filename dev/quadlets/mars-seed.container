@@ -1,0 +1,18 @@
+[Unit]
+Description=MARS local OSM seed
+Requires=mars-postgis.service
+After=mars-postgis.service
+
+[Container]
+Image=localhost/mars-seed:dev
+ContainerName=mars-seed
+Network=mars.network
+Volume=osm-cache.volume:/cache
+Environment=PG_DSN=postgres://mars:mars@mars-postgis/mars OSM_BBOX=9.5,55.6,10.7,56.0
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+[Install]
+WantedBy=default.target
