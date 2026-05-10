@@ -24,3 +24,4 @@ regex       = "1"
 
 [dev-dependencies]
 tempfile = { workspace = true }
+temp-env = { workspace = true }

@@ -1,12 +1,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use std::env;
 use std::fs;
 use std::path::PathBuf;
 
 use mars_config::{ConfigError, load, validate};
-
-static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures")
@@ -97,15 +94,10 @@ fn unknown_band_in_source_binding_is_rejected() {
 }
 
 #[test]
-#[allow(unsafe_code)]
 fn env_default_used_when_unset() {
-    let _guard = ENV_LOCK.lock().unwrap();
-    // SAFETY: ENV_LOCK serialises env mutations across these tests.
-    unsafe {
-        env::remove_var("MARS_TEST_DSN");
-    }
-    let dir = tempfile::tempdir().unwrap();
-    let yaml = r#"
+    temp_env::with_var_unset("MARS_TEST_DSN", || {
+        let dir = tempfile::tempdir().unwrap();
+        let yaml = r#"
 service: { name: t }
 source:
   type: postgis
@@ -118,22 +110,18 @@ scales: { bands: [{ name: hi, max_denom_exclusive: 1 }] }
 cells: { grid: regular, origin: [0, 0], size_per_band: { hi: 1m } }
 interfaces: {}
 "#;
-    let p = dir.path().join("c.yaml");
-    fs::write(&p, yaml).unwrap();
-    let cfg = load(&p).unwrap();
-    assert_eq!(cfg.source.dsn, "postgres://default/x");
+        let p = dir.path().join("c.yaml");
+        fs::write(&p, yaml).unwrap();
+        let cfg = load(&p).unwrap();
+        assert_eq!(cfg.source.dsn, "postgres://default/x");
+    });
 }
 
 #[test]
-#[allow(unsafe_code)]
 fn env_unset_no_default_errors() {
-    let _guard = ENV_LOCK.lock().unwrap();
-    // SAFETY: ENV_LOCK serialises env mutations across these tests.
-    unsafe {
-        env::remove_var("MARS_TEST_REQUIRED_VAR");
-    }
-    let dir = tempfile::tempdir().unwrap();
-    let yaml = r#"
+    temp_env::with_var_unset("MARS_TEST_REQUIRED_VAR", || {
+        let dir = tempfile::tempdir().unwrap();
+        let yaml = r#"
 service: { name: t }
 source:
   type: postgis
@@ -146,22 +134,18 @@ scales: { bands: [{ name: hi, max_denom_exclusive: 1 }] }
 cells: { grid: regular, origin: [0, 0], size_per_band: { hi: 1m } }
 interfaces: {}
 "#;
-    let p = dir.path().join("c.yaml");
-    fs::write(&p, yaml).unwrap();
-    let err = load(&p).unwrap_err();
-    assert!(matches!(err, ConfigError::EnvMissing(name) if name == "MARS_TEST_REQUIRED_VAR"));
+        let p = dir.path().join("c.yaml");
+        fs::write(&p, yaml).unwrap();
+        let err = load(&p).unwrap_err();
+        assert!(matches!(err, ConfigError::EnvMissing(name) if name == "MARS_TEST_REQUIRED_VAR"));
+    });
 }
 
 #[test]
-#[allow(unsafe_code)]
 fn env_in_yaml_comment_is_ignored() {
-    let _guard = ENV_LOCK.lock().unwrap();
-    // SAFETY: ENV_LOCK serialises env mutations across these tests.
-    unsafe {
-        env::remove_var("MARS_TEST_COMMENTED_OUT");
-    }
-    let dir = tempfile::tempdir().unwrap();
-    let yaml = r#"
+    temp_env::with_var_unset("MARS_TEST_COMMENTED_OUT", || {
+        let dir = tempfile::tempdir().unwrap();
+        let yaml = r#"
 service: { name: t }
 source:
   type: postgis
@@ -175,10 +159,11 @@ scales: { bands: [{ name: hi, max_denom_exclusive: 1 }] }
 cells: { grid: regular, origin: [0, 0], size_per_band: { hi: 1m } }
 interfaces: {}
 "#;
-    let p = dir.path().join("c.yaml");
-    fs::write(&p, yaml).unwrap();
-    let cfg = load(&p).unwrap();
-    assert_eq!(cfg.source.dsn, "postgres://example/x");
+        let p = dir.path().join("c.yaml");
+        fs::write(&p, yaml).unwrap();
+        let cfg = load(&p).unwrap();
+        assert_eq!(cfg.source.dsn, "postgres://example/x");
+    });
 }
 
 #[test]
