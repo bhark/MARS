@@ -90,6 +90,17 @@ pub struct Compiler {
     /// sidecar / object-store I/O.
     #[serde(default = "default_compile_binding_parallelism")]
     pub compile_binding_parallelism: usize,
+    /// In-flight pass-2 buffer ceiling per binding. Pass 2 streams the
+    /// whole table once per binding and buckets rows into the planned
+    /// pages; pages eager-flush on completion, but at any instant the
+    /// summed footprint of partially-filled pages must stay under this
+    /// ceiling. Crossing it trips
+    /// [`CompilerError::CompileMemoryBudgetExceeded`]. Unit-suffixed
+    /// byte literal (`256MiB`).
+    ///
+    /// [`CompilerError::CompileMemoryBudgetExceeded`]: https://docs.rs/mars-compiler
+    #[serde(default = "default_compile_in_flight_pages_budget")]
+    pub compile_in_flight_pages_budget_bytes: String,
     /// Opportunistic rebalance settings (split / merge under size or
     /// bbox-dilation drift).
     #[serde(default)]
@@ -104,6 +115,7 @@ impl Default for Compiler {
             compile_page_working_set_bytes: default_compile_page_working_set(),
             compile_plan_budget_bytes: default_compile_plan_budget(),
             compile_binding_parallelism: default_compile_binding_parallelism(),
+            compile_in_flight_pages_budget_bytes: default_compile_in_flight_pages_budget(),
             rebalance: Rebalance::default(),
         }
     }
@@ -124,6 +136,11 @@ impl Compiler {
     pub fn compile_plan_budget(&self) -> Result<u64, ConfigError> {
         units::parse_bytes(&self.compile_plan_budget_bytes)
     }
+
+    /// Resolve `compile_in_flight_pages_budget_bytes` to bytes.
+    pub fn compile_in_flight_pages_budget(&self) -> Result<u64, ConfigError> {
+        units::parse_bytes(&self.compile_in_flight_pages_budget_bytes)
+    }
 }
 
 fn default_compiler_window() -> String {
@@ -140,6 +157,10 @@ fn default_compile_plan_budget() -> String {
 
 fn default_compile_binding_parallelism() -> usize {
     4
+}
+
+fn default_compile_in_flight_pages_budget() -> String {
+    "256MiB".to_owned()
 }
 
 /// Opportunistic rebalance settings. LAZARUS §Rebalance: rebalance is
