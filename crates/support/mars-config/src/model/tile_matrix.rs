@@ -1,7 +1,7 @@
 use mars_types::CrsCode;
 use serde::{Deserialize, Serialize};
 
-/// Tile-matrix-set definition. SPEC §13.3.
+/// Tile-matrix-set definition.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TileMatrixSet {
     /// CRS the matrix set is defined in.

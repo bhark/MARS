@@ -1,4 +1,4 @@
-//! tiny-skia rasterisation helpers. SPEC §11.2.
+//! tiny-skia rasterisation helpers.
 
 use mars_render_port::{Path as PortPath, RenderError};
 use mars_style::{Colour, LabelStyle, LineCap as SLineCap, LineJoin as SLineJoin, Style};

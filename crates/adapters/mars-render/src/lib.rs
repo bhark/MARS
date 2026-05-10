@@ -1,4 +1,4 @@
-//! CPU rasteriser. SPEC §11.2 - tiny-skia rasterisation, PNG and JPEG encoding.
+//! CPU rasteriser. tiny-skia rasterisation, PNG and JPEG encoding.
 
 #![forbid(unsafe_code)]
 

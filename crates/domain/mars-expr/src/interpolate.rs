@@ -1,4 +1,4 @@
-//! Text-template interpolation for label `text:` strings. SPEC §5.6.
+//! Text-template interpolation for label `text:` strings.
 //!
 //! A template is a sequence of literal segments and `{ident}` placeholders.
 //! Identifier syntax matches the WHERE-clause lexer: ASCII alpha/underscore
@@ -7,7 +7,7 @@
 //!
 //! At eval time, every placeholder is rendered via the shared
 //! [`AttributeAccess`] trait. Missing or NULL attributes render as the empty
-//! string - SPEC §14 calls for forgiving label rendering rather than runtime
+//! string. Forgiving label rendering is preferred over runtime
 //! errors when a row is sparsely populated.
 
 use crate::{AttributeAccess, ExprError, Literal};

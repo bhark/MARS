@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::ConfigError;
 use crate::units;
 
-/// Source database configuration. SPEC §5.2.
+/// Source database configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Source {
     /// Source kind discriminator (e.g. `postgis`).
@@ -50,7 +50,7 @@ pub struct SourcePool {
     pub batch_send_timeout_secs: Option<u64>,
 }
 
-/// Change-feed configuration. SPEC §8.2.
+/// Change-feed configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChangeFeed {
     /// Change-feed kind (e.g. `pgoutput`, `polling`).

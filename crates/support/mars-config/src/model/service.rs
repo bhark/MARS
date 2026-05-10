@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-/// Service identity. SPEC §5.2.
+/// Service identity.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceMeta {
     /// Service slug used in URLs and manifest paths.
@@ -14,7 +14,7 @@ pub struct ServiceMeta {
     /// Operator contact email.
     #[serde(default)]
     pub contact_email: String,
-    /// Font discovery for label rendering. SPEC §14.
+    /// Font discovery for label rendering.
     #[serde(default)]
     pub fonts: Fonts,
     /// DPI used to compute the scale denominator from a request's

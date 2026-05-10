@@ -114,7 +114,7 @@ fn update_event(
         ));
     };
 
-    // SPEC §8.2.1: bound tables MUST carry REPLICA IDENTITY FULL so the
+    // bound tables MUST carry REPLICA IDENTITY FULL so the
     // OLD geometry is present on every UPDATE/DELETE. phase-c uses both
     // old and new bboxes to derive Hilbert keys covering the dirty pages.
     let Some(old) = payload.full_old.as_ref() else {

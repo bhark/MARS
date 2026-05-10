@@ -1,5 +1,5 @@
 //! renderer port. tiny abstract vocabulary so the application layer can swap a
-//! CPU rasteriser for a GPU one without touching the request path (SPEC §11.2).
+//! CPU rasteriser for a GPU one without touching the request path.
 //! the trait deliberately speaks in pixmaps, paths, paints; it does not name
 //! `tiny-skia` types. concrete impls live in `mars-render`.
 

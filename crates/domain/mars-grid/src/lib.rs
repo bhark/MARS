@@ -82,7 +82,7 @@ pub struct BandConfig {
 }
 
 /// Pick the scale band whose `max_denom` is the smallest one strictly greater
-/// than the requested `denom`. SPEC §7.2 defines bands as half-open intervals
+/// than the requested `denom`. Bands are half-open intervals
 /// `[prev_max, max_denom)`, so `denom == max_denom` falls into the next band.
 ///
 /// Bands need not be pre-sorted; the function performs the smallest-strictly-

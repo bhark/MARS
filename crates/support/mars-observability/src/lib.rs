@@ -2,7 +2,7 @@
 //!
 //! Stable names for metrics (so dashboards survive code refactors), the
 //! tracing-subscriber bootstrap, the JSON log formatter wiring, and the
-//! Prometheus [`Metrics`] facade. Per SPEC §15.
+//! Prometheus [`Metrics`] facade.
 
 #![forbid(unsafe_code)]
 
@@ -62,7 +62,7 @@ pub mod metrics {
 /// `log_level` is read from `config.observability.log_level`; when present it
 /// takes precedence over `RUST_LOG`. When both are absent the default is
 /// `info`. JSON output when `json` is true (matches
-/// `observability.log_format: json` in SPEC §5.2).
+/// `observability.log_format: json`).
 pub fn init_tracing(json: bool, log_level: Option<&str>) -> Result<(), ObservabilityError> {
     let filter = if let Some(level) = log_level {
         EnvFilter::new(level)

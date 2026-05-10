@@ -1,4 +1,4 @@
-//! atomic manifest publisher (SPEC §8.5).
+//! atomic manifest publisher.
 //!
 //! writes `manifests/v{N}.json` first, then swaps `manifests/current` to point
 //! at it. each write is a temp-file-in-same-directory + fsync + rename. if the
@@ -79,7 +79,7 @@ impl FsPublisher {
         let current_path = root.join(MANIFEST_DIR).join(CURRENT_FILE);
         // capture mtime alongside pointer so the watcher can distinguish
         // pointer="vN" → "vM" → "vN" (a republish-and-rollback within one
-        // poll interval) from a steady "vN" - SPEC §10.5 requires emitting
+        // poll interval) from a steady "vN" - requires emitting
         // on every pointer change.
         let mtime = match tokio::fs::metadata(&current_path).await {
             Ok(m) => m.modified().unwrap_or(SystemTime::UNIX_EPOCH),

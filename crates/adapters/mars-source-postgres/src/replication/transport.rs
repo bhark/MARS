@@ -16,7 +16,7 @@
 //! every `status_interval` (or immediately when the server requests a
 //! reply). Crash between `next_batch` and `acknowledge` simply leaves
 //! `confirmed_flush_lsn` un-advanced, which replays the window on the
-//! next subscribe (SPEC §8.3 / compiler `run` invariant).
+//! next subscribe (compiler `run` invariant).
 
 use std::str::FromStr;
 use std::sync::Arc;
@@ -347,7 +347,7 @@ fn build_replication_config(cfg: &PgConfig) -> Result<ReplicationConfig, SourceE
         slot: cfg.slot.clone(),
         publication: cfg.publication.clone(),
         // Lsn(0) tells the server to resume from the slot's confirmed_flush_lsn.
-        // SPEC §8.3 ack semantics: this is what makes replay-on-reconnect work
+        // ack semantics: this is what makes replay-on-reconnect work
         // without needing to remember the cursor anywhere except the slot.
         start_lsn: Lsn::ZERO,
         stop_at_lsn: None,

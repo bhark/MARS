@@ -1,4 +1,4 @@
-//! WMS 1.3.0 interface adapter. SPEC §12.
+//! WMS 1.3.0 interface adapter.
 //!
 //! Covers `GetMap` and `GetCapabilities` only. SLD / SLD_BODY,
 //! GetFeatureInfo and GetLegendGraphic are deferred.

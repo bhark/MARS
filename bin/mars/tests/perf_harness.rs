@@ -1,4 +1,4 @@
-//! perf harness: host-side §19 measurements against the parcels-mini
+//! perf harness: host-side measurements against the parcels-mini
 //! fixture. mirrors `image_diff_harness.rs` for setup, then runs:
 //!
 //!   * latency phase: N warm sequential renders per case → p50/p95/max ms
@@ -8,7 +8,7 @@
 //!
 //! parcels-mini is small; the absolute numbers will be optimistic vs a
 //! production-class fixture, but the methodology
-//! is what §19 needs. operator-driven cluster captures land via
+//! is the methodology. operator-driven cluster captures land via
 //! `mars-diff-capture --load`; this harness keeps the host-side ratchet
 //! honest under e2e CI.
 //!
@@ -201,7 +201,7 @@ async fn parcels_mini_perf_harness() -> Result<()> {
     report.push_str(&format!("| p99 ms (under load) | {:.2} |\n", tput.p99_ms));
     report.push_str(&format!("| failures | {} |\n", tput.failures));
 
-    report.push_str("\n## §19 cells covered host-side\n\n");
+    report.push_str("\n## cells covered host-side\n\n");
     report.push_str("- GetMap p50/p95 warm, high zoom: see latency table.\n");
     report.push_str("- Throughput per pod, mixed: see throughput table.\n\n");
     report.push_str("Cells deferred to operator capture (cluster-side, against production data):\n\n");

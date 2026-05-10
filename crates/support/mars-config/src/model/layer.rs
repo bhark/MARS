@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::ConfigError;
 use crate::units;
 
-/// Layer definition. SPEC §5.3.
+/// Layer definition.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Layer {
     /// Stable layer identifier.
@@ -56,14 +56,14 @@ pub struct ScaleWindow {
     pub max: Option<u64>,
 }
 
-/// Source binding for a layer. SPEC §5.3.
+/// Source binding for a layer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourceBinding {
     /// Scale window this binding is active in.
     #[serde(default)]
     pub scale: Option<ScaleWindow>,
-    /// Scale band this binding routes against. SPEC §7.3, §11 Glossary —
-    /// bands are routing rules, not substrate axes. At config validation,
+    /// Scale band this binding routes against. Bands are routing rules, not
+    /// substrate axes. At config validation,
     /// `band` is folded into `scale` as the half-open denominator interval
     /// `[prev_max, this_max)` derived from `scales.bands`, intersected with
     /// any explicit `scale` bound. The renderer's binding picker reads only
@@ -209,7 +209,7 @@ pub struct DecimationLevelConfig {
     pub label_min_priority: u32,
 }
 
-/// Layer class. SPEC §5.3.
+/// Layer class.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Class {
     /// Class identifier.
@@ -244,7 +244,7 @@ pub enum ClassStyle {
     Inline(Style),
 }
 
-/// Label declaration on a layer. SPEC §5.5.
+/// Label declaration on a layer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LayerLabel {
     /// Reference or inline label style.

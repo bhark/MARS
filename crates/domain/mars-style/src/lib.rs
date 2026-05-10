@@ -1,4 +1,4 @@
-//! MARS style model. SPEC §5.4 / §5.5 - a small fixed vocabulary close to SVG.
+//! MARS style model. a small fixed vocabulary close to SVG.
 //!
 //! No rendering happens here; the renderer adapter consumes the compiled form.
 
@@ -117,7 +117,7 @@ pub struct Style {
     pub stroke_linejoin: Option<LineJoin>,
 }
 
-/// Label-typed style. SPEC §5.4.
+/// Label-typed style.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LabelStyle {
     pub font_family: String,
@@ -136,13 +136,13 @@ pub struct LabelStyle {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Halo {
-    // accept either `colour` or `color`; SPEC examples use the US spelling.
+    // accept either `colour` or `color`; examples use the US spelling.
     #[serde(alias = "color")]
     pub colour: Colour,
     pub width: f32,
 }
 
-/// Label placement strategy. SPEC §5.5.
+/// Label placement strategy.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum Placement {
@@ -175,7 +175,7 @@ impl Placement {
     }
 }
 
-/// Polygon-label anchor strategy. SPEC §14.1.
+/// Polygon-label anchor strategy.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PolygonStrategy {
@@ -223,7 +223,7 @@ impl LayerGeomKind {
 }
 
 /// Default placement for a layer with no explicit `placement:` block.
-/// SPEC §5.5: lines repeat at 250 m with a 25° angle gate; everything else
+/// lines repeat at 250 m with a 25° angle gate; everything else
 /// gets a single point anchor.
 #[must_use]
 pub fn default_placement(kind: LayerGeomKind) -> Placement {
@@ -301,7 +301,7 @@ mod tests {
 
     #[test]
     fn polygon_style_from_spec_example_round_trips() {
-        // mirrors SPEC §5.4: a `bygning_*` polygon style.
+        // mirrors: a `bygning_*` polygon style.
         let json = r##"{"fill":"#fafafa","stroke":"#b4b4b4","stroke_width":0.6}"##;
         let s: Style = serde_json::from_str(json).unwrap();
         assert_eq!(s.fill.unwrap(), Colour::rgba(0xfa, 0xfa, 0xfa, 0xff));

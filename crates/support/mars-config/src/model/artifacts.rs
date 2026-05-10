@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::ConfigError;
 use crate::units;
 
-/// Artifact storage configuration. SPEC §5.2 / §10.
+/// Artifact storage configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Artifacts {
     /// Long-term artifact store.

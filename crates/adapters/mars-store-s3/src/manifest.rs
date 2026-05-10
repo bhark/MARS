@@ -1,4 +1,4 @@
-//! object-store-backed [`ManifestStore`] (SPEC §8.5).
+//! object-store-backed [`ManifestStore`].
 //!
 //! publish flow:
 //!   1. write `manifests/v{N}.json` with `PutMode::Create` so a duplicate

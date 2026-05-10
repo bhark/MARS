@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::ConfigError;
 use crate::units;
 
-/// Scale-band table. SPEC §5.2 / §7.2.
+/// Scale-band table.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Scales {
     /// Bands ordered fine-to-coarse.

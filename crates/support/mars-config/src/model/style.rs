@@ -2,7 +2,7 @@ use mars_style::{LabelStyle, Style};
 use serde::{Deserialize, Serialize};
 
 /// Style entry as seen on the YAML wire. The `type:` field discriminates
-/// (SPEC §5.4: `line | polygon | point | label`); geometry kinds all share
+/// (: `line | polygon | point | label`); geometry kinds all share
 /// the same flat shape, label has its own field set.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]

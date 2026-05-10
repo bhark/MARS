@@ -1,4 +1,4 @@
-//! tokenizer + recursive-descent parser for the SPEC §5.6 dialect.
+//! tokenizer + recursive-descent parser for the dialect.
 //!
 //! grammar (low → high precedence):
 //!   or      := and ( OR and )*

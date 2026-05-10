@@ -1,6 +1,6 @@
 //! Regression: a layer with two source bindings that resolve to the same
 //! `(layer_id, binding_id)` (different `band:` only) must not produce duplicate
-//! class sidecars in the published manifest. SPEC §7.3 — bands are routing
+//! class sidecars in the published manifest. — bands are routing
 //! rules, not substrate axes.
 //!
 //! Without `build_bootstrap_plan` deduping `LayerPlan` per `(layer_id,

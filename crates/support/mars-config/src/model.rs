@@ -1,4 +1,4 @@
-//! Typed serde model for MARS service YAML. SPEC §5.2 - §5.5.
+//! Typed serde model for MARS service YAML.
 //!
 //! Unit-suffixed scalars (`50GiB`, `4096m`, `5min`) are deserialised as
 //! strings here and parsed in [`crate::units`] when accessed; the wire form

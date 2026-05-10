@@ -21,7 +21,7 @@ pub mod fixtures;
 ///
 /// Resolution step: every source binding with `band: Some(name)` has its
 /// `scale: ScaleWindow` intersected with the band's half-open denominator
-/// interval (SPEC §7.3, §11 Glossary — bands are routing rules). Disjoint
+/// interval (Glossary — bands are routing rules). Disjoint
 /// intersections are rejected so the renderer's binding picker, which
 /// consumes `source.scale` directly, sees the effective routing window
 /// without needing band knowledge.

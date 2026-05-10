@@ -1,4 +1,4 @@
-//! WMS 1.3.0 GetCapabilities document. SPEC §12.
+//! WMS 1.3.0 GetCapabilities document.
 //!
 //! Renders a minimal, valid 1.3.0 capabilities body; format conformance is a
 //! future concern. The output is built per manifest swap so newly published

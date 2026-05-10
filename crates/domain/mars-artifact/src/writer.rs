@@ -118,7 +118,7 @@ impl ArtifactWriter {
     ///
     /// All cross-field invariants are validated here:
     /// - bbox must have been set
-    /// - source artifacts must not carry a source_ref (SPEC §9.2)
+    /// - source artifacts must not carry a source_ref
     /// - feature_count, when present alongside geometry, must equal the
     ///   actual feature count encoded in the payload
     pub fn finish(mut self) -> Result<Bytes, ArtifactError> {

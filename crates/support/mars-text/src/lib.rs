@@ -1,4 +1,4 @@
-//! font discovery, shaping, and glyph rasterisation for MARS labels (SPEC §14).
+//! font discovery, shaping, and glyph rasterisation for MARS labels.
 //!
 //! - [`Fonts`] wraps `fontdb` for face discovery; `load(paths, bundle_default)`
 //!   walks a list of search paths and optionally appends the vendored DejaVu Sans

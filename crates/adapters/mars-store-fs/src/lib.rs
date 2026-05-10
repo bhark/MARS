@@ -1,5 +1,5 @@
 //! filesystem-backed adapter for `mars-store::ObjectStore`, `LocalCache`,
-//! and `ManifestStore`. SPEC §8.5 / §10.2 / §10.3.
+//! and `ManifestStore`.
 #![deny(unsafe_code)]
 
 use std::time::Duration;

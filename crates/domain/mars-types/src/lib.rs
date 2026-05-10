@@ -152,17 +152,17 @@ macro_rules! impl_string_newtype {
 }
 
 impl_string_newtype!(
-    /// CRS authority code, e.g. `EPSG:25832`. dedup axis (SPEC §7).
+    /// CRS authority code, e.g. `EPSG:25832`. dedup axis.
     pub CrsCode
 );
 
 impl_string_newtype!(
-    /// stable layer identifier inside a service. dedup axis (SPEC §7).
+    /// stable layer identifier inside a service. dedup axis.
     pub LayerId
 );
 
 impl_string_newtype!(
-    /// object-store key for an artifact. dedup axis (SPEC §7).
+    /// object-store key for an artifact. dedup axis.
     pub ArtifactKey
 );
 
@@ -498,7 +498,7 @@ impl ImageFormat {
     }
 }
 
-/// manifest v3 data-transfer object. SPEC §8.5 / §9.2.
+/// manifest v3 data-transfer object.
 ///
 /// substrate is `(binding × decimation_level × page)`. each render-time page
 /// lookup is a binary search of `pages` (sorted by `(binding_id, level,

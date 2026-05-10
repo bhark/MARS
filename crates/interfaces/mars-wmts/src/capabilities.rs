@@ -1,4 +1,4 @@
-//! WMTS 1.0.0 GetCapabilities document. SPEC §13.
+//! WMTS 1.0.0 GetCapabilities document.
 //!
 //! The envelope is OWS Common 1.1 (xmlns `http://www.opengis.net/wmts/1.0`)
 //! rather than the WMS shape. The Contents block lists each advertised layer
@@ -143,7 +143,7 @@ fn write_layer<W: std::io::Write>(
     }
     text_element(w, "ows:Identifier", layer.name.as_str())?;
 
-    // a single default style. SLD is a non-goal (SPEC §12.4); we expose only
+    // a single default style. SLD is a non-goal; we expose only
     // the compiled-in default to keep the document honest.
     w.write_event({
         let mut s = BytesStart::new("Style");

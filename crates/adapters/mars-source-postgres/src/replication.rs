@@ -1,4 +1,4 @@
-//! pgoutput logical-decoding subscriber (SPEC §8.2.1).
+//! pgoutput logical-decoding subscriber.
 //!
 //! Layout:
 //! - `pgoutput`: byte-level decoder for pgoutput v1/v2 messages. Pure, tested

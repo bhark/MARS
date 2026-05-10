@@ -1,4 +1,4 @@
-//! WMTS 1.0.0 KVP request parsing. SPEC §13.
+//! WMTS 1.0.0 KVP request parsing.
 //!
 //! v1 covers `GetTile` and `GetCapabilities`. Other request kinds
 //! (`GetFeatureInfo`) reject with `WmtsError::NotImplemented`.

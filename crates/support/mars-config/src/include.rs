@@ -119,7 +119,7 @@ fn resolve(value: &mut Value, base_dir: &Path, root: &Path, stack: &mut HashSet<
             // similarly, !include under a mapping value may resolve to a
             // mapping that should merge into the parent. we splice in place
             // unless the value resolves to a mapping AND the original key was
-            // a placeholder marker - SPEC keeps it simple: at a mapping value
+            // a placeholder marker - the design keeps it simple: at a mapping value
             // position, we just substitute the value (no merging). merging
             // is reserved for sequence position (e.g. layers: !include ...).
             for (_, v) in map.iter_mut() {

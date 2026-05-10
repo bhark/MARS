@@ -40,7 +40,7 @@ pub fn parse_get_map(query: &str, cfg: &WmsConfig) -> Result<RenderPlan, WmsErro
 }
 
 fn parse_get_map_inner(kvp: &Kvp, cfg: &WmsConfig) -> Result<RenderPlan, WmsError> {
-    // version is checked loosely; SPEC commits to 1.3.0 only.
+    // version is checked loosely; commits to 1.3.0 only.
     if let Some(v) = kvp.get("version")
         && v != "1.3.0"
     {

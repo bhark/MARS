@@ -2,7 +2,7 @@
 //!
 //! `Source` is the read interface used by the compiler to materialise
 //! geometries and attributes per page. `ChangeFeed` is the subscription
-//! interface that produces dirty-page events (SPEC §8.2). Both are
+//! interface that produces dirty-page events. Both are
 //! runtime-agnostic - concrete adapters live in `crates/adapters/mars-source-*`.
 //!
 //! `CompileSession` exposes a snapshot-stable `fetch_full_table_streaming`
@@ -43,7 +43,7 @@ pub enum SourceError {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
     /// The change feed slot was lost or fell too far behind. Recovery is via
-    /// snapshot compile (SPEC §8.2.3).
+    /// snapshot compile.
     #[error("change feed gone; full snapshot required")]
     ChangeFeedGone,
     /// Invalid binding configuration.

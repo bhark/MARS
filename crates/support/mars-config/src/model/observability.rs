@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-/// Observability settings. SPEC §15.
+/// Observability settings.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Observability {
     /// `info`, `debug`, ...

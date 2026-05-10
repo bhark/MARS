@@ -3,7 +3,7 @@
 //! - [`ObjectStore`] - the shared, cloud-grade artifact bucket (S3 / R2 / GCS / FS).
 //! - [`LocalCache`]  - the per-pod SSD cache (mirrored key layout, mmap-friendly).
 //! - [`ManifestStore`] - publish, read, and watch the current manifest pointer
-//!   (SPEC §8.5 / §10.5).
+//!
 //!
 //! adapters live under `crates/adapters/mars-store-*`.
 

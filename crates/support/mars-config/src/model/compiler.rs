@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::ConfigError;
 use crate::units;
 
-/// Compiler settings. SPEC §8.3.
+/// Compiler settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Compiler {
     /// Window over which incremental change events are batched before

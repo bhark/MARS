@@ -1,4 +1,4 @@
-//! Unit-suffixed scalar parsing for SPEC §5.1.
+//! Unit-suffixed scalar parsing.
 //!
 //! Sizes use IEC binary suffixes (`KiB`, `MiB`, `GiB`, `TiB`) and the SI
 //! decimal forms (`KB`, `MB`, `GB`, `TB`). Distances are metres. Durations

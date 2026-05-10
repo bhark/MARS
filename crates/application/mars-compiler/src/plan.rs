@@ -44,7 +44,7 @@ pub enum PlanError {
         detail: &'static str,
     },
     /// Same `(layer_id, binding_id)` pair declared twice with diverging
-    /// class / label / kind shape. SPEC §7.3: bands are routing rules, not
+    /// class / label / kind shape.: bands are routing rules, not
     /// substrate axes — multiple sources of one layer that resolve to the
     /// same binding collapse to a single `LayerPlan`, which requires their
     /// per-layer shape (classes, label, kind, label_survival) to agree.
@@ -757,7 +757,7 @@ mod tests {
         assert_eq!(levels[2].label_min_priority, 100);
     }
 
-    /// SPEC §7.3: bands are routing rules, not substrate axes. two sources of
+    /// bands are routing rules, not substrate axes. two sources of
     /// the same layer that resolve to the same binding must collapse to one
     /// LayerPlan, otherwise rebuild emits duplicate sidecars per page.
     #[test]

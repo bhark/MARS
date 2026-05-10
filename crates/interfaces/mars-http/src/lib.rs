@@ -1,6 +1,6 @@
 //! `axum`-backed HTTP edge.
 //!
-//! Routes (SPEC §3.3):
+//! Routes:
 //!
 //! ```text
 //! /wms        WMS 1.3.0

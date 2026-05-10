@@ -28,7 +28,7 @@ pub struct FeatureGeom {
     /// multiple parts shares the same user_id). The per-page primary key is
     /// the positional slot index (`feature_idx`) assigned at encode time.
     pub user_id: u64,
-    /// Per-feature bounding box stored as f32 per SPEC §9.3. At canonical-CRS
+    /// Per-feature bounding box stored as f32. At canonical-CRS
     /// magnitudes (~6e5 m for Danish UTM-32) this is ~0.05 m of precision,
     /// so the index bbox is APPROXIMATE: feature-level filtering must not
     /// rely on it for sub-meter discrimination - re-test against the decoded

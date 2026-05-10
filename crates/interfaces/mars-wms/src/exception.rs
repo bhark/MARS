@@ -1,5 +1,5 @@
 //! WMS 1.3.0 ServiceExceptionReport XML builder.
-//! SPEC §7.4.
+//!
 
 use std::io::Cursor;
 

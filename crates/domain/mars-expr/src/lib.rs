@@ -3,7 +3,7 @@
 //! can be lowered into a parameterised SQL query (in `mars-source-postgres`)
 //! and evaluated in-memory at render time.
 //!
-//! SPEC §5.6 defines the dialect. This crate owns the AST, parser, validator,
+//! This crate owns the AST, parser, validator,
 //! and in-memory evaluator. SQL lowering lives with the database adapter that
 //! owns the database vocabulary; that boundary keeps SQL parameterisation
 //! enforceable.
@@ -33,7 +33,7 @@ pub enum ExprError {
     TooDeep { max: u32 },
 }
 
-/// Filter-expression AST. Scope is intentionally narrow (SPEC §5.6).
+/// Filter-expression AST. Scope is intentionally narrow.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Expr {
     Literal(Literal),
@@ -469,7 +469,7 @@ mod tests {
 
     #[test]
     fn parse_string_with_utf8_multibyte() {
-        // SPEC §5.3 explicitly uses 'Foreløbig'; byte-as-char would mangle 'ø'.
+        // the config explicitly uses 'Foreløbig'; byte-as-char would mangle 'ø'.
         let e = parse("status = 'Foreløbig'").unwrap();
         match e {
             Expr::Cmp { rhs, .. } => match *rhs {

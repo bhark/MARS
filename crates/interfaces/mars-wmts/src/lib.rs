@@ -1,4 +1,4 @@
-//! WMTS 1.0.0 interface adapter. SPEC §13.
+//! WMTS 1.0.0 interface adapter.
 
 #![forbid(unsafe_code)]
 

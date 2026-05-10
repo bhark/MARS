@@ -10,7 +10,7 @@ use crate::model::{
 // support types imported so the struct fields compile
 use crate::model::Cells;
 
-/// Top-level service configuration. SPEC §5.2.
+/// Top-level service configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// Service identity and capabilities metadata.
