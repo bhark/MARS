@@ -199,8 +199,11 @@ fn build_feature_ids_only_query(binding: &SourceBinding) -> Result<String, Sourc
     Ok(format!("SELECT {id_q} FROM {schema_q}.{table_q}"))
 }
 
-/// `SELECT id, ST_AsBinary(geom), attrs... FROM s.t` -- no spatial filter, no
-/// ORDER BY. Used by snapshot bootstrap.
+/// `SELECT id, ST_AsBinary(geom), attrs... FROM s.t WHERE geom IS NOT NULL`
+/// -- no spatial filter, no ORDER BY. Used by snapshot bootstrap. NULL geoms
+/// are filtered server-side: ST_AsBinary(NULL) decodes as a NULL bytea which
+/// the non-Option Vec<u8> decoder cannot represent, and a row with no
+/// geometry has nothing to render anyway.
 fn build_full_table_query(binding: &SourceBinding) -> Result<String, SourceError> {
     let id_q = quote_ident(&binding.id_column)?;
     let geom_q = quote_ident(&binding.geometry_column)?;
@@ -213,7 +216,9 @@ fn build_full_table_query(binding: &SourceBinding) -> Result<String, SourceError
         select.push_str(", ");
         select.push_str(&q);
     }
-    Ok(format!("SELECT {select} FROM {schema_q}.{table_q}"))
+    Ok(format!(
+        "SELECT {select} FROM {schema_q}.{table_q} WHERE {geom_q} IS NOT NULL"
+    ))
 }
 
 fn build_feature_ids_query(binding: &SourceBinding) -> Result<String, SourceError> {
@@ -228,8 +233,10 @@ fn build_feature_ids_query(binding: &SourceBinding) -> Result<String, SourceErro
         select.push_str(", ");
         select.push_str(&q);
     }
+    // mirror build_full_table_query: NULL geoms have no rendering surface and
+    // would crash the non-Option Vec<u8> decoder.
     Ok(format!(
-        "SELECT {select} FROM {schema_q}.{table_q} WHERE {id_q} = ANY($1::bigint[])"
+        "SELECT {select} FROM {schema_q}.{table_q} WHERE {id_q} = ANY($1::bigint[]) AND {geom_q} IS NOT NULL"
     ))
 }
 
@@ -507,7 +514,7 @@ mod tests {
         let sql = build_feature_ids_query(&b()).unwrap();
         assert_eq!(
             sql,
-            "SELECT \"gid\", ST_AsBinary(\"geom\") AS geom, \"name\", \"kind\" FROM \"public\".\"t\" WHERE \"gid\" = ANY($1::bigint[])"
+            "SELECT \"gid\", ST_AsBinary(\"geom\") AS geom, \"name\", \"kind\" FROM \"public\".\"t\" WHERE \"gid\" = ANY($1::bigint[]) AND \"geom\" IS NOT NULL"
         );
     }
 

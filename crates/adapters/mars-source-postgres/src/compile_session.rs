@@ -222,9 +222,14 @@ fn pack_row_key(tableoid: u32, block: u32, offset: u16) -> SourceRowKey {
 }
 
 /// Pass-1 SQL: `SELECT id, tableoid, ctid, ST_XMin(geom), ST_YMin, ST_XMax,
-/// ST_YMax, octet_length(ST_AsBinary(geom)) FROM s.t`. The combined
-/// `(tableoid, ctid)` pair is the snapshot-stable row identity used as
-/// the page planner's terminal sort tier.
+/// ST_YMax, octet_length(ST_AsBinary(geom)) FROM s.t WHERE geom IS NOT NULL`.
+/// The combined `(tableoid, ctid)` pair is the snapshot-stable row identity
+/// used as the page planner's terminal sort tier.
+///
+/// rows with NULL geometry are filtered at SQL level: ST_XMin/ST_AsBinary
+/// return NULL on NULL geom, which the non-Option decoders cannot represent.
+/// the same predicate runs in pass-2 so the two scans stay row-set aligned
+/// under the shared snapshot.
 fn build_summary_query(binding: &SourceBinding) -> Result<String, SourceError> {
     let id_q = quote_ident(&binding.id_column)?;
     let geom_q = quote_ident(&binding.geometry_column)?;
@@ -239,16 +244,18 @@ fn build_summary_query(binding: &SourceBinding) -> Result<String, SourceError> {
                 ST_XMax({geom_q})::float4, \
                 ST_YMax({geom_q})::float4, \
                 octet_length(ST_AsBinary({geom_q}))::int4 \
-         FROM {schema_q}.{table_q}"
+         FROM {schema_q}.{table_q} \
+         WHERE {geom_q} IS NOT NULL"
     ))
 }
 
 /// Pass-2 SQL: `SELECT id, ST_AsBinary(geom), attrs..., tableoid::oid,
-/// ctid::text FROM s.t`. Single sequential scan in pg-table order; pass-2's
-/// caller buckets rows into the planned pages by joining on
-/// [`SourceRowKey`]. No `WHERE`, no `ORDER BY` -- avoids the per-page
-/// heap-walk that the prior `id = ANY($1)` pattern degenerated to on
-/// non-clustered tables.
+/// ctid::text FROM s.t WHERE geom IS NOT NULL`. Single sequential scan in
+/// pg-table order; pass-2's caller buckets rows into the planned pages by
+/// joining on [`SourceRowKey`]. No `ORDER BY` -- avoids the per-page heap-walk
+/// that the prior `id = ANY($1)` pattern degenerated to on non-clustered
+/// tables. The NULL-geom predicate mirrors pass-1 so the two scans see the
+/// same row set under the shared snapshot.
 fn build_full_table_query(binding: &SourceBinding) -> Result<String, SourceError> {
     let id_q = quote_ident(&binding.id_column)?;
     let geom_q = quote_ident(&binding.geometry_column)?;
@@ -264,7 +271,9 @@ fn build_full_table_query(binding: &SourceBinding) -> Result<String, SourceError
     // tableoid + ctid land at fixed trailing offsets so decode_compile_row
     // can locate them without re-deriving the attribute count.
     select.push_str(", tableoid::oid, ctid::text");
-    Ok(format!("SELECT {select} FROM {schema_q}.{table_q}"))
+    Ok(format!(
+        "SELECT {select} FROM {schema_q}.{table_q} WHERE {geom_q} IS NOT NULL"
+    ))
 }
 
 /// Decode a pass-2 row produced by `build_full_table_query`. The first
@@ -309,6 +318,7 @@ mod tests {
         assert!(sql.contains("ctid::text"));
         assert!(!sql.contains("md5"));
         assert!(sql.contains("FROM \"public\".\"t\""));
+        assert!(sql.contains("WHERE \"geom\" IS NOT NULL"));
     }
 
     #[test]
@@ -326,9 +336,8 @@ mod tests {
         let sql = build_full_table_query(&b).unwrap();
         assert_eq!(
             sql,
-            "SELECT \"gid\", ST_AsBinary(\"geom\") AS geom, \"name\", \"kind\", tableoid::oid, ctid::text FROM \"public\".\"t\""
+            "SELECT \"gid\", ST_AsBinary(\"geom\") AS geom, \"name\", \"kind\", tableoid::oid, ctid::text FROM \"public\".\"t\" WHERE \"geom\" IS NOT NULL"
         );
-        assert!(!sql.contains("WHERE"));
         assert!(!sql.contains("ORDER BY"));
     }
 
