@@ -1,7 +1,8 @@
 #!/bin/sh
 set -eu
 
-OSM_BBOX="${OSM_BBOX:-9.5,55.6,10.7,56.0}"
+# overpass bbox order is (south,west,north,east)
+OSM_BBOX="${OSM_BBOX:-55.6,9.5,56.0,10.7}"
 PG_DSN="${PG_DSN:-postgres://mars:mars@mars-postgis/mars}"
 PUBLICATION="${PUBLICATION:-mars_local_pub}"
 # must match `SCHEMA` in osm-mapping.lua

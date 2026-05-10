@@ -8,7 +8,7 @@ Image=localhost/mars-seed:dev
 ContainerName=mars-seed
 Network=mars.network
 Volume=osm-cache.volume:/cache
-Environment=PG_DSN=postgres://mars:mars@mars-postgis/mars OSM_BBOX=9.5,55.6,10.7,56.0
+Environment=PG_DSN=postgres://mars:mars@mars-postgis/mars OSM_BBOX=55.6,9.5,56.0,10.7
 
 [Service]
 Type=oneshot
