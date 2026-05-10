@@ -522,6 +522,7 @@ mod tests {
                 name: "default".into(),
                 title: String::new(),
                 when: None,
+                scale: None,
                 style: ClassStyle::Inline(Default::default()),
             }],
             label: None,
@@ -613,12 +614,14 @@ mod tests {
                     name: "main".into(),
                     title: String::new(),
                     when: Some("kind = 'main'".into()),
+                    scale: None,
                     style: ClassStyle::Inline(Default::default()),
                 },
                 mars_config::Class {
                     name: "default".into(),
                     title: String::new(),
                     when: None,
+                    scale: None,
                     style: ClassStyle::Inline(Default::default()),
                 },
             ],
@@ -788,6 +791,7 @@ mod tests {
             name: "other".into(),
             title: String::new(),
             when: None,
+            scale: None,
             style: ClassStyle::Inline(Default::default()),
         }];
         let cfg = config_with(vec![l1, l2]);

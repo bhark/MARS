@@ -553,6 +553,8 @@ fn parse_class(
     let mut name: Option<String> = None;
     let mut expression: Option<String> = None;
     let mut styles: Vec<StyleBlock> = Vec::new();
+    let mut min_scale_denom: Option<u64> = None;
+    let mut max_scale_denom: Option<u64> = None;
 
     let mut i = 0;
     while i < body.len() {
@@ -561,6 +563,23 @@ fn parse_class(
         match kw.as_str() {
             "NAME" if name.is_none() => {
                 name = t.args.first().cloned();
+                i += 1;
+                continue;
+            }
+            "MINSCALEDENOM" | "MAXSCALEDENOM" => {
+                if let Some(arg) = t.args.first() {
+                    match arg.parse::<f64>() {
+                        Ok(v) if v.is_finite() && v >= 0.0 => {
+                            let n = normalize_n_plus_one(v as u64);
+                            if kw == "MINSCALEDENOM" {
+                                min_scale_denom = Some(n);
+                            } else {
+                                max_scale_denom = Some(n);
+                            }
+                        }
+                        _ => warn!(line = t.line, keyword = %kw, value = %arg, "could not parse class scale denom"),
+                    }
+                }
                 i += 1;
                 continue;
             }
@@ -665,6 +684,8 @@ fn parse_class(
         name: class_name,
         title,
         when: expression,
+        min_scale_denom,
+        max_scale_denom,
         style_ref,
     })
 }

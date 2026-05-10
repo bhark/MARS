@@ -21,7 +21,7 @@ use mars_artifact::{
     ArtifactReader, FeatureGeom, GeomKind, LabelCandidate, LabelShape, SectionKind, SpatialIndex,
     decode_class_assignment, decode_label_candidates, decode_one_geom, decode_style_refs, iter_feature_index,
 };
-use mars_config::Layer;
+use mars_config::{Layer, ScaleWindow};
 use mars_render_port::{Canvas, DrawOp, Path, Renderer, Subpath};
 use mars_style::{LabelStyle, LabelSurvival, Style, Stylesheet};
 use mars_types::{Bbox, BindingMetadata, LayerId, PageEntry};
@@ -111,6 +111,10 @@ async fn render_one_layer(
         else {
             return Ok::<(usize, Option<LayerOutput>), RuntimeError>((idx, None));
         };
+        // per-class scale gating: classes with a `scale:` window only fire when
+        // the request denom falls inside it. None means always-on. precompute
+        // once per layer; the page loop reuses the mask via class_idx.
+        let class_active = class_active_mask(layer_cfg, denom);
         let binding =
             state
                 .index
@@ -136,12 +140,32 @@ async fn render_one_layer(
             layer_cfg.label_survival,
             deps.renderer.as_ref(),
             page_fetch_concurrency,
+            &class_active,
         )
         .await?;
         Ok((idx, Some(out)))
     }
     .instrument(layer_span)
     .await
+}
+
+/// per-class active mask at a given request denom. an entry is `true` when
+/// the class either has no `scale:` window or its half-open `[min, max)`
+/// covers `denom`. mirrors MapServer CLASS MIN/MAXSCALEDENOM semantics.
+fn class_active_mask(layer: &Layer, denom: u32) -> Vec<bool> {
+    layer
+        .classes
+        .iter()
+        .map(|c| match &c.scale {
+            None => true,
+            Some(s) => scale_window_contains(s, denom),
+        })
+        .collect()
+}
+
+fn scale_window_contains(s: &ScaleWindow, denom: u32) -> bool {
+    let d = u64::from(denom);
+    s.min.is_none_or(|m| d >= m) && s.max.is_none_or(|m| d < m)
 }
 
 fn lookup_layer<'c>(config: &'c mars_config::Config, layer_id: &LayerId) -> Result<&'c Layer, RuntimeError> {
@@ -170,6 +194,7 @@ async fn render_layer_pages(
     label_survival: LabelSurvival,
     renderer: &dyn Renderer,
     page_fetch_concurrency: usize,
+    class_active: &[bool],
 ) -> Result<LayerOutput, RuntimeError> {
     // ordered-and-bounded fan-out: fetch up to `page_fetch_concurrency`
     // pages in parallel but emit in input (page-key) order so draw-op
@@ -244,6 +269,7 @@ async fn render_layer_pages(
             layer_id,
             &state.stylesheet,
             same_crs,
+            class_active,
         )?;
         if unstyled_count > 0 {
             deps.metrics
@@ -319,6 +345,10 @@ impl ClassResolver {
         self.style_refs.get(cls).map(String::as_str)
     }
 
+    fn class_idx_for(&self, feature_idx: u32) -> Option<u16> {
+        *self.by_slot.get(feature_idx as usize)?
+    }
+
     pub(crate) fn style_refs(&self) -> &[String] {
         &self.style_refs
     }
@@ -334,6 +364,7 @@ fn decode_page_to_ops(
     layer_id: &LayerId,
     stylesheet: &Stylesheet,
     same_crs: bool,
+    class_active: &[bool],
 ) -> Result<DecodedPage, RuntimeError> {
     let reader = ArtifactReader::open(bytes).map_err(map_artifact_err)?;
     let spatial_bytes = reader.section(SectionKind::SpatialIndex).map_err(map_artifact_err)?;
@@ -413,6 +444,19 @@ fn decode_page_to_ops(
     let mut ops = Vec::with_capacity(projected.len());
     let mut unstyled_count: u64 = 0;
     for (slot, f) in projected {
+        // per-class scale gate: a feature assigned to a class whose scale
+        // window doesn't cover this denom is suppressed. clear it from
+        // rendered_slots too so FollowGeometry-survival labels track the
+        // suppression. matches MapServer CLASS MIN/MAXSCALEDENOM semantics.
+        if let Some(idx) = class.as_ref().and_then(|c| c.class_idx_for(slot))
+            && class_active.get(idx as usize).copied() == Some(false)
+        {
+            let i = slot as usize;
+            if i < rendered_slots.len() {
+                rendered_slots[i] = false;
+            }
+            continue;
+        }
         let Some(name) = class.as_ref().and_then(|c| c.style_ref_for(slot)) else {
             // class chain didn't match this feature; drop it and let the
             // caller bump the unstyled counter once for the page.
@@ -761,6 +805,37 @@ mod tests {
             stroke_linecap: None,
             stroke_linejoin: None,
         })
+    }
+
+    #[test]
+    fn class_scale_window_gates_at_denom() {
+        // half-open [25001, 100001): denom 25001 active, 100001 not.
+        let s = ScaleWindow {
+            min: Some(25_001),
+            max: Some(100_001),
+        };
+        assert!(scale_window_contains(&s, 25_001));
+        assert!(scale_window_contains(&s, 100_000));
+        assert!(!scale_window_contains(&s, 25_000));
+        assert!(!scale_window_contains(&s, 100_001));
+    }
+
+    #[test]
+    fn class_scale_window_open_bounds() {
+        let s_no_min = ScaleWindow {
+            min: None,
+            max: Some(50),
+        };
+        assert!(scale_window_contains(&s_no_min, 0));
+        assert!(scale_window_contains(&s_no_min, 49));
+        assert!(!scale_window_contains(&s_no_min, 50));
+
+        let s_no_max = ScaleWindow {
+            min: Some(50),
+            max: None,
+        };
+        assert!(!scale_window_contains(&s_no_max, 49));
+        assert!(scale_window_contains(&s_no_max, 1_000_000));
     }
 
     #[test]

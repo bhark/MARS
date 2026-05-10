@@ -52,6 +52,8 @@ pub(crate) struct ClassSkeleton {
     pub(crate) name: String,
     pub(crate) title: Option<String>,
     pub(crate) when: Option<String>,
+    pub(crate) min_scale_denom: Option<u64>,
+    pub(crate) max_scale_denom: Option<u64>,
     pub(crate) style_ref: String,
 }
 
@@ -367,6 +369,16 @@ pub(crate) fn render(skel: &Skeleton, bands: &[(String, u64)]) -> String {
                     }
                     if let Some(when) = &cls.when {
                         parts.push(format!("when: {}", yaml_quote(when)));
+                    }
+                    if cls.min_scale_denom.is_some() || cls.max_scale_denom.is_some() {
+                        let mut scale_parts: Vec<String> = Vec::new();
+                        if let Some(m) = cls.min_scale_denom {
+                            scale_parts.push(format!("min: {m}"));
+                        }
+                        if let Some(m) = cls.max_scale_denom {
+                            scale_parts.push(format!("max: {m}"));
+                        }
+                        parts.push(format!("scale: {{ {} }}", scale_parts.join(", ")));
                     }
                     parts.push(format!("style: {{ type: ref, name: {} }}", yaml_quote(&cls.style_ref)));
                     let _ = writeln!(out, "      - {{ {} }}", parts.join(", "));

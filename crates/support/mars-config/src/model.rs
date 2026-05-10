@@ -1031,6 +1031,12 @@ pub struct Class {
     /// `when:` filter expression. Parsed by [`mars_expr::parse`].
     #[serde(default)]
     pub when: Option<String>,
+    /// Per-class scale window. Mirrors MapServer CLASS MINSCALEDENOM /
+    /// MAXSCALEDENOM: a class is active only when the rendering scale
+    /// denominator falls in `[min, max)`. When unset the class follows the
+    /// layer's own scale window.
+    #[serde(default)]
+    pub scale: Option<ScaleWindow>,
     /// Style: either a `{ ref: name }` or an inline geometry style.
     pub style: ClassStyle,
 }

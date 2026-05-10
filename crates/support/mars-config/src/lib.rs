@@ -279,6 +279,29 @@ pub fn validate(config: &mut Config, config_dir: &Path) -> Result<(), ConfigErro
                     layer.name, class.name
                 )));
             }
+
+            // class scale window must be a valid half-open interval; if the
+            // layer carries its own window the class window must intersect it
+            // (a class wholly outside the layer window can never fire).
+            if let Some(cs) = &class.scale {
+                match (cs.min, cs.max) {
+                    (Some(a), Some(b)) if a >= b => {
+                        return Err(ConfigError::Invalid(format!(
+                            "layer {} class {:?} scale window is empty: min {a} >= max {b}",
+                            layer.name, class.name
+                        )));
+                    }
+                    _ => {}
+                }
+                if let Some(ls) = &layer.scale
+                    && intersect_scale_windows(ls, cs).is_none()
+                {
+                    return Err(ConfigError::Invalid(format!(
+                        "layer {} class {:?} scale window is disjoint from layer scale window",
+                        layer.name, class.name
+                    )));
+                }
+            }
         }
 
         // collect every attribute name the layer references via class
@@ -820,6 +843,7 @@ mod tests {
                 name: "primary".into(),
                 title: String::new(),
                 when: Some("kind = 'major'".into()),
+                scale: None,
                 style: ClassStyle::Inline(Default::default()),
             }],
             label: None,
@@ -898,12 +922,14 @@ mod tests {
                     name: "default".into(),
                     title: String::new(),
                     when: None,
+                    scale: None,
                     style: ClassStyle::Inline(Default::default()),
                 },
                 crate::model::Class {
                     name: "default".into(),
                     title: String::new(),
                     when: None,
+                    scale: None,
                     style: ClassStyle::Inline(Default::default()),
                 },
             ],
@@ -924,6 +950,7 @@ mod tests {
                 name: format!("c{i}"),
                 title: String::new(),
                 when: None,
+                scale: None,
                 style: ClassStyle::Inline(Default::default()),
             })
             .collect();
