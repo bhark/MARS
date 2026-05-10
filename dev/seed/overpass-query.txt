@@ -5,7 +5,6 @@
   way["waterway"="riverbank"]({{bbox}});
   relation["natural"="water"]({{bbox}});
   way["landuse"="residential"]({{bbox}});
-  node["place"]({{bbox}});
   way["place"]({{bbox}});
   relation["place"]({{bbox}});
   way["highway"]({{bbox}});
