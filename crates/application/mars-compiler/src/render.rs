@@ -36,7 +36,7 @@ use mars_artifact::{
     ArtifactKind, ArtifactWriter, AttrValue as ArtAttrValue, FeatureGeom, LabelCandidate, MAX_ROW_BYTES,
     SpatialIndexBuilder, compute_content_hash, encode_row, wkb_to_feature_geom,
 };
-use mars_source::{AttrValue, RowBytes, SourceBinding as PortBinding, SourceCollectionId, SourceError, SourceRowKey};
+use mars_source::{AttrValue, RowBytes, SourceBinding as PortBinding, SourceCollectionId, SourceError};
 use mars_types::{
     ArtifactEntry, ArtifactKey, Bbox, BindingId, BindingMetadata, ContentHash, DecimationLevel, HilbertKey,
     LayerSidecarEntry, LayerSidecarKind, LevelMetadata, Manifest, PageEntry, PageId, PageKey,
@@ -1013,13 +1013,7 @@ pub async fn rebuild_binding_from_plan<'a>(
     // eager-flush so partial buffers don't pile up.
     let layer_plans: Vec<&LayerPlan> = plan.layers_for(&binding_plan.binding_id).collect();
 
-    type RouteList = Vec<(usize, PageId)>;
-    let total_planned: usize = page_plan
-        .levels
-        .iter()
-        .map(|l| l.pages.iter().map(|p| p.row_keys.len()).sum::<usize>())
-        .sum();
-    let mut targets: HashMap<SourceRowKey, RouteList> = HashMap::with_capacity(total_planned);
+    let mut targets = crate::route_index::RouteIndex::with_governor(governor, spill_dir)?;
     let mut expected: HashMap<(usize, PageId), usize> = HashMap::new();
     for (lvl_idx, level_pp) in page_plan.levels.iter().enumerate() {
         for planned in &level_pp.pages {
@@ -1030,7 +1024,7 @@ pub async fn rebuild_binding_from_plan<'a>(
             }
             expected.insert((lvl_idx, planned.page_id), planned.row_keys.len());
             for rk in &planned.row_keys {
-                targets.entry(*rk).or_default().push((lvl_idx, planned.page_id));
+                targets.insert(*rk, (lvl_idx, planned.page_id))?;
             }
         }
     }
@@ -1057,7 +1051,7 @@ pub async fn rebuild_binding_from_plan<'a>(
         let row: RowBytes = item?;
         // a row whose pass-1 bbox failed every level's filter has no route
         // and is silently skipped.
-        let Some(routes) = targets.get(&row.row_key).cloned() else {
+        let Some(routes) = targets.lookup(&row.row_key)? else {
             continue;
         };
 

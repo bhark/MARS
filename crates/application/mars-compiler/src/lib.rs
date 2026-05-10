@@ -19,6 +19,7 @@ pub mod plan;
 pub mod rebalance;
 pub mod reconcile;
 pub mod render;
+pub mod route_index;
 pub mod sidecar;
 pub(crate) mod spill;
 pub mod testing;
