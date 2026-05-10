@@ -100,6 +100,13 @@ pub struct Compiler {
     /// more aggressively to disk; it never crashes the process.
     #[serde(default)]
     pub compile_memory_budget_bytes: Option<String>,
+    /// Hard ceiling on transient compile-scratch disk usage summed across
+    /// all in-flight bindings. When unset the governor admits up to a
+    /// generous fallback (64 GiB) so existing deployments behave as
+    /// before; setting this lower makes the disk-spill paths backpressure
+    /// rather than ENOSPC. Unit-suffixed byte literal (`32GiB`).
+    #[serde(default)]
+    pub compile_disk_budget_bytes: Option<String>,
     /// Soft trigger threshold for pass-2 disk spill, per binding. Pass 2
     /// streams the whole table once per binding and buckets rows into the
     /// planned pages; pages eager-flush on completion. When the summed
@@ -145,6 +152,7 @@ impl Default for Compiler {
             compile_plan_budget_bytes: default_compile_plan_budget(),
             compile_binding_parallelism: default_compile_binding_parallelism(),
             compile_memory_budget_bytes: None,
+            compile_disk_budget_bytes: None,
             compile_in_flight_pages_budget_bytes: default_compile_in_flight_pages_budget(),
             compile_spill_dir: None,
             compile_spill_open_file_limit: default_compile_spill_open_file_limit(),
@@ -172,6 +180,14 @@ impl Compiler {
     /// Resolve `compile_memory_budget_bytes` to bytes when explicitly set.
     pub fn compile_memory_budget(&self) -> Result<Option<u64>, ConfigError> {
         self.compile_memory_budget_bytes
+            .as_deref()
+            .map(units::parse_bytes)
+            .transpose()
+    }
+
+    /// Resolve `compile_disk_budget_bytes` to bytes when explicitly set.
+    pub fn compile_disk_budget(&self) -> Result<Option<u64>, ConfigError> {
+        self.compile_disk_budget_bytes
             .as_deref()
             .map(units::parse_bytes)
             .transpose()

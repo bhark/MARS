@@ -10,6 +10,7 @@
 
 pub mod class_eval;
 pub mod decimate;
+pub mod disk_governor;
 pub mod external_sort;
 pub mod hilbert;
 pub mod incremental;
@@ -286,6 +287,7 @@ impl Compiler {
         let spill_dir = self.config.compiler.compile_spill_dir_path();
         let spill_open_file_limit = self.config.compiler.compile_spill_open_file_limit;
         let governor = memory_governor::MemoryGovernor::new(resolve_governor_cap(&self.config.compiler)?);
+        let disk_governor = disk_governor::DiskGovernor::new(resolve_disk_governor_cap(&self.config.compiler)?);
         let manifest = run_snapshot_from_plan(
             &self.deps,
             &plan,
@@ -301,6 +303,7 @@ impl Compiler {
         )
         .await?;
         log_governor_observations("compile.snapshot.governor", &governor);
+        log_disk_governor_observations("compile.snapshot.disk_governor", &disk_governor);
         let v = publish_with_retry(self.deps.manifest.as_ref(), &manifest, &self.deps.metrics, shutdown).await?;
         tracing::info!(
             version = v,
@@ -439,6 +442,7 @@ impl Compiler {
         let spill_dir = self.config.compiler.compile_spill_dir_path();
         let spill_open_file_limit = self.config.compiler.compile_spill_open_file_limit;
         let governor = memory_governor::MemoryGovernor::new(resolve_governor_cap(&self.config.compiler)?);
+        let disk_governor = disk_governor::DiskGovernor::new(resolve_disk_governor_cap(&self.config.compiler)?);
         let started = std::time::Instant::now();
         let outcome = render::rebuild_pages(
             &self.deps,
@@ -456,6 +460,8 @@ impl Compiler {
         .await?;
         self.deps.metrics.observe_compiler_rebuild_duration(started.elapsed());
         log_governor_observations("compile.cycle.governor", &governor);
+        log_disk_governor_observations("compile.cycle.disk_governor", &disk_governor);
+        let _ = disk_governor;
 
         // merge outcome into prior to produce the new manifest.
         let next_version = prior.version + 1;
@@ -992,6 +998,30 @@ async fn publish_with_retry(
     }
 }
 
+/// Resolve the disk-governor cap for a compile run. Resolution order:
+/// explicit `compile_disk_budget_bytes` > 64 GiB fallback. (Filesystem
+/// free-space introspection is operator-controlled; piping `nix::statvfs`
+/// in here would add an unsafe-code carve-out the compiler crate avoids.)
+fn resolve_disk_governor_cap(cfg: &mars_config::Compiler) -> Result<u64, CompilerError> {
+    const FALLBACK_BYTES: u64 = 64 * 1024 * 1024 * 1024;
+    if let Some(explicit) = cfg.compile_disk_budget()? {
+        tracing::info!(
+            target: "mars_compiler::compile",
+            cap_resolved = explicit,
+            source = "config",
+            "compile.disk_governor: cap resolved"
+        );
+        return Ok(explicit);
+    }
+    tracing::info!(
+        target: "mars_compiler::compile",
+        cap_resolved = FALLBACK_BYTES,
+        source = "default",
+        "compile.disk_governor: cap resolved"
+    );
+    Ok(FALLBACK_BYTES)
+}
+
 /// Resolve the memory-governor cap for a compile run. Resolution order:
 /// explicit `compile_memory_budget_bytes` > 70% of detected cgroup limit
 /// minus 512 MiB OS reservation > 2 GiB fallback.
@@ -1029,6 +1059,16 @@ fn resolve_governor_cap(cfg: &mars_config::Compiler) -> Result<u64, CompilerErro
         "compile.memory_governor: cap resolved"
     );
     Ok(FALLBACK_BYTES)
+}
+
+fn log_disk_governor_observations(event: &'static str, governor: &disk_governor::DiskGovernor) {
+    tracing::info!(
+        target: "mars_compiler::compile",
+        cap_bytes = governor.cap_bytes(),
+        peak_bytes = governor.peak_bytes(),
+        acquire_wait_us = governor.acquire_wait_us(),
+        "{event}",
+    );
 }
 
 fn log_governor_observations(event: &'static str, governor: &memory_governor::MemoryGovernor) {
