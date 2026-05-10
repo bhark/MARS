@@ -21,7 +21,7 @@ resources:
   - ../local/postgis-deployment.yaml
   - ../local/postgis-service.yaml
   - ../local/postgis-secret.yaml
-  - fixture-loader-job.yaml
+  - fixture-loader-pod.yaml
 
 configMapGenerator:
   - name: mars-postgis-init

@@ -1,0 +1,71 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: mars-fixture-loader
+  labels:
+    app.kubernetes.io/part-of: fixture-loader
+    app.kubernetes.io/component: fixture-loader
+spec:
+  # kind: Pod (not Job) is a deliberate concession to podman 5.x kube-play:
+  # PlayKube panics on a nil Container.Inspect immediately after starting a
+  # Job's pod (independent of init containers). this manifest is e2e-only -
+  # nothing in the dev overlay or a real cluster deploys it - so K8s parity
+  # is not at stake. Quadlet's Type=oneshot + ExitCodePropagation=all on
+  # mars-e2e-fixture-loader.service is what gates the rest of the chain on
+  # the loader's exit code.
+  restartPolicy: Never
+  containers:
+    # readiness gate is inlined into the loader rather than split into an
+    # initContainer: podman 5.x kube-play races on init-type "once"
+    # cleanup vs. PlayKube's post-start inspect, panicking when the init
+    # container exits quickly. systemd's After=mars-e2e-postgis.service
+    # only waits for `kube play` to return, not for postgres to accept
+    # connections, so the wait still has to live somewhere.
+    - name: loader
+      image: docker.io/postgis/postgis:18-3.6
+      imagePullPolicy: IfNotPresent
+      command:
+        - /bin/sh
+        - -c
+        - |
+          set -eu
+          i=0
+          until pg_isready -h mars-postgis -p 5432 -U mars -d mars -q; do
+            i=$((i+1))
+            if [ "$i" -ge 60 ]; then
+              echo "wait-for-postgis: timeout after 60 attempts" >&2
+              exit 1
+            fi
+            sleep 2
+          done
+          psql "$PG_DSN" -v ON_ERROR_STOP=1 -c "CREATE EXTENSION IF NOT EXISTS postgis"
+          # idempotent reload: drop the e2e_source schema and any prior
+          # pub/slot (create-replication.sql does the latter) so reruns
+          # converge to a clean state.
+          psql "$PG_DSN" -v ON_ERROR_STOP=1 -c "DROP SCHEMA IF EXISTS e2e_source CASCADE"
+          gzip -dc /fixture/dump.sql.gz | psql "$PG_DSN" -v ON_ERROR_STOP=1
+          psql "$PG_DSN" -v ON_ERROR_STOP=1 -f /sql/assert-fixture.sql
+          psql "$PG_DSN" -v ON_ERROR_STOP=1 -f /sql/create-replication.sql
+      env:
+        - name: PG_DSN
+          valueFrom:
+            secretKeyRef:
+              name: mars-postgis
+              key: PG_DSN
+      volumeMounts:
+        - name: fixture
+          mountPath: /fixture
+          readOnly: true
+        - name: sql
+          mountPath: /sql
+          readOnly: true
+  volumes:
+    - name: fixture
+      # podman maps PVC name 1:1 to a podman volume. scripts/run-e2e.sh
+      # pre-populates `mars-fixture` (e2e-mars-fixture after kustomize
+      # namePrefix) with `dump.sql.gz` before starting this pod.
+      persistentVolumeClaim:
+        claimName: mars-fixture
+    - name: sql
+      configMap:
+        name: mars-fixture-sql
