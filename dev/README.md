@@ -50,6 +50,8 @@ First cold start builds images (~5-8 min) and fetches OSM data (~1-3 min); subse
 
 **SELinux (Fedora/RHEL):** The Quadlets use `:Z` on read-only host bind mounts. Named volumes handle their own labelling. If you still see permission denials, check `audit2why`.
 
+**Shared UID for the artifact store:** Both the compiler (rw) and runtime (ro) containers run as UID 65532 (the distroless `nonroot` user). This is intentional - the `mars-artifact-store` named volume is created under that UID on first start, and the runtime can read what the compiler writes without further wiring. If you swap the base image to something with a different non-root UID, expect to chown the volume.
+
 ## Reset
 
 ```bash
