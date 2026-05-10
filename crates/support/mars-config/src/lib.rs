@@ -402,6 +402,15 @@ fn validate_band_tiers(
                         layer.name
                     )));
                 }
+                if idx == 0
+                    && let Some(band_min) = band_window.min
+                    && m <= band_min
+                {
+                    return Err(ConfigError::Invalid(format!(
+                        "layer {} source[{i}] in band {band_name:?} max_denom_exclusive ({m}) is not strictly greater than band lower bound ({band_min})",
+                        layer.name
+                    )));
+                }
                 if let Some(p) = prev_max
                     && m <= p
                 {
@@ -1631,6 +1640,32 @@ mod tests {
         }])];
         let err = validate(&mut cfg, Path::new(".")).unwrap_err();
         assert!(err.to_string().contains("exceeds band cap"));
+    }
+
+    #[test]
+    fn first_tier_max_at_or_below_band_lower_bound_rejected() {
+        // band "mid" spans [25_000, 250_000); a first-tier max of 25_000 (or below) would
+        // resolve to an empty window and silently make the source unreachable.
+        let mut cfg = two_band_config();
+        cfg.layers = vec![tiered_layer(vec![
+            SourceBinding {
+                band: Some("mid".into()),
+                max_denom: Some(25_000),
+                from: "a".into(),
+                ..binding("a")
+            },
+            SourceBinding {
+                band: Some("mid".into()),
+                max_denom: Some(250_000),
+                from: "b".into(),
+                ..binding("b")
+            },
+        ])];
+        let err = validate(&mut cfg, Path::new(".")).unwrap_err();
+        assert!(
+            err.to_string().contains("not strictly greater than band lower bound"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
