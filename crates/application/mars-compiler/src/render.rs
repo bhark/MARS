@@ -44,7 +44,7 @@ use mars_types::{
 
 use crate::class_eval::{LabelSpec, RowAttrs, assign_class, emit_label_candidate};
 use crate::decimate::{passes_min_size, simplify};
-use crate::external_sort::WorkingSetGuard;
+use crate::external_sort::external_sort_page;
 use crate::incremental::{BindingDirty, DirtyPages};
 use crate::memory_governor::MemoryGovernor;
 use crate::page_plan::{PagePlan, compute_page_plan};
@@ -122,11 +122,12 @@ pub(crate) fn enforce_page_budget(
     binding_id: &str,
     page_id: PageId,
 ) -> Result<(), CompilerError> {
-    let mut guard = WorkingSetGuard::new(working_set_bytes);
+    let mut observed: u64 = 0;
     for r in rows {
         let attr_bytes: u64 = r.attrs.iter().map(|(k, _)| (k.len() + 16) as u64).sum();
         let est = r.geom_bytes_estimate.saturating_add(attr_bytes).saturating_add(64);
-        if let Err(observed) = guard.add(est) {
+        observed = observed.saturating_add(est);
+        if observed > working_set_bytes {
             return Err(CompilerError::ScratchBudgetExceeded {
                 binding: binding_id.to_string(),
                 page_id: Some(page_id),
@@ -1149,6 +1150,8 @@ pub async fn rebuild_binding_from_plan<'a>(
                     dropped,
                     &layer_plans,
                     working_set_bytes,
+                    spill_dir,
+                    governor,
                     &mut levels_pages,
                     &mut class_sidecars,
                     &mut label_sidecars,
@@ -1275,25 +1278,25 @@ async fn flush_one_page(
     pruned_rows: Vec<KeyedRow>,
     layer_plans: &[&LayerPlan],
     working_set_bytes: u64,
+    spill_dir: &std::path::Path,
+    governor: &crate::memory_governor::MemoryGovernor,
     levels_pages: &mut [Vec<PageEntry>],
     class_sidecars: &mut Vec<LayerSidecarEntry>,
     label_sidecars: &mut Vec<LayerSidecarEntry>,
 ) -> Result<(), CompilerError> {
     let level_plan = &binding_plan.levels[lvl_idx];
-    let mut page_rows = page_rows;
-    page_rows.sort_by(|a, b| {
-        a.key
-            .cmp(&b.key)
-            .then_with(|| a.feature.user_id.cmp(&b.feature.user_id))
-            .then_with(|| a.row_fingerprint.cmp(&b.row_fingerprint))
-    });
+    // governor-bounded sort: in-memory fast path when the page footprint
+    // fits the cap, chunked-spill k-way-merge slow path otherwise. byte-
+    // identical output to today's `Vec::sort_by` either way.
+    let page_rows = external_sort_page(page_rows, working_set_bytes, spill_dir, governor)?;
     // β.2: drop rows no layer's class chain matches before geometry emit.
     let (page_rows, dropped_unmatched) = filter_unmatched_rows(page_rows, layer_plans);
     if dropped_unmatched > 0 {
         deps.metrics
             .inc_compiler_features_unmatched(binding_plan.binding_id.as_str(), dropped_unmatched);
     }
-    enforce_page_budget(&page_rows, working_set_bytes, binding_plan.binding_id.as_str(), page_id)?;
+    let _ = page_id;
+    let _ = working_set_bytes;
     if page_rows.is_empty() {
         // pruned-only page: drop entirely, matches incremental contract.
         return Ok(());
