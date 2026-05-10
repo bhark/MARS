@@ -14,24 +14,28 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::sync::atomic::AtomicU64;
+use std::time::Duration;
 
 use arc_swap::ArcSwap;
 use axum::Router;
-use axum::extract::{Request, State};
-use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
-use axum::middleware::{self, Next};
-use axum::response::{IntoResponse, Response};
+use axum::http::StatusCode;
 use axum::routing::get;
 use mars_observability::Metrics;
-use mars_runtime::{RenderPlan, Runtime, RuntimeError};
-use mars_wms::{WmsConfig, WmsError, WmsRequest};
-use mars_wmts::{WmtsConfig, WmtsError, WmtsRequest};
+use mars_runtime::Runtime;
+use mars_wms::WmsConfig;
+use mars_wmts::WmtsConfig;
 use tokio_util::sync::CancellationToken;
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
-use tracing::Instrument;
+
+mod errors;
+mod handlers;
+mod middleware;
+
+pub use errors::*;
+pub use handlers::*;
+pub use middleware::*;
 
 const BODY_LIMIT_BYTES: usize = 1 << 20; // 1 MiB
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
@@ -68,12 +72,6 @@ impl CapabilitiesDoc {
     }
 }
 
-fn etag_for(bytes: &[u8]) -> String {
-    let hash = blake3::hash(bytes);
-    // strong validator, hex-truncated to 16 chars (64 bits) - collision-safe for caps.
-    format!("\"{}\"", &hash.to_hex().as_str()[..16])
-}
-
 /// Atomically swappable capabilities document. Cheap clone, lock-free reads.
 pub type CapabilitiesHandle = Arc<ArcSwap<CapabilitiesDoc>>;
 
@@ -93,7 +91,7 @@ pub struct CapabilitiesBundle {
 
 /// Shared per-request state.
 #[derive(Clone)]
-struct AppState {
+pub struct AppState {
     runtime: Arc<Runtime>,
     wms_capabilities: CapabilitiesHandle,
     wmts_capabilities: CapabilitiesHandle,
@@ -127,7 +125,7 @@ pub fn router(
         .route("/readyz", get(handle_ready))
         .route("/metrics", get(handle_metrics))
         .with_state(state.clone())
-        .layer(middleware::from_fn_with_state(state, observe_request))
+        .layer(axum::middleware::from_fn_with_state(state, observe_request))
         .layer(RequestBodyLimitLayer::new(BODY_LIMIT_BYTES))
         .layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
@@ -160,321 +158,13 @@ pub async fn serve(
         .map_err(|e| HttpError::Listen(e.to_string()))
 }
 
-// ---------- middleware ----------
-
-async fn observe_request(State(state): State<AppState>, req: Request, next: Next) -> Response {
-    let interface = interface_label(req.uri().path());
-    let start = Instant::now();
-    let resp = next.run(req).await;
-    state
-        .metrics
-        .observe_request(interface, resp.status().as_u16(), start.elapsed());
-    resp
-}
-
-fn interface_label(path: &str) -> &'static str {
-    // strict prefix match; anything outside the known set is bucketed as "other"
-    // to keep cardinality flat regardless of probing/garbage requests.
-    if path == "/healthz" {
-        "health"
-    } else if path == "/readyz" {
-        "ready"
-    } else if path == "/metrics" {
-        "metrics"
-    } else if path.starts_with("/wms") {
-        "wms"
-    } else if path.starts_with("/wmts") {
-        "wmts"
-    } else {
-        "other"
-    }
-}
-
-// ---------- handlers ----------
-
-async fn handle_wms(State(state): State<AppState>, headers: HeaderMap, raw_query: axum::extract::RawQuery) -> Response {
-    let req_id = request_id(&state, &headers);
-    let span = tracing::info_span!("wms", req_id = %req_id);
-
-    async move {
-        let raw = raw_query.0.unwrap_or_default();
-
-        let parsed = match mars_wms::parse_request(&raw, &state.wms_cfg) {
-            Ok(r) => r,
-            Err(e) => return wms_error_response(e),
-        };
-
-        match parsed {
-            WmsRequest::GetCapabilities => serve_capabilities(&state.wms_capabilities, &headers),
-            WmsRequest::GetMap(plan) => {
-                let mime = plan.format.mime();
-                match state.runtime.render(&plan).await {
-                    Ok(bytes) => {
-                        let mut h = HeaderMap::new();
-                        h.insert(header::CONTENT_TYPE, HeaderValue::from_static(mime));
-                        (StatusCode::OK, h, bytes).into_response()
-                    }
-                    Err(e) => runtime_error_response(e, &plan),
-                }
-            }
-        }
-    }
-    .instrument(span)
-    .await
-}
-
-async fn handle_wmts(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    raw_query: axum::extract::RawQuery,
-) -> Response {
-    let req_id = request_id(&state, &headers);
-    let span = tracing::info_span!("wmts", req_id = %req_id);
-
-    async move {
-        let raw = raw_query.0.unwrap_or_default();
-
-        let parsed = match mars_wmts::parse_request(&raw, &state.wmts_cfg) {
-            Ok(r) => r,
-            Err(e) => return wmts_error_response(e),
-        };
-
-        match parsed {
-            WmtsRequest::GetCapabilities => serve_capabilities(&state.wmts_capabilities, &headers),
-            WmtsRequest::GetTile(plan) => {
-                let mime = plan.format.mime();
-                match state.runtime.render(&plan).await {
-                    Ok(bytes) => {
-                        let mut h = HeaderMap::new();
-                        h.insert(header::CONTENT_TYPE, HeaderValue::from_static(mime));
-                        (StatusCode::OK, h, bytes).into_response()
-                    }
-                    Err(e) => wmts_runtime_error_response(e, &plan),
-                }
-            }
-        }
-    }
-    .instrument(span)
-    .await
-}
-
-fn serve_capabilities(handle: &CapabilitiesHandle, headers: &HeaderMap) -> Response {
-    let doc = handle.load_full();
-    let etag_value = match HeaderValue::from_str(&doc.etag) {
-        Ok(v) => v,
-        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "bad etag").into_response(),
-    };
-    if let Some(req_etag) = headers.get(header::IF_NONE_MATCH)
-        && *req_etag == etag_value
-    {
-        let mut h = HeaderMap::new();
-        h.insert(header::ETAG, etag_value);
-        return (StatusCode::NOT_MODIFIED, h).into_response();
-    }
-    let mut h = HeaderMap::new();
-    h.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/xml"));
-    h.insert(header::ETAG, etag_value);
-    (StatusCode::OK, h, doc.body.clone()).into_response()
-}
-
-async fn handle_ready(State(state): State<AppState>) -> Response {
-    if state.runtime.is_ready() {
-        (StatusCode::OK, "ready").into_response()
-    } else {
-        (StatusCode::SERVICE_UNAVAILABLE, "no manifest").into_response()
-    }
-}
-
-async fn handle_metrics(State(state): State<AppState>) -> Response {
-    match state.metrics.encode_text() {
-        Ok(body) => {
-            let mut h = HeaderMap::new();
-            h.insert(
-                header::CONTENT_TYPE,
-                HeaderValue::from_static("text/plain; version=0.0.4"),
-            );
-            (StatusCode::OK, h, body).into_response()
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "metrics encode failed");
-            (StatusCode::INTERNAL_SERVER_ERROR, "metrics encode failed").into_response()
-        }
-    }
-}
-
-// ---------- helpers ----------
-
-/// Hard cap on incoming `x-request-id`: long enough for UUIDs, short enough
-/// to keep structured-log cardinality and per-line size bounded.
-const REQUEST_ID_MAX_LEN: usize = 128;
-
-fn request_id(state: &AppState, headers: &HeaderMap) -> String {
-    if let Some(v) = headers.get("x-request-id").and_then(|h| h.to_str().ok()) {
-        // accept only printable ascii (plus space-equivalents) within the cap.
-        // anything else falls back to a counter so a malicious client cannot
-        // inject newlines into structured logs or blow the per-line budget.
-        if (1..=REQUEST_ID_MAX_LEN).contains(&v.len()) && v.bytes().all(|b| matches!(b, 0x21..=0x7e)) {
-            return v.to_owned();
-        }
-    }
-    let n = state.request_counter.fetch_add(1, Ordering::Relaxed);
-    format!("req-{n}")
-}
-
-/// Service-agnostic exception payload. The same fields drive both the WMS
-/// `ServiceExceptionReport` and the OWS `ExceptionReport` envelopes; only the
-/// XML wrapping differs.
-///
-/// `code` is optional for WMS (omitted attribute) but required by OWS, where
-/// `None` is rendered as `"NoApplicableCode"` per OWS Annex A.
-struct EdgeException {
-    status: StatusCode,
-    code: Option<&'static str>,
-    /// OWS `locator` attribute. Ignored by the WMS emitter.
-    locator: Option<&'static str>,
-    message: String,
-}
-
-fn wms_exception_response(exc: EdgeException) -> Response {
-    let xml = mars_wms::service_exception_report(exc.code, &exc.message);
-    let mut resp = (exc.status, xml).into_response();
-    resp.headers_mut().insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static("text/xml; charset=utf-8"),
-    );
-    resp
-}
-
-fn wms_error_response(e: WmsError) -> Response {
-    let exc = match e {
-        WmsError::MissingParam(name) => EdgeException {
-            status: StatusCode::BAD_REQUEST,
-            code: Some("MissingParameterValue"),
-            locator: Some(name),
-            message: format!("Missing required parameter: {name}"),
-        },
-        WmsError::InvalidParam { name, reason } => EdgeException {
-            status: StatusCode::BAD_REQUEST,
-            code: Some("InvalidParameterValue"),
-            locator: Some(name),
-            message: format!("Invalid parameter '{name}': {reason}"),
-        },
-        WmsError::NotImplemented { what } => EdgeException {
-            status: StatusCode::NOT_IMPLEMENTED,
-            code: Some("OperationNotSupported"),
-            locator: None,
-            message: format!("Operation not supported: {what}"),
-        },
-    };
-    wms_exception_response(exc)
-}
-
-fn runtime_error_response(e: RuntimeError, plan: &RenderPlan) -> Response {
-    log_render_failure(&e, plan);
-    wms_exception_response(map_runtime_error(&e))
-}
-
-fn wmts_exception_response(exc: EdgeException) -> Response {
-    let xml = mars_wmts::ows_exception_report(exc.code.unwrap_or("NoApplicableCode"), exc.locator, &exc.message);
-    let mut resp = (exc.status, xml).into_response();
-    resp.headers_mut().insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static("text/xml; charset=utf-8"),
-    );
-    resp
-}
-
-fn wmts_error_response(e: WmtsError) -> Response {
-    let exc = match e {
-        WmtsError::MissingParam(name) => EdgeException {
-            status: StatusCode::BAD_REQUEST,
-            code: Some("MissingParameterValue"),
-            locator: Some(name),
-            message: format!("Missing required parameter: {name}"),
-        },
-        WmtsError::InvalidParam { name, reason } => EdgeException {
-            status: StatusCode::BAD_REQUEST,
-            code: Some("InvalidParameterValue"),
-            locator: Some(name),
-            message: format!("Invalid parameter '{name}': {reason}"),
-        },
-        WmtsError::NotImplemented { what } => EdgeException {
-            status: StatusCode::NOT_IMPLEMENTED,
-            code: Some("OperationNotSupported"),
-            locator: None,
-            message: format!("Operation not supported: {what}"),
-        },
-    };
-    wmts_exception_response(exc)
-}
-
-fn wmts_runtime_error_response(e: RuntimeError, plan: &RenderPlan) -> Response {
-    log_render_failure(&e, plan);
-    wmts_exception_response(map_runtime_error(&e))
-}
-
-fn log_render_failure(e: &RuntimeError, plan: &RenderPlan) {
-    match e {
-        RuntimeError::NotReady => {
-            tracing::warn!(error = %e, layers = ?plan.layers, bbox = ?plan.bbox, "render failed")
-        }
-        _ => {
-            tracing::error!(error = %e, layers = ?plan.layers, bbox = ?plan.bbox, "render failed")
-        }
-    }
-}
-
-fn map_runtime_error(e: &RuntimeError) -> EdgeException {
-    match e {
-        RuntimeError::NotReady => EdgeException {
-            status: StatusCode::SERVICE_UNAVAILABLE,
-            code: None,
-            locator: None,
-            message: "Service temporarily unavailable".into(),
-        },
-        RuntimeError::NotImplemented { what } => EdgeException {
-            status: StatusCode::NOT_IMPLEMENTED,
-            code: Some("OperationNotSupported"),
-            locator: None,
-            message: format!("Operation not supported: {what}"),
-        },
-        RuntimeError::LayerNotDefined { layer } => EdgeException {
-            status: StatusCode::BAD_REQUEST,
-            code: Some("LayerNotDefined"),
-            locator: Some("LAYERS"),
-            message: format!("Layer '{layer}' is not defined"),
-        },
-        RuntimeError::PixelBudgetExceeded { requested, budget } => EdgeException {
-            status: StatusCode::BAD_REQUEST,
-            code: Some("InvalidParameterValue"),
-            locator: None,
-            message: format!("Request requires {requested} pixels but server budget is {budget}"),
-        },
-        RuntimeError::Config(_)
-        | RuntimeError::Store(_)
-        | RuntimeError::Render(_)
-        | RuntimeError::Encode(_)
-        | RuntimeError::InvalidManifest { .. }
-        | RuntimeError::ConfigManifestMismatch { .. }
-        | RuntimeError::StylesheetDrift { .. } => internal_error(),
-    }
-}
-
-fn internal_error() -> EdgeException {
-    EdgeException {
-        status: StatusCode::INTERNAL_SERVER_ERROR,
-        code: None,
-        locator: None,
-        message: "Internal server error".into(),
-    }
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use axum::body::Body;
-    use axum::http::Request;
+    use axum::http::{Request, header};
+    use axum::response::Response;
     use mars_render_port::{
         Canvas, EncodeError, Encoder, ImageFormat as RenderImageFormat, Pixmap, RenderError, Renderer,
     };
