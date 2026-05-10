@@ -330,3 +330,72 @@ async fn budget_overrun_spills_and_completes() {
     assert_eq!(out.pages.len(), 1);
     assert_eq!(out.pages[0].feature_count, 2);
 }
+
+/// Equivalence invariant: the spill fallback must produce byte-identical
+/// page artifacts to the in-memory path. Triggers spill on the very first
+/// row so every subsequent row is written via the spill-append path; the
+/// drain-and-flush at page completion must reconstruct the same KeyedRow
+/// sequence the in-memory path would have held.
+#[tokio::test]
+async fn spilled_path_emits_identical_artifacts_to_in_memory() {
+    let rows: Vec<RowBytes> = (0u64..8)
+        .map(|i| row(i + 1, i as f64, (i as f64) * 0.5, 0x1000_0000_0000_0000 ^ (i + 1)))
+        .collect();
+    let bp = binding_plan();
+    let page_plan = page_plan_for(&rows);
+    let plan = BootstrapPlan {
+        bindings: vec![bp.clone()],
+        layers: vec![],
+    };
+
+    // baseline: in-memory only.
+    let deps_mem = make_deps();
+    let mut session_mem = ScriptedSession { rows: rows.clone() };
+    let out_mem = rebuild_binding_from_plan(
+        &deps_mem,
+        &plan,
+        &bp,
+        &page_plan,
+        &mut session_mem,
+        4 * 1024 * 1024,
+        u64::MAX,
+        &std::env::temp_dir(),
+        256,
+        &mars_compiler::memory_governor::MemoryGovernor::new(u64::MAX),
+    )
+    .await
+    .unwrap();
+
+    // forced spill on first row.
+    let deps_spill = make_deps();
+    let mut session_spill = ScriptedSession { rows: rows.clone() };
+    let out_spill = rebuild_binding_from_plan(
+        &deps_spill,
+        &plan,
+        &bp,
+        &page_plan,
+        &mut session_spill,
+        4 * 1024 * 1024,
+        1,
+        &std::env::temp_dir(),
+        256,
+        &mars_compiler::memory_governor::MemoryGovernor::new(u64::MAX),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(out_mem.pages.len(), out_spill.pages.len());
+    for (m, s) in out_mem.pages.iter().zip(out_spill.pages.iter()) {
+        assert_eq!(
+            m.content_hash, s.content_hash,
+            "spill path produced a different artifact than the in-memory path: \
+             page_id={} feature_count mem={} spill={}",
+            m.key.page_id.get(),
+            m.feature_count,
+            s.feature_count,
+        );
+        assert_eq!(m.spatial_bbox, s.spatial_bbox);
+        assert_eq!(m.feature_count, s.feature_count);
+        assert_eq!(m.hilbert_range, s.hilbert_range);
+    }
+}
