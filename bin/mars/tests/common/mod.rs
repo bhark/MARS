@@ -14,8 +14,15 @@ pub struct DiffReport {
     pub width: u32,
     pub height: u32,
     pub total_pixels: u32,
+    /// strict per-pixel-position differing count (no neighborhood relaxation).
+    /// kept for visibility into the raw signal.
+    pub strict_differing: u32,
+    /// neighborhood-tolerant count: a strict-differing pixel only counts here
+    /// if neither side has a within-tolerance match in the other image's
+    /// `radius` window. forgives sub-pixel anti-alias jitter on thin features.
     pub differing_pixels: u32,
     pub max_channel_delta: u8,
+    pub radius: u32,
 }
 
 impl DiffReport {
@@ -26,19 +33,30 @@ impl DiffReport {
             self.differing_pixels as f32 / self.total_pixels as f32
         }
     }
+
+    pub fn strict_diff_ratio(&self) -> f32 {
+        if self.total_pixels == 0 {
+            0.0
+        } else {
+            self.strict_differing as f32 / self.total_pixels as f32
+        }
+    }
 }
 
 impl fmt::Display for DiffReport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "DiffReport {{ {}x{} px, differing={}/{} ({:.4}%), max_channel_delta={} }}",
+            "DiffReport {{ {}x{} px, differing={}/{} ({:.4}%), strict={} ({:.4}%), max_channel_delta={}, r={} }}",
             self.width,
             self.height,
             self.differing_pixels,
             self.total_pixels,
             self.diff_ratio() * 100.0,
+            self.strict_differing,
+            self.strict_diff_ratio() * 100.0,
             self.max_channel_delta,
+            self.radius,
         )
     }
 }
@@ -178,9 +196,25 @@ fn decode_jpeg(bytes: &[u8]) -> Result<Decoded, String> {
     })
 }
 
-/// pixel-by-pixel comparison. tolerance is the per-channel delta beyond which a
-/// pixel is counted as differing (any channel exceeding `tolerance` => differs).
+/// per-channel delta beyond which a pixel position is counted as strictly
+/// differing. neighborhood relaxation (radius `r`, default 1, override via
+/// `MARS_DIFF_RADIUS`) then forgives any strict differ that has a within-
+/// tolerance match in the other image's (2r+1)x(2r+1) window — kills sub-
+/// pixel anti-alias jitter on thin features without hiding real divergence.
 pub fn diff_pngs(actual: &[u8], golden: &[u8], tolerance: u8) -> Result<DiffReport, DiffError> {
+    let radius = std::env::var("MARS_DIFF_RADIUS")
+        .ok()
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(1);
+    diff_pngs_with_radius(actual, golden, tolerance, radius)
+}
+
+pub fn diff_pngs_with_radius(
+    actual: &[u8],
+    golden: &[u8],
+    tolerance: u8,
+    radius: u32,
+) -> Result<DiffReport, DiffError> {
     let a = decode_inner(actual).map_err(DiffError::DecodeActual)?;
     let g = decode_inner(golden).map_err(DiffError::DecodeGolden)?;
 
@@ -200,33 +234,105 @@ pub fn diff_pngs(actual: &[u8], golden: &[u8], tolerance: u8) -> Result<DiffRepo
     }
 
     let stride = a.channels.stride();
-    let total_pixels = a.width.saturating_mul(a.height);
-    let mut differing: u32 = 0;
-    let mut max_delta: u8 = 0;
+    let width = a.width;
+    let height = a.height;
+    let total_pixels = width.saturating_mul(height);
 
-    for (pa, pg) in a.pixels.chunks_exact(stride).zip(g.pixels.chunks_exact(stride)) {
-        let mut pixel_max: u8 = 0;
-        for c in 0..stride {
-            let d = pa[c].abs_diff(pg[c]);
-            if d > pixel_max {
-                pixel_max = d;
-            }
+    // strict pass
+    let mut strict_mask = vec![false; (width as usize) * (height as usize)];
+    let mut strict_count: u32 = 0;
+    let mut max_delta: u8 = 0;
+    for (i, (pa, pg)) in a
+        .pixels
+        .chunks_exact(stride)
+        .zip(g.pixels.chunks_exact(stride))
+        .enumerate()
+    {
+        let pm = pixel_max_delta(pa, pg);
+        if pm > max_delta {
+            max_delta = pm;
         }
-        if pixel_max > max_delta {
-            max_delta = pixel_max;
-        }
-        if pixel_max > tolerance {
-            differing = differing.saturating_add(1);
+        if pm > tolerance {
+            strict_mask[i] = true;
+            strict_count = strict_count.saturating_add(1);
         }
     }
 
+    // neighborhood pass: forgive any strict differ that has a tolerance-match
+    // in the other image within `radius`. symmetric in both directions so
+    // jitter is forgiven only when *both* sides have the same feature nearby.
+    let differing = if radius == 0 || strict_count == 0 {
+        strict_count
+    } else {
+        let mut count: u32 = 0;
+        for y in 0..height {
+            for x in 0..width {
+                let idx = (y as usize) * (width as usize) + x as usize;
+                if !strict_mask[idx] {
+                    continue;
+                }
+                let off = idx * stride;
+                let pa = &a.pixels[off..off + stride];
+                let pg = &g.pixels[off..off + stride];
+                let a_match_in_g = neighborhood_has_match(pa, &g.pixels, width, height, x, y, radius, stride, tolerance);
+                let g_match_in_a = neighborhood_has_match(pg, &a.pixels, width, height, x, y, radius, stride, tolerance);
+                if !(a_match_in_g && g_match_in_a) {
+                    count = count.saturating_add(1);
+                }
+            }
+        }
+        count
+    };
+
     Ok(DiffReport {
-        width: a.width,
-        height: a.height,
+        width,
+        height,
         total_pixels,
+        strict_differing: strict_count,
         differing_pixels: differing,
         max_channel_delta: max_delta,
+        radius,
     })
+}
+
+#[inline]
+fn pixel_max_delta(a: &[u8], b: &[u8]) -> u8 {
+    let mut m: u8 = 0;
+    for (x, y) in a.iter().zip(b.iter()) {
+        let d = x.abs_diff(*y);
+        if d > m {
+            m = d;
+        }
+    }
+    m
+}
+
+#[allow(clippy::too_many_arguments)]
+fn neighborhood_has_match(
+    probe: &[u8],
+    other: &[u8],
+    width: u32,
+    height: u32,
+    x: u32,
+    y: u32,
+    radius: u32,
+    stride: usize,
+    tolerance: u8,
+) -> bool {
+    let x0 = x.saturating_sub(radius);
+    let y0 = y.saturating_sub(radius);
+    let x1 = (x + radius).min(width - 1);
+    let y1 = (y + radius).min(height - 1);
+    for ny in y0..=y1 {
+        for nx in x0..=x1 {
+            let off = ((ny as usize) * (width as usize) + nx as usize) * stride;
+            let q = &other[off..off + stride];
+            if pixel_max_delta(probe, q) <= tolerance {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// asserts the diff ratio is within bounds; panics with the full report on
@@ -240,4 +346,56 @@ pub fn assert_within_tolerance(report: &DiffReport, max_diff_ratio: f32) {
         max_diff_ratio,
         report,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rgb_png(w: u32, h: u32, pixels: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut enc = png::Encoder::new(&mut out, w, h);
+        enc.set_color(png::ColorType::Rgb);
+        enc.set_depth(png::BitDepth::Eight);
+        let mut wr = enc.write_header().unwrap();
+        wr.write_image_data(pixels).unwrap();
+        drop(wr);
+        out
+    }
+
+    /// 5x1 strip with a single black pixel; jittered by one column. radius=1
+    /// must forgive entirely; radius=0 must count both endpoints as differing.
+    #[test]
+    fn neighborhood_forgives_one_pixel_jitter() {
+        let mut a = vec![255u8; 5 * 3];
+        let mut g = vec![255u8; 5 * 3];
+        a[3..6].copy_from_slice(&[0, 0, 0]); // black at x=1
+        g[6..9].copy_from_slice(&[0, 0, 0]); // black at x=2
+
+        let pa = rgb_png(5, 1, &a);
+        let pg = rgb_png(5, 1, &g);
+
+        let r1 = diff_pngs_with_radius(&pa, &pg, 0, 1).unwrap();
+        assert_eq!(r1.strict_differing, 2);
+        assert_eq!(r1.differing_pixels, 0, "neighborhood forgives both");
+
+        let r0 = diff_pngs_with_radius(&pa, &pg, 0, 0).unwrap();
+        assert_eq!(r0.differing_pixels, 2, "no neighborhood => count both");
+    }
+
+    /// when the actual paints something not present anywhere nearby in golden,
+    /// the neighborhood pass still flags it.
+    #[test]
+    fn neighborhood_keeps_real_divergence() {
+        let mut a = vec![255u8; 5 * 3];
+        let g = vec![255u8; 5 * 3];
+        a[6..9].copy_from_slice(&[0, 0, 0]);
+
+        let pa = rgb_png(5, 1, &a);
+        let pg = rgb_png(5, 1, &g);
+
+        let r = diff_pngs_with_radius(&pa, &pg, 0, 1).unwrap();
+        assert_eq!(r.strict_differing, 1);
+        assert_eq!(r.differing_pixels, 1, "no match for black anywhere in golden");
+    }
 }
