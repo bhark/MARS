@@ -11,7 +11,7 @@ use bytes::Bytes;
 use mars_artifact::compute_content_hash;
 use mars_store::{ObjectStore, StoreError};
 use mars_types::{ArtifactKey, ContentHash};
-use rand::{distr::Alphanumeric, rng, RngExt};
+use rand::{RngExt, distr::Alphanumeric, rng};
 
 use crate::key::{validate_artifact_key, validate_key};
 
@@ -196,11 +196,7 @@ pub(crate) fn atomic_create_new(path: &Path, body: &[u8]) -> Result<CreateNewOut
         .ok_or_else(|| StoreError::Backend("path has no parent".into()))?;
     std::fs::create_dir_all(parent).map_err(|e| StoreError::Backend(format!("mkdir {}: {e}", parent.display())))?;
 
-    let suffix: String = rng()
-        .sample_iter(&Alphanumeric)
-        .take(12)
-        .map(char::from)
-        .collect();
+    let suffix: String = rng().sample_iter(&Alphanumeric).take(12).map(char::from).collect();
     let file_name = path
         .file_name()
         .and_then(|s| s.to_str())
@@ -236,11 +232,7 @@ pub(crate) fn atomic_write(path: &Path, body: &[u8]) -> Result<(), StoreError> {
         .ok_or_else(|| StoreError::Backend("path has no parent".into()))?;
     std::fs::create_dir_all(parent).map_err(|e| StoreError::Backend(format!("mkdir {}: {e}", parent.display())))?;
 
-    let suffix: String = rng()
-        .sample_iter(&Alphanumeric)
-        .take(12)
-        .map(char::from)
-        .collect();
+    let suffix: String = rng().sample_iter(&Alphanumeric).take(12).map(char::from).collect();
     let file_name = path
         .file_name()
         .and_then(|s| s.to_str())
