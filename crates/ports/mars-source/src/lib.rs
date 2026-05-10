@@ -8,8 +8,11 @@
 //!
 //! Phase B note: the cell-keyed surface is retired with the v3 substrate
 //! cut; Phase C reintroduces page-keyed `fetch_full_table_streaming` and
-//! `fetch_by_feature_ids` plus a `ChangeEvent` payload that carries the
-//! geometry envelope so the compiler can derive Hilbert keys directly.
+//! `fetch_by_feature_ids` (the latter on `Source` only) plus a
+//! `ChangeEvent` payload that carries the geometry envelope so the
+//! compiler can derive Hilbert keys directly. `CompileSession` exposes a
+//! snapshot-stable `fetch_full_table_streaming` that reuses the pass-1
+//! transaction.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
@@ -344,7 +347,7 @@ pub struct RowSummary {
 
 /// Compile-time session bound to one `SourceBinding`. Holds a connection in
 /// a snapshot-isolated transaction so pass-1 (geometry summary) and pass-2
-/// (row hydration via `fetch_by_feature_ids`) see the same rows.
+/// (full-table row hydration) see the same rows.
 ///
 /// `&mut self` on the streaming methods enforces one stream at a time:
 /// callers drain (or drop) one stream before opening the next.
@@ -360,12 +363,16 @@ pub trait CompileSession: Send + Sync {
         &'a mut self,
     ) -> Result<BoxStream<'a, Result<RowSummary, SourceError>>, SourceError>;
 
-    /// Stream rows matching `ids` from the same snapshot. Pass 2 of the
-    /// unified compile pipeline. Bag-valued: a source row exploded into
-    /// multiple parts may return multiple rows per id.
-    async fn fetch_by_feature_ids<'a>(
+    /// Stream every row of the bound table from the same snapshot, in
+    /// adapter-native order. Pass 2 of the unified compile pipeline.
+    ///
+    /// Each yielded `RowBytes` carries a snapshot-stable `row_key` derived
+    /// from the same source as `RowSummary::row_key` (postgres: `tableoid +
+    /// ctid`); the compiler buckets rows into the planned pages by joining
+    /// on `row_key`. Bag-valued: rows that exploded into multiple parts
+    /// upstream are still returned as distinct rows.
+    async fn fetch_full_table_streaming<'a>(
         &'a mut self,
-        ids: &'a [i64],
     ) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError>;
 
     /// Commit the snapshot transaction. Call on the success path of a
@@ -379,9 +386,14 @@ pub trait CompileSession: Send + Sync {
     async fn rollback(self: Box<Self>) -> Result<(), SourceError>;
 }
 
-/// Per-row record returned by `Source`. Geometry is opaque adapter-native
-/// bytes (typically WKB); attributes are decoded into `(name, AttrValue)`
-/// pairs ordered to match the binding's projection.
+/// Per-row record returned by `Source` and `CompileSession`. Geometry is
+/// opaque adapter-native bytes (typically WKB); attributes are decoded into
+/// `(name, AttrValue)` pairs ordered to match the binding's projection.
+///
+/// `row_key` carries the snapshot-stable row identity when the row was
+/// produced inside a `CompileSession`. Stateless `Source::fetch_*` callers
+/// have no transactional snapshot to hang an identity off and set it to
+/// [`SourceRowKey::ZERO`].
 #[derive(Debug, Clone)]
 pub struct RowBytes {
     /// Stable identifier of the row inside the source collection.
@@ -390,6 +402,9 @@ pub struct RowBytes {
     pub geometry: Bytes,
     /// Decoded attributes, ordered to mirror `SourceBinding.attributes`.
     pub attributes: Vec<(String, AttrValue)>,
+    /// Snapshot-stable row identity. Populated by `CompileSession`; set to
+    /// [`SourceRowKey::ZERO`] by stateless `Source` callers.
+    pub row_key: SourceRowKey,
 }
 
 /// Phase-0 stub adapters that satisfy the port traits with `NotImplemented`.

@@ -5,10 +5,14 @@
 //! the unified compile pipeline see the same row set. Adapter side of the
 //! `mars_source::CompileSession` port.
 //!
-//! Pass-1 emits `(tableoid, ctid)` as the snapshot-stable row identity
-//! packed into a [`SourceRowKey`]. Both columns are read-only system
-//! columns supported by every heap-backed relation; the page planner
-//! uses the key as the terminal sort tier after `(hilbert_key, feature_id)`.
+//! Pass-1 (`fetch_geometry_summary`) and pass-2 (`fetch_full_table_streaming`)
+//! both emit `(tableoid, ctid)` as the snapshot-stable row identity packed
+//! into a [`SourceRowKey`]. Both columns are read-only system columns
+//! supported by every heap-backed relation; the page planner uses the key as
+//! the terminal sort tier after `(hilbert_key, feature_id)` and pass-2
+//! buckets streamed rows into planned pages by joining on it. A single
+//! sequential scan replaces the historical per-page `WHERE id = ANY($1)`
+//! pattern, whose heap-walk cost dominated compile time on large bindings.
 
 use async_trait::async_trait;
 use deadpool_postgres::Object;
@@ -28,14 +32,14 @@ pub(crate) struct PgCompileSession {
     object: Option<Object>,
     binding: SourceBinding,
     summary_sql: String,
-    ids_sql: String,
+    full_sql: String,
     closed: bool,
 }
 
 impl PgCompileSession {
     pub(crate) async fn open(pool: deadpool_postgres::Pool, binding: SourceBinding) -> Result<Self, SourceError> {
         let summary_sql = build_summary_query(&binding)?;
-        let ids_sql = build_feature_ids_query(&binding)?;
+        let full_sql = build_full_table_query(&binding)?;
 
         let object = pool.get().await.map_err(|e| SourceError::backend("pool checkout", e))?;
         // snapshot isolation across pass-1 + pass-2 scans.
@@ -48,7 +52,7 @@ impl PgCompileSession {
             object: Some(object),
             binding,
             summary_sql,
-            ids_sql,
+            full_sql,
             closed: false,
         })
     }
@@ -78,23 +82,19 @@ impl CompileSession for PgCompileSession {
         Ok(Box::pin(mapped))
     }
 
-    async fn fetch_by_feature_ids<'a>(
+    async fn fetch_full_table_streaming<'a>(
         &'a mut self,
-        ids: &'a [i64],
     ) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError> {
-        if ids.is_empty() {
-            return Ok(Box::pin(futures_util::stream::empty()));
-        }
         let object = self.client()?;
-        let chunk: Vec<i64> = ids.to_vec();
+        let no_params: [&(dyn ToSql + Sync); 0] = [];
         let row_stream = object
-            .query_raw(&self.ids_sql, [(&chunk) as &(dyn ToSql + Sync)])
+            .query_raw(&self.full_sql, no_params)
             .await
-            .map_err(|e| SourceError::backend("query_raw feature_ids (session)", e))?;
+            .map_err(|e| SourceError::backend("query_raw full_table (session)", e))?;
         let binding = self.binding.clone();
         let mapped = row_stream.map(move |item| match item {
-            Ok(row) => decode_row_pub(&row, &binding),
-            Err(e) => Err(SourceError::backend("row stream feature_ids", e)),
+            Ok(row) => decode_compile_row(&row, &binding),
+            Err(e) => Err(SourceError::backend("row stream full_table", e)),
         });
         Ok(Box::pin(mapped))
     }
@@ -226,7 +226,13 @@ fn build_summary_query(binding: &SourceBinding) -> Result<String, SourceError> {
     ))
 }
 
-fn build_feature_ids_query(binding: &SourceBinding) -> Result<String, SourceError> {
+/// Pass-2 SQL: `SELECT id, ST_AsBinary(geom), attrs..., tableoid::oid,
+/// ctid::text FROM s.t`. Single sequential scan in pg-table order; pass-2's
+/// caller buckets rows into the planned pages by joining on
+/// [`SourceRowKey`]. No `WHERE`, no `ORDER BY` -- avoids the per-page
+/// heap-walk that the prior `id = ANY($1)` pattern degenerated to on
+/// non-clustered tables.
+fn build_full_table_query(binding: &SourceBinding) -> Result<String, SourceError> {
     let id_q = quote_ident(&binding.id_column)?;
     let geom_q = quote_ident(&binding.geometry_column)?;
     let schema_q = quote_ident(&binding.from_schema)?;
@@ -238,9 +244,28 @@ fn build_feature_ids_query(binding: &SourceBinding) -> Result<String, SourceErro
         select.push_str(", ");
         select.push_str(&q);
     }
-    Ok(format!(
-        "SELECT {select} FROM {schema_q}.{table_q} WHERE {id_q} = ANY($1::bigint[])"
-    ))
+    // tableoid + ctid land at fixed trailing offsets so decode_compile_row
+    // can locate them without re-deriving the attribute count.
+    select.push_str(", tableoid::oid, ctid::text");
+    Ok(format!("SELECT {select} FROM {schema_q}.{table_q}"))
+}
+
+/// Decode a pass-2 row produced by `build_full_table_query`. The first
+/// `2 + binding.attributes.len()` columns are the standard `[id, geom,
+/// attrs...]` shape that `decode_row_pub` already understands; tableoid +
+/// ctid sit at the trailing offsets and become the [`SourceRowKey`].
+fn decode_compile_row(row: &tokio_postgres::Row, binding: &SourceBinding) -> Result<RowBytes, SourceError> {
+    let mut decoded = decode_row_pub(row, binding)?;
+    let key_offset = 2 + binding.attributes.len();
+    let tableoid: u32 = row
+        .try_get::<_, u32>(key_offset)
+        .map_err(|e| SourceError::backend("decode_compile_row tableoid", e))?;
+    let ctid_text: &str = row
+        .try_get::<_, &str>(key_offset + 1)
+        .map_err(|e| SourceError::backend("decode_compile_row ctid", e))?;
+    let (block, offset) = parse_ctid(ctid_text)?;
+    decoded.row_key = pack_row_key(tableoid, block, offset);
+    Ok(decoded)
 }
 
 #[cfg(test)]
@@ -267,6 +292,27 @@ mod tests {
         assert!(sql.contains("ctid::text"));
         assert!(!sql.contains("md5"));
         assert!(sql.contains("FROM \"public\".\"t\""));
+    }
+
+    #[test]
+    fn full_table_sql_is_well_formed() {
+        let b = SourceBinding::new(
+            mars_source::SourceCollectionId::new("c"),
+            "public",
+            "t",
+            "geom",
+            "gid",
+            vec!["name".into(), "kind".into()],
+            mars_types::CrsCode::new("EPSG:25832"),
+        )
+        .unwrap();
+        let sql = build_full_table_query(&b).unwrap();
+        assert_eq!(
+            sql,
+            "SELECT \"gid\", ST_AsBinary(\"geom\") AS geom, \"name\", \"kind\", tableoid::oid, ctid::text FROM \"public\".\"t\""
+        );
+        assert!(!sql.contains("WHERE"));
+        assert!(!sql.contains("ORDER BY"));
     }
 
     #[test]

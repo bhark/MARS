@@ -12,7 +12,7 @@ use deadpool_postgres::Pool;
 use futures_core::stream::BoxStream;
 use futures_util::StreamExt;
 use mars_expr::Expr;
-use mars_source::{AttrValue, RowBytes, SourceBinding, SourceError};
+use mars_source::{AttrValue, RowBytes, SourceBinding, SourceError, SourceRowKey};
 use mars_types::Bbox;
 use tokio_postgres::types::{ToSql, Type};
 
@@ -320,10 +320,12 @@ fn decode_row(row: &tokio_postgres::Row, binding: &SourceBinding) -> Result<RowB
         attributes.push((name.clone(), v));
     }
 
+    // stateless source path has no snapshot to anchor row identity.
     Ok(RowBytes {
         feature_id,
         geometry,
         attributes,
+        row_key: SourceRowKey::ZERO,
     })
 }
 
