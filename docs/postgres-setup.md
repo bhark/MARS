@@ -37,7 +37,7 @@ CREATE PUBLICATION mars_my_service FOR TABLE
     my_schema.buildings
     WITH (publish = 'insert, update, delete, truncate');
 
--- 4. REPLICA IDENTITY FULL on each bound table. SPEC §8.2.1: required so
+-- 4. REPLICA IDENTITY FULL on each bound table. Required so
 --    UPDATEs and DELETEs carry the old geometry; without it, MARS cannot
 --    invalidate the cells of moved-or-deleted features and the rendered
 --    output drifts from source.
@@ -54,6 +54,7 @@ The MARS YAML refers to these by name:
 source:
   type: postgis
   dsn: "postgres://mars@db.example/mars?sslmode=require"
+  native_crs: EPSG:25832
   change_feed:
     type: pgoutput
     publication: mars_my_service
@@ -74,7 +75,7 @@ FROM pg_replication_slots
 WHERE slot_name = 'mars_my_service';
 ```
 
-`retained_wal` growing without bound means the compiler is not advancing its cursor. Either the compiler is down or its publish path is failing (manifest publish must succeed before the cursor advances; SPEC §8.3).
+`retained_wal` growing without bound means the compiler is not advancing its cursor. Either the compiler is down or its publish path is failing (manifest publish must succeed before the cursor advances).
 
 ### Publication membership
 
@@ -123,7 +124,7 @@ The compiler returns errors via the `SourceError::Backend` channel; they are log
 
 ## Snapshot vs incremental
 
-A fresh compiler with no local manifest does a snapshot compile from PostGIS first (SPEC §8.2.3) and only then opens the replication subscription. Operators can force a snapshot rebuild by deleting the local manifest from the artifact store; the next compiler start will rebuild and resume incremental from the slot's current `confirmed_flush_lsn`.
+A fresh compiler with no local manifest does a snapshot compile from PostGIS first and only then opens the replication subscription. Operators can force a snapshot rebuild by deleting the local manifest from the artifact store; the next compiler start will rebuild and resume incremental from the slot's current `confirmed_flush_lsn`.
 
 If the slot has fallen too far behind for the WAL retention window, PostgreSQL will drop it and the compiler will surface `change feed gone; full snapshot required`. The fix is to recreate the slot and the manifest:
 

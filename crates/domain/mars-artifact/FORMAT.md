@@ -32,8 +32,8 @@ Per feature, in compiler-supplied slot order:
 - u64 user_id (non-key data; may repeat)
 - [f32; 4] bbox in canonical CRS units (NOT mm)
 - u8 geom_type: 1=Point, 2=LineString, 3=Polygon, 4=MultiPoint, 5=MultiLineString, 6=MultiPolygon (matches WKB)
-- u32 coord_block_offset
-- u32 coord_block_length
+- u32 coord_offset
+- u32 coord_len
 
 The packed coord array follows the feature index. For each feature's coord block:
 - Point: one absolute (x_mm, y_mm) i64 pair (varint i64 zigzag, but Point is a single absolute pair without delta)

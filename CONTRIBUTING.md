@@ -23,7 +23,7 @@ Commits are **subject-only conventional commits**. No body, no co-author trailer
 ```
 
 - Types: `feat`, `fix`, `style`, `test`, `docs`, `chore`, `refactor`, `perf`, `ci`.
-- Scope mirrors the touched crate (`runtime`, `compiler`, `wms`, `wmts`, `render`, `proj`, `grid`, `store-s3`, `store-fs`, `source-postgres`, `artifact`, `expr`, `style`, `types`, `config`, `observability`, `http`, `mars`, ...). One scope per commit.
+- Scope mirrors the touched crate (`runtime`, `compiler`, `wms`, `wmts`, `render`, `proj`, `grid`, `store-s3`, `store-fs`, `source-postgres`, `artifact`, `expr`, `style`, `types`, `config`, `observability`, `http`, `text`, `bin-shared`, `diff-capture`, `mars`, ...). One scope per commit.
 - Commit each individual piece of work as its own commit once tests + clippy are green. Do not batch commits at the end of a multi-step task.
 
 Releases are automated from these commit messages by `release-plz`; non-conforming commits are skipped from the changelog.
