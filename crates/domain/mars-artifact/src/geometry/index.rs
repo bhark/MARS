@@ -1,7 +1,7 @@
 use crate::ArtifactError;
 
 use super::codec::read_array;
-use super::{GeomType, GT_MULTIPOINT, GT_MULTIPOLYGON, GT_MULTILINESTRING, GT_POINT, GT_POLYGON, GT_LINESTRING};
+use super::{GT_LINESTRING, GT_MULTILINESTRING, GT_MULTIPOINT, GT_MULTIPOLYGON, GT_POINT, GT_POLYGON, GeomType};
 
 /// Length in bytes of one feature index entry.
 ///

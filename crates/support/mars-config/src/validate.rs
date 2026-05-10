@@ -320,10 +320,10 @@ pub fn validate(config: &mut Config, config_dir: &Path) -> Result<(), ConfigErro
 mod tests {
     use std::path::Path;
 
+    use crate::ConfigError;
     use crate::model::{Band, ClassStyle, LabelStyleAttach, Layer, LayerLabel, SourceBinding};
     use crate::validate::fixtures::*;
     use crate::validate::validate;
-    use crate::ConfigError;
     use mars_types::CrsCode;
 
     #[test]

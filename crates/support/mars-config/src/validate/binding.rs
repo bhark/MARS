@@ -141,10 +141,10 @@ pub(super) fn validate_binding_levels(layer: &LayerId, idx: usize, binding: &Sou
 mod tests {
     use std::path::Path;
 
+    use crate::SimplifierKind;
     use crate::model::DecimationLevelConfig;
     use crate::validate::fixtures::*;
     use crate::validate::validate;
-    use crate::SimplifierKind;
 
     #[test]
     fn accepts_simple_table_binding() {

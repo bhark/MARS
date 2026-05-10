@@ -75,8 +75,10 @@ pub(crate) const MAX_GEOM_COORDS: usize = 1_000_000;
 /// hard limit on rings / parts / polygons per geometry.
 pub(crate) const MAX_GEOM_PARTS: usize = 100_000;
 
-pub use builder::{encode_geometry_payload, FeatureWriter, GeomPayloadBuilder};
+pub use builder::{FeatureWriter, GeomPayloadBuilder, encode_geometry_payload};
+pub use decode::{
+    decode_geometry_at_slots, decode_geometry_payload, decode_geometry_payload_filtered, decode_one_geom,
+};
 pub(crate) use index::FEATURE_INDEX_ENTRY_LEN;
 pub use index::{FeatureIndexEntry, FeatureIndexIter, iter_feature_index};
-pub use decode::{decode_geometry_at_slots, decode_geometry_payload, decode_geometry_payload_filtered, decode_one_geom};
 pub use visit::{GeomVisitor, visit_one_geom};

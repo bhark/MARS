@@ -1,9 +1,9 @@
 use crate::ArtifactError;
 
 use super::{
-    codec::read_geom,
-    index::{iter_feature_index, FeatureIndexEntry},
     FeatureGeom, GeomKind,
+    codec::read_geom,
+    index::{FeatureIndexEntry, iter_feature_index},
 };
 
 /// Decode the coordinates for a single index entry. The `coord_area` slice

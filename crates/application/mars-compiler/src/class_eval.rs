@@ -162,7 +162,7 @@ fn label_shape_from_geom(feature: &FeatureGeom, placement: &Placement) -> Option
             })
         }
         (GeomKind::Polygon(_) | GeomKind::MultiPolygon(_), Placement::Polygon { strategy }) => {
-            // bbox-centroid is the cheap, conservative anchor; 
+            // bbox-centroid is the cheap, conservative anchor;
             // reserves the inner-skeleton strategy for v1.1 so both fall back
             // to centroid until that lands.
             let _ = strategy;

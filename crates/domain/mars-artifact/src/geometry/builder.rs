@@ -3,8 +3,8 @@ use bytes::Bytes;
 use crate::ArtifactError;
 
 use super::{
-    codec::{quantize, write_geom, geom_type_byte},
-    FeatureGeom, GeomType, FEATURE_INDEX_ENTRY_LEN,
+    FEATURE_INDEX_ENTRY_LEN, FeatureGeom, GeomType,
+    codec::{geom_type_byte, quantize, write_geom},
 };
 
 /// encode features into the geometry-payload section bytes.

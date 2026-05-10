@@ -3,7 +3,10 @@ use crate::{
     varint::{read_ivarint, read_uvarint, write_ivarint, write_uvarint},
 };
 
-use super::{Coord, GeomKind, GT_MULTIPOINT, GT_MULTIPOLYGON, GT_MULTILINESTRING, GT_POINT, GT_POLYGON, GT_LINESTRING, MAX_GEOM_COORDS, MAX_GEOM_PARTS};
+use super::{
+    Coord, GT_LINESTRING, GT_MULTILINESTRING, GT_MULTIPOINT, GT_MULTIPOLYGON, GT_POINT, GT_POLYGON, GeomKind,
+    MAX_GEOM_COORDS, MAX_GEOM_PARTS,
+};
 
 // quantization is mm-precision fixed point. i64 holds ±9.2e18 mm = ±9.2e15 m
 // of representable canonical-CRS extent; anything beyond is a coding bug or

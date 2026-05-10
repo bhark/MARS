@@ -2,9 +2,9 @@ use crate::ArtifactError;
 use crate::varint::read_ivarint;
 
 use super::{
+    FeatureIndexEntry, GT_LINESTRING, GT_MULTILINESTRING, GT_MULTIPOINT, GT_MULTIPOLYGON, GT_POINT, GT_POLYGON,
+    MAX_GEOM_COORDS, MAX_GEOM_PARTS,
     codec::{dequantize, read_uvarint_usize},
-    FeatureIndexEntry,
-    GT_MULTIPOINT, GT_MULTIPOLYGON, GT_MULTILINESTRING, GT_POINT, GT_POLYGON, GT_LINESTRING, MAX_GEOM_COORDS, MAX_GEOM_PARTS,
 };
 
 /// Streaming geometry visitor. Implementors receive coordinates one at a time
