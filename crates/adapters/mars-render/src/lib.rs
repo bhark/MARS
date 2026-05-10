@@ -526,6 +526,49 @@ mod tests {
     }
 
     #[test]
+    fn subpixel_stroke_0_15_is_visible() {
+        // regression probe for the composite-coast diff: MapServer renders a
+        // 0.15 px polygon outline, MARS (via tiny-skia) must too.
+        let canvas = Canvas {
+            width: 64,
+            height: 64,
+            background: Some(white()),
+        };
+        let ops = vec![DrawOp::Path {
+            path: square(32.0, 32.0, 16.0),
+            style: Arc::new(Style {
+                fill: Some(mars_style::Colour::rgb(220, 240, 255)),
+                stroke: Some(mars_style::Colour::rgb(40, 150, 230)),
+                stroke_width: Some(0.15),
+                ..Default::default()
+            }),
+        }];
+        let (_, _, rgba) = decode(&render_png(canvas, &ops));
+        // count pixels that are closer to the stroke colour than to either
+        // the fill colour or the white background.
+        let strokeish: usize = rgba
+            .chunks_exact(4)
+            .filter(|p| {
+                let r = p[0] as i16;
+                let g = p[1] as i16;
+                let b = p[2] as i16;
+                // closer to stroke (40,150,230) than to fill (220,240,255) or white
+                let d_stroke = (r - 40).abs() + (g - 150).abs() + (b - 230).abs();
+                let d_fill = (r - 220).abs() + (g - 240).abs() + (b - 255).abs();
+                let d_white = (r - 255).abs() + (g - 255).abs() + (b - 255).abs();
+                d_stroke < d_fill && d_stroke < d_white && p[3] > 0
+            })
+            .count();
+        // a 0.15 px stroke on a 32x32 square should produce *some* non-zero
+        // anti-aliased pixels along the edge; if tiny-skia drops it entirely
+        // this count will be zero.
+        assert!(
+            strokeish > 0,
+            "expected sub-pixel stroke (width=0.15) to produce visible pixels, got {strokeish}"
+        );
+    }
+
+    #[test]
     fn golden_square_matches() {
         let canvas = Canvas {
             width: 64,

@@ -85,7 +85,10 @@ pub(crate) fn draw_path(pm: &mut Pixmap, path: &PortPath, style: &Style) {
     }
 
     if let Some(stroke_col) = style.stroke {
-        let width = style.stroke_width.unwrap_or(1.0);
+        // tiny-skia silently drops strokes thinner than ~0.75 px; MapServer's
+        // AGG renderer honours (or rounds up) sub-pixel widths. clamp to 1.0
+        // so that outlines like the Soe layer's WIDTH 0.15 remain visible.
+        let width = style.stroke_width.unwrap_or(1.0).max(1.0);
         if width > 0.0 {
             let mut paint = Paint::default();
             paint.set_color(colour_to_tsk(stroke_col));
