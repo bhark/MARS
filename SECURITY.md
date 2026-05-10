@@ -10,8 +10,8 @@ Please **do not** open public GitHub issues for security reports.
 
 Report vulnerabilities privately via either:
 
-- GitHub's [private vulnerability reporting](https://github.com/forn-dk/mars/security/advisories/new), or
-- Email to `forn@forn.dk` with subject prefix `[mars-security]`.
+- GitHub's [private vulnerability reporting](https://github.com/bhark/MARS/security/advisories/new), or
+- Email to `adrian@forn.dk` with subject prefix `[mars-security]`.
 
 We aim to acknowledge reports within 72 hours and to coordinate a fix and a public advisory once a patched release is available.
 
