@@ -26,8 +26,9 @@ else
         "https://overpass-api.de/api/interpreter" \
         -o "${OSM_FILE}"
 
-    echo "seed: converting to PBF"
-    osmium cat "${OSM_FILE}" -o "${PBF_FILE}"
+    # osm2pgsql requires input sorted by type+id; overpass uses quadtile order
+    echo "seed: converting to sorted PBF"
+    osmium sort "${OSM_FILE}" -o "${PBF_FILE}"
 fi
 
 # idempotent reset: drop publication + schema before osm2pgsql --create.
