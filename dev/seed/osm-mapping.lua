@@ -15,7 +15,7 @@ local land = osm2pgsql.define_table{
     schema = SCHEMA,
     ids = { type = 'any', id_column = 'id', type_column = 'osm_type' },
     columns = {
-        { column = 'geom', type = 'geometry', projection = SRID },
+        { column = 'geom', type = 'geometry', projection = SRID, not_null = true },
     },
     indexes = {
         { column = 'geom', method = 'gist' },
@@ -27,7 +27,7 @@ local water = osm2pgsql.define_table{
     schema = SCHEMA,
     ids = { type = 'any', id_column = 'id', type_column = 'osm_type' },
     columns = {
-        { column = 'geom', type = 'geometry', projection = SRID },
+        { column = 'geom', type = 'geometry', projection = SRID, not_null = true },
     },
     indexes = {
         { column = 'geom', method = 'gist' },
@@ -39,7 +39,7 @@ local settlements = osm2pgsql.define_table{
     schema = SCHEMA,
     ids = { type = 'any', id_column = 'id', type_column = 'osm_type' },
     columns = {
-        { column = 'geom', type = 'geometry', projection = SRID },
+        { column = 'geom', type = 'geometry', projection = SRID, not_null = true },
     },
     indexes = {
         { column = 'geom', method = 'gist' },
@@ -51,7 +51,7 @@ local roads = osm2pgsql.define_table{
     schema = SCHEMA,
     ids = { type = 'way', id_column = 'id' },
     columns = {
-        { column = 'geom', type = 'linestring', projection = SRID },
+        { column = 'geom', type = 'linestring', projection = SRID, not_null = true },
         { column = 'kind', type = 'text' },
     },
     indexes = {
@@ -64,7 +64,7 @@ local buildings = osm2pgsql.define_table{
     schema = SCHEMA,
     ids = { type = 'way', id_column = 'id' },
     columns = {
-        { column = 'geom', type = 'geometry', projection = SRID },
+        { column = 'geom', type = 'geometry', projection = SRID, not_null = true },
         { column = 'kind', type = 'text' },
         { column = 'status', type = 'text' },
     },
@@ -78,7 +78,7 @@ local waterways = osm2pgsql.define_table{
     schema = SCHEMA,
     ids = { type = 'way', id_column = 'id' },
     columns = {
-        { column = 'geom', type = 'linestring', projection = SRID },
+        { column = 'geom', type = 'linestring', projection = SRID, not_null = true },
         { column = 'width_class', type = 'text' },
     },
     indexes = {
