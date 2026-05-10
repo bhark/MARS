@@ -1,0 +1,28 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# env-agnostic skeleton for the MARS stack: runtime + compiler workloads,
+# their service, and a config ConfigMap with no artifact-store backend.
+# overlays add the storage backend, secrets, and per-env workloads (postgis,
+# seed, viewer in local; managed PG in prod, etc).
+
+resources:
+  - compiler-deployment.yaml
+  - runtime-deployment.yaml
+  - runtime-service.yaml
+
+configMapGenerator:
+  - name: mars-config
+    files:
+      - mars.yaml=../../dev/config/mars.yaml
+    options:
+      labels:
+        app.kubernetes.io/part-of: config
+
+generatorOptions:
+  disableNameSuffixHash: true
+
+labels:
+  - includeSelectors: false
+    pairs:
+      app.kubernetes.io/name: mars
