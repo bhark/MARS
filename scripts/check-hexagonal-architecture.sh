@@ -237,6 +237,15 @@ if [[ -n "$other_unsafe_filtered" ]]; then
     echo "$other_unsafe_filtered" | sed 's/^/    /'
 fi
 
+# also flag per-item #[allow(unsafe_code)] outside the two boundary files
+per_item_unsafe_re='#\[allow\([^)]*\bunsafe_code\b[^)]*\)\]'
+other_per_item=$(grep -rlE "$per_item_unsafe_re" crates/ bin/ --include="*.rs" 2>/dev/null || true)
+other_per_item_filtered=$(echo "$other_per_item" | grep -v "crates/support/mars-proj/src/lib.rs" | grep -v "crates/adapters/mars-store-fs/src/mmap.rs" || true)
+if [[ -n "$other_per_item_filtered" ]]; then
+    warn "per-item '#[allow(unsafe_code)]' found outside permitted boundaries:"
+    echo "$other_per_item_filtered" | sed 's/^/    /'
+fi
+
 # -----------------------------------------------------------------------------
 # summary
 # -----------------------------------------------------------------------------
