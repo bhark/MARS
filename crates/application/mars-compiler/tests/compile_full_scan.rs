@@ -141,6 +141,11 @@ fn page_plan_for(rows: &[RowBytes]) -> PagePlan {
         row_keys,
         estimated_bytes: rows.iter().map(|r| r.geometry.len() as u64 + 64).sum(),
     };
+    let mut writer = mars_compiler::sidecar_arena::SidecarArenaWriter::new(std::env::temp_dir().as_path()).unwrap();
+    for r in rows {
+        writer.push(r.feature_id, HilbertKey::min()).unwrap();
+    }
+    let sidecar_arena = writer.finish().unwrap();
     PagePlan {
         combined_bbox: Bbox::new(-1000.0, -1000.0, 1000.0, 1000.0),
         levels: vec![LevelPagePlan {
@@ -148,7 +153,7 @@ fn page_plan_for(rows: &[RowBytes]) -> PagePlan {
             pages: vec![page],
         }],
         feature_count_total: rows.len() as u64,
-        sidecar_entries: rows.iter().map(|r| (r.feature_id, HilbertKey::min())).collect(),
+        sidecar_arena,
     }
 }
 
@@ -387,7 +392,8 @@ async fn spilled_path_emits_identical_artifacts_to_in_memory() {
     assert_eq!(out_mem.pages.len(), out_spill.pages.len());
     for (m, s) in out_mem.pages.iter().zip(out_spill.pages.iter()) {
         assert_eq!(
-            m.content_hash, s.content_hash,
+            m.content_hash,
+            s.content_hash,
             "spill path produced a different artifact than the in-memory path: \
              page_id={} feature_count mem={} spill={}",
             m.key.page_id.get(),

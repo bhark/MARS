@@ -21,6 +21,7 @@ pub mod reconcile;
 pub mod render;
 pub mod route_index;
 pub mod sidecar;
+pub mod sidecar_arena;
 pub(crate) mod spill;
 pub mod testing;
 
@@ -703,7 +704,8 @@ pub async fn run_snapshot_from_plan(
         );
         let mut session = deps.source.open_compile_session(&port_binding).await?;
         let work = async {
-            let page_plan = page_plan::compute_page_plan(session.as_mut(), binding_plan, plan_budget_bytes).await?;
+            let page_plan =
+                page_plan::compute_page_plan(session.as_mut(), binding_plan, plan_budget_bytes, spill_dir).await?;
             render::rebuild_binding_from_plan(
                 deps,
                 bootstrap,

@@ -16,6 +16,8 @@
 //! budget; crossing it yields [`crate::CompilerError::BootstrapPlanTooLarge`]
 //! before the planner allocates beyond it.
 
+use std::path::Path;
+
 use futures_util::StreamExt;
 use mars_source::{CompileSession, RowSummary, SourceRowKey};
 use mars_types::{Bbox, DecimationLevel, HilbertKey, PageId};
@@ -24,6 +26,7 @@ use crate::CompilerError;
 use crate::decimate::passes_min_size_bbox;
 use crate::hilbert::key_from_centroid;
 use crate::plan::BindingPlan;
+use crate::sidecar_arena::{SidecarArena, SidecarArenaWriter};
 
 /// Per-(binding, level) page plan plus the binding's combined bbox.
 #[derive(Debug, Clone, PartialEq)]
@@ -35,11 +38,11 @@ pub struct PagePlan {
     pub levels: Vec<LevelPagePlan>,
     /// Total rows seen by pass 1 before per-level filtering.
     pub feature_count_total: u64,
-    /// `(feature_id, hilbert_key)` for every unfiltered row pass 1 saw.
-    /// Pass 2 hands this to `encode_sidecar` to produce the binding's
-    /// page-membership sidecar without re-hydrating the table. Order is
-    /// pass-1 stream order; encode_sidecar performs its own sort.
-    pub sidecar_entries: Vec<(u64, HilbertKey)>,
+    /// `(feature_id, hilbert_key)` for every unfiltered row pass 1 saw,
+    /// stored as a fixed-record on-disk arena. Pass 2 drains it once and
+    /// hands the buffer to `encode_sidecar`, which sorts and encodes.
+    /// Order is pass-1 stream order.
+    pub sidecar_arena: SidecarArena,
 }
 
 /// One level's slice of the plan. Pages are emitted in ascending hilbert
@@ -91,6 +94,7 @@ pub async fn compute_page_plan(
     session: &mut (dyn CompileSession + '_),
     binding: &BindingPlan,
     plan_budget_bytes: u64,
+    scratch_dir: &Path,
 ) -> Result<PagePlan, CompilerError> {
     let row_size = std::mem::size_of::<PlanRow>() as u64;
     let max_rows = plan_budget_bytes
@@ -141,8 +145,12 @@ pub async fn compute_page_plan(
 
     // sidecar entries: (user_id, hilbert_key) for every unfiltered row.
     // postgres rejects negative ids upstream, so the i64 -> u64 cast preserves
-    // value.
-    let sidecar_entries: Vec<(u64, HilbertKey)> = rows.iter().map(|r| (r.feature_id as u64, r.hilbert_key)).collect();
+    // value. arena is on-disk; pass 2 drains once.
+    let mut arena_writer = SidecarArenaWriter::new(scratch_dir)?;
+    for r in &rows {
+        arena_writer.push(r.feature_id as u64, r.hilbert_key)?;
+    }
+    let sidecar_arena = arena_writer.finish()?;
 
     let mut levels: Vec<LevelPagePlan> = Vec::with_capacity(binding.levels.len());
     for level in &binding.levels {
@@ -174,7 +182,7 @@ pub async fn compute_page_plan(
         combined_bbox,
         levels,
         feature_count_total,
-        sidecar_entries,
+        sidecar_arena,
     };
     let total_pages: usize = plan.levels.iter().map(|l| l.pages.len()).sum();
     tracing::info!(
@@ -376,7 +384,9 @@ mod tests {
     async fn empty_source_yields_empty_plan() {
         let mut sess: Box<dyn CompileSession> = Box::new(FakeSession { summaries: vec![] });
         let bp = binding_plan(1024, vec![level(0.0)]);
-        let plan = compute_page_plan(sess.as_mut(), &bp, 8 * 1024 * 1024).await.unwrap();
+        let plan = compute_page_plan(sess.as_mut(), &bp, 8 * 1024 * 1024, std::env::temp_dir().as_path())
+            .await
+            .unwrap();
         assert_eq!(plan.feature_count_total, 0);
         assert_eq!(plan.levels.len(), 1);
         assert!(plan.levels[0].pages.is_empty());
@@ -391,7 +401,9 @@ mod tests {
             summaries: summaries.clone(),
         });
         let bp = binding_plan(64 * 1024, vec![level(0.0)]);
-        let plan = compute_page_plan(sess.as_mut(), &bp, 8 * 1024 * 1024).await.unwrap();
+        let plan = compute_page_plan(sess.as_mut(), &bp, 8 * 1024 * 1024, std::env::temp_dir().as_path())
+            .await
+            .unwrap();
         assert_eq!(plan.feature_count_total, 10);
         assert_eq!(plan.levels.len(), 1);
         assert_eq!(plan.levels[0].pages.len(), 1);
@@ -404,7 +416,9 @@ mod tests {
         let mut sess: Box<dyn CompileSession> = Box::new(FakeSession { summaries });
         // (64 + 64) bytes per row = 128; with 256 byte target, 2 rows/page.
         let bp = binding_plan(256, vec![level(0.0)]);
-        let plan = compute_page_plan(sess.as_mut(), &bp, 64 * 1024 * 1024).await.unwrap();
+        let plan = compute_page_plan(sess.as_mut(), &bp, 64 * 1024 * 1024, std::env::temp_dir().as_path())
+            .await
+            .unwrap();
         assert_eq!(plan.feature_count_total, 1_000);
         let pages = &plan.levels[0].pages;
         assert!(pages.len() > 100);
@@ -465,7 +479,9 @@ mod tests {
                 level(50.0), // keep only the three large bboxes
             ],
         );
-        let plan = compute_page_plan(sess.as_mut(), &bp, 8 * 1024 * 1024).await.unwrap();
+        let plan = compute_page_plan(sess.as_mut(), &bp, 8 * 1024 * 1024, std::env::temp_dir().as_path())
+            .await
+            .unwrap();
         let l0_total: usize = plan.levels[0].pages.iter().map(|p| p.feature_ids.len()).sum();
         let l1_total: usize = plan.levels[1].pages.iter().map(|p| p.feature_ids.len()).sum();
         assert_eq!(l0_total, 6);
@@ -480,7 +496,9 @@ mod tests {
         let bp = binding_plan(16 * 1024, vec![level(0.0)]);
         let row_size = std::mem::size_of::<PlanRow>() as u64;
         let budget = row_size * 3;
-        let err = compute_page_plan(sess.as_mut(), &bp, budget).await.unwrap_err();
+        let err = compute_page_plan(sess.as_mut(), &bp, budget, std::env::temp_dir().as_path())
+            .await
+            .unwrap_err();
         match err {
             CompilerError::BootstrapPlanTooLarge {
                 binding,

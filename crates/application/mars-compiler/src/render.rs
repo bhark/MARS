@@ -259,7 +259,7 @@ async fn rebuild_binding_truncate(
     )?;
     let mut session = deps.source.open_compile_session(&port_binding).await?;
     let work = async {
-        let page_plan = compute_page_plan(session.as_mut(), binding_plan, plan_budget_bytes).await?;
+        let page_plan = compute_page_plan(session.as_mut(), binding_plan, plan_budget_bytes, spill_dir).await?;
         rebuild_binding_from_plan(
             deps,
             plan,
@@ -1211,7 +1211,7 @@ pub async fn rebuild_binding_from_plan<'a>(
 
     // page-membership sidecar: pass-1 already collected (user_id, hilbert_key)
     // for every unfiltered row, so we just hand the slice to encode_sidecar.
-    let mut sidecar_entries = page_plan.sidecar_entries.clone();
+    let mut sidecar_entries = page_plan.sidecar_arena.drain_into_vec()?;
     let sidecar_bytes = encode_sidecar(&mut sidecar_entries)?;
     let sidecar_hash = compute_content_hash(&sidecar_bytes);
     let sidecar_key = membership_sidecar_object_key(binding_plan.binding_id.as_str(), &sidecar_hash)?;
