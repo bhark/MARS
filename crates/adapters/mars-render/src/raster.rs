@@ -35,6 +35,15 @@ pub(crate) fn colour_to_tsk(c: Colour) -> Color {
     Color::from_rgba8(c.r, c.g, c.b, c.a)
 }
 
+/// returns `c` with alpha multiplied by `scale` (clamped to [0,1]). used to
+/// emulate AGG sub-pixel stroke widths: a width of 0.15 renders as a 1px
+/// stroke at 15% alpha rather than a full-intensity 1px line.
+fn scaled_alpha(c: Colour, scale: f32) -> Color {
+    let s = scale.clamp(0.0, 1.0);
+    let a = ((c.a as f32) * s).round().clamp(0.0, 255.0) as u8;
+    Color::from_rgba8(c.r, c.g, c.b, a)
+}
+
 /// true iff the path's AABB has non-zero extent on both axes. tiny-skia's
 /// `fill_path` rejects degenerate-bbox paths (collapsed to a point or a
 /// horizontal/vertical line) with a `log::warn`; gating here suppresses that
@@ -85,13 +94,19 @@ pub(crate) fn draw_path(pm: &mut Pixmap, path: &PortPath, style: &Style) {
     }
 
     if let Some(stroke_col) = style.stroke {
-        // tiny-skia silently drops strokes thinner than ~0.75 px; MapServer's
-        // AGG renderer honours (or rounds up) sub-pixel widths. clamp to 1.0
-        // so that outlines like the Soe layer's WIDTH 0.15 remain visible.
-        let width = style.stroke_width.unwrap_or(1.0).max(1.0);
-        if width > 0.0 {
+        // tiny-skia silently drops strokes thinner than ~0.75 px. AGG-based
+        // renderers (MapServer) emulate sub-pixel widths by drawing a 1px
+        // stroke at proportionally reduced alpha; mirror that here so a
+        // WIDTH 0.15 outline stays soft instead of going full intensity.
+        let requested = style.stroke_width.unwrap_or(1.0);
+        if requested > 0.0 {
+            let (width, alpha_scale) = if requested < 1.0 {
+                (1.0, requested)
+            } else {
+                (requested, 1.0)
+            };
             let mut paint = Paint::default();
-            paint.set_color(colour_to_tsk(stroke_col));
+            paint.set_color(scaled_alpha(stroke_col, alpha_scale));
             paint.anti_alias = true;
 
             let mut stroke = Stroke {

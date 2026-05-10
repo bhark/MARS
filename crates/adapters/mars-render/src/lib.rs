@@ -526,9 +526,12 @@ mod tests {
     }
 
     #[test]
-    fn subpixel_stroke_0_15_is_visible() {
-        // regression probe for the composite-coast diff: MapServer renders a
-        // 0.15 px polygon outline, MARS (via tiny-skia) must too.
+    fn subpixel_stroke_0_15_is_visible_and_soft() {
+        // a 0.15 px stroke must be visible (regression: tiny-skia drops thin
+        // strokes outright) AND must be soft, not full-intensity. AGG-style
+        // emulation = 1px stroke at proportional alpha. concretely: edge
+        // pixels are tinted toward stroke from fill, but never approach the
+        // raw stroke colour.
         let canvas = Canvas {
             width: 64,
             height: 64,
@@ -544,27 +547,20 @@ mod tests {
             }),
         }];
         let (_, _, rgba) = decode(&render_png(canvas, &ops));
-        // count pixels that are closer to the stroke colour than to either
-        // the fill colour or the white background.
-        let strokeish: usize = rgba
-            .chunks_exact(4)
-            .filter(|p| {
-                let r = p[0] as i16;
-                let g = p[1] as i16;
-                let b = p[2] as i16;
-                // closer to stroke (40,150,230) than to fill (220,240,255) or white
-                let d_stroke = (r - 40).abs() + (g - 150).abs() + (b - 230).abs();
-                let d_fill = (r - 220).abs() + (g - 240).abs() + (b - 255).abs();
-                let d_white = (r - 255).abs() + (g - 255).abs() + (b - 255).abs();
-                d_stroke < d_fill && d_stroke < d_white && p[3] > 0
-            })
-            .count();
-        // a 0.15 px stroke on a 32x32 square should produce *some* non-zero
-        // anti-aliased pixels along the edge; if tiny-skia drops it entirely
-        // this count will be zero.
-        assert!(
-            strokeish > 0,
-            "expected sub-pixel stroke (width=0.15) to produce visible pixels, got {strokeish}"
+
+        // pixels with red strictly below pure fill (220) require stroke
+        // contribution: pure white->fill anti-alias only produces r in
+        // [220, 255]. their existence proves the stroke actually rendered.
+        let stroke_tinted = rgba.chunks_exact(4).filter(|p| p[0] < 220 && p[3] > 0).count();
+        assert!(stroke_tinted > 0, "sub-pixel stroke produced no visible tint");
+
+        // and: no pixel should be saturated toward the raw stroke colour.
+        // a full-alpha 1px stroke would produce pixels with r near 40; under
+        // 15% alpha-scaled emulation r should stay well above ~150.
+        let saturated = rgba.chunks_exact(4).filter(|p| p[0] < 120).count();
+        assert_eq!(
+            saturated, 0,
+            "sub-pixel stroke is rendering at full intensity ({saturated} saturated px)"
         );
     }
 
