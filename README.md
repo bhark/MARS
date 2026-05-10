@@ -77,10 +77,19 @@ cargo test --workspace --locked --all-targets
 cargo deny check
 ```
 
-The end-to-end suite spins up a PostGIS container via `testcontainers` and needs Docker:
+The end-to-end harness drives a Podman Quadlet stack (postgis + compiler +
+runtime) via systemd `--user` units, loads the local-map-subset fixture into
+PostGIS, and exercises WMS GetCapabilities + GetMap:
 
 ```sh
 ./scripts/run-e2e.sh
+```
+
+A separate in-process e2e (`bin/mars/tests/e2e_render.rs`) uses
+`testcontainers` and needs Docker:
+
+```sh
+MARS_E2E=1 cargo test -p mars --features e2e -- --nocapture
 ```
 
 CI runs the same gates plus `cargo-deny`. A green local run is not a guarantee of a green CI run, but a red local run is a guaranteed red CI run.

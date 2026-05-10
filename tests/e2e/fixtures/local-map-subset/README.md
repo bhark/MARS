@@ -2,7 +2,7 @@
 
 This fixture contract is the public e2e data boundary. The harness expects a
 gzip-compressed SQL dump at `target/e2e-fixtures/local-map-subset.sql.gz` unless
-`scripts/run-k3d-e2e.sh --fixture PATH` is used.
+`scripts/run-e2e.sh --fixture PATH` is used.
 
 The dump must create the `e2e_source` schema and these tables:
 
