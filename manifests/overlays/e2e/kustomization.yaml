@@ -1,6 +1,12 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
+# e2e- prefix isolates rendered resources (Deployments -> pods, PVCs ->
+# podman volumes, ConfigMaps, Secrets) from the dev `overlays/local`
+# stack so both can coexist on the same host without colliding on
+# `mars-postgis-pod` / `mars-postgis-data` / etc.
+namePrefix: e2e-
+
 # e2e overlay: postgis + fixture-loader (replaces OSM seed) + compiler +
 # runtime, no viewer. layers point at the e2e_source.* schema produced by
 # tests/e2e/fixtures/local-map-subset/. runtime hostPort is 18080 so the

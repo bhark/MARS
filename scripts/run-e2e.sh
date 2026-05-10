@@ -38,12 +38,12 @@ UNITS=(
   mars-e2e-config.service
 )
 VOLUMES=(
-  mars-postgis-data
-  mars-artifact-store
-  mars-compiler-cache
-  mars-compiler-work
-  mars-runtime-cache
-  mars-fixture
+  e2e-mars-postgis-data
+  e2e-mars-artifact-store
+  e2e-mars-compiler-cache
+  e2e-mars-compiler-work
+  e2e-mars-runtime-cache
+  e2e-mars-fixture
 )
 
 usage() {
@@ -81,7 +81,12 @@ dump_diagnostics() {
 }
 
 teardown_stack() {
-  systemctl --user stop "${UNITS[@]}" 2>/dev/null || true
+  # glob-stop catches the Quadlet-generated mars-e2e-network.service too,
+  # which UNITS= deliberately omits (it's wired implicitly via `Network=`
+  # in the .kube units). leaving it active across runs hides its unit-file
+  # deletion from systemd and breaks the next pod start with `network not
+  # found`.
+  systemctl --user stop 'mars-e2e-*.service' 2>/dev/null || true
 }
 
 remove_install() {
@@ -157,7 +162,7 @@ done
 # Quadlet ConfigMap= (podman kube play does not persist ConfigMaps across
 # plays). mirrors dev/install.sh.
 yq ea \
-  'select(.kind == "ConfigMap" and .metadata.name == "mars-config")' \
+  'select(.kind == "ConfigMap" and .metadata.name == "e2e-mars-config")' \
   "$RENDERED" > "$MANIFEST_DIR/mars-config-cm.yaml"
 if ! [[ -s "$MANIFEST_DIR/mars-config-cm.yaml" ]]; then
   echo "install: extracted mars-config ConfigMap is empty" >&2
@@ -170,11 +175,11 @@ done
 
 systemctl --user daemon-reload
 
-log "fixture: populating mars-fixture volume from $FIXTURE"
-podman volume rm -f mars-fixture >/dev/null 2>&1 || true
-podman volume create mars-fixture >/dev/null
+log "fixture: populating e2e-mars-fixture volume from $FIXTURE"
+podman volume rm -f e2e-mars-fixture >/dev/null 2>&1 || true
+podman volume create e2e-mars-fixture >/dev/null
 podman run --rm \
-  -v mars-fixture:/dst \
+  -v e2e-mars-fixture:/dst \
   -v "$FIXTURE":/src/dump.sql.gz:ro,Z \
   docker.io/alpine:latest \
   cp /src/dump.sql.gz /dst/dump.sql.gz
