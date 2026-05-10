@@ -3,8 +3,7 @@
 //! - [`ObjectStore`] - the shared, cloud-grade artifact bucket (S3 / R2 / GCS / FS).
 //! - [`LocalCache`]  - the per-pod SSD cache (mirrored key layout, mmap-friendly).
 //! - [`ManifestStore`] - publish, read, and watch the current manifest pointer
-//!   (SPEC §8.5 / §10.5). The single trait collapses what used to be three
-//!   sibling traits with identical impl sites.
+//!   (SPEC §8.5 / §10.5).
 //!
 //! adapters live under `crates/adapters/mars-store-*`.
 
@@ -80,10 +79,8 @@ pub trait LocalCache: Send + Sync + 'static {
     ) -> Result<Bytes, StoreError>;
 }
 
-/// Single port for manifest pub/sub. Replaces the older split into
-/// `ManifestPublisher` / `ManifestReader` / `ManifestWatch` - every concrete
-/// adapter implemented all three on the same struct, and consumers now hold
-/// one `Arc<dyn ManifestStore>` instead of three separate trait objects.
+/// Single port for manifest pub/sub. Publish, read, and watch on one trait
+/// object; consumers hold one `Arc<dyn ManifestStore>`.
 #[async_trait]
 pub trait ManifestStore: Send + Sync + 'static {
     /// Write the manifest body and atomically swap `manifests/current`.

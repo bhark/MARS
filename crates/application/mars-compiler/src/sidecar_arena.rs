@@ -3,8 +3,8 @@
 //! Pass 1 records `(user_id, hilbert_key)` for every unfiltered row; pass
 //! 2 hands the same set to [`crate::sidecar::encode_sidecar`]. Holding the
 //! list in a `Vec` peaks at 16 bytes × `feature_count_total` (~96 MiB on
-//! a 6 M-row binding) and used to be cloned out of the plan into pass 2,
-//! adding another transient ~96 MiB at peak.
+//! a 6 M-row binding). The arena avoids a second transient copy by writing
+//! directly to disk in pass 1 and reading sequentially in pass 2.
 //!
 //! This arena writes each pair as a fixed 16-byte record into a private
 //! scratch file during pass 1 and exposes a sequential reader during pass

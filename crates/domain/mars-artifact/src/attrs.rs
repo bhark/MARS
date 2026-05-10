@@ -20,9 +20,7 @@ use bytes::Bytes;
 
 /// on-disk attribute value vocabulary. uses
 /// [`mars_expr::Literal`] directly so the artifact codec, the expression
-/// layer, and adapter conversions all speak the same shape — there used to
-/// be a parallel `AttrValue` enum here that drifted (no `serde` derive) and
-/// duplicated the same five variants.
+/// layer, and adapter conversions all speak the same shape.
 pub use mars_expr::Literal as AttrValue;
 
 /// Maximum encoded size of a single row's attribute block.

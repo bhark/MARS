@@ -241,8 +241,7 @@ pub fn default_placement(kind: LayerGeomKind) -> Placement {
 
 /// Compiled stylesheet, keyed by style name. Both maps share style structs
 /// behind `Arc` so the runtime can clone references without re-allocating
-/// per-feature; previously `geometry` was Arc-shared but `labels` cloned
-/// the whole struct on each layer attach.
+/// per-feature.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Stylesheet {
     #[serde(default)]

@@ -505,7 +505,7 @@ mod tests {
 
     #[test]
     fn float_display_roundtrips_large_value() {
-        // 1e20 used to format as "100000000000000000000" and round-trip as Int.
+        // 1e20 must format with a decimal point or exponent so reparse stays Float.
         let lit = Literal::Float(1e20);
         let s = format!("{lit}");
         // must contain '.' or 'e' so reparse stays Float

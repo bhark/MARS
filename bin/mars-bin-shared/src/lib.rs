@@ -2,8 +2,7 @@
 //!
 //! Both bins are composition roots that wire concrete adapters from parsed
 //! configuration. The wiring is identical; this crate keeps it in one place
-//! so the two bins cannot drift (e.g. `mars-compile` previously rejected an
-//! `s3`-typed store).
+//! so the two bins cannot drift.
 //!
 //! Lives under `bin/` because it names concrete adapter types
 //! (`PgSource`, `FsStore`, `S3Store`, ...) which the hexagonal-architecture

@@ -114,8 +114,8 @@ pub(crate) async fn hydrate_keyed_rows<'a>(
 
 /// Sum the working-set bytes of `rows` against `working_set_bytes`. Trips
 /// [`CompilerError::ScratchBudgetExceeded`] with `Some(page_id)` when the
-/// running total crosses the ceiling. Mirrors the per-row formula
-/// [`hydrate_keyed_rows`] used to use, just measured per-page.
+/// running total crosses the ceiling. Mirrors the per-row working-set size
+/// estimate used during hydration, summed per-page.
 pub(crate) fn enforce_page_budget(
     rows: &[KeyedRow],
     working_set_bytes: u64,
@@ -1201,8 +1201,8 @@ pub async fn rebuild_binding_from_plan<'a>(
         }
     }
 
-    // build per-level metadata in plan order, restoring the level summary
-    // events that the per-level loop used to emit.
+    // build per-level metadata in plan order, including the level summary
+    // events.
     let mut levels_meta: Vec<LevelMetadata> = Vec::with_capacity(binding_plan.levels.len());
     let mut all_pages: Vec<PageEntry> = Vec::new();
     for (lvl_idx, level_plan) in binding_plan.levels.iter().enumerate() {

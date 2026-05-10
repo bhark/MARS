@@ -642,7 +642,7 @@ pub struct Band {
 }
 
 /// Cell grid configuration. **Deprecated:** retained only for backward
-/// compatibility with earlier fixtures. The page-keyed substrate does not
+/// compatibility with existing fixtures. The page-keyed substrate does not
 /// consume any of these fields.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Cells {

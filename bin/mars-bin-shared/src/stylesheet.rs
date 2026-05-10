@@ -1,8 +1,6 @@
 //! Build a runtime `Stylesheet` from parsed config.
 //!
-//! Lives here because all three bins (`mars`, `mars-diff-capture`, the e2e
-//! harness in `bin/mars/tests/`) need the exact same lowering and previously
-//! kept their own near-copies, which drifted.
+//! Lives here because multiple bins need the exact same lowering.
 
 use std::sync::Arc;
 
