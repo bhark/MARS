@@ -37,6 +37,9 @@ RUN cargo build --release --locked -p mars
 
 FROM gcr.io/distroless/cc-debian12:nonroot
 
+# proj-sys links sqlite dynamically; distroless/cc doesn't ship it
+COPY --from=builder /usr/lib/x86_64-linux-gnu/libsqlite3.so.0 \
+                    /usr/lib/x86_64-linux-gnu/libsqlite3.so.0
 COPY --from=builder /src/target/release/mars /usr/local/bin/mars
 
 USER nonroot:nonroot
