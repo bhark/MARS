@@ -970,6 +970,15 @@ pub async fn rebuild_binding_from_plan<'a>(
         });
     }
 
+    let rebuild_started = std::time::Instant::now();
+    tracing::info!(
+        target: "mars_compiler::compile",
+        binding = %binding_plan.binding_id,
+        levels = binding_plan.levels.len(),
+        feature_count_total = page_plan.feature_count_total,
+        "compile.rebuild.start",
+    );
+
     // pass 2 hydrates one planned page at a time using the authoritative
     // `feature_ids` set produced by pass 1. range-based filtering used to
     // double-count rows whose hilbert key sat exactly on a page boundary
@@ -986,6 +995,14 @@ pub async fn rebuild_binding_from_plan<'a>(
 
     for (level_plan, level_pp) in binding_plan.levels.iter().zip(&page_plan.levels) {
         debug_assert_eq!(level_plan.level, level_pp.level);
+        let level_started = std::time::Instant::now();
+        tracing::info!(
+            target: "mars_compiler::compile",
+            binding = %binding_plan.binding_id,
+            level = level_plan.level.get(),
+            pages = level_pp.pages.len(),
+            "compile.level.start",
+        );
         let mut level_pages: Vec<PageEntry> = Vec::new();
         for planned in &level_pp.pages {
             let stream = session.fetch_by_feature_ids(&planned.feature_ids).await?;
@@ -1037,6 +1054,8 @@ pub async fn rebuild_binding_from_plan<'a>(
                 // pruned-only page: drop entirely, matches incremental contract.
                 continue;
             }
+            let page_started = std::time::Instant::now();
+            let row_count = page_rows.len();
             let entry = flush_page(deps, binding_plan, level_plan.level, planned.page_id, &page_rows).await?;
             let mut class_acc: Vec<LayerSidecarEntry> = Vec::new();
             let mut label_acc: Vec<LayerSidecarEntry> = Vec::new();
@@ -1051,10 +1070,28 @@ pub async fn rebuild_binding_from_plan<'a>(
                 &mut label_acc,
             )
             .await?;
+            tracing::info!(
+                target: "mars_compiler::compile",
+                binding = %binding_plan.binding_id,
+                level = level_plan.level.get(),
+                page_id = planned.page_id.get(),
+                rows = row_count,
+                bytes = entry.size_bytes,
+                elapsed_ms = page_started.elapsed().as_millis() as u64,
+                "compile.page.flush",
+            );
             level_pages.push(entry);
             class_sidecars.append(&mut class_acc);
             label_sidecars.append(&mut label_acc);
         }
+        tracing::info!(
+            target: "mars_compiler::compile",
+            binding = %binding_plan.binding_id,
+            level = level_plan.level.get(),
+            pages_emitted = level_pages.len(),
+            elapsed_ms = level_started.elapsed().as_millis() as u64,
+            "compile.level.end",
+        );
         levels_meta.push(LevelMetadata {
             level: level_plan.level,
             vertex_tolerance_m: level_plan.vertex_tolerance_m,
@@ -1101,12 +1138,22 @@ pub async fn rebuild_binding_from_plan<'a>(
             size_bytes: sidecar_size,
         }),
     };
-    Ok(BindingOutput {
+    let output = BindingOutput {
         meta,
         pages: all_pages,
         class_sidecars,
         label_sidecars,
-    })
+    };
+    tracing::info!(
+        target: "mars_compiler::compile",
+        binding = %binding_plan.binding_id,
+        elapsed_ms = rebuild_started.elapsed().as_millis() as u64,
+        pages = output.pages.len(),
+        class_sidecars = output.class_sidecars.len(),
+        label_sidecars = output.label_sidecars.len(),
+        "compile.rebuild.end",
+    );
+    Ok(output)
 }
 
 /// Recompute level metadata after pages were replaced or dropped. Pure;

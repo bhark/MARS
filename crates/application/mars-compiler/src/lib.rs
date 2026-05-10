@@ -633,6 +633,12 @@ pub async fn run_snapshot_from_plan(
             binding_plan.attributes.clone(),
             binding_plan.native_crs.clone(),
         )?;
+        let started = std::time::Instant::now();
+        tracing::info!(
+            target: "mars_compiler::compile",
+            binding = %binding_plan.binding_id,
+            "compile.binding.start",
+        );
         let mut session = deps.source.open_compile_session(&port_binding).await?;
         let work = async {
             let page_plan = page_plan::compute_page_plan(session.as_mut(), binding_plan, plan_budget_bytes).await?;
@@ -650,12 +656,30 @@ pub async fn run_snapshot_from_plan(
         match work {
             Ok(out) => {
                 session.commit().await?;
+                let pages: usize = out.pages.len();
+                let levels = out.meta.levels.len();
+                tracing::info!(
+                    target: "mars_compiler::compile",
+                    binding = %binding_plan.binding_id,
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    pages = pages,
+                    levels = levels,
+                    feature_count_total = out.meta.feature_count_total,
+                    "compile.binding.end",
+                );
                 Ok(out)
             }
             Err(err) => {
                 if let Err(rb) = session.rollback().await {
                     tracing::warn!(error = %rb, "compile session rollback failed");
                 }
+                tracing::info!(
+                    target: "mars_compiler::compile",
+                    binding = %binding_plan.binding_id,
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    error = %err,
+                    "compile.binding.end",
+                );
                 Err(err)
             }
         }

@@ -89,6 +89,13 @@ pub async fn compute_page_plan(
         .checked_div(row_size)
         .map_or(usize::MAX, |n| usize::try_from(n).unwrap_or(usize::MAX));
 
+    let started = std::time::Instant::now();
+    tracing::info!(
+        target: "mars_compiler::compile",
+        binding = %binding.binding_id,
+        "compile.plan.start",
+    );
+
     let mut rows: Vec<PlanRow> = Vec::new();
     let mut bbox_acc = BboxAcc::default();
     let mut feature_count_total: u64 = 0;
@@ -151,12 +158,27 @@ pub async fn compute_page_plan(
         });
     }
 
-    Ok(PagePlan {
+    let plan = PagePlan {
         combined_bbox,
         levels,
         feature_count_total,
         sidecar_entries,
-    })
+    };
+    let total_pages: usize = plan.levels.iter().map(|l| l.pages.len()).sum();
+    tracing::info!(
+        target: "mars_compiler::compile",
+        binding = %binding.binding_id,
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        feature_count_total = plan.feature_count_total,
+        levels = plan.levels.len(),
+        pages = total_pages,
+        bbox_min_x = plan.combined_bbox.min_x,
+        bbox_min_y = plan.combined_bbox.min_y,
+        bbox_max_x = plan.combined_bbox.max_x,
+        bbox_max_y = plan.combined_bbox.max_y,
+        "compile.plan.end",
+    );
+    Ok(plan)
 }
 
 /// Sweep an already-sorted level slice into pages whose accumulated WKB
