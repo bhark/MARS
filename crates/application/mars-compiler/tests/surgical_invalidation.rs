@@ -214,6 +214,7 @@ async fn surgical_invalidation_rebuilds_only_dirty_pages() {
         1,
         &std::env::temp_dir(),
         256,
+        &mars_compiler::memory_governor::MemoryGovernor::new(u64::MAX),
     )
     .await
     .unwrap();
@@ -374,6 +375,7 @@ async fn surgical_invalidation_rebuilds_only_dirty_pages() {
         TEST_IN_FLIGHT_BUDGET,
         &std::env::temp_dir(),
         256,
+        &mars_compiler::memory_governor::MemoryGovernor::new(u64::MAX),
     )
     .await
     .unwrap();

@@ -46,6 +46,7 @@ use crate::class_eval::{LabelSpec, RowAttrs, assign_class, emit_label_candidate}
 use crate::decimate::{passes_min_size, simplify};
 use crate::external_sort::WorkingSetGuard;
 use crate::incremental::{BindingDirty, DirtyPages};
+use crate::memory_governor::MemoryGovernor;
 use crate::page_plan::{PagePlan, compute_page_plan};
 use crate::plan::{BindingPlan, BootstrapPlan, LayerPlan, LevelPlan};
 use crate::rebalance::RebalanceOp;
@@ -155,6 +156,7 @@ pub async fn rebuild_pages(
     in_flight_budget_bytes: u64,
     spill_dir: &std::path::Path,
     spill_open_file_limit: usize,
+    governor: &MemoryGovernor,
 ) -> Result<RebuildOutcome, CompilerError> {
     let mut outcome = RebuildOutcome::default();
     for (binding_id, binding_dirty) in dirty.per_binding {
@@ -169,6 +171,7 @@ pub async fn rebuild_pages(
                 in_flight_budget_bytes,
                 spill_dir,
                 spill_open_file_limit,
+                governor,
                 &mut outcome,
             )
             .await?;
@@ -211,6 +214,7 @@ async fn rebuild_binding_truncate(
     in_flight_budget_bytes: u64,
     spill_dir: &std::path::Path,
     spill_open_file_limit: usize,
+    governor: &MemoryGovernor,
     outcome: &mut RebuildOutcome,
 ) -> Result<(), CompilerError> {
     let binding_plan =
@@ -266,6 +270,7 @@ async fn rebuild_binding_truncate(
             in_flight_budget_bytes,
             spill_dir,
             spill_open_file_limit,
+            governor,
         )
         .await
     }
@@ -967,6 +972,7 @@ pub async fn rebuild_binding_from_plan<'a>(
     in_flight_budget_bytes: u64,
     spill_dir: &std::path::Path,
     spill_open_file_limit: usize,
+    governor: &MemoryGovernor,
 ) -> Result<BindingOutput, CompilerError> {
     if page_plan.feature_count_total == 0 {
         return Ok(BindingOutput {
@@ -1033,6 +1039,13 @@ pub async fn rebuild_binding_from_plan<'a>(
     let mut pruned: HashMap<(usize, PageId), Vec<KeyedRow>> = HashMap::new();
     let mut received: HashMap<(usize, PageId), usize> = HashMap::new();
     let mut page_bytes: HashMap<(usize, PageId), u64> = HashMap::new();
+    // governor reservations shadowing `page_bytes` so peak/in-flight bytes
+    // surface in the shared cap. piece 1 wires this as a no-op: a failed
+    // try_acquire is silently ignored — the existing in_flight_bytes /
+    // spill trigger keeps semantics. piece 3 narrows producers so the
+    // governor becomes load-bearing.
+    let mut page_reservations: HashMap<(usize, PageId), Vec<crate::memory_governor::MemoryReservation>> =
+        HashMap::new();
     let mut in_flight_bytes: u64 = 0;
     let mut levels_pages: Vec<Vec<PageEntry>> = vec![Vec::new(); binding_plan.levels.len()];
     let mut class_sidecars: Vec<LayerSidecarEntry> = Vec::new();
@@ -1106,6 +1119,9 @@ pub async fn rebuild_binding_from_plan<'a>(
                 }
                 *page_bytes.entry((lvl_idx, page_id)).or_insert(0) += kr_bytes;
                 in_flight_bytes = in_flight_bytes.saturating_add(kr_bytes);
+                if let Some(res) = governor.try_acquire(kr_bytes) {
+                    page_reservations.entry((lvl_idx, page_id)).or_default().push(res);
+                }
             }
 
             let r = received.entry((lvl_idx, page_id)).or_insert(0);
@@ -1129,6 +1145,7 @@ pub async fn rebuild_binding_from_plan<'a>(
                 };
                 let bytes = page_bytes.remove(&(lvl_idx, page_id)).unwrap_or(0);
                 in_flight_bytes = in_flight_bytes.saturating_sub(bytes);
+                page_reservations.remove(&(lvl_idx, page_id));
                 flush_one_page(
                     deps,
                     binding_plan,
@@ -1152,6 +1169,8 @@ pub async fn rebuild_binding_from_plan<'a>(
         if in_flight_bytes > in_flight_budget_bytes {
             let evicted = spill.flush_all_partials(&mut partial, &mut pruned, &mut page_bytes)?;
             in_flight_bytes = in_flight_bytes.saturating_sub(evicted);
+            // every page with a live reservation just got evicted to disk.
+            page_reservations.clear();
         }
     }
 
@@ -1245,6 +1264,8 @@ pub async fn rebuild_binding_from_plan<'a>(
         spill_bytes_written = spill_metrics.bytes_written,
         spill_bytes_read = spill_metrics.bytes_read,
         spill_files_active_peak = spill_metrics.files_active_peak,
+        governor_peak_bytes = governor.peak_bytes(),
+        governor_acquire_wait_us = governor.acquire_wait_us(),
         "compile.rebuild.end",
     );
     Ok(output)

@@ -13,6 +13,7 @@ pub mod decimate;
 pub mod external_sort;
 pub mod hilbert;
 pub mod incremental;
+pub mod memory_governor;
 pub mod page_plan;
 pub mod plan;
 pub mod rebalance;
@@ -282,6 +283,9 @@ impl Compiler {
         let binding_parallelism = self.config.compiler.compile_binding_parallelism;
         let spill_dir = self.config.compiler.compile_spill_dir_path();
         let spill_open_file_limit = self.config.compiler.compile_spill_open_file_limit;
+        // governor cap mirrors the existing in-flight budget for now: piece 1
+        // is a behavioural no-op so trip points stay where they were.
+        let governor = memory_governor::MemoryGovernor::new(in_flight_budget_bytes);
         let manifest = run_snapshot_from_plan(
             &self.deps,
             &plan,
@@ -293,8 +297,10 @@ impl Compiler {
             binding_parallelism,
             &spill_dir,
             spill_open_file_limit,
+            &governor,
         )
         .await?;
+        log_governor_observations("compile.snapshot.governor", &governor);
         let v = publish_with_retry(self.deps.manifest.as_ref(), &manifest, &self.deps.metrics, shutdown).await?;
         tracing::info!(
             version = v,
@@ -432,6 +438,7 @@ impl Compiler {
         let in_flight_budget_bytes = self.config.compiler.compile_in_flight_pages_budget()?;
         let spill_dir = self.config.compiler.compile_spill_dir_path();
         let spill_open_file_limit = self.config.compiler.compile_spill_open_file_limit;
+        let governor = memory_governor::MemoryGovernor::new(in_flight_budget_bytes);
         let started = std::time::Instant::now();
         let outcome = render::rebuild_pages(
             &self.deps,
@@ -444,9 +451,11 @@ impl Compiler {
             in_flight_budget_bytes,
             &spill_dir,
             spill_open_file_limit,
+            &governor,
         )
         .await?;
         self.deps.metrics.observe_compiler_rebuild_duration(started.elapsed());
+        log_governor_observations("compile.cycle.governor", &governor);
 
         // merge outcome into prior to produce the new manifest.
         let next_version = prior.version + 1;
@@ -657,6 +666,7 @@ pub async fn run_snapshot_from_plan(
     binding_parallelism: usize,
     spill_dir: &std::path::Path,
     spill_open_file_limit: usize,
+    governor: &memory_governor::MemoryGovernor,
 ) -> Result<Manifest, CompilerError> {
     use futures_util::StreamExt;
     use mars_source::{SourceBinding as PortBinding, SourceCollectionId};
@@ -675,6 +685,7 @@ pub async fn run_snapshot_from_plan(
         in_flight_budget_bytes: u64,
         spill_dir: &std::path::Path,
         spill_open_file_limit: usize,
+        governor: &memory_governor::MemoryGovernor,
     ) -> Result<BindingOutput, CompilerError> {
         let port_binding = PortBinding::new(
             SourceCollectionId::new(binding_plan.binding_id.as_str()),
@@ -704,6 +715,7 @@ pub async fn run_snapshot_from_plan(
                 in_flight_budget_bytes,
                 spill_dir,
                 spill_open_file_limit,
+                governor,
             )
             .await
         }
@@ -756,6 +768,7 @@ pub async fn run_snapshot_from_plan(
                 in_flight_budget_bytes,
                 spill_dir,
                 spill_open_file_limit,
+                governor,
             ));
         }
         match pending.next().await {
@@ -976,4 +989,14 @@ async fn publish_with_retry(
             _ = tokio::time::sleep(*d) => {}
         }
     }
+}
+
+fn log_governor_observations(event: &'static str, governor: &memory_governor::MemoryGovernor) {
+    tracing::info!(
+        target: "mars_compiler::compile",
+        cap_bytes = governor.cap_bytes(),
+        peak_bytes = governor.peak_bytes(),
+        acquire_wait_us = governor.acquire_wait_us(),
+        "{event}",
+    );
 }

@@ -247,6 +247,7 @@ async fn multi_band_same_binding_emits_one_class_sidecar_per_page() {
         1,
         &std::env::temp_dir(),
         256,
+        &mars_compiler::memory_governor::MemoryGovernor::new(u64::MAX),
     )
     .await
     .expect("snapshot");
