@@ -283,9 +283,7 @@ impl Compiler {
         let binding_parallelism = self.config.compiler.compile_binding_parallelism;
         let spill_dir = self.config.compiler.compile_spill_dir_path();
         let spill_open_file_limit = self.config.compiler.compile_spill_open_file_limit;
-        // governor cap mirrors the existing in-flight budget for now: piece 1
-        // is a behavioural no-op so trip points stay where they were.
-        let governor = memory_governor::MemoryGovernor::new(in_flight_budget_bytes);
+        let governor = memory_governor::MemoryGovernor::new(resolve_governor_cap(&self.config.compiler)?);
         let manifest = run_snapshot_from_plan(
             &self.deps,
             &plan,
@@ -438,7 +436,7 @@ impl Compiler {
         let in_flight_budget_bytes = self.config.compiler.compile_in_flight_pages_budget()?;
         let spill_dir = self.config.compiler.compile_spill_dir_path();
         let spill_open_file_limit = self.config.compiler.compile_spill_open_file_limit;
-        let governor = memory_governor::MemoryGovernor::new(in_flight_budget_bytes);
+        let governor = memory_governor::MemoryGovernor::new(resolve_governor_cap(&self.config.compiler)?);
         let started = std::time::Instant::now();
         let outcome = render::rebuild_pages(
             &self.deps,
@@ -989,6 +987,45 @@ async fn publish_with_retry(
             _ = tokio::time::sleep(*d) => {}
         }
     }
+}
+
+/// Resolve the memory-governor cap for a compile run. Resolution order:
+/// explicit `compile_memory_budget_bytes` > 70% of detected cgroup limit
+/// minus 512 MiB OS reservation > 2 GiB fallback.
+fn resolve_governor_cap(cfg: &mars_config::Compiler) -> Result<u64, CompilerError> {
+    const RESERVATION_BYTES: u64 = 512 * 1024 * 1024;
+    const FALLBACK_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+    const MIN_CAP_BYTES: u64 = 64 * 1024 * 1024;
+
+    if let Some(explicit) = cfg.compile_memory_budget()? {
+        tracing::info!(
+            target: "mars_compiler::compile",
+            cap_resolved = explicit,
+            source = "config",
+            "compile.memory_governor: cap resolved"
+        );
+        return Ok(explicit);
+    }
+    if let Some(limit) = mars_config::cgroup::detect_memory_limit() {
+        let after_reservation = limit.saturating_sub(RESERVATION_BYTES);
+        let scaled = (after_reservation as u128 * 7 / 10) as u64;
+        let cap = scaled.max(MIN_CAP_BYTES);
+        tracing::info!(
+            target: "mars_compiler::compile",
+            cap_resolved = cap,
+            cgroup_limit = limit,
+            source = "cgroup",
+            "compile.memory_governor: cap resolved"
+        );
+        return Ok(cap);
+    }
+    tracing::info!(
+        target: "mars_compiler::compile",
+        cap_resolved = FALLBACK_BYTES,
+        source = "default",
+        "compile.memory_governor: cap resolved"
+    );
+    Ok(FALLBACK_BYTES)
 }
 
 fn log_governor_observations(event: &'static str, governor: &memory_governor::MemoryGovernor) {

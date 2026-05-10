@@ -90,6 +90,16 @@ pub struct Compiler {
     /// sidecar / object-store I/O.
     #[serde(default = "default_compile_binding_parallelism")]
     pub compile_binding_parallelism: usize,
+    /// Hard ceiling on pass-2 RAM allocation, summed across the whole
+    /// compile pipeline (all in-flight bindings). When unset, the compiler
+    /// self-sizes against the active cgroup memory limit: 70% of the limit
+    /// minus a 512 MiB OS / runtime reservation. Outside a cgroup the
+    /// fallback is 2 GiB. Unit-suffixed byte literal (`4GiB`).
+    ///
+    /// Treat as "throughput knob": setting this lower makes pass 2 spill
+    /// more aggressively to disk; it never crashes the process.
+    #[serde(default)]
+    pub compile_memory_budget_bytes: Option<String>,
     /// Soft trigger threshold for pass-2 disk spill, per binding. Pass 2
     /// streams the whole table once per binding and buckets rows into the
     /// planned pages; pages eager-flush on completion. When the summed
@@ -134,6 +144,7 @@ impl Default for Compiler {
             compile_page_working_set_bytes: default_compile_page_working_set(),
             compile_plan_budget_bytes: default_compile_plan_budget(),
             compile_binding_parallelism: default_compile_binding_parallelism(),
+            compile_memory_budget_bytes: None,
             compile_in_flight_pages_budget_bytes: default_compile_in_flight_pages_budget(),
             compile_spill_dir: None,
             compile_spill_open_file_limit: default_compile_spill_open_file_limit(),
@@ -156,6 +167,14 @@ impl Compiler {
     /// Resolve `compile_plan_budget_bytes` to bytes.
     pub fn compile_plan_budget(&self) -> Result<u64, ConfigError> {
         units::parse_bytes(&self.compile_plan_budget_bytes)
+    }
+
+    /// Resolve `compile_memory_budget_bytes` to bytes when explicitly set.
+    pub fn compile_memory_budget(&self) -> Result<Option<u64>, ConfigError> {
+        self.compile_memory_budget_bytes
+            .as_deref()
+            .map(units::parse_bytes)
+            .transpose()
     }
 
     /// Resolve `compile_in_flight_pages_budget_bytes` to bytes.

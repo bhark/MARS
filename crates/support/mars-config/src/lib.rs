@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 
 use mars_types::LayerId;
 
+pub mod cgroup;
 mod env_subst;
 mod include;
 pub mod model;
