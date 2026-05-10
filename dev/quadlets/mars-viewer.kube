@@ -3,11 +3,12 @@ Description=MARS local viewer
 Requires=mars-runtime.service
 After=mars-runtime.service
 
-[Container]
-Image=localhost/mars-viewer:dev
-ContainerName=mars-viewer
+[Kube]
+Yaml=%h/.local/share/mars-dev/manifests/viewer.yaml
 Network=mars.network
-PublishPort=5173:80
+
+[Service]
+Restart=on-failure
 
 [Install]
 WantedBy=default.target

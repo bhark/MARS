@@ -10,14 +10,13 @@ dev-up: dev-build dev-install
 	systemctl --user start mars-viewer.service
 
 dev-down:
-	systemctl --user stop mars-viewer.service mars-runtime.service mars-compiler.service mars-seed.service mars-postgis.service || true
+	systemctl --user stop mars-viewer.service mars-runtime.service mars-compiler.service mars-seed.service mars-postgis.service mars-config.service || true
 
 dev-logs:
 	journalctl --user -u 'mars-*' -f
 
 dev-reseed:
-	systemctl --user stop mars-seed.service || true
-	systemctl --user start mars-seed.service
+	systemctl --user restart mars-seed.service
 
 dev-purge: dev-down
 	./uninstall.sh

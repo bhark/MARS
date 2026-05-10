@@ -1,0 +1,14 @@
+[Unit]
+Description=MARS local compiler
+Requires=mars-seed.service
+After=mars-seed.service
+
+[Kube]
+Yaml=%h/.local/share/mars-dev/manifests/compiler.yaml
+Network=mars.network
+
+[Service]
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

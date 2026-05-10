@@ -17,15 +17,6 @@ source:
     statement_timeout_ms: 300000
     batch_send_timeout_secs: 30
 
-artifacts:
-  store:
-    type: fs
-    path: /var/lib/mars/store
-  cache:
-    path: /cache
-    max_size: 512MiB
-    eviction: lru
-
 compiler:
   compile_binding_parallelism: 2
   compile_in_flight_pages_budget_bytes: 512MiB

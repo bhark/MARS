@@ -1,0 +1,9 @@
+[Unit]
+Description=MARS local config and secrets
+
+[Kube]
+Yaml=%h/.local/share/mars-dev/manifests/config.yaml
+Network=mars.network
+
+[Install]
+WantedBy=default.target

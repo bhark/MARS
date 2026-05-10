@@ -1,0 +1,14 @@
+[Unit]
+Description=MARS local runtime
+Requires=mars-compiler.service
+After=mars-compiler.service
+
+[Kube]
+Yaml=%h/.local/share/mars-dev/manifests/runtime.yaml
+Network=mars.network
+
+[Service]
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

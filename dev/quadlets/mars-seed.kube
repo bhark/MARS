@@ -3,12 +3,10 @@ Description=MARS local OSM seed
 Requires=mars-postgis.service
 After=mars-postgis.service
 
-[Container]
-Image=localhost/mars-seed:dev
-ContainerName=mars-seed
+[Kube]
+Yaml=%h/.local/share/mars-dev/manifests/seed.yaml
 Network=mars.network
-Volume=osm-cache.volume:/cache
-Environment=PG_DSN=postgres://mars:mars@mars-postgis/mars OSM_BBOX=55.6,9.5,56.0,10.7
+ExitCodePropagation=all
 
 [Service]
 Type=oneshot
