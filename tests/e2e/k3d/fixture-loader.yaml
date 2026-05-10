@@ -51,10 +51,22 @@ metadata:
     app.kubernetes.io/name: fixture-loader
 spec:
   restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 999
+    runAsGroup: 999
+    fsGroup: 999
+    seccompProfile:
+      type: RuntimeDefault
   containers:
     - name: loader
       image: postgis/postgis:18-3.6
       imagePullPolicy: IfNotPresent
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+            - ALL
       command:
         - sleep
         - infinity
