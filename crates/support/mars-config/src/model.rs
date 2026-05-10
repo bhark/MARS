@@ -31,3 +31,6 @@ pub use service::*;
 pub use source::*;
 pub use style::*;
 pub use tile_matrix::*;
+
+#[cfg(test)]
+mod tests;
