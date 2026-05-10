@@ -75,7 +75,7 @@ pub(crate) async fn render_plan(state: &RuntimeState, deps: &Deps, plan: &Render
         // descending, place survivors that don't collide with already-placed
         // labels' approximate text bbox.
         let label_ops = info_span!("render.collide", n = all_labels.len())
-            .in_scope(|| collide_and_emit_labels(all_labels, plan.width, plan.height));
+            .in_scope(|| collide_and_emit_labels(all_labels));
         all_ops.extend(label_ops);
 
         let pixmap =
@@ -746,7 +746,7 @@ fn text_bbox_from_metrics(anchor: (f32, f32), m: mars_render_port::TextMetrics) 
 
 /// run a greedy collision pass over the accumulated label set and return
 /// the surviving `DrawOp::Label` ops in placement order.
-fn collide_and_emit_labels(mut labels: Vec<PreparedLabel>, _w: u32, _h: u32) -> Vec<DrawOp> {
+fn collide_and_emit_labels(mut labels: Vec<PreparedLabel>) -> Vec<DrawOp> {
     if labels.is_empty() {
         return Vec::new();
     }
