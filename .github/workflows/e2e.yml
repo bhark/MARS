@@ -25,6 +25,8 @@ jobs:
         with:
           toolchain: 1.95.0
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: workspace
       - name: install proj build deps
         run: |
           sudo apt-get update -qq

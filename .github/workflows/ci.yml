@@ -32,6 +32,8 @@ jobs:
           toolchain: 1.95.0
           components: clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: workspace
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   test:
@@ -43,6 +45,8 @@ jobs:
         with:
           toolchain: 1.95.0
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: workspace
       - run: cargo test --workspace --locked --all-targets
 
   e2e-check:
@@ -54,6 +58,8 @@ jobs:
         with:
           toolchain: 1.95.0
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: workspace
       - run: cargo check --locked --features e2e -p mars-source-postgres --tests
 
   deps:
@@ -65,6 +71,8 @@ jobs:
         with:
           toolchain: 1.95.0
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: deps
       - name: install jq
         run: sudo apt-get update -qq && sudo apt-get install -y -qq jq
       - name: hexagonal architecture check
