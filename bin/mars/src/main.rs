@@ -76,6 +76,13 @@ enum Tool {
         /// Path to the artifact file.
         path: PathBuf,
     },
+    /// Perform an HTTP health check against a URL.
+    /// Exits 0 on 2xx, 1 otherwise. Used by container health probes.
+    Healthcheck {
+        /// URL to GET.
+        #[arg(long)]
+        url: String,
+    },
 }
 
 fn main() -> Result<()> {
@@ -128,6 +135,7 @@ async fn async_main(cli: Cli) -> Result<()> {
         }
         (None, Some(Tool::Validate { path })) => tool_validate(&path).await,
         (None, Some(Tool::Inspect { path })) => tool_inspect(&path).await,
+        (None, Some(Tool::Healthcheck { url })) => tool_healthcheck(&url),
         (Some(_), Some(_)) => unreachable!("clap conflicts_with rules this out at parse time"),
     }
 }
@@ -417,6 +425,16 @@ fn flatten_join(res: Result<Result<()>, tokio::task::JoinError>, what: &str) -> 
 }
 
 // ---------- tooling ----------
+
+fn tool_healthcheck(url: &str) -> Result<()> {
+    let resp = reqwest::blocking::get(url).with_context(|| format!("healthcheck: request to {url}"))?;
+    let status = resp.status();
+    if status.is_success() {
+        Ok(())
+    } else {
+        Err(anyhow!("healthcheck: {url} returned {status}"))
+    }
+}
 
 async fn tool_validate(path: &Path) -> Result<()> {
     let mut cfg = mars_config::load(path).with_context(|| format!("load {}", path.display()))?;
