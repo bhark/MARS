@@ -46,7 +46,7 @@ const WORKER_EVENT_BUFFER: usize = 8192;
 
 /// How often the library flushes the latest applied/flush LSN to the server
 /// as a standby status update. The library default (10s) is fine for batch
-/// CDC but is too lazy for our ack semantics — between ack and disconnect
+/// CDC but is too lazy for our ack semantics - between ack and disconnect
 /// we must have flushed the cursor or the next subscription will replay an
 /// already-persisted window. One second balances quick advancement with
 /// keepalive overhead.
@@ -178,7 +178,7 @@ impl Worker {
 
                 changed = self.applied_rx.changed() => {
                     if changed.is_err() {
-                        // sender dropped — subscription is gone. proceed to cancel
+                        // sender dropped - subscription is gone. proceed to cancel
                         // path on next iteration.
                         continue;
                     }

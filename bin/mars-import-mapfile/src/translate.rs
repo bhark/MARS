@@ -9,7 +9,7 @@ use crate::scanner::{Token, block_range, is_block_opener, scan};
 use crate::style::{parse_class, parse_label};
 
 /// keywords whose presence we don't translate yet. some are block openers,
-/// some are scalar directives — `walk` handles both.
+/// some are scalar directives - `walk` handles both.
 const UNSUPPORTED: &[&str] = &[
     "SYMBOL",
     "FONTSET",
@@ -347,7 +347,7 @@ fn strip_using(s: &str) -> &str {
 /// `( SELECT ... FROM <table> WHERE <expr> ) [AS alias]` and split it into the
 /// real table and the WHERE clause. Anything that doesn't fit this exact
 /// shape (joins, sub-selects, bare table refs) falls through with the input
-/// returned as-is and no filter. Heuristic-only — operators are expected to
+/// returned as-is and no filter. Heuristic-only - operators are expected to
 /// hand-edit the YAML for anything more elaborate.
 pub(crate) fn lift_inline_subquery(raw: &str) -> (String, Option<String>) {
     let trimmed = raw.trim();
@@ -440,7 +440,7 @@ fn parse_scale_token(body: &[Token]) -> Vec<(u64, String)> {
 
 /// canonicalize MapServer's `MINSCALEDENOM = N+1` half-open convention.
 /// when `n - 1` lands cleanly on a "round" base (10000, 5000, 1000, 500, 100),
-/// snap down. conservative — values not on a round base are left alone.
+/// snap down. conservative - values not on a round base are left alone.
 pub(crate) fn normalize_n_plus_one(n: u64) -> u64 {
     if n <= 1 {
         return n;
@@ -629,7 +629,7 @@ END
         assert_eq!(normalize_n_plus_one(2_501), 2_500);
         assert_eq!(normalize_n_plus_one(25_001), 25_000);
         assert_eq!(normalize_n_plus_one(100_001), 100_000);
-        // not on a round base — left alone.
+        // not on a round base - left alone.
         assert_eq!(normalize_n_plus_one(2_502), 2_502);
         assert_eq!(normalize_n_plus_one(123), 123);
     }

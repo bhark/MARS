@@ -314,7 +314,7 @@ mod tests {
 
     #[test]
     fn substitute_passes_through_apostrophe_in_double_quoted_context() {
-        // simulates `key: "${VAR}"` with VAR=`a's` — must not be rejected.
+        // simulates `key: "${VAR}"` with VAR=`a's` - must not be rejected.
         let result = substitute("key: \"${MARS_TEST_APOS:-a's}\"").unwrap();
         assert_eq!(result, "key: \"a's\"");
         // and the resulting yaml must parse cleanly downstream

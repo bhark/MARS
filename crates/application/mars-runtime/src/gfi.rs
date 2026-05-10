@@ -40,7 +40,7 @@ pub struct LayerFeatureInfo {
 /// resolve a pixel-space click into the matching `(layer, feature)` set.
 ///
 /// `point_px` is in render-target pixel coordinates (origin at top-left,
-/// `+x` right, `+y` down — matching the pixmap layout). out-of-bounds
+/// `+x` right, `+y` down - matching the pixmap layout). out-of-bounds
 /// coordinates produce an empty result.
 pub(crate) async fn get_feature_info(
     state: &RuntimeState,

@@ -20,13 +20,13 @@ const PIXEL_SUBSAMPLE_K: f64 = 0.5;
 /// pick the binding and decimation level for `layer` at `request_denom`.
 ///
 /// `m_per_pixel` is the standardised pixel size the caller used to derive
-/// `request_denom` — typically [`crate::OGC_STANDARDIZED_PIXEL_SIZE_M`] or
+/// `request_denom` - typically [`crate::OGC_STANDARDIZED_PIXEL_SIZE_M`] or
 /// the value implied by `service.scale_dpi`. Inverting it here keeps the
 /// level-pick threshold consistent with the routing denom.
 ///
 /// returns `None` when no binding's `ScaleWindow` covers the request denom,
 /// when the matching binding is absent from the manifest, or when the
-/// binding has no levels at all (which the compiler never emits — the
+/// binding has no levels at all (which the compiler never emits - the
 /// fallback level-0 plan always produces at least one entry).
 #[must_use]
 pub fn pick_binding_and_level(

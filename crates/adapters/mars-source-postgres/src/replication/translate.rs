@@ -136,7 +136,7 @@ fn missing_full_old_error(entry: &CachedRelation, op: &str) -> SourceError {
     let schema = &entry.topology.schema;
     let table = &entry.topology.table;
     if entry.replica_identity == b'f' {
-        // pgoutput claims FULL but no O tuple arrived: defensive — should
+        // pgoutput claims FULL but no O tuple arrived: defensive - should
         // not happen unless the upstream behaviour changes mid-stream.
         SourceError::backend_msg(
             "pgoutput",

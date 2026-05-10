@@ -181,7 +181,7 @@ pub async fn rebuild_binding_from_plan<'a>(
     let mut page_bytes: HashMap<(usize, PageId), u64> = HashMap::new();
     // governor reservations shadowing `page_bytes` so peak/in-flight bytes
     // surface in the shared cap. piece 1 wires this as a no-op: a failed
-    // try_acquire is silently ignored — the existing in_flight_bytes /
+    // try_acquire is silently ignored - the existing in_flight_bytes /
     // spill trigger keeps semantics. piece 3 narrows producers so the
     // governor becomes load-bearing.
     let mut page_reservations: HashMap<(usize, PageId), Vec<crate::memory_governor::MemoryReservation>> =

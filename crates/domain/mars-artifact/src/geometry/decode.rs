@@ -56,7 +56,7 @@ where
 /// [`crate::SpatialIndex::query`]; entries are the position in the
 /// payload's id-sorted feature index (the same `idx` the snapshot writer
 /// passed to `SpatialIndexBuilder::add`). Out-of-range slots are silently
-/// dropped — they cannot match any feature.
+/// dropped - they cannot match any feature.
 ///
 /// `slots` need not be sorted or deduped. The function sorts a local copy
 /// and walks the index once.

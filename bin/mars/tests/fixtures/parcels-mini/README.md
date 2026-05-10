@@ -4,19 +4,19 @@ Tiny synthetic fixture for the image-diff harness (`tests/image_diff_harness.rs`
 
 ## Contents
 
-- `seed.sql` — one PostGIS table `mars_diff.parcels` with seven polygons in three
+- `seed.sql` - one PostGIS table `mars_diff.parcels` with seven polygons in three
   classes (`park`, `road`, `water`), all in `EPSG:25832`, fitting cell (0,0).
-- `service.yaml` — minimal MARS service config with three style classes. Three
+- `service.yaml` - minimal MARS service config with three style classes. Three
   placeholders (`{{DSN}}`, `{{STORE}}`, `{{CACHE}}`) are substituted by the
   harness at runtime.
-- `goldens/` — reference PNGs the harness compares against, one per case in the
+- `goldens/` - reference PNGs the harness compares against, one per case in the
   matrix. Filenames match `Case::name` in the harness.
 
 ## The matrix
 
 Each `Case` declares a render plan, a per-channel pixel tolerance, and a
 maximum differing-pixel ratio. Cases share one container, one compile, and one
-runtime — adding a case is one entry and one regenerated golden.
+runtime - adding a case is one entry and one regenerated golden.
 
 Current cases:
 

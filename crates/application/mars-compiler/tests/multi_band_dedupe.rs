@@ -1,6 +1,6 @@
 //! Regression: a layer with two source bindings that resolve to the same
 //! `(layer_id, binding_id)` (different `band:` only) must not produce duplicate
-//! class sidecars in the published manifest. — bands are routing
+//! class sidecars in the published manifest. - bands are routing
 //! rules, not substrate axes.
 //!
 //! Without `build_bootstrap_plan` deduping `LayerPlan` per `(layer_id,
@@ -261,7 +261,7 @@ async fn multi_band_same_binding_emits_one_class_sidecar_per_page() {
         let key = (sc.layer_id.as_str().to_string(), sc.page_key.clone());
         assert!(
             seen.insert(key.clone()),
-            "duplicate class sidecar for {:?} — dedupe regression",
+            "duplicate class sidecar for {:?} - dedupe regression",
             key
         );
     }

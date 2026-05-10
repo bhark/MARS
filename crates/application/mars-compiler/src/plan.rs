@@ -45,7 +45,7 @@ pub enum PlanError {
     },
     /// Same `(layer_id, binding_id)` pair declared twice with diverging
     /// class / label / kind shape.: bands are routing rules, not
-    /// substrate axes — multiple sources of one layer that resolve to the
+    /// substrate axes - multiple sources of one layer that resolve to the
     /// same binding collapse to a single `LayerPlan`, which requires their
     /// per-layer shape (classes, label, kind, label_survival) to agree.
     #[error("layer {layer} on binding {binding} declared with conflicting shape: {detail}")]

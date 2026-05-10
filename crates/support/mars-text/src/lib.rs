@@ -102,7 +102,7 @@ impl Fonts {
     }
 
     /// resolve `id` to an Arc-backed byte source. for `Source::Binary` this
-    /// is the Arc fontdb already holds — no copy. for file-backed sources
+    /// is the Arc fontdb already holds - no copy. for file-backed sources
     /// (loaded via `load_fonts_dir`) read once and wrapped.
     fn face_bytes(&self, id: ID) -> Result<(FaceBytes, u32), FontError> {
         let (src, index) = self

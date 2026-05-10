@@ -7,7 +7,7 @@
 //! when the data they buffer no longer needs the disk space.
 //!
 //! A misconfigured disk budget makes the compiler slow (acquires block
-//! waiting for prior reservations to drain), never crashes — same
+//! waiting for prior reservations to drain), never crashes - same
 //! contract as the memory governor.
 
 use std::sync::Arc;

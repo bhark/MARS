@@ -18,7 +18,7 @@ use mars_artifact::wkb_to_feature_geom;
 use mars_source::{CompileSession, RowBytes, RowSummary, Source, SourceBinding, SourceError, SourceRowKey};
 
 /// `CompileSession` wrapper that derives summaries by re-decoding WKB on
-/// the client. Not snapshot-isolated — only correct when the underlying
+/// the client. Not snapshot-isolated - only correct when the underlying
 /// `Source` is stable for the lifetime of the session (test fixtures, in
 /// particular).
 pub struct FullScanCompileSession<'a> {
@@ -32,7 +32,7 @@ impl<'a> FullScanCompileSession<'a> {
         Self { source, binding }
     }
 
-    /// Box the wrapper as a `CompileSession` trait object — convenience for
+    /// Box the wrapper as a `CompileSession` trait object - convenience for
     /// `Source::open_compile_session` overrides.
     pub fn boxed(source: &'a dyn Source, binding: &'a SourceBinding) -> Box<dyn CompileSession + 'a> {
         Box::new(Self::new(source, binding))

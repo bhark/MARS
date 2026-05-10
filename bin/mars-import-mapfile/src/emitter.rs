@@ -94,7 +94,7 @@ pub(crate) fn rgb_to_hex(r: u8, g: u8, b: u8) -> String {
 
 /// default scale-band ladder used when `--bands` is not supplied.
 /// caps are denom upper bounds (exclusive). the overview cap is finite
-/// (1:10_000_000) — large enough for a country-wide view, small enough to
+/// (1:10_000_000) - large enough for a country-wide view, small enough to
 /// render cleanly in YAML; operators that need a wider ladder pass `--bands`.
 pub(crate) fn default_bands() -> Vec<(String, u64)> {
     vec![
@@ -482,7 +482,7 @@ mod tests {
 
     #[test]
     fn partial_band_coverage_is_dropped() {
-        // layer caps at 25000 — covers detail and hi fully, mid only partially.
+        // layer caps at 25000 - covers detail and hi fully, mid only partially.
         let layer = LayerSkeleton {
             name: "x".into(),
             sources: vec![src(Some(25_000), "t")],

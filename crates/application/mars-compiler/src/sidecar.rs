@@ -1,7 +1,7 @@
 //! page-membership sidecar codec.
 //!
 //! per binding, a flat mmap-friendly binary file pairing every source
-//! `user_id` with its hilbert key. user_id is allowed to repeat — a source
+//! `user_id` with its hilbert key. user_id is allowed to repeat - a source
 //! row exploded into multiple parts contributes one entry per part, all
 //! sharing the same user_id but landing on (potentially) different hilbert
 //! keys. used by the incremental compile path in C.2 to resolve
@@ -47,7 +47,7 @@ pub enum SidecarError {
 
 /// Encode a page-membership sidecar from `(user_id, hilbert_key)` pairs.
 /// The slice is sorted in place by `(user_id, hilbert_key)`; user_id is
-/// permitted to repeat (multimap semantics — a source row exploded into N
+/// permitted to repeat (multimap semantics - a source row exploded into N
 /// parts contributes N entries with the same user_id).
 pub fn encode_sidecar(entries: &mut [(u64, HilbertKey)]) -> Result<Bytes, SidecarError> {
     entries.sort_unstable_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));

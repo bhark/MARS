@@ -239,7 +239,7 @@ pub(crate) fn pages_for_key(level: &LevelMetadata, key: HilbertKey) -> Vec<PageI
     // table is sorted ascending by `range_lo`; partition_point gives us the
     // first row whose range starts strictly after `key`. walk back from
     // there collecting any entry whose range still covers `key`. PageId is
-    // read from the table — it is not the row index (rebalance allocates
+    // read from the table - it is not the row index (rebalance allocates
     // fresh ids that no longer match table position).
     let ranges = &level.hilbert_range_table;
     let end = ranges.partition_point(|(range_lo, _, _)| *range_lo <= key);

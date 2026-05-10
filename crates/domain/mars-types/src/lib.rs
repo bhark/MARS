@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 /// `LevelMetadata.hilbert_range_table` started carrying the per-entry
 /// `PageId` so dirty-page lookup stays correct after rebalance allocates
 /// fresh ids. Readers reject anything other than this exact value (no
-/// "accept `<= max`" — see `mars-store-fs` / `mars-store-s3` manifest
+/// "accept `<= max`" - see `mars-store-fs` / `mars-store-s3` manifest
 /// readers).
 pub const MANIFEST_FORMAT_VERSION: u32 = 4;
 
@@ -505,7 +505,7 @@ impl ImageFormat {
 /// hilbert_range.0)`) plus a bounded linear scan for spatial-bbox hits.
 /// `format_version` is bumped on incompatible changes to this struct; v3
 /// readers reject anything other than the current value (no floor, no
-/// "accept `<= max`" — that contract was retired).
+/// "accept `<= max`" - that contract was retired).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Manifest {
     /// On-disk format version of this manifest envelope. Exact-match only.

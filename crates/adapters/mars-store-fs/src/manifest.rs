@@ -102,7 +102,7 @@ impl FsPublisher {
             .await
             .map_err(|e| StoreError::Backend(format!("read manifest {pointer}: {e}")))?;
         // exact-match version gate: v3 is a clean cut from v1/v2, no
-        // tolerance for "accept anything <= max" — see manifest version handling.
+        // tolerance for "accept anything <= max" - see manifest version handling.
         // peek format_version before the full decode so structural drift
         // in older payloads surfaces as UnsupportedManifestVersion rather
         // than as a generic serde error.

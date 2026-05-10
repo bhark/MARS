@@ -16,7 +16,7 @@ pub(crate) const FEATURE_INDEX_ENTRY_LEN: usize = 8 + 4 * 4 + 1 + 4 + 4;
 /// One feature's index entry: user_id (data), approximate bbox, and pointer
 /// into the coord area. Decoded lazily by [`FeatureIndexIter`]; coordinates
 /// stay untouched until [`decode_one_geom`] is called for a chosen entry.
-/// The substrate primary key is positional — see [`FeatureIndexIter`] for
+/// The substrate primary key is positional - see [`FeatureIndexIter`] for
 /// `(feature_idx, entry)` pairs.
 #[derive(Debug, Clone, Copy)]
 pub struct FeatureIndexEntry {

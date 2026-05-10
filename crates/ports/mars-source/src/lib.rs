@@ -258,7 +258,7 @@ pub enum AttrValue {
 /// Read-side port.
 /// - `fetch_full_table_streaming(binding)` for snapshot bootstrap, and
 /// - `fetch_by_feature_ids(binding, ids)` for incremental page rebuilds
-///   (`WHERE id_column = ANY($1)`; bag-valued — sources are allowed to
+///   (`WHERE id_column = ANY($1)`; bag-valued - sources are allowed to
 ///   return multiple rows per id, in which case the compiler treats each
 ///   row as a distinct substrate feature for rendering purposes).
 #[async_trait]
@@ -335,7 +335,7 @@ impl SourceRowKey {
 }
 
 /// Per-row geometry summary produced by [`CompileSession::fetch_geometry_summary`].
-/// Bbox + byte length + a snapshot-stable row identity — exactly the
+/// Bbox + byte length + a snapshot-stable row identity - exactly the
 /// fixed-size record the pass-1 page planner needs.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RowSummary {
@@ -386,7 +386,7 @@ pub trait CompileSession: Send + Sync {
     async fn commit(self: Box<Self>) -> Result<(), SourceError>;
 
     /// Roll back the snapshot transaction. Call on the error path of a
-    /// compile session. `Drop` does not perform I/O — adapters rely on
+    /// compile session. `Drop` does not perform I/O - adapters rely on
     /// pool-level recycling for safety, so callers should still invoke
     /// `commit` or `rollback` explicitly.
     async fn rollback(self: Box<Self>) -> Result<(), SourceError>;
@@ -518,9 +518,9 @@ pub trait LeaderLockGuard: Send + Sync + std::fmt::Debug {}
 #[async_trait]
 pub trait LeaderLock: Send + Sync + 'static {
     /// Try to acquire the lock keyed by `key`. Non-blocking:
-    /// - `Ok(Some(guard))` — leader; hold `guard` for the duration of work.
-    /// - `Ok(None)` — another instance holds the lock.
-    /// - `Err(_)` — backend error.
+    /// - `Ok(Some(guard))` - leader; hold `guard` for the duration of work.
+    /// - `Ok(None)` - another instance holds the lock.
+    /// - `Err(_)` - backend error.
     async fn try_acquire(&self, key: i64) -> Result<Option<Box<dyn LeaderLockGuard>>, SourceError>;
 }
 

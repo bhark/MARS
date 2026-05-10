@@ -193,7 +193,7 @@ pub enum CompilerError {
     /// budget allows. Trips before the planner allocates beyond its
     /// configured ceiling so the operator gets a clean ceiling rather than
     /// an OOM. Resolution: split the binding, lift the budget, or add a
-    /// fixed-record pass-1 spill primitive (planned follow-up — track via
+    /// fixed-record pass-1 spill primitive (planned follow-up - track via
     /// repository issue tracker once landed).
     #[error(
         "bootstrap plan exceeds plan budget: binding {binding} observed {observed_rows} rows, \

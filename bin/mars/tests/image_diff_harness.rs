@@ -96,7 +96,7 @@ fn cases() -> Vec<Case> {
             tolerance: 2,
             max_diff_ratio: 0.005,
         },
-        // labelled cell — same plan as parcels-cell-0-0 but the renderer
+        // labelled cell - same plan as parcels-cell-0-0 but the renderer
         // composites text on top. the budget is loosened to absorb glyph AA.
         Case {
             name: "parcels-cell-0-0-with-labels",

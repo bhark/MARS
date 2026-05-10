@@ -59,7 +59,7 @@ pub fn wkb_bbox(wkb: &[u8]) -> Result<Bbox, WkbError> {
 
 /// Centroid of an arbitrary supported WKB / EWKB geometry. Defined as the
 /// midpoint of the geometry's axis-aligned bbox. Cheap (single bbox walk)
-/// and consistent with the Hilbert keying used by the compiler — the curve
+/// and consistent with the Hilbert keying used by the compiler - the curve
 /// is parameterised over the binding's combined bbox extent, so the
 /// centroid only ever needs to be a stable point inside the geometry's
 /// envelope, not an area-weighted true centroid.

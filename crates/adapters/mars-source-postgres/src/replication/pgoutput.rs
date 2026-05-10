@@ -142,7 +142,7 @@ pub(crate) fn decode(buf: &[u8]) -> Result<Message<'_>, PgOutputError> {
         // Type / Origin / LogicalMessage / Stream*: parsed by reading their
         // payloads only as far as needed to keep the stream synced. since
         // each pgoutput frame is its own copydata payload, we can simply
-        // ignore them — the framing layer never consumes more than one
+        // ignore them - the framing layer never consumes more than one
         // frame's bytes.
         b'Y' | b'O' | b'M' | b'S' | b'E' | b'r' | b'l' | b'c' => Ok(Message::Unhandled),
         other => Err(PgOutputError::UnknownKind(other)),

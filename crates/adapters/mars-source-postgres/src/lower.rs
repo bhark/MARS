@@ -112,7 +112,7 @@ fn lower_logic_arg(parent: LogicOp, e: &Expr, ctx: &mut LowerCtx<'_>) -> Result<
 
 fn lower_literal(l: &Literal, ctx: &mut LowerCtx<'_>) -> String {
     match l {
-        // NULL is a keyword, not a parameter — postgres can't bind a typed
+        // NULL is a keyword, not a parameter - postgres can't bind a typed
         // NULL via `$N` in arbitrary positions without explicit casts.
         Literal::Null => "NULL".to_string(),
         Literal::Bool(b) => ctx.push_param(SqlParam::Bool(*b)),

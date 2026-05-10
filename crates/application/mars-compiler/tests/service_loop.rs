@@ -1,7 +1,7 @@
 //! Service-loop orchestration: covers `Compiler::run` directly.
 //!
 //! Asserts that the long-running compiler entrypoint does the right thing
-//! around its boundaries — leader-lock, bootstrap, change-feed lifecycle —
+//! around its boundaries - leader-lock, bootstrap, change-feed lifecycle -
 //! independent of the snapshot/cycle bodies which have their own tests.
 //! Specifically:
 //! - skips bootstrap when a prior manifest exists;

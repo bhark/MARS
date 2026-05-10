@@ -9,7 +9,7 @@ use super::{
 
 /// encode features into the geometry-payload section bytes.
 ///
-/// Caller is responsible for the deterministic feature ordering — the encoder
+/// Caller is responsible for the deterministic feature ordering - the encoder
 /// trusts the input order (the compiler computes a stable
 /// `(hilbert_key, user_id, row_fingerprint)` tuple before calling). `user_id`
 /// is permitted to repeat: it is data, not a key. Position-in-input becomes

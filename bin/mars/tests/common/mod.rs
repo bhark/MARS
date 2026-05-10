@@ -187,7 +187,7 @@ fn decode_jpeg(bytes: &[u8]) -> Result<Decoded, String> {
 /// per-channel delta beyond which a pixel position is counted as strictly
 /// differing. neighborhood relaxation (radius `r`, default 1, override via
 /// `MARS_DIFF_RADIUS`) then forgives any strict differ that has a within-
-/// tolerance match in the other image's (2r+1)x(2r+1) window — kills sub-
+/// tolerance match in the other image's (2r+1)x(2r+1) window - kills sub-
 /// pixel anti-alias jitter on thin features without hiding real divergence.
 pub fn diff_pngs(actual: &[u8], golden: &[u8], tolerance: u8) -> Result<DiffReport, DiffError> {
     let radius = std::env::var("MARS_DIFF_RADIUS")

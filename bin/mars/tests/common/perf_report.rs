@@ -176,7 +176,7 @@ pub fn render_markdown(bundle: &Bundle) -> String {
     let mut out = String::new();
     let _ = writeln!(
         out,
-        "## MARS vs MapServer perf — {} cases × {} samples (warmup {})",
+        "## MARS vs MapServer perf - {} cases × {} samples (warmup {})",
         bundle.cases.len(),
         bundle.run.samples,
         bundle.run.warmup,

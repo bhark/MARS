@@ -30,7 +30,7 @@ pub trait GeomVisitor {
 
 /// Visitor counterpart of [`decode_one_geom`]. Decodes the same wire format
 /// but emits visitor events instead of materialising a [`GeomKind`]. Generic
-/// over the visitor so the inner varint loop monomorphises per impl — using
+/// over the visitor so the inner varint loop monomorphises per impl - using
 /// `&mut dyn GeomVisitor` here would erase the dispatch and undo the win.
 pub fn visit_one_geom<V: GeomVisitor>(
     coord_area: &[u8],

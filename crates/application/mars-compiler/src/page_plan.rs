@@ -163,7 +163,7 @@ pub async fn compute_page_plan(
         // snapshot, so this triple is strictly sortable; pass-2 page sort
         // shares the same prefix `(hilbert_key, feature_id)`. boundary-edge
         // ties on the prefix shuffle within their page (today they shuffle
-        // across runs anyway — pass-1 md5 vs pass-2 BLAKE3 disagree); the
+        // across runs anyway - pass-1 md5 vs pass-2 BLAKE3 disagree); the
         // page assignment itself stays deterministic.
         level_rows.sort_by(|a, b| {
             a.hilbert_key

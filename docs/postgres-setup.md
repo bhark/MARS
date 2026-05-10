@@ -14,7 +14,7 @@ For one MARS service (one logical-replication subscription) the source DB must h
 4. An existing logical replication slot named in `source.change_feed.slot`, using the `pgoutput` output plugin.
 5. `REPLICA IDENTITY FULL` on every table covered by the publication.
 
-The compiler does not create the publication or the slot — those are operator-owned because their lifetime is tied to the data, not the service deployment. Recreating the slot drops all uncommitted change history; the compiler will fall back to a snapshot rebuild on next start.
+The compiler does not create the publication or the slot - those are operator-owned because their lifetime is tied to the data, not the service deployment. Recreating the slot drops all uncommitted change history; the compiler will fall back to a snapshot rebuild on next start.
 
 ## Day-1 setup
 

@@ -135,7 +135,7 @@ impl PgSource {
             deadpool_postgres::Manager::from_config(pg_cfg, NoTls, mgr_cfg)
         } else {
             // install_default returns Err only when a provider is already
-            // installed in this process — benign when the host wired one up
+            // installed in this process - benign when the host wired one up
             // already, suspicious only on first call. surface errors from
             // root loading, since silently trusting an empty store would
             // make every TLS connect fail with an opaque protocol error.
@@ -221,7 +221,7 @@ impl PgSource {
         self
     }
 
-    /// Borrow the underlying pool — useful for tests and future extensions
+    /// Borrow the underlying pool - useful for tests and future extensions
     /// (e.g. per-call statement cache, replication cursors).
     #[must_use]
     pub fn pool(&self) -> &Pool {
@@ -282,7 +282,7 @@ impl ChangeFeed for PgSource {
 /// so unit tests can inspect the parameter list without any DB.
 #[derive(Debug, Clone, PartialEq)]
 pub enum SqlParam {
-    /// SQL NULL — currently produced only by callers that explicitly bind it.
+    /// SQL NULL - currently produced only by callers that explicitly bind it.
     Null,
     /// Boolean.
     Bool(bool),

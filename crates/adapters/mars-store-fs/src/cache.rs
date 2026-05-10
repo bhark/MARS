@@ -526,7 +526,7 @@ mod tests {
 
         let second = cache.get_or_fetch(&key, h, &store).await.unwrap();
         assert_eq!(second.as_ref(), body.as_slice());
-        // second call hits local — origin not consulted again.
+        // second call hits local - origin not consulted again.
         assert_eq!(store.gets.load(Ordering::SeqCst), 1);
     }
 

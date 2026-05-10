@@ -6,7 +6,7 @@
 //!
 //! KVP semantics: parameter names are case-insensitive (lowercased on parse,
 //! per OGC 06-042 §11.5.2); values are preserved as-is. Repeated keys
-//! follow last-win semantics — the spec does not pin a behaviour, so this
+//! follow last-win semantics - the spec does not pin a behaviour, so this
 //! is an adapter choice that matches common WMS server practice.
 
 use std::collections::HashMap;

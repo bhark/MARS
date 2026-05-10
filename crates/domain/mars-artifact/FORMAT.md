@@ -8,7 +8,7 @@
 
 All multi-byte integers are little-endian.
 
-## Section kinds (existing enum — extend if needed)
+## Section kinds (existing enum - extend if needed)
 - 0x02 GeometryPayload
 - 0x03 Attributes
 - 0x04 LabelCandidates
@@ -21,7 +21,7 @@ The per-page primary key for joining sidecars (attributes / class / label) to
 geometry is `feature_idx`: the positional slot index of the feature in the
 GeometryPayload, `0..n`. Source-supplied identifiers (`user_id`) live on the
 geometry-index entry as data, not as a key, and are explicitly allowed to
-repeat — for example when a source row is exploded into per-part features by
+repeat - for example when a source row is exploded into per-part features by
 a simplification pipeline. Determinism is owned by the compiler: it sorts by
 `(hilbert_key, user_id, row_fingerprint)` before encoding.
 
@@ -40,7 +40,7 @@ The packed coord array follows the feature index. For each feature's coord block
 - LineString: varint vertex_count; first vertex absolute (i64 x_mm, i64 y_mm); subsequent (dx, dy) zigzag-varints
 - Polygon: varint ring_count; outer first then holes; per ring same as LineString
 - Multi*: varint part_count; per part the singular layout
-- Empty: vertex_count = 0 / ring_count = 0 / part_count = 0 — permitted; rendered as no-op
+- Empty: vertex_count = 0 / ring_count = 0 / part_count = 0 - permitted; rendered as no-op
 
 Determinism: the encoder writes features in caller-supplied order (the
 substrate primary key is the position itself). Two writes with identical
@@ -50,7 +50,7 @@ input must produce byte-identical artifacts.
 Header: `[magic "MARSATTR"][u32 version = 2][u32 count][u32 dir_offset]`.
 Rows region: `count × [u32 row_len][row_bytes]`.
 Directory region (at `dir_offset`, sorted ascending by feature_idx):
-`count × [u32 feature_idx][u32 byte_offset]` — slot is the per-page primary
+`count × [u32 feature_idx][u32 byte_offset]` - slot is the per-page primary
 key; user_id is not used here.
 
 ### per-row attribute block
@@ -77,13 +77,13 @@ ascending by feature_idx. Sparse: only slots that match a class appear.
 ## label_candidates section (layer artifacts)
 See `label_candidates.rs` for the wire layout. Each entry carries a flags
 byte; bit 1 (`HAS_SLOT`) marks slot-bearing labels (`u32 feature_idx`
-follows). Slotless entries carry pruned-feature labels — features whose
+follows). Slotless entries carry pruned-feature labels - features whose
 geometry was filtered out at this level under the Independent survival
 policy. The codec requires slotted entries to be ascending by feature_idx
 and to precede any slotless entries.
 
 ## style_refs section (layer artifacts)
-u32 count, then `count` entries each as (u32 length, length UTF-8 bytes) — style_id strings, indexed by class_index.
+u32 count, then `count` entries each as (u32 length, length UTF-8 bytes) - style_id strings, indexed by class_index.
 
 ## Content hash
 ContentHash = BLAKE3 of the entire file bytes. Used as the store key. The footer carries no self-hash.

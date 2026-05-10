@@ -74,7 +74,7 @@ pub struct Compiler {
     /// end (success or failure). When unset, resolves to
     /// `${TMPDIR}/mars-compile-spill`. The directory must be writable and
     /// have headroom for the worst-case spilled hydrated payload across
-    /// concurrent bindings — typical sizing is a few GiB per spilling
+    /// concurrent bindings - typical sizing is a few GiB per spilling
     /// binding, multiplied by [`compile_binding_parallelism`].
     ///
     /// [`compile_binding_parallelism`]: Self::compile_binding_parallelism

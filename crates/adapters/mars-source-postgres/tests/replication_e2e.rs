@@ -367,7 +367,7 @@ async fn acked_batch_is_not_replayed_on_reconnect() {
     let batch = next_batch_or_timeout(&mut sub).await.unwrap();
     assert_eq!(batch.events.len(), 1, "expected single replay-free batch");
     // Make sure no replay of gid=1 follows immediately. Pull again with a
-    // short timeout — we expect a timeout.
+    // short timeout - we expect a timeout.
     let r = tokio::time::timeout(Duration::from_secs(2), sub.next_batch()).await;
     assert!(r.is_err(), "unexpected extra batch after ack: {r:?}");
 }

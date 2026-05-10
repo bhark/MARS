@@ -463,7 +463,7 @@ impl SpatialIndex {
         }
         // off is in [level_starts[lo], level_starts[lo + 1]); end is
         // level_starts[lo + 1]. saturate at the last entry for malformed
-        // descent (defensive — open() already validated bounds).
+        // descent (defensive - open() already validated bounds).
         *self.level_starts.get(lo + 1).unwrap_or(&self.level_starts[lo])
     }
 }

@@ -125,7 +125,7 @@ pub(crate) struct KeyedRow {
 /// identically.
 ///
 /// Memory budgets are enforced per-page by the caller (see
-/// [`enforce_page_budget`]) — the hydration step itself is unbounded
+/// [`enforce_page_budget`]) - the hydration step itself is unbounded
 /// because per-page guards catch single-page outliers and binding-wide
 /// pressure is bounded by the feature-id set the caller assembles.
 pub(crate) async fn hydrate_keyed_rows<'a>(

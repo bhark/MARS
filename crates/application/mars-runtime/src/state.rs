@@ -67,7 +67,7 @@ pub enum IndexError {
         /// page key the sidecar references but which has no matching `PageEntry`.
         page_key: PageKey,
     },
-    /// two sidecars of the same kind reference the same `(layer, page_key)` —
+    /// two sidecars of the same kind reference the same `(layer, page_key)` -
     /// the manifest writer must dedupe before commit.
     #[error("duplicate {kind:?} sidecar for layer {layer} at {page_key:?}")]
     DuplicateSidecar {
@@ -108,7 +108,7 @@ impl PageIndex {
     }
 
     /// borrow the contiguous page slice for `(binding_id, level)`. returns an
-    /// empty slice when the binding/level pair is not materialised — callers
+    /// empty slice when the binding/level pair is not materialised - callers
     /// treat that as "no candidate pages."
     #[must_use]
     pub fn page_slice<'m>(
@@ -230,7 +230,7 @@ fn build_sidecar_index(
 ///
 /// the index is the hot-path-friendly view of the same manifest; readers that
 /// only need the on-disk fields can reach for `state.manifest` directly. the
-/// `config` is the service config the manifest validated against — render
+/// `config` is the service config the manifest validated against - render
 /// uses it to look up per-layer bindings, classes, and label policy.
 #[derive(Debug)]
 pub struct RuntimeState {
@@ -471,7 +471,7 @@ mod tests {
 
     #[test]
     fn orphan_sidecar_with_valid_binding_level_but_unknown_page_id_rejected() {
-        // (binding, level) bucket exists but the specific page_id does not —
+        // (binding, level) bucket exists but the specific page_id does not -
         // a coarse bucket-only check would let this stale sidecar survive.
         let pages = vec![page("a", 0, 0, 1)];
         let mut m = manifest_with(pages.clone(), vec![]);

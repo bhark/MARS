@@ -70,7 +70,7 @@ pub async fn reconcile_binding(
     )?
     .with_filter(binding_plan.filter.clone());
 
-    // 1. count source rows per user_id (bag, not set — a non-unique source id
+    // 1. count source rows per user_id (bag, not set - a non-unique source id
     //    contributes one count per row).
     let mut stream = deps.source.stream_feature_ids(&port_binding).await?;
     let mut source_counts: BTreeMap<u64, u32> = BTreeMap::new();
@@ -131,7 +131,7 @@ pub async fn reconcile_binding(
     // 4. missing: fetch geometry for every drifting user_id once and emit
     //    one synthetic Insert per returned row, each carrying its own
     //    envelope so the cycle can identify the dirty page via centroid.
-    //    over-emitting beyond the strict deficit is benign — the rebuild
+    //    over-emitting beyond the strict deficit is benign - the rebuild
     //    sidecar refresh drops every multimap entry for an observed id
     //    and re-adds entries from the freshly fetched rows, which lands
     //    at parity regardless of the event count.

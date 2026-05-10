@@ -125,7 +125,7 @@ async fn execute_rebalance_one_binding(
 
     // union of hilbert ranges; sidecar lookup gives us the feature id set.
     let union_ranges: Vec<(HilbertKey, HilbertKey)> = source_pages.values().map(|p| p.hilbert_range).collect();
-    // bag semantics: dedup user_ids before the source fetch — a user_id
+    // bag semantics: dedup user_ids before the source fetch - a user_id
     // that appears N times in the multimap should still be fetched once,
     // since the source returns ALL its rows.
     let mut feature_ids = sc.user_ids_in_ranges(&union_ranges);

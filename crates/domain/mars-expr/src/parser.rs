@@ -170,7 +170,7 @@ fn parse_err(pos: usize, msg: &str) -> ExprError {
     ExprError::Parse(format!("at position {pos}: {msg}"))
 }
 
-/// `=`/`!=` against `NULL` is silently always-NULL in SQL — never matches.
+/// `=`/`!=` against `NULL` is silently always-NULL in SQL - never matches.
 /// reject at parse time and steer authors to `IS NULL` / `IS NOT NULL`.
 fn reject_null_compare(lhs: &Expr, rhs: &Expr, op: &str) -> Result<(), ExprError> {
     if matches!(lhs, Expr::Literal(Literal::Null)) || matches!(rhs, Expr::Literal(Literal::Null)) {
@@ -548,7 +548,7 @@ impl Parser {
                 let e = self.parse_or()?;
                 self.expect(&Tok::RParen, "')'")?;
                 // function call would be ident immediately followed by lparen, which would
-                // hit this branch via parse_primary on the lparen — but our caller already
+                // hit this branch via parse_primary on the lparen - but our caller already
                 // consumed the ident first. detect that case in parse_predicate is hard;
                 // instead, function calls are caught because ident is parsed as primary,
                 // and the next token being '(' is rejected here as no postfix matches.
