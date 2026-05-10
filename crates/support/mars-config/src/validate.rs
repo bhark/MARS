@@ -9,7 +9,8 @@ mod binding;
 mod crs;
 
 #[cfg(test)]
-pub mod fixtures;
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+pub(crate) mod fixtures;
 
 /// Validate a parsed configuration and resolve derived forms in place.
 ///

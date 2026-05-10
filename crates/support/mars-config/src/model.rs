@@ -33,4 +33,5 @@ pub use style::*;
 pub use tile_matrix::*;
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests;

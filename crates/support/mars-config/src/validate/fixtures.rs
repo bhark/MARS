@@ -4,7 +4,7 @@ use crate::model::*;
 use mars_types::{Bbox, CrsCode};
 
 #[cfg(test)]
-pub fn minimal_config() -> Config {
+pub(crate) fn minimal_config() -> Config {
     use crate::model::{ArtifactCache, ArtifactStore, Compiler, Interfaces, Observability, Render};
     let mut size_per_band = std::collections::BTreeMap::new();
     size_per_band.insert("hi".into(), "1024m".into());
@@ -61,7 +61,7 @@ pub fn minimal_config() -> Config {
 }
 
 #[cfg(test)]
-pub fn binding(from: &str) -> SourceBinding {
+pub(crate) fn binding(from: &str) -> SourceBinding {
     SourceBinding {
         scale: None,
         band: None,
@@ -80,7 +80,7 @@ pub fn binding(from: &str) -> SourceBinding {
 }
 
 #[cfg(test)]
-pub fn layer_with_binding(binding: SourceBinding) -> Layer {
+pub(crate) fn layer_with_binding(binding: SourceBinding) -> Layer {
     Layer {
         name: mars_types::LayerId::new("roads"),
         title: String::new(),
@@ -98,7 +98,7 @@ pub fn layer_with_binding(binding: SourceBinding) -> Layer {
 }
 
 #[cfg(test)]
-pub fn two_band_config() -> Config {
+pub(crate) fn two_band_config() -> Config {
     let mut cfg = minimal_config();
     cfg.scales.bands = vec![
         Band {
@@ -115,7 +115,7 @@ pub fn two_band_config() -> Config {
 }
 
 #[cfg(test)]
-pub fn tiered_layer(sources: Vec<SourceBinding>) -> Layer {
+pub(crate) fn tiered_layer(sources: Vec<SourceBinding>) -> Layer {
     Layer {
         name: mars_types::LayerId::new("test"),
         title: String::new(),
