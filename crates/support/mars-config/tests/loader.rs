@@ -27,7 +27,37 @@ fn loads_minimal_fixture() {
     let sizes = cfg.cells.size_per_band_m().unwrap();
     assert!((sizes["hi"] - 4096.0).abs() < f64::EPSILON);
 
+    // unset scale_dpi defaults to 96 (mapserver-parity).
+    assert!((cfg.service.scale_dpi - 96.0).abs() < f64::EPSILON);
+    assert!((cfg.service.scale_pixel_size_m() - 0.0254 / 96.0).abs() < 1e-12);
+
     validate(&mut cfg, &fixtures_dir()).expect("validate minimal");
+}
+
+#[test]
+fn rejects_non_positive_scale_dpi() {
+    let dir = tempfile::tempdir().unwrap();
+    let yaml = r#"
+service: { name: t, scale_dpi: 0 }
+source:
+  type: postgis
+  dsn: postgres://example/x
+  native_crs: EPSG:25832
+artifacts:
+  store: { type: fs, path: /tmp/s }
+  cache: { path: /tmp/c, max_size: 1MiB }
+scales:
+  bands:
+    - { name: hi, max_denom_exclusive: 25000 }
+cells: { grid: regular, origin: [0, 0], size_per_band: { hi: 1024m } }
+interfaces: {}
+layers: []
+"#;
+    let p = dir.path().join("bad.yaml");
+    fs::write(&p, yaml).unwrap();
+    let mut cfg = load(&p).expect("load");
+    let err = validate(&mut cfg, dir.path()).unwrap_err();
+    assert!(matches!(err, ConfigError::Invalid(msg) if msg.contains("scale_dpi")));
 }
 
 #[test]

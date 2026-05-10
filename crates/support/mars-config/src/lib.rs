@@ -161,6 +161,12 @@ pub fn validate(config: &mut Config, config_dir: &Path) -> Result<(), ConfigErro
             config.service.name
         )));
     }
+    if !config.service.scale_dpi.is_finite() || config.service.scale_dpi <= 0.0 {
+        return Err(ConfigError::Invalid(format!(
+            "service.scale_dpi must be a positive, finite number; got {}",
+            config.service.scale_dpi
+        )));
+    }
 
     let crs = config.source.native_crs.as_str().trim();
     if crs.is_empty() {
