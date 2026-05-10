@@ -1,11 +1,13 @@
-FROM docker.io/alpine:3.21
+FROM docker.io/debian:bookworm-slim
 
-RUN apk add --no-cache \
-    osm2pgsql \
-    curl \
-    jq \
-    postgresql16-client \
-    py3-osmium
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+        osm2pgsql \
+        osmium-tool \
+        curl \
+        ca-certificates \
+        postgresql-client \
+ && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /work
 COPY fetch-and-load.sh overpass-query.txt osm-mapping.lua ./
