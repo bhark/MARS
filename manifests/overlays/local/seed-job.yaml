@@ -1,53 +1,32 @@
-apiVersion: batch/v1
-kind: Job
+apiVersion: v1
+kind: Pod
 metadata:
   name: mars-seed
   labels:
     app.kubernetes.io/part-of: seed
     app.kubernetes.io/component: seed
 spec:
-  backoffLimit: 1
-  template:
-    metadata:
-      labels:
-        app.kubernetes.io/component: seed
-    spec:
-      restartPolicy: Never
-      initContainers:
-        # Requires=mars-postgis.service only waits for `kube play` to return,
-        # not for postgres to accept connections. block here until it does.
-        - name: wait-for-postgis
-          image: docker.io/postgis/postgis:18-3.6
-          command:
-            - /bin/sh
-            - -c
-            - |
-              set -eu
-              i=0
-              until pg_isready -h mars-postgis -p 5432 -U mars -d mars -q; do
-                i=$((i+1))
-                if [ "$i" -ge 60 ]; then
-                  echo "wait-for-postgis: timeout after 60 attempts" >&2
-                  exit 1
-                fi
-                sleep 2
-              done
-      containers:
-        - name: seed
-          image: localhost/mars-seed:dev
-          imagePullPolicy: IfNotPresent
-          env:
-            - name: PG_DSN
-              valueFrom:
-                secretKeyRef:
-                  name: mars-postgis
-                  key: PG_DSN
-            - name: OSM_BBOX
-              value: "55.6,9.5,56.0,10.7"
-          volumeMounts:
-            - name: cache
-              mountPath: /cache
-      volumes:
+  restartPolicy: Never
+  # podman 5.8.x kube play crashes (nil deref in libpod.Container.Inspect)
+  # when wrapping a Job in a service container. modeled as a one-shot Pod
+  # instead. wait-for-postgis logic lives in the seed entrypoint.
+  # convert back to a Job once the upstream bug is fixed; prod doesn't seed.
+  containers:
+    - name: seed
+      image: localhost/mars-seed:dev
+      imagePullPolicy: IfNotPresent
+      env:
+        - name: PG_DSN
+          valueFrom:
+            secretKeyRef:
+              name: mars-postgis
+              key: PG_DSN
+        - name: OSM_BBOX
+          value: "55.6,9.5,56.0,10.7"
+      volumeMounts:
         - name: cache
-          persistentVolumeClaim:
-            claimName: mars-osm-cache
+          mountPath: /cache
+  volumes:
+    - name: cache
+      persistentVolumeClaim:
+        claimName: mars-osm-cache

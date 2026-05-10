@@ -13,6 +13,21 @@ PBF_FILE="${CACHE_DIR}/osm-extract.osm.pbf"
 
 mkdir -p "${CACHE_DIR}"
 
+# wait for postgres before any psql/osm2pgsql work. Requires=mars-postgis only
+# guarantees the pod started, not that postgres accepts connections. an init
+# container would be cleaner but podman 5.8.x kube play crashes on
+# --service-container=true + Job + initContainers.
+PG_HOST=$(echo "${PG_DSN}" | sed -nE 's|^postgres://[^@]+@([^/:]+).*|\1|p')
+i=0
+until pg_isready -h "${PG_HOST}" -U mars -d mars -q; do
+    i=$((i+1))
+    if [ "$i" -ge 60 ]; then
+        echo "seed: timeout waiting for ${PG_HOST}" >&2
+        exit 1
+    fi
+    sleep 2
+done
+
 if [ -f "${PBF_FILE}" ]; then
     echo "seed: using cached PBF ${PBF_FILE}"
 else
