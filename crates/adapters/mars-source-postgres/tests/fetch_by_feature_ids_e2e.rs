@@ -9,7 +9,7 @@ use futures_util::StreamExt;
 use mars_source::{Source, SourceBinding, SourceCollectionId};
 use mars_source_postgres::{PgConfig, PgSource};
 use mars_types::CrsCode;
-use rand::distributions::{Alphanumeric, DistString};
+use rand::distr::{Alphanumeric, SampleString};
 use testcontainers::{
     GenericImage, ImageExt,
     core::{IntoContainerPort, WaitFor},
@@ -18,7 +18,7 @@ use testcontainers::{
 
 #[tokio::test]
 async fn fetch_by_feature_ids_yields_matching_rows() {
-    let password = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+    let password = Alphanumeric.sample_string(&mut rand::rng(), 16);
     let container = GenericImage::new("postgis/postgis", "16-3.4")
         .with_exposed_port(5432.tcp())
         .with_wait_for(WaitFor::message_on_stderr(

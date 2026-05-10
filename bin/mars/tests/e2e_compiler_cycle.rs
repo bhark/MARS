@@ -26,7 +26,7 @@ use mars_source_postgres::{CollectionTopology, PgConfig, PgSource, ReplicationTo
 use mars_store::{ManifestStore, ObjectStore};
 use mars_store_fs::{FsPublisher, FsStore};
 use mars_types::{ContentHash, MANIFEST_FORMAT_VERSION, PageKey};
-use rand::distributions::{Alphanumeric, DistString};
+use rand::distr::{Alphanumeric, SampleString};
 use tempfile::TempDir;
 use testcontainers::{
     GenericImage, ImageExt,
@@ -42,7 +42,7 @@ const FIXTURE_ROWS: i32 = 200;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn e2e_change_feed_cycle_publishes_v3_manifest() -> Result<()> {
-    let password = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+    let password = Alphanumeric.sample_string(&mut rand::rng(), 16);
     let container = GenericImage::new("postgis/postgis", "16-3.4")
         .with_exposed_port(5432.tcp())
         .with_wait_for(WaitFor::message_on_stderr(

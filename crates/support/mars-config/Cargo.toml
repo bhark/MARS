@@ -19,8 +19,8 @@ mars-proj   = { workspace = true }
 serde       = { workspace = true }
 thiserror   = { workspace = true }
 serde_yaml_ng = { workspace = true }
-humantime   = "2"
-regex       = "1"
+humantime   = { workspace = true }
+regex       = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -15,7 +15,7 @@ workspace = true
 [dependencies]
 mars-types  = { workspace = true }
 thiserror   = { workspace = true }
-proj-sys    = "0.27"
+proj-sys    = { workspace = true }
 
 [dev-dependencies]
 criterion   = { workspace = true }

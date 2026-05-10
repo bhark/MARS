@@ -34,18 +34,18 @@ thiserror   = { workspace = true }
 tracing     = { workspace = true }
 tokio          = { workspace = true }
 tokio-postgres = { workspace = true }
-deadpool-postgres      = "0.14"
+deadpool-postgres      = { workspace = true }
 tokio-postgres-rustls  = { workspace = true }
 rustls-native-certs    = { workspace = true }
 rustls                 = { workspace = true }
 # logical replication client. owns pgwire framing, SCRAM/MD5 auth, TLS, and
 # CopyBoth/standby-status handling; mars-source-postgres owns the pgoutput
 # decoder + translator that consume `XLogData` payload bytes.
-pgwire-replication     = "0.3"
+pgwire-replication     = { workspace = true }
 tokio-util             = { workspace = true }
 # optional, gated behind `e2e` feature; lives under [dependencies] because
 # cargo does not allow optional [dev-dependencies].
-testcontainers = { version = "0.27", optional = true }
+testcontainers = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros", "rt-multi-thread"] }

@@ -7,7 +7,7 @@
 
 use mars_source::LeaderLock;
 use mars_source_postgres::{PgConfig, PgSource};
-use rand::distributions::{Alphanumeric, DistString};
+use rand::distr::{Alphanumeric, SampleString};
 use testcontainers::{
     GenericImage, ImageExt,
     core::{IntoContainerPort, WaitFor},
@@ -16,7 +16,7 @@ use testcontainers::{
 
 #[tokio::test]
 async fn try_acquire_grants_one_leader_and_denies_concurrent() {
-    let password = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+    let password = Alphanumeric.sample_string(&mut rand::rng(), 16);
     let container = GenericImage::new("postgis/postgis", "16-3.4")
         .with_exposed_port(5432.tcp())
         .with_wait_for(WaitFor::message_on_stderr(

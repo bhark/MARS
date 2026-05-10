@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use mars_source::{ChangeEvent, ChangeFeed, SourceError};
 use mars_source_postgres::{CollectionTopology, PgConfig, PgSource, ReplicationTopology};
-use rand::distributions::{Alphanumeric, DistString};
+use rand::distr::{Alphanumeric, SampleString};
 use testcontainers::{
     ContainerAsync, GenericImage, ImageExt,
     core::{IntoContainerPort, WaitFor},
@@ -30,7 +30,7 @@ const PUB: &str = "mars_e2e_pub";
 /// and bound table(s). Returns the container (kept alive) and the DSN used by
 /// the adapter.
 async fn boot_postgis() -> (ContainerAsync<GenericImage>, String) {
-    let password = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+    let password = Alphanumeric.sample_string(&mut rand::rng(), 16);
     let container = GenericImage::new("postgis/postgis", "16-3.4")
         .with_exposed_port(5432.tcp())
         .with_wait_for(WaitFor::message_on_stderr(

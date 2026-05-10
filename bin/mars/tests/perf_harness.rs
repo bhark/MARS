@@ -33,7 +33,7 @@ use mars_source_postgres::{PgConfig, PgSource};
 use mars_store::ManifestStore;
 use mars_store_fs::{FsCache, FsPublisher, FsStore};
 use mars_types::{Bbox, CrsCode, ImageFormat, LayerId};
-use rand::distributions::{Alphanumeric, DistString};
+use rand::distr::{Alphanumeric, SampleString};
 use tempfile::TempDir;
 use testcontainers::{
     GenericImage, ImageExt,
@@ -100,7 +100,7 @@ async fn parcels_mini_perf_harness() -> Result<()> {
     let seed_sql = std::fs::read_to_string(fixture_dir.join("seed.sql")).context("read seed.sql")?;
     let yaml_template = std::fs::read_to_string(fixture_dir.join("service.yaml")).context("read service.yaml")?;
 
-    let password = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+    let password = Alphanumeric.sample_string(&mut rand::rng(), 16);
     let container = GenericImage::new("postgis/postgis", "16-3.4")
         .with_exposed_port(5432.tcp())
         .with_wait_for(WaitFor::message_on_stderr(

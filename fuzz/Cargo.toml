@@ -12,10 +12,10 @@ publish = false
 cargo-fuzz = true
 
 [dependencies]
-libfuzzer-sys = "0.4"
+libfuzzer-sys = "0.4.12"
 mars-artifact = { path = "../crates/domain/mars-artifact" }
 mars-expr     = { path = "../crates/domain/mars-expr" }
-bytes         = "1"
+bytes         = "1.11.1"
 
 [[bin]]
 name              = "fuzz_target_artifact_reader"

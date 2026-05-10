@@ -18,7 +18,7 @@ use mars_source_postgres::{PgConfig, PgSource};
 use mars_store::ManifestStore;
 use mars_store_fs::{FsCache, FsPublisher, FsStore};
 use mars_types::{Bbox, CrsCode, ImageFormat, LayerId};
-use rand::distributions::{Alphanumeric, DistString};
+use rand::distr::{Alphanumeric, SampleString};
 use tempfile::TempDir;
 use testcontainers::{
     GenericImage, ImageExt,
@@ -38,7 +38,7 @@ const FILL_C: (u8, u8, u8) = (46, 204, 113); // green-ish
 #[tokio::test(flavor = "multi_thread")]
 async fn end_to_end_compile_and_render() -> Result<()> {
     // start postgis
-    let password = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+    let password = Alphanumeric.sample_string(&mut rand::rng(), 16);
     let container = GenericImage::new("postgis/postgis", "16-3.4")
         .with_exposed_port(5432.tcp())
         .with_wait_for(WaitFor::message_on_stderr(

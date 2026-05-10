@@ -18,12 +18,12 @@ mars-expr  = { workspace = true }
 bytes      = { workspace = true }
 serde      = { workspace = true }
 thiserror  = { workspace = true }
-planus     = "1"
-blake3     = "1"
+planus     = { workspace = true }
+blake3     = { workspace = true }
 
 [build-dependencies]
-planus-codegen = "1"
-planus-translation = "1"
+planus-codegen = { workspace = true }
+planus-translation = { workspace = true }
 
 [package.metadata.cargo-machete]
 ignored = ["serde"]

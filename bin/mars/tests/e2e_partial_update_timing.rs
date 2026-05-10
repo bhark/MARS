@@ -21,7 +21,7 @@ use mars_config::{Config, config_dir};
 use mars_source::ChangeFeed;
 use mars_source_postgres::{CollectionTopology, PgConfig, PgSource, ReplicationTopology};
 use mars_store_fs::{FsPublisher, FsStore};
-use rand::distributions::{Alphanumeric, DistString};
+use rand::distr::{Alphanumeric, SampleString};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use tempfile::TempDir;
@@ -43,7 +43,7 @@ const GATE_BUDGET: Duration = Duration::from_secs(5 * 60);
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "operator-driven; takes minutes against a 100k fixture"]
 async fn partial_update_cycle_within_5min() -> Result<()> {
-    let password = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+    let password = Alphanumeric.sample_string(&mut rand::rng(), 16);
     let container = GenericImage::new("postgis/postgis", "16-3.4")
         .with_exposed_port(5432.tcp())
         .with_wait_for(WaitFor::message_on_stderr(

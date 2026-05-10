@@ -16,8 +16,8 @@ mars-types    = { workspace = true }
 mars-runtime  = { workspace = true }
 mars-config   = { workspace = true }
 thiserror     = { workspace = true }
-percent-encoding = "2"
-quick-xml     = "0.39"
+percent-encoding = { workspace = true }
+quick-xml     = { workspace = true }
 
 [dev-dependencies]
 serde_yaml_ng = { workspace = true }

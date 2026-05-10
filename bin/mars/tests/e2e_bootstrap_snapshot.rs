@@ -30,7 +30,7 @@ use mars_store::{ManifestStore, ObjectStore};
 use mars_store_fs::{FsPublisher, FsStore};
 use mars_types::ContentHash;
 use rand::SeedableRng;
-use rand::distributions::{Alphanumeric, DistString};
+use rand::distr::{Alphanumeric, SampleString};
 use rand::rngs::StdRng;
 use tempfile::TempDir;
 use testcontainers::{
@@ -50,7 +50,7 @@ const PAGE_TARGET_BYTES: u64 = 64 * 1024;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn snapshot_bootstrap_e2e() -> Result<()> {
-    let password = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+    let password = Alphanumeric.sample_string(&mut rand::rng(), 16);
     let container = GenericImage::new("postgis/postgis", "16-3.4")
         .with_exposed_port(5432.tcp())
         .with_wait_for(WaitFor::message_on_stderr(
