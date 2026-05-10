@@ -31,7 +31,7 @@ pub(crate) async fn fetch_full_table_streaming(
 ) -> Result<BoxStream<'static, Result<RowBytes, SourceError>>, SourceError> {
     // build the SQL up front so we surface bad identifiers as InvalidBinding /
     // backend errors before the producer task is spawned.
-    let sql = build_full_table_query(&binding)?;
+    let (sql, params) = build_full_table_query(&binding)?;
 
     // bounded channel so a slow consumer back-pressures the producer rather
     // than letting an unbounded queue grow during a 50M-row bootstrap.
@@ -52,9 +52,7 @@ pub(crate) async fn fetch_full_table_streaming(
                 return;
             }
         };
-        // empty params slice; query_raw still needs the iterator type fixed.
-        let no_params: [&(dyn ToSql + Sync); 0] = [];
-        let row_stream = match client.query_raw(&sql, no_params).await {
+        let row_stream = match client.query_raw(&sql, params.iter()).await {
             Ok(s) => s,
             Err(e) => {
                 send_err(SourceError::backend("query_raw full_table", e), &tx).await;
@@ -82,7 +80,7 @@ pub(crate) async fn fetch_by_feature_ids(
     binding: SourceBinding,
     ids: Vec<i64>,
 ) -> Result<BoxStream<'static, Result<RowBytes, SourceError>>, SourceError> {
-    let sql = build_feature_ids_query(&binding)?;
+    let (sql, filter_params) = build_feature_ids_query(&binding)?;
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<RowBytes, SourceError>>(64);
 
     if ids.is_empty() {
@@ -109,7 +107,13 @@ pub(crate) async fn fetch_by_feature_ids(
 
         for chunk in ids.chunks(PG_ID_BATCH) {
             let chunk_ids = chunk.to_vec();
-            let row_stream = match client.query_raw(&sql, [(&chunk_ids) as &(dyn ToSql + Sync)]).await {
+            // $1 = id array, $2.. = binding filter params (if any).
+            let mut bound: Vec<&(dyn ToSql + Sync)> = Vec::with_capacity(1 + filter_params.len());
+            bound.push(&chunk_ids);
+            for p in &filter_params {
+                bound.push(p);
+            }
+            let row_stream = match client.query_raw(&sql, bound).await {
                 Ok(s) => s,
                 Err(e) => {
                     send_err(SourceError::backend("query_raw feature_ids", e), &tx).await;
@@ -140,7 +144,7 @@ pub(crate) async fn stream_feature_ids(
     pool: Pool,
     binding: SourceBinding,
 ) -> Result<BoxStream<'static, Result<i64, SourceError>>, SourceError> {
-    let sql = build_feature_ids_only_query(&binding)?;
+    let (sql, params) = build_feature_ids_only_query(&binding)?;
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<i64, SourceError>>(64);
 
     tokio::spawn(async move {
@@ -157,8 +161,7 @@ pub(crate) async fn stream_feature_ids(
                 return;
             }
         };
-        let no_params: [&(dyn ToSql + Sync); 0] = [];
-        let row_stream = match client.query_raw(&sql, no_params).await {
+        let row_stream = match client.query_raw(&sql, params.iter()).await {
             Ok(s) => s,
             Err(e) => {
                 send_err(SourceError::backend("query_raw stream_feature_ids", e), &tx).await;
@@ -192,11 +195,20 @@ pub(crate) async fn stream_feature_ids(
     Ok(Box::pin(stream))
 }
 
-fn build_feature_ids_only_query(binding: &SourceBinding) -> Result<String, SourceError> {
+fn build_feature_ids_only_query(binding: &SourceBinding) -> Result<(String, Vec<SqlParam>), SourceError> {
     let id_q = quote_ident(&binding.id_column)?;
     let schema_q = quote_ident(&binding.from_schema)?;
     let table_q = quote_ident(&binding.from_table)?;
-    Ok(format!("SELECT {id_q} FROM {schema_q}.{table_q}"))
+    let mut sql = format!("SELECT {id_q} FROM {schema_q}.{table_q}");
+    let mut params: Vec<SqlParam> = Vec::new();
+    if binding.filter.is_some() {
+        // no other WHERE on this query, so insert the keyword before the AND
+        // helper would. keep the helper's leading " AND ": stitch a no-op
+        // `WHERE TRUE` so placeholders stay clean.
+        sql.push_str(" WHERE TRUE");
+        append_binding_filter(&mut sql, &mut params, binding, 0)?;
+    }
+    Ok((sql, params))
 }
 
 /// `SELECT id, ST_AsBinary(geom), attrs... FROM s.t WHERE geom IS NOT NULL`
@@ -204,7 +216,7 @@ fn build_feature_ids_only_query(binding: &SourceBinding) -> Result<String, Sourc
 /// are filtered server-side: ST_AsBinary(NULL) decodes as a NULL bytea which
 /// the non-Option Vec<u8> decoder cannot represent, and a row with no
 /// geometry has nothing to render anyway.
-fn build_full_table_query(binding: &SourceBinding) -> Result<String, SourceError> {
+fn build_full_table_query(binding: &SourceBinding) -> Result<(String, Vec<SqlParam>), SourceError> {
     let id_q = quote_ident(&binding.id_column)?;
     let geom_q = quote_ident(&binding.geometry_column)?;
     let schema_q = quote_ident(&binding.from_schema)?;
@@ -216,12 +228,13 @@ fn build_full_table_query(binding: &SourceBinding) -> Result<String, SourceError
         select.push_str(", ");
         select.push_str(&q);
     }
-    Ok(format!(
-        "SELECT {select} FROM {schema_q}.{table_q} WHERE {geom_q} IS NOT NULL"
-    ))
+    let mut sql = format!("SELECT {select} FROM {schema_q}.{table_q} WHERE {geom_q} IS NOT NULL");
+    let mut params: Vec<SqlParam> = Vec::new();
+    append_binding_filter(&mut sql, &mut params, binding, 0)?;
+    Ok((sql, params))
 }
 
-fn build_feature_ids_query(binding: &SourceBinding) -> Result<String, SourceError> {
+fn build_feature_ids_query(binding: &SourceBinding) -> Result<(String, Vec<SqlParam>), SourceError> {
     let id_q = quote_ident(&binding.id_column)?;
     let geom_q = quote_ident(&binding.geometry_column)?;
     let schema_q = quote_ident(&binding.from_schema)?;
@@ -235,9 +248,33 @@ fn build_feature_ids_query(binding: &SourceBinding) -> Result<String, SourceErro
     }
     // mirror build_full_table_query: NULL geoms have no rendering surface and
     // would crash the non-Option Vec<u8> decoder.
-    Ok(format!(
-        "SELECT {select} FROM {schema_q}.{table_q} WHERE {id_q} = ANY($1::bigint[]) AND {geom_q} IS NOT NULL"
-    ))
+    let mut sql =
+        format!("SELECT {select} FROM {schema_q}.{table_q} WHERE {id_q} = ANY($1::bigint[]) AND {geom_q} IS NOT NULL");
+    // id-array sits at $1, so the binding filter's placeholders start at $2.
+    let mut params: Vec<SqlParam> = Vec::new();
+    append_binding_filter(&mut sql, &mut params, binding, 1)?;
+    Ok((sql, params))
+}
+
+/// AND the binding's `filter` (if any) into `sql`, pushing the lowered
+/// params onto `params`. `prior_params` is the count of placeholders the
+/// caller has already bound before us; the lowerer numbers from
+/// `prior_params + params.len() + 1`.
+pub(crate) fn append_binding_filter(
+    sql: &mut String,
+    params: &mut Vec<SqlParam>,
+    binding: &SourceBinding,
+    prior_params: usize,
+) -> Result<(), SourceError> {
+    if let Some(expr) = binding.filter.as_ref() {
+        let start = prior_params + params.len() + 1;
+        let (frag, fparams) = lower_to_sql(expr, binding, start)?;
+        sql.push_str(" AND (");
+        sql.push_str(&frag);
+        sql.push(')');
+        params.extend(fparams);
+    }
+    Ok(())
 }
 
 /// SRID extraction: only EPSG codes are supported in v1.
@@ -281,15 +318,20 @@ pub(crate) fn build_query(
         "SELECT {select} FROM {schema_q}.{table_q} WHERE ST_Intersects({geom_q}, ST_MakeEnvelope($1, $2, $3, $4, $5))"
     );
 
+    // bind-level filter first, caller filter second. deterministic ordering
+    // keeps placeholder numbering stable; both go through `lower_to_sql`.
+    let prior = params.len();
+    let mut tail: Vec<SqlParam> = Vec::new();
+    append_binding_filter(&mut sql, &mut tail, binding, prior)?;
     if let Some(expr) = filter {
-        // lowerer emits placeholders starting at `params.len() + 1`
-        let start = params.len() + 1;
+        let start = prior + tail.len() + 1;
         let (frag, fparams) = lower_to_sql(expr, binding, start)?;
         sql.push_str(" AND (");
         sql.push_str(&frag);
         sql.push(')');
-        params.extend(fparams);
+        tail.extend(fparams);
     }
+    params.extend(tail);
 
     Ok((sql, params))
 }
@@ -511,11 +553,43 @@ mod tests {
 
     #[test]
     fn feature_ids_query_quotes_identifiers() {
-        let sql = build_feature_ids_query(&b()).unwrap();
+        let (sql, params) = build_feature_ids_query(&b()).unwrap();
         assert_eq!(
             sql,
             "SELECT \"gid\", ST_AsBinary(\"geom\") AS geom, \"name\", \"kind\" FROM \"public\".\"t\" WHERE \"gid\" = ANY($1::bigint[]) AND \"geom\" IS NOT NULL"
         );
+        assert!(params.is_empty());
+    }
+
+    #[test]
+    fn binding_filter_lands_in_full_table_query() {
+        let mut b = b();
+        b.filter = Some(parse("name = 'x'").unwrap());
+        let (sql, params) = build_full_table_query(&b).unwrap();
+        assert!(sql.ends_with(" AND (\"name\" = $1)"), "{sql}");
+        assert_eq!(params.len(), 1);
+    }
+
+    #[test]
+    fn binding_filter_starts_at_two_in_feature_ids_query() {
+        let mut b = b();
+        b.filter = Some(parse("name = 'x'").unwrap());
+        let (sql, params) = build_feature_ids_query(&b).unwrap();
+        assert!(sql.ends_with(" AND (\"name\" = $2)"), "{sql}");
+        assert_eq!(params.len(), 1);
+    }
+
+    #[test]
+    fn binding_filter_composes_with_caller_filter_in_build_query() {
+        let bbox = Bbox::new(0.0, 0.0, 100.0, 100.0);
+        let mut b = b();
+        b.filter = Some(parse("name = 'x'").unwrap());
+        let caller = parse("kind = 1").unwrap();
+        let (sql, params) = build_query(&b, bbox, 25832, Some(&caller)).unwrap();
+        // bind filter at $6, caller filter at $7
+        assert!(sql.contains("AND (\"name\" = $6)"), "{sql}");
+        assert!(sql.contains("AND (\"kind\" = $7)"), "{sql}");
+        assert_eq!(params.len(), 7);
     }
 
     #[test]

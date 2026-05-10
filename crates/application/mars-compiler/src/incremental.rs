@@ -271,6 +271,7 @@ mod tests {
         BindingPlan {
             binding_id: BindingId::try_new(id).unwrap(),
             source_table: id.to_string(),
+            filter: None,
             geometry_column: "geom".into(),
             id_column: Some("id".into()),
             attributes: Vec::new(),

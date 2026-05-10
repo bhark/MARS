@@ -411,29 +411,42 @@ fn handle_layer(
             } else {
                 max_scale_denom
             };
+            let (real_table, filter) = lift_inline_subquery(table);
             sources.push(SourceSkeleton {
                 max_denom_exclusive: max_denom,
-                from: table.clone(),
+                from: real_table,
+                filter,
                 geometry_column: gc.clone(),
                 id_column: id_col.clone(),
                 attributes: Vec::new(),
             });
         }
     } else if let Some(table) = from_table {
+        let (real_table, filter) = lift_inline_subquery(&table);
         sources.push(SourceSkeleton {
             max_denom_exclusive: max_scale_denom,
-            from: table,
+            from: real_table,
+            filter,
             geometry_column: geometry_column.unwrap_or_else(|| "geometri".into()),
             id_column: processing_items.as_deref().and_then(guess_id_column),
             attributes: Vec::new(),
         });
     }
 
-    // collect attributes from class expressions
+    // collect attributes from class expressions and any per-tier filter idents
+    // (config validation requires every filter ident to be declared on the
+    // binding's attributes ∪ id_column).
     let mut all_attrs = BTreeSet::new();
     for cls in &classes {
         if let Some(ref when) = cls.when
             && let Ok(expr) = mars_expr::parse(when)
+        {
+            mars_expr::collect_idents(&expr, &mut all_attrs);
+        }
+    }
+    for src in &sources {
+        if let Some(ref f) = src.filter
+            && let Ok(expr) = mars_expr::parse(f)
         {
             mars_expr::collect_idents(&expr, &mut all_attrs);
         }
@@ -470,6 +483,55 @@ fn strip_using(s: &str) -> &str {
     } else {
         s
     }
+}
+
+/// Detect a mapfile inline DATA subquery of the shape
+/// `( SELECT ... FROM <table> WHERE <expr> ) [AS alias]` and split it into the
+/// real table and the WHERE clause. Anything that doesn't fit this exact
+/// shape (joins, sub-selects, bare table refs) falls through with the input
+/// returned as-is and no filter. Heuristic-only — operators are expected to
+/// hand-edit the YAML for anything more elaborate.
+fn lift_inline_subquery(raw: &str) -> (String, Option<String>) {
+    let trimmed = raw.trim();
+    let inner = match trimmed.strip_prefix('(') {
+        Some(rest) => match rest.rsplit_once(')') {
+            // tolerate trailing ` AS alias` after the closing paren.
+            Some((body, _tail)) => body.trim(),
+            None => return (raw.to_string(), None),
+        },
+        None => return (raw.to_string(), None),
+    };
+    let upper = inner.to_ascii_uppercase();
+    if !upper.trim_start().starts_with("SELECT") {
+        return (raw.to_string(), None);
+    }
+    let from_pos = match upper.find(" FROM ") {
+        Some(p) => p + " FROM ".len(),
+        None => return (raw.to_string(), None),
+    };
+    let where_pos = match upper[from_pos..].find(" WHERE ") {
+        Some(p) => from_pos + p,
+        None => return (raw.to_string(), None),
+    };
+    let table = inner[from_pos..where_pos].trim().to_string();
+    // accept simple `schema.table` / `table` / `"table"`; bail on anything with
+    // joins, commas, or sub-selects so we don't fabricate a fragile from:.
+    if table.contains(',') || table.contains(' ') || table.contains('(') {
+        return (raw.to_string(), None);
+    }
+    let where_clause = inner[where_pos + " WHERE ".len()..].trim();
+    let cleaned_table = table.trim_matches('"').to_string();
+    if where_clause.is_empty() {
+        return (cleaned_table, None);
+    }
+    // round-trip through the mars-expr parser when feasible to normalise
+    // quoting/spacing. mapfile WHERE is SQL; round-trip failure means the
+    // expression is outside the DSL, so emit the raw text and let config
+    // validation reject it loudly rather than silently dropping.
+    let normalised = mars_expr::parse(where_clause)
+        .map(|e| e.to_string())
+        .unwrap_or_else(|_| where_clause.to_string());
+    (cleaned_table, Some(normalised))
 }
 
 fn parse_data(data: Option<&str>) -> (Option<String>, Option<String>) {
@@ -948,6 +1010,31 @@ END
         assert_eq!(skel.service_name.as_deref(), Some("x"));
         assert_eq!(skel.layers.len(), 1);
         assert_eq!(skel.layers[0].name, "l1");
+    }
+
+    #[test]
+    fn lift_inline_subquery_extracts_table_and_where() {
+        let (t, f) = lift_inline_subquery("(SELECT * FROM simplified.streams WHERE midtebredde IN ('12-', '2.5-12'))");
+        assert_eq!(t, "simplified.streams");
+        let f = f.expect("filter lifted");
+        assert!(f.contains("midtebredde"));
+        assert!(f.contains("12-"));
+    }
+
+    #[test]
+    fn lift_inline_subquery_passes_through_bare_table() {
+        let (t, f) = lift_inline_subquery("simplified.streams");
+        assert_eq!(t, "simplified.streams");
+        assert!(f.is_none());
+    }
+
+    #[test]
+    fn lift_inline_subquery_skips_joins_and_complex_from() {
+        let raw = "(SELECT * FROM a JOIN b ON a.id = b.id WHERE x = 1)";
+        let (t, f) = lift_inline_subquery(raw);
+        // join means we keep the raw text and emit no filter.
+        assert_eq!(t, raw);
+        assert!(f.is_none());
     }
 
     #[test]

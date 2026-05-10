@@ -898,6 +898,13 @@ pub struct SourceBinding {
     pub max_denom: Option<u64>,
     /// Source table or relation.
     pub from: String,
+    /// Optional binding-level filter expression (mars-expr DSL). When set,
+    /// the compiler ANDs this into the source SELECT so artifacts only
+    /// materialise rows the filter accepts. Mirrors MapServer DATA inline
+    /// subquery WHERE / SCALEToken-driven WHERE. Identifiers must be
+    /// declared in `attributes` (or be `id_column`).
+    #[serde(default)]
+    pub filter: Option<String>,
     /// Geometry column.
     pub geometry_column: String,
     /// Identifier column.

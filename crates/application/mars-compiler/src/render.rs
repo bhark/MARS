@@ -257,7 +257,8 @@ async fn rebuild_binding_truncate(
         binding_plan.id_column.as_deref().unwrap_or("id"),
         binding_plan.attributes.clone(),
         binding_plan.native_crs.clone(),
-    )?;
+    )?
+    .with_filter(binding_plan.filter.clone());
     let mut session = deps.source.open_compile_session(&port_binding).await?;
     let work = async {
         let page_plan = compute_page_plan(session.as_mut(), binding_plan, plan_budget_bytes, spill_dir).await?;
@@ -383,7 +384,8 @@ async fn rebuild_binding_incremental(
         binding_plan.id_column.as_deref().unwrap_or("id"),
         binding_plan.attributes.clone(),
         binding_plan.native_crs.clone(),
-    )?;
+    )?
+    .with_filter(binding_plan.filter.clone());
     let ids: Vec<i64> = feature_ids
         .iter()
         .map(|f| i64::try_from(*f).unwrap_or(i64::MAX))
@@ -697,7 +699,8 @@ async fn execute_rebalance_one_binding(
         binding_plan.id_column.as_deref().unwrap_or("id"),
         binding_plan.attributes.clone(),
         binding_plan.native_crs.clone(),
-    )?;
+    )?
+    .with_filter(binding_plan.filter.clone());
     let ids: Vec<i64> = feature_ids
         .iter()
         .map(|f| i64::try_from(*f).unwrap_or(i64::MAX))

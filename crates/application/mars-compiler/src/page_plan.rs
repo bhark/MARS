@@ -343,6 +343,7 @@ mod tests {
         BindingPlan {
             binding_id: BindingId::try_new("planned").unwrap(),
             source_table: "planned".into(),
+            filter: None,
             geometry_column: "geom".into(),
             id_column: Some("id".into()),
             attributes: vec![],

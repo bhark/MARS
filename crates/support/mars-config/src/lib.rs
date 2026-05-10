@@ -337,6 +337,31 @@ pub fn validate(config: &mut Config, config_dir: &Path) -> Result<(), ConfigErro
                     )));
                 }
             }
+            // binding-level filter: must parse, and every identifier it
+            // references must be declared (attributes or id_column). this
+            // mirrors the lower_to_sql allowlist in mars-source-postgres so a
+            // bad filter fails loudly at config time instead of at SQL build.
+            if let Some(f) = &binding.filter {
+                let expr = mars_expr::parse(f).map_err(|e| {
+                    ConfigError::Invalid(format!(
+                        "layer {} source[{i}] (from {:?}) filter parse error: {e}",
+                        layer.name, binding.from
+                    ))
+                })?;
+                let mut idents: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+                mars_expr::collect_idents(&expr, &mut idents);
+                for name in &idents {
+                    let in_attrs = declared.contains(name.as_str());
+                    let is_id = binding.id_column.as_deref() == Some(name.as_str());
+                    if !in_attrs && !is_id {
+                        return Err(ConfigError::Invalid(format!(
+                            "layer {} source[{i}] (from {:?}) filter references unknown ident {name:?}; \
+                             declare it in `attributes` or as `id_column`",
+                            layer.name, binding.from
+                        )));
+                    }
+                }
+            }
         }
 
         if let Some(label) = &layer.label {
@@ -829,6 +854,7 @@ mod tests {
                 scale: None,
                 band: None,
                 max_denom: None,
+                filter: None,
                 from: "roads".into(),
                 geometry_column: "geom".into(),
                 id_column: Some("id".into()),
@@ -856,6 +882,77 @@ mod tests {
     }
 
     #[test]
+    fn rejects_binding_filter_with_undeclared_ident() {
+        let mut cfg = minimal_config();
+        cfg.layers = vec![Layer {
+            name: mars_types::LayerId::new("roads"),
+            title: String::new(),
+            abstract_: String::new(),
+            kind: "line".into(),
+            scale: None,
+            group: None,
+            enable_get_feature_info: false,
+            bbox: None,
+            sources: vec![SourceBinding {
+                scale: None,
+                band: None,
+                max_denom: None,
+                filter: Some("midtebredde IN ('12-', '2.5-12')".into()),
+                from: "roads".into(),
+                geometry_column: "geom".into(),
+                id_column: Some("id".into()),
+                attributes: vec!["name".into()],
+                levels: None,
+                page_size_target_bytes: None,
+                reconcile_every_cycles: None,
+                sidecar_size_warn_bytes: None,
+                simplifier: None,
+            }],
+            classes: vec![],
+            label: None,
+            label_survival: mars_style::LabelSurvival::Independent,
+        }];
+        let err = validate(&mut cfg, Path::new(".")).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("filter"), "expected filter error: {msg}");
+        assert!(msg.contains("midtebredde"), "expected ident name: {msg}");
+    }
+
+    #[test]
+    fn accepts_binding_filter_when_ident_declared() {
+        let mut cfg = minimal_config();
+        cfg.layers = vec![Layer {
+            name: mars_types::LayerId::new("streams"),
+            title: String::new(),
+            abstract_: String::new(),
+            kind: "line".into(),
+            scale: None,
+            group: None,
+            enable_get_feature_info: false,
+            bbox: None,
+            sources: vec![SourceBinding {
+                scale: None,
+                band: None,
+                max_denom: None,
+                filter: Some("midtebredde IN ('12-', '2.5-12')".into()),
+                from: "streams".into(),
+                geometry_column: "geom".into(),
+                id_column: Some("id".into()),
+                attributes: vec!["midtebredde".into()],
+                levels: None,
+                page_size_target_bytes: None,
+                reconcile_every_cycles: None,
+                sidecar_size_warn_bytes: None,
+                simplifier: None,
+            }],
+            classes: vec![],
+            label: None,
+            label_survival: mars_style::LabelSurvival::Independent,
+        }];
+        validate(&mut cfg, Path::new(".")).expect("filter referencing declared attribute should validate");
+    }
+
+    #[test]
     fn rejects_label_text_referencing_undeclared_attribute() {
         use crate::model::{LabelStyleAttach, LayerLabel};
         let mut cfg = minimal_config();
@@ -872,6 +969,7 @@ mod tests {
                 scale: None,
                 band: None,
                 max_denom: None,
+                filter: None,
                 from: "roads".into(),
                 geometry_column: "geom".into(),
                 id_column: Some("id".into()),
@@ -1116,6 +1214,7 @@ mod tests {
             scale: None,
             band: None,
             max_denom: None,
+            filter: None,
             from: from.into(),
             geometry_column: "geom".into(),
             id_column: Some("id".into()),

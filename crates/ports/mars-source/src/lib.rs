@@ -162,7 +162,7 @@ pub struct ChangeBatch {
 /// Source-side binding: maps a logical `SourceCollectionId` onto the physical
 /// table, geometry/id columns, attribute projection, and CRS. Lives in
 /// `mars-source` because every field is database-vocabulary, not domain.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SourceBinding {
     /// Logical collection name.
     pub collection: SourceCollectionId,
@@ -178,6 +178,10 @@ pub struct SourceBinding {
     pub attributes: Vec<String>,
     /// Source CRS.
     pub crs: CrsCode,
+    /// Optional binding-level filter ANDed into every SELECT this binding
+    /// drives. Idents must already be in `attributes ∪ {id_column}` (the
+    /// caller is expected to validate up front; lowering double-checks).
+    pub filter: Option<mars_expr::Expr>,
 }
 
 impl SourceBinding {
@@ -227,7 +231,16 @@ impl SourceBinding {
             id_column,
             attributes,
             crs,
+            filter: None,
         })
+    }
+
+    /// Attach (or clear) a binding-level filter expression. Lowering ANDs
+    /// it into the source SELECT in addition to any caller-supplied filter.
+    #[must_use]
+    pub fn with_filter(mut self, filter: Option<mars_expr::Expr>) -> Self {
+        self.filter = filter;
+        self
     }
 }
 

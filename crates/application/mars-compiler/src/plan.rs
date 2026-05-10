@@ -97,6 +97,10 @@ pub struct BindingPlan {
     pub geometry_column: String,
     pub id_column: Option<String>,
     pub attributes: Vec<String>,
+    /// Pre-parsed binding-level filter; ANDed into the source SELECT at fetch
+    /// time. Two bindings on the same table with different filters cannot
+    /// share a page set, so dedup treats this as part of the binding identity.
+    pub filter: Option<Expr>,
     pub native_crs: CrsCode,
     pub levels: Vec<LevelPlan>,
     pub page_size_target_bytes: u64,
@@ -188,12 +192,20 @@ pub fn build_bootstrap_plan(cfg: &Config) -> Result<BootstrapPlan, PlanError> {
                         id: id.clone(),
                         detail: "sidecar_size_warn_bytes failed to parse",
                     })?;
+            let filter_parsed = match &binding.filter {
+                Some(s) => Some(parse(s).map_err(|_| PlanError::ConflictingBinding {
+                    id: id.clone(),
+                    detail: "filter failed to parse",
+                })?),
+                None => None,
+            };
             let plan = BindingPlan {
                 binding_id: id.clone(),
                 source_table: binding.from.clone(),
                 geometry_column: binding.geometry_column.clone(),
                 id_column: binding.id_column.clone(),
                 attributes: binding.attributes.clone(),
+                filter: filter_parsed,
                 native_crs: native_crs.clone(),
                 levels: level_plans(binding.levels.as_deref()),
                 page_size_target_bytes: binding.resolved_page_size_target(),
@@ -357,6 +369,12 @@ fn ensure_consistent(existing: &BindingPlan, candidate: &BindingPlan) -> Result<
             detail: "id_column",
         });
     }
+    if existing.filter != candidate.filter {
+        return Err(PlanError::ConflictingBinding {
+            id: existing.binding_id.clone(),
+            detail: "filter",
+        });
+    }
     if existing.levels != candidate.levels {
         return Err(PlanError::ConflictingBinding {
             id: existing.binding_id.clone(),
@@ -495,6 +513,7 @@ mod tests {
             scale: None,
             band: None,
             max_denom: None,
+            filter: None,
             from: from.into(),
             geometry_column: "geom".into(),
             id_column: Some("id".into()),

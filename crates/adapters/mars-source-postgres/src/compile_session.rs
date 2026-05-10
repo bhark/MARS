@@ -19,9 +19,9 @@ use deadpool_postgres::Object;
 use futures_core::stream::BoxStream;
 use futures_util::StreamExt;
 use mars_source::{CompileSession, RowBytes, RowSummary, SourceBinding, SourceError, SourceRowKey};
-use tokio_postgres::types::ToSql;
 
-use crate::fetch::decode_row_pub;
+use crate::SqlParam;
+use crate::fetch::{append_binding_filter, decode_row_pub};
 use crate::quote::quote_ident;
 
 /// One compile-time session against a single binding. Owns a pooled
@@ -32,14 +32,16 @@ pub(crate) struct PgCompileSession {
     object: Option<Object>,
     binding: SourceBinding,
     summary_sql: String,
+    summary_params: Vec<SqlParam>,
     full_sql: String,
+    full_params: Vec<SqlParam>,
     closed: bool,
 }
 
 impl PgCompileSession {
     pub(crate) async fn open(pool: deadpool_postgres::Pool, binding: SourceBinding) -> Result<Self, SourceError> {
-        let summary_sql = build_summary_query(&binding)?;
-        let full_sql = build_full_table_query(&binding)?;
+        let (summary_sql, summary_params) = build_summary_query(&binding)?;
+        let (full_sql, full_params) = build_full_table_query(&binding)?;
 
         let object = pool.get().await.map_err(|e| SourceError::backend("pool checkout", e))?;
         // snapshot isolation across pass-1 + pass-2 scans. pass-2 is a single
@@ -66,7 +68,9 @@ impl PgCompileSession {
             object: Some(object),
             binding,
             summary_sql,
+            summary_params,
             full_sql,
+            full_params,
             closed: false,
         })
     }
@@ -84,9 +88,8 @@ impl CompileSession for PgCompileSession {
         &'a mut self,
     ) -> Result<BoxStream<'a, Result<RowSummary, SourceError>>, SourceError> {
         let object = self.client()?;
-        let no_params: [&(dyn ToSql + Sync); 0] = [];
         let row_stream = object
-            .query_raw(&self.summary_sql, no_params)
+            .query_raw(&self.summary_sql, self.summary_params.iter())
             .await
             .map_err(|e| SourceError::backend("query_raw summary", e))?;
         let mapped = row_stream.map(|item| match item {
@@ -100,9 +103,8 @@ impl CompileSession for PgCompileSession {
         &'a mut self,
     ) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError> {
         let object = self.client()?;
-        let no_params: [&(dyn ToSql + Sync); 0] = [];
         let row_stream = object
-            .query_raw(&self.full_sql, no_params)
+            .query_raw(&self.full_sql, self.full_params.iter())
             .await
             .map_err(|e| SourceError::backend("query_raw full_table (session)", e))?;
         let binding = self.binding.clone();
@@ -230,12 +232,12 @@ fn pack_row_key(tableoid: u32, block: u32, offset: u16) -> SourceRowKey {
 /// return NULL on NULL geom, which the non-Option decoders cannot represent.
 /// the same predicate runs in pass-2 so the two scans stay row-set aligned
 /// under the shared snapshot.
-fn build_summary_query(binding: &SourceBinding) -> Result<String, SourceError> {
+fn build_summary_query(binding: &SourceBinding) -> Result<(String, Vec<SqlParam>), SourceError> {
     let id_q = quote_ident(&binding.id_column)?;
     let geom_q = quote_ident(&binding.geometry_column)?;
     let schema_q = quote_ident(&binding.from_schema)?;
     let table_q = quote_ident(&binding.from_table)?;
-    Ok(format!(
+    let mut sql = format!(
         "SELECT {id_q}::int8, \
                 tableoid::oid, \
                 ctid::text, \
@@ -246,7 +248,10 @@ fn build_summary_query(binding: &SourceBinding) -> Result<String, SourceError> {
                 octet_length(ST_AsBinary({geom_q}))::int4 \
          FROM {schema_q}.{table_q} \
          WHERE {geom_q} IS NOT NULL"
-    ))
+    );
+    let mut params: Vec<SqlParam> = Vec::new();
+    append_binding_filter(&mut sql, &mut params, binding, 0)?;
+    Ok((sql, params))
 }
 
 /// Pass-2 SQL: `SELECT id, ST_AsBinary(geom), attrs..., tableoid::oid,
@@ -256,7 +261,7 @@ fn build_summary_query(binding: &SourceBinding) -> Result<String, SourceError> {
 /// that the prior `id = ANY($1)` pattern degenerated to on non-clustered
 /// tables. The NULL-geom predicate mirrors pass-1 so the two scans see the
 /// same row set under the shared snapshot.
-fn build_full_table_query(binding: &SourceBinding) -> Result<String, SourceError> {
+fn build_full_table_query(binding: &SourceBinding) -> Result<(String, Vec<SqlParam>), SourceError> {
     let id_q = quote_ident(&binding.id_column)?;
     let geom_q = quote_ident(&binding.geometry_column)?;
     let schema_q = quote_ident(&binding.from_schema)?;
@@ -271,9 +276,10 @@ fn build_full_table_query(binding: &SourceBinding) -> Result<String, SourceError
     // tableoid + ctid land at fixed trailing offsets so decode_compile_row
     // can locate them without re-deriving the attribute count.
     select.push_str(", tableoid::oid, ctid::text");
-    Ok(format!(
-        "SELECT {select} FROM {schema_q}.{table_q} WHERE {geom_q} IS NOT NULL"
-    ))
+    let mut sql = format!("SELECT {select} FROM {schema_q}.{table_q} WHERE {geom_q} IS NOT NULL");
+    let mut params: Vec<SqlParam> = Vec::new();
+    append_binding_filter(&mut sql, &mut params, binding, 0)?;
+    Ok((sql, params))
 }
 
 /// Decode a pass-2 row produced by `build_full_table_query`. The first
@@ -311,7 +317,7 @@ mod tests {
             mars_types::CrsCode::new("EPSG:25832"),
         )
         .unwrap();
-        let sql = build_summary_query(&b).unwrap();
+        let (sql, params) = build_summary_query(&b).unwrap();
         assert!(sql.contains("ST_XMin(\"geom\")::float4"));
         assert!(sql.contains("octet_length(ST_AsBinary(\"geom\"))::int4"));
         assert!(sql.contains("tableoid::oid"));
@@ -319,6 +325,7 @@ mod tests {
         assert!(!sql.contains("md5"));
         assert!(sql.contains("FROM \"public\".\"t\""));
         assert!(sql.contains("WHERE \"geom\" IS NOT NULL"));
+        assert!(params.is_empty());
     }
 
     #[test]
@@ -333,12 +340,13 @@ mod tests {
             mars_types::CrsCode::new("EPSG:25832"),
         )
         .unwrap();
-        let sql = build_full_table_query(&b).unwrap();
+        let (sql, params) = build_full_table_query(&b).unwrap();
         assert_eq!(
             sql,
             "SELECT \"gid\", ST_AsBinary(\"geom\") AS geom, \"name\", \"kind\", tableoid::oid, ctid::text FROM \"public\".\"t\" WHERE \"geom\" IS NOT NULL"
         );
         assert!(!sql.contains("ORDER BY"));
+        assert!(params.is_empty());
     }
 
     #[test]

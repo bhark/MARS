@@ -701,7 +701,8 @@ pub async fn run_snapshot_from_plan(
             binding_plan.id_column.as_deref().unwrap_or("id"),
             binding_plan.attributes.clone(),
             binding_plan.native_crs.clone(),
-        )?;
+        )?
+        .with_filter(binding_plan.filter.clone());
         let started = std::time::Instant::now();
         tracing::info!(
             target: "mars_compiler::compile",

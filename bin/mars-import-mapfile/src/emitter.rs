@@ -42,6 +42,7 @@ pub(crate) struct LayerSkeleton {
 pub(crate) struct SourceSkeleton {
     pub(crate) max_denom_exclusive: Option<u64>,
     pub(crate) from: String,
+    pub(crate) filter: Option<String>,
     pub(crate) geometry_column: String,
     pub(crate) id_column: Option<String>,
     pub(crate) attributes: Vec<String>,
@@ -346,6 +347,9 @@ pub(crate) fn render(skel: &Skeleton, bands: &[(String, u64)]) -> String {
                         if let Some(d) = tier.max_denom {
                             parts.push(format!("max_denom_exclusive: {d}"));
                         }
+                        if let Some(f) = &src.filter {
+                            parts.push(format!("filter: {}", yaml_quote(f)));
+                        }
                         if !src.attributes.is_empty() {
                             let attrs = src
                                 .attributes
@@ -414,6 +418,7 @@ mod tests {
         SourceSkeleton {
             max_denom_exclusive: max,
             from: from.into(),
+            filter: None,
             geometry_column: "g".into(),
             id_column: None,
             attributes: vec![],

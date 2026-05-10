@@ -258,6 +258,7 @@ mod tests {
             scale,
             band: None,
             max_denom: None,
+            filter: None,
             from: from.into(),
             geometry_column: "geom".into(),
             id_column: None,

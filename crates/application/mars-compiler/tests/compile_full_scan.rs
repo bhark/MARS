@@ -112,6 +112,7 @@ fn binding_plan() -> BindingPlan {
     BindingPlan {
         binding_id: BindingId::try_new("points").unwrap(),
         source_table: "public.points".into(),
+        filter: None,
         geometry_column: "geom".into(),
         id_column: Some("id".into()),
         attributes: vec!["name".into()],

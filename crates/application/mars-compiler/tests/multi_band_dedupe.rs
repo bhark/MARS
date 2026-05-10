@@ -129,6 +129,7 @@ fn build_two_band_config() -> Config {
         scale: None,
         band: Some(band.into()),
         max_denom: None,
+        filter: None,
         from: "vejmidte".into(),
         geometry_column: "geom".into(),
         id_column: Some("id".into()),

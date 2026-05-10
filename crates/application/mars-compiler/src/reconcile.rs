@@ -67,7 +67,8 @@ pub async fn reconcile_binding(
         binding_plan.id_column.as_deref().unwrap_or("id"),
         binding_plan.attributes.clone(),
         binding_plan.native_crs.clone(),
-    )?;
+    )?
+    .with_filter(binding_plan.filter.clone());
 
     // 1. count source rows per user_id (bag, not set — a non-unique source id
     //    contributes one count per row).
@@ -263,6 +264,7 @@ mod tests {
         BindingPlan {
             binding_id: BindingId::try_new("points").unwrap(),
             source_table: "points".into(),
+            filter: None,
             geometry_column: "geom".into(),
             id_column: Some("id".into()),
             attributes: vec![],
