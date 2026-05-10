@@ -80,7 +80,7 @@ spec:
             periodSeconds: 2
           volumeMounts:
             - name: data
-              mountPath: /var/lib/postgresql/data
+              mountPath: /var/lib/postgresql
       volumes:
         - name: data
           emptyDir: {}
