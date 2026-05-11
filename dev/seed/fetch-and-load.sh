@@ -3,7 +3,7 @@ set -eu
 
 # overpass bbox order is (south,west,north,east)
 OSM_BBOX="${OSM_BBOX:-55.6,9.5,56.0,10.7}"
-PG_DSN="${PG_DSN:-postgres://mars:mars@mars-postgis/mars}"
+PG_DSN="${PG_DSN:-postgres://mars:mars@postgis/mars}"
 PUBLICATION="${PUBLICATION:-mars_local_pub}"
 # must match `SCHEMA` in osm-mapping.lua
 SCHEMA="e2e_source"
@@ -13,10 +13,9 @@ PBF_FILE="${CACHE_DIR}/osm-extract.osm.pbf"
 
 mkdir -p "${CACHE_DIR}"
 
-# wait for postgres before any psql/osm2pgsql work. Requires=mars-postgis only
-# guarantees the pod started, not that postgres accepts connections. an init
-# container would be cleaner but podman 5.8.x kube play crashes on
-# --service-container=true + Job + initContainers.
+# wait for postgres before any psql/osm2pgsql work. compose's depends_on
+# service_healthy already gates this, but keep the loop so the script stays
+# usable outside the compose flow.
 PG_HOST=$(echo "${PG_DSN}" | sed -nE 's|^postgres://[^@]+@([^/:]+).*|\1|p')
 i=0
 until pg_isready -h "${PG_HOST}" -U mars -d mars -q; do

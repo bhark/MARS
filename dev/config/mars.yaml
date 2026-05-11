@@ -1,7 +1,7 @@
 service:
   name: mars-local-dev
   title: "MARS local development"
-  abstract: "Local Quadlet-based development surface with open OSM data."
+  abstract: "Local development surface with open OSM data."
   contact_email: ops@example.org
 
 source:
@@ -16,6 +16,15 @@ source:
     max_size: 8
     statement_timeout_ms: 300000
     batch_send_timeout_secs: 30
+
+artifacts:
+  store:
+    type: fs
+    path: /var/lib/mars/store
+  cache:
+    path: /cache
+    max_size: 512MiB
+    eviction: lru
 
 compiler:
   compile_binding_parallelism: 2
