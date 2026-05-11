@@ -88,33 +88,29 @@ enum Tool {
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // tracing-subscriber's global registry can only be installed once; read
-    // observability settings from the config when a service mode is selected,
-    // otherwise fall back to plain text / default level for tooling.
-    let (json, log_level) = observability_prefs(&cli);
+    // service modes need a validated Config; tool subcommands don't. load
+    // once here so observability prefs and the chosen mode share one parse.
+    let cfg = if cli.mode.is_some() {
+        Some(Arc::new(load_and_validate(&cli.config)?))
+    } else {
+        None
+    };
+
+    let (json, log_level) = cfg.as_ref().map_or((false, None), |c| {
+        (
+            matches!(c.observability.log_format.as_deref(), Some("json")),
+            c.observability.log_level.clone(),
+        )
+    });
     if let Err(e) = mars_observability::init_tracing(json, log_level.as_deref()) {
         eprintln!("warning: tracing init failed: {e}");
     }
 
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
-    runtime.block_on(async_main(cli))
+    runtime.block_on(async_main(cli, cfg))
 }
 
-fn observability_prefs(cli: &Cli) -> (bool, Option<String>) {
-    if cli.tool.is_some() {
-        return (false, None);
-    }
-    // pre-parse the config purely for observability. errors are non-fatal here;
-    // the real load_and_validate runs again inside the chosen mode and reports
-    // the error with full context.
-    let Ok(cfg) = mars_config::load(&cli.config) else {
-        return (false, None);
-    };
-    let json = matches!(cfg.observability.log_format.as_deref(), Some("json"));
-    (json, cfg.observability.log_level)
-}
-
-async fn async_main(cli: Cli) -> Result<()> {
+async fn async_main(cli: Cli, cfg: Option<Arc<Config>>) -> Result<()> {
     // clap's `conflicts_with` on `mode` rules out the (Some, Some) case at
     // parse time; only one branch can populate.
     match (cli.mode, cli.tool) {
@@ -122,16 +118,19 @@ async fn async_main(cli: Cli) -> Result<()> {
             "mars: provide --mode <runtime|compiler|all-in-one> or one of: validate, inspect"
         )),
         (Some(Mode::Runtime), None) => {
+            let cfg = cfg.ok_or_else(|| anyhow!("internal: service mode without loaded config"))?;
             let shutdown = install_signal_handler();
-            run_runtime(Arc::new(load_and_validate(&cli.config)?), shutdown).await
+            run_runtime(cfg, shutdown).await
         }
         (Some(Mode::Compiler), None) => {
+            let cfg = cfg.ok_or_else(|| anyhow!("internal: service mode without loaded config"))?;
             let shutdown = install_signal_handler();
-            run_compiler_mode(&cli.config, shutdown).await
+            run_compiler(cfg, shutdown).await
         }
         (Some(Mode::AllInOne), None) => {
+            let cfg = cfg.ok_or_else(|| anyhow!("internal: service mode without loaded config"))?;
             let shutdown = install_signal_handler();
-            run_all_in_one(&cli.config, shutdown).await
+            run_all_in_one(cfg, shutdown).await
         }
         (None, Some(Tool::Validate { path })) => tool_validate(&path).await,
         (None, Some(Tool::Inspect { path })) => tool_inspect(&path).await,
@@ -348,18 +347,14 @@ async fn rebuild_capabilities_loop(
 
 // ---------- compiler mode ----------
 
-async fn run_compiler_mode(config_path: &Path, shutdown: CancellationToken) -> Result<()> {
-    let cfg = load_and_validate(config_path)?;
-    run_compiler(cfg, shutdown).await
-}
-
-async fn run_compiler(cfg: Config, shutdown: CancellationToken) -> Result<()> {
+async fn run_compiler(cfg: Arc<Config>, shutdown: CancellationToken) -> Result<()> {
     composition::validate_change_feed_config(&cfg)?;
     let topology = composition::build_replication_topology(&cfg)?;
     let source = build_pg_source(&cfg, Some(topology)).await?;
     let (store, publisher) = build_store_and_publisher(&cfg)?;
     let metrics = mars_observability::Metrics::new().context("init metrics")?;
 
+    // Compiler::new takes Config by value; clone out of the Arc once at handoff.
     let compiler = Compiler::new(
         CompilerDeps {
             source: source.clone(),
@@ -369,7 +364,7 @@ async fn run_compiler(cfg: Config, shutdown: CancellationToken) -> Result<()> {
             manifest: publisher,
             metrics,
         },
-        cfg,
+        (*cfg).clone(),
     );
     match compiler.run(shutdown).await {
         Ok(()) => Ok(()),
@@ -381,16 +376,14 @@ async fn run_compiler(cfg: Config, shutdown: CancellationToken) -> Result<()> {
     }
 }
 
-async fn run_all_in_one(config_path: &Path, shutdown: CancellationToken) -> Result<()> {
-    let cfg = load_and_validate(config_path)?;
-    let runtime_cfg = Arc::new(cfg.clone());
+async fn run_all_in_one(cfg: Arc<Config>, shutdown: CancellationToken) -> Result<()> {
     // spawn both halves so we can observe the first to finish and cancel the
     // shared shutdown *before* awaiting the survivor's drain. try_join! would
     // drop the survivor's future mid-await on a sibling failure, so its HTTP
     // graceful drain never runs. we want the survivor to see the cancellation
     // and shut down cleanly.
-    let mut compiler_handle = tokio::spawn(run_compiler(cfg, shutdown.clone()));
-    let mut runtime_handle = tokio::spawn(run_runtime(runtime_cfg, shutdown.clone()));
+    let mut compiler_handle = tokio::spawn(run_compiler(cfg.clone(), shutdown.clone()));
+    let mut runtime_handle = tokio::spawn(run_runtime(cfg, shutdown.clone()));
 
     let first = tokio::select! {
         res = &mut compiler_handle => ("compiler", res),
