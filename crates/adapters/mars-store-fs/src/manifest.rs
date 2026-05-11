@@ -5,7 +5,9 @@
 //! process dies between the body write and the pointer swap, `current` still references
 //! the previous version - never a partial.
 
-use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::path::Path;
+use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
@@ -45,16 +47,15 @@ impl FsPublisher {
         })
     }
 
-    /// Open / create a publisher with an explicit manifest-watch poll interval.
-    pub fn new_with_poll_interval(root: impl Into<PathBuf>, poll_interval: Duration) -> Result<Self, StoreError> {
+    #[cfg(test)]
+    pub(crate) fn new_with_poll_interval(root: impl Into<PathBuf>, poll_interval: Duration) -> Result<Self, StoreError> {
         let mut publisher = Self::new(root)?;
         publisher.poll_interval = poll_interval;
         Ok(publisher)
     }
 
-    /// Reads the body of `manifests/current` (typically `v{N}`). Returns
-    /// `None` when no manifest has been published yet.
-    pub fn read_current(&self) -> Result<Option<String>, StoreError> {
+    #[cfg(test)]
+    pub(crate) fn read_current(&self) -> Result<Option<String>, StoreError> {
         let p = self.root.join(MANIFEST_DIR).join(CURRENT_FILE);
         match std::fs::read_to_string(&p) {
             Ok(s) => Ok(Some(s)),
@@ -63,15 +64,12 @@ impl FsPublisher {
         }
     }
 
-    /// Path to the manifests directory.
-    #[must_use]
-    pub fn manifests_dir(&self) -> PathBuf {
+    pub(crate) fn manifests_dir(&self) -> PathBuf {
         self.root.join(MANIFEST_DIR)
     }
 
-    /// Root path.
-    #[must_use]
-    pub fn root(&self) -> &Path {
+    #[cfg(test)]
+    pub(crate) fn root(&self) -> &Path {
         &self.root
     }
 
