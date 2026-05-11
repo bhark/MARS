@@ -31,7 +31,7 @@ First cold start builds images (~5-8 min); subsequent starts use caches and are 
 
 ```
 dev/
-├── docker-compose.yml      # stack definition
+├── compose.yml             # stack definition
 ├── Makefile                # wrapper targets
 ├── config/mars.yaml        # canonical MARS config (also used by manifests/base)
 ├── postgis/init.sql        # postgis bootstrap (extension + schema + slot)
@@ -57,9 +57,9 @@ dev/
 
 **Overpass rate limits:** If seeding fails with HTTP 429, wait a few minutes and `make seed` again. The OSM extract is cached in the `osm-cache` volume.
 
-**Port conflicts:** Runtime binds `8080`, viewer binds `5173`. Edit the `ports:` mappings in `dev/docker-compose.yml` if those are taken.
+**Port conflicts:** Runtime binds `8080`, viewer binds `5173`. Edit the `ports:` mappings in `dev/compose.yml` if those are taken.
 
-**Logs:** `docker compose -f dev/docker-compose.yml logs -f <service>` or `make logs`.
+**Logs:** `docker compose -f dev/compose.yml logs -f <service>` or `make logs`.
 
 **Artifact-store ownership:** the `init-artifact-store` service chowns the shared `artifact-store` volume to uid 65532 (the distroless `nonroot` user) before compiler/runtime start. If you swap the base image to a different non-root UID, edit that one line.
 
