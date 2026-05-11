@@ -440,7 +440,7 @@ impl Compiler {
             // no work; publish a no-op version bump so downstream cursors
             // advance even on empty windows.
             let next_version = prior.version + 1;
-            let mut next = prior.clone();
+            let mut next = prior;
             next.version = next_version;
             next.epoch = next_version;
             next.source_version = last_source_version;
@@ -532,7 +532,7 @@ impl Compiler {
         if ops.is_empty() {
             // already balanced; bump version so cursors advance.
             let next_version = prior.version + 1;
-            let mut next = prior.clone();
+            let mut next = prior;
             next.version = next_version;
             next.epoch = next_version;
             next.created_at = std::time::SystemTime::now();
