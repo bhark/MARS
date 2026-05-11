@@ -74,3 +74,41 @@ jobs:
         with:
           command: check
           arguments: --all-features
+
+  helm:
+    name: helm lint + kubeconform
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: install helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.1
+      - name: install kubeconform
+        run: |
+          curl -fsSL https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz \
+            | tar -xz -C /usr/local/bin kubeconform
+      - name: helm lint
+        run: helm lint charts/mars-operator
+      - name: helm template + kubeconform
+        run: |
+          helm template mars-operator charts/mars-operator --namespace mars-system \
+            | kubeconform -strict -ignore-missing-schemas -summary
+
+  crd-drift:
+    name: CRD drift check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@master
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: workspace
+      - name: regenerate CRD
+        run: ./scripts/generate-crd.sh
+      - name: fail on drift
+        run: |
+          if ! git diff --exit-code charts/mars-operator/templates/crd.yaml; then
+            echo "::error::CRD drifted. Run scripts/generate-crd.sh and commit the result."
+            exit 1
+          fi
