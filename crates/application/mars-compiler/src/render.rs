@@ -313,8 +313,8 @@ async fn rebuild_binding_truncate(
 
     let port_binding = PortBinding::new(
         SourceCollectionId::new(binding_plan.binding_id.as_str()),
-        binding_schema(&binding_plan.source_table),
-        binding_table(&binding_plan.source_table),
+        binding_plan.schema(),
+        binding_plan.table(),
         binding_plan.geometry_column.clone(),
         binding_plan.id_column.as_deref().unwrap_or("id"),
         binding_plan.attributes.clone(),
@@ -440,8 +440,8 @@ async fn rebuild_binding_incremental(
     // 3. fetch from source.
     let port_binding = PortBinding::new(
         SourceCollectionId::new(binding_plan.binding_id.as_str()),
-        binding_schema(&binding_plan.source_table),
-        binding_table(&binding_plan.source_table),
+        binding_plan.schema(),
+        binding_plan.table(),
         binding_plan.geometry_column.clone(),
         binding_plan.id_column.as_deref().unwrap_or("id"),
         binding_plan.attributes.clone(),
@@ -677,14 +677,6 @@ pub(crate) fn empty_level_metadata(level: &LevelPlan) -> LevelMetadata {
         combined_bbox: Bbox::new(0.0, 0.0, 0.0, 0.0),
         hilbert_range_table: Vec::new(),
     }
-}
-
-pub(crate) fn binding_schema(from: &str) -> &str {
-    from.split_once('.').map(|(s, _)| s).unwrap_or("public")
-}
-
-pub(crate) fn binding_table(from: &str) -> &str {
-    from.split_once('.').map(|(_, t)| t).unwrap_or(from)
 }
 
 pub(crate) fn membership_sidecar_object_key(binding: &str, hash: &ContentHash) -> Result<ArtifactKey, CompilerError> {

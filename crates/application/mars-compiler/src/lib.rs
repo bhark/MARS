@@ -681,7 +681,7 @@ pub async fn run_snapshot_from_plan(
     use mars_source::{SourceBinding as PortBinding, SourceCollectionId};
     use mars_types::{LayerSidecarEntry, MANIFEST_FORMAT_VERSION, PageEntry};
 
-    use crate::render::{BindingOutput, binding_schema, binding_table};
+    use crate::render::BindingOutput;
 
     let parallelism = binding_parallelism.max(1);
 
@@ -698,8 +698,8 @@ pub async fn run_snapshot_from_plan(
     ) -> Result<BindingOutput, CompilerError> {
         let port_binding = PortBinding::new(
             SourceCollectionId::new(binding_plan.binding_id.as_str()),
-            binding_schema(&binding_plan.source_table),
-            binding_table(&binding_plan.source_table),
+            binding_plan.schema(),
+            binding_plan.table(),
             binding_plan.geometry_column.clone(),
             binding_plan.id_column.as_deref().unwrap_or("id"),
             binding_plan.attributes.clone(),

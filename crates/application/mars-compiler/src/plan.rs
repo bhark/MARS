@@ -119,6 +119,20 @@ pub struct BindingPlan {
     pub simplifier: SimplifierKind,
 }
 
+impl BindingPlan {
+    /// Schema portion of `source_table` (`"schema.table"`); defaults to `"public"`.
+    #[must_use]
+    pub fn schema(&self) -> &str {
+        self.source_table.split_once('.').map_or("public", |(s, _)| s)
+    }
+
+    /// Table portion of `source_table` (`"schema.table"`); the whole string when no dot.
+    #[must_use]
+    pub fn table(&self) -> &str {
+        self.source_table.split_once('.').map_or(self.source_table.as_str(), |(_, t)| t)
+    }
+}
+
 /// One pre-parsed class entry on a [`LayerPlan`]. `when` parses once at
 /// plan-build time so the per-feature evaluator never reaches for the parser.
 /// `style_ref` is the canonical name written into the page's StyleRefs

@@ -16,7 +16,6 @@ use mars_source::{ChangeEvent, GeometryEnvelope, SourceBinding as PortBinding, S
 use mars_types::{Bbox, BindingId};
 
 use crate::plan::BindingPlan;
-use crate::render::{binding_schema, binding_table};
 use crate::sidecar::SidecarReader;
 use crate::{CompilerError, Deps};
 
@@ -61,8 +60,8 @@ pub async fn reconcile_binding(
 ) -> Result<ReconciliationOutcome, CompilerError> {
     let port_binding = PortBinding::new(
         SourceCollectionId::new(binding_plan.binding_id.as_str()),
-        binding_schema(&binding_plan.source_table),
-        binding_table(&binding_plan.source_table),
+        binding_plan.schema(),
+        binding_plan.table(),
         binding_plan.geometry_column.clone(),
         binding_plan.id_column.as_deref().unwrap_or("id"),
         binding_plan.attributes.clone(),

@@ -15,10 +15,7 @@ use crate::sidecar::SidecarReader;
 use crate::{CompilerError, Deps};
 
 use super::flush::{emit_layer_sidecars, filter_unmatched_rows, flush_page};
-use super::{
-    KeyedRow, RebuildOutcome, binding_schema, binding_table, drain_pruned_through, enforce_page_budget,
-    hydrate_keyed_rows,
-};
+use super::{KeyedRow, RebuildOutcome, drain_pruned_through, enforce_page_budget, hydrate_keyed_rows};
 
 /// Apply a list of [`RebalanceOp`]s, fetching the affected feature ids via
 /// `Source::fetch_by_feature_ids` and emitting fresh page artifacts plus
@@ -135,8 +132,8 @@ async fn execute_rebalance_one_binding(
     // fetch rows.
     let port_binding = PortBinding::new(
         SourceCollectionId::new(binding_plan.binding_id.as_str()),
-        binding_schema(&binding_plan.source_table),
-        binding_table(&binding_plan.source_table),
+        binding_plan.schema(),
+        binding_plan.table(),
         binding_plan.geometry_column.clone(),
         binding_plan.id_column.as_deref().unwrap_or("id"),
         binding_plan.attributes.clone(),
