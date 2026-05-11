@@ -1,0 +1,91 @@
+use std::collections::BTreeSet;
+
+use crate::ConfigError;
+use crate::model::{Layer, SourceBinding};
+
+/// Every attribute referenced by a class `when:` or label `text:` must be
+/// declared on every binding for the layer; otherwise the snapshot path would
+/// silently observe a missing column at eval time. Binding `filter:`
+/// expressions are checked against the same per-binding allowlist used by the
+/// SQL lowering pass, so a bad filter fails at config time, not at SQL build.
+pub(super) fn validate_attribute_references(layer: &Layer) -> Result<(), ConfigError> {
+    let referenced = collect_referenced_attributes(layer);
+
+    for (i, binding) in layer.sources.iter().enumerate() {
+        let declared: BTreeSet<&str> = binding.attributes.iter().map(String::as_str).collect();
+        check_declared_covers(layer, i, binding, &declared, &referenced)?;
+        check_filter_idents(layer, i, binding, &declared)?;
+    }
+    Ok(())
+}
+
+fn collect_referenced_attributes(layer: &Layer) -> BTreeSet<String> {
+    let mut out: BTreeSet<String> = BTreeSet::new();
+    for class in &layer.classes {
+        if let Some(when) = &class.when
+            && let Ok(expr) = mars_expr::parse(when)
+        {
+            mars_expr::collect_idents(&expr, &mut out);
+        }
+    }
+    if let Some(label) = &layer.label
+        && let Ok(template) = mars_expr::parse_template(&label.text)
+    {
+        for seg in &template.segments {
+            if let mars_expr::Segment::Ident(name) = seg {
+                out.insert(name.clone());
+            }
+        }
+    }
+    out
+}
+
+fn check_declared_covers(
+    layer: &Layer,
+    i: usize,
+    binding: &SourceBinding,
+    declared: &BTreeSet<&str>,
+    referenced: &BTreeSet<String>,
+) -> Result<(), ConfigError> {
+    for name in referenced {
+        if !declared.contains(name.as_str()) {
+            return Err(ConfigError::Invalid(format!(
+                "layer {} source[{i}] (from {:?}) does not declare attribute {name:?} \
+                 referenced by a class when: or label text",
+                layer.name, binding.from
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn check_filter_idents(
+    layer: &Layer,
+    i: usize,
+    binding: &SourceBinding,
+    declared: &BTreeSet<&str>,
+) -> Result<(), ConfigError> {
+    let Some(filter) = &binding.filter else {
+        return Ok(());
+    };
+    let expr = mars_expr::parse(filter).map_err(|e| {
+        ConfigError::Invalid(format!(
+            "layer {} source[{i}] (from {:?}) filter parse error: {e}",
+            layer.name, binding.from
+        ))
+    })?;
+    let mut idents: BTreeSet<String> = BTreeSet::new();
+    mars_expr::collect_idents(&expr, &mut idents);
+    for name in &idents {
+        let in_attrs = declared.contains(name.as_str());
+        let is_id = binding.id_column.as_deref() == Some(name.as_str());
+        if !in_attrs && !is_id {
+            return Err(ConfigError::Invalid(format!(
+                "layer {} source[{i}] (from {:?}) filter references unknown ident {name:?}; \
+                 declare it in `attributes` or as `id_column`",
+                layer.name, binding.from
+            )));
+        }
+    }
+    Ok(())
+}

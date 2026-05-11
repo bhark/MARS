@@ -1,7 +1,39 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ConfigError;
 use crate::model::{Config, Layer, ScaleWindow, SourceBinding};
+
+/// Walk `config.scales.bands` once, rejecting duplicates and building the
+/// derived half-open scale window for each band. The window map is consumed
+/// downstream by per-layer tier validation; the name set by per-source
+/// band-reference checks.
+pub(super) fn validate_bands(config: &Config) -> Result<BandIndex, ConfigError> {
+    let mut names: BTreeSet<String> = BTreeSet::new();
+    let mut windows: BTreeMap<String, ScaleWindow> = BTreeMap::new();
+    let mut prev_max: Option<u64> = None;
+    for band in &config.scales.bands {
+        if !names.insert(band.name.clone()) {
+            return Err(ConfigError::Invalid(format!(
+                "duplicate band name {:?} in scales.bands",
+                band.name
+            )));
+        }
+        windows.insert(
+            band.name.clone(),
+            ScaleWindow {
+                min: prev_max,
+                max: Some(band.max_denom),
+            },
+        );
+        prev_max = Some(band.max_denom);
+    }
+    Ok(BandIndex { names, windows })
+}
+
+pub(super) struct BandIndex {
+    pub names: BTreeSet<String>,
+    pub windows: BTreeMap<String, ScaleWindow>,
+}
 
 /// Intersect two half-open scale windows. `None` bounds act as ±infinity.
 /// Returns `None` if the intersection is empty (lo >= hi).

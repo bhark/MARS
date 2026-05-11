@@ -80,9 +80,9 @@ pub(crate) fn binding(from: &str) -> SourceBinding {
 }
 
 #[cfg(test)]
-pub(crate) fn layer_with_binding(binding: SourceBinding) -> Layer {
+pub(crate) fn layer(name: &str) -> Layer {
     Layer {
-        name: mars_types::LayerId::new("roads"),
+        name: mars_types::LayerId::new(name),
         title: String::new(),
         abstract_: String::new(),
         kind: "line".into(),
@@ -90,10 +90,44 @@ pub(crate) fn layer_with_binding(binding: SourceBinding) -> Layer {
         group: None,
         enable_get_feature_info: false,
         bbox: None,
-        sources: vec![binding],
+        sources: vec![],
         classes: vec![],
         label: None,
         label_survival: mars_style::LabelSurvival::Independent,
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn layer_with_binding(binding: SourceBinding) -> Layer {
+    let mut l = layer("roads");
+    l.sources = vec![binding];
+    l
+}
+
+#[cfg(test)]
+pub(crate) fn class_inline(name: &str, when: Option<&str>) -> Class {
+    Class {
+        name: name.into(),
+        title: String::new(),
+        when: when.map(Into::into),
+        scale: None,
+        style: ClassStyle::Inline(Default::default()),
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn inline_label(text: &str, placement: Option<mars_style::Placement>) -> LayerLabel {
+    LayerLabel {
+        text: text.into(),
+        style: LabelStyleAttach::Inline(mars_style::LabelStyle {
+            font_family: "DejaVu Sans".into(),
+            font_size: 12.0,
+            fill: mars_style::Colour::rgb(0, 0, 0),
+            halo: None,
+            priority: 0,
+            min_distance: 0.0,
+        }),
+        placement,
     }
 }
 
