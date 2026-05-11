@@ -75,9 +75,6 @@ services:
     tmpfs:
       - /cache:mode=1777
       - /work:mode=1777
-    # image HEALTHCHECK targets /healthz on 8080; compiler doesn't bind it.
-    healthcheck:
-      disable: true
     depends_on:
       postgis:
         condition: service_healthy

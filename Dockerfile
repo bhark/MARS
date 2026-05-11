@@ -58,9 +58,6 @@ COPY --from=builder /usr/local/bin/mars /usr/local/bin/mars
 USER nonroot:nonroot
 ENTRYPOINT ["/usr/local/bin/mars"]
 
-# distroless has no shell or curl; use the in-binary healthcheck subcommand.
-# only meaningful when the container runs in `runtime` mode (compiler does
-# not bind 8080); compose-side `healthcheck: disable: true` opts compiler
-# services out.
-HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=6 \
-    CMD ["/usr/local/bin/mars", "healthcheck", "--url", "http://127.0.0.1:8080/healthz"]
+# no image-level HEALTHCHECK: only runtime binds 8080, and orchestrators
+# (compose, k8s) configure their own probes against /readyz or /healthz.
+# the `mars healthcheck` subcommand stays available for those consumers.
