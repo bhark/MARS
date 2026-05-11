@@ -44,3 +44,7 @@ COPY --from=builder /src/target/release/mars /usr/local/bin/mars
 
 USER nonroot:nonroot
 ENTRYPOINT ["/usr/local/bin/mars"]
+
+# distroless has no shell or curl; use the in-binary healthcheck subcommand.
+HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=6 \
+    CMD ["/usr/local/bin/mars", "healthcheck", "--url", "http://127.0.0.1:8080/healthz"]
