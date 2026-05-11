@@ -24,6 +24,7 @@ clap               = { workspace = true }
 futures-util       = { workspace = true }
 k8s-openapi        = { workspace = true }
 kube               = { workspace = true }
+kube-lease-manager = { workspace = true }
 prometheus         = { workspace = true }
 schemars           = { workspace = true }
 serde              = { workspace = true }

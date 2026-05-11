@@ -1,19 +1,18 @@
 //! Long-running operator entry point. Starts the controller, the metrics
-//! server, and a leader-election loop (if enabled), then blocks on shutdown.
+//! server, and leader election (if enabled), then blocks on shutdown.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::{Context, Result};
 use futures_util::StreamExt;
 use k8s_openapi::api::apps::v1::Deployment;
-use k8s_openapi::api::coordination::v1::{Lease, LeaseSpec};
 use k8s_openapi::api::core::v1::{ConfigMap, PersistentVolumeClaim, Service};
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use kube::Client;
-use kube::api::{Api, Patch, PatchParams, PostParams};
+use kube::api::Api;
 use kube::runtime::Controller;
 use kube::runtime::watcher::Config as WatcherConfig;
+use kube_lease_manager::LeaseManagerBuilder;
+use tokio::sync::watch;
 use tracing::{error, info, warn};
 
 use crate::cli::Cli;
@@ -22,9 +21,9 @@ use crate::metrics::{self, Metrics};
 use crate::reconcile::{self, Ctx};
 
 const LEASE_NAME: &str = "mars-operator-leader";
-const LEASE_DURATION_SECS: i32 = 30;
-const LEASE_RENEW_INTERVAL: Duration = Duration::from_secs(10);
-const LEASE_RETRY_INTERVAL: Duration = Duration::from_secs(5);
+const LEASE_DURATION_SECS: u64 = 30;
+const LEASE_GRACE_SECS: u64 = 5;
+const LEASE_FIELD_MANAGER: &str = "mars-operator-lease";
 
 pub(crate) async fn run(cli: Cli) -> Result<()> {
     let client = Client::try_default().await.context("kube client")?;
@@ -42,9 +41,11 @@ pub(crate) async fn run(cli: Cli) -> Result<()> {
         })
     };
 
-    if cli.leader_elect {
-        acquire_lease(client.clone(), &cli.namespace).await?;
-    }
+    let lease_rx = if cli.leader_elect {
+        Some(start_leader_election(client.clone(), &cli.namespace).await?)
+    } else {
+        None
+    };
 
     let ctx = Arc::new(Ctx {
         client: client.clone(),
@@ -79,110 +80,90 @@ pub(crate) async fn run(cli: Cli) -> Result<()> {
         _ = metrics_serve => {
             info!("metrics server exited");
         }
+        _ = wait_for_lease_loss(lease_rx) => {
+            // exit so the kubelet restarts us and re-enters acquisition;
+            // matches client-go / controller-runtime convention and avoids
+            // a multi-leader window from a half-shut-down replica.
+            error!("lost leader lease; exiting");
+            std::process::exit(1);
+        }
     }
 
     Ok(())
 }
 
-/// Acquire (and start renewing) the operator leader lease. Blocks until
-/// leadership is held - other replicas park here. If the API call fails
-/// transiently we retry; permanent RBAC failures bubble up.
-async fn acquire_lease(client: Client, namespace: &str) -> Result<()> {
+/// Build a LeaseManager, park until we hold the Lease, return the watch
+/// receiver so the caller can react to loss. The renewer task spawned by
+/// `manager.watch()` is detached and lives as long as the receiver does.
+async fn start_leader_election(client: Client, namespace: &str) -> Result<watch::Receiver<bool>> {
     let identity = std::env::var("HOSTNAME").unwrap_or_else(|_| "mars-operator".into());
-    let api: Api<Lease> = Api::namespaced(client, namespace);
 
+    let manager = LeaseManagerBuilder::new(client, LEASE_NAME)
+        .with_namespace(namespace)
+        .with_identity(&identity)
+        .with_duration(LEASE_DURATION_SECS)
+        .with_grace(LEASE_GRACE_SECS)
+        .with_field_manager(LEASE_FIELD_MANAGER)
+        .build()
+        .await
+        .context("build LeaseManager")?;
+
+    let (mut rx, _task) = manager.watch().await;
+
+    // park until first acquire
     loop {
-        match try_acquire(&api, &identity).await {
-            Ok(true) => {
-                info!(identity = %identity, "acquired leader lease");
-                spawn_renewer(api, identity);
-                return Ok(());
-            }
-            Ok(false) => {
-                tokio::time::sleep(LEASE_RETRY_INTERVAL).await;
-            }
-            Err(e) => {
-                warn!(error = %e, "lease acquisition error, retrying");
-                tokio::time::sleep(LEASE_RETRY_INTERVAL).await;
-            }
+        if *rx.borrow_and_update() {
+            break;
+        }
+        rx.changed()
+            .await
+            .context("lease watch channel closed before acquire")?;
+    }
+    info!(identity = %identity, lease = LEASE_NAME, namespace = %namespace, "acquired leader lease");
+    Ok(rx)
+}
+
+/// Resolves on the first transition leader -> non-leader, or on channel
+/// close (which means the renewer task died). Pending forever when election
+/// is disabled.
+async fn wait_for_lease_loss(rx: Option<watch::Receiver<bool>>) {
+    let Some(mut rx) = rx else {
+        std::future::pending::<()>().await;
+        return;
+    };
+    loop {
+        if rx.changed().await.is_err() {
+            warn!("lease watch channel closed; treating as lease loss");
+            return;
+        }
+        if !*rx.borrow_and_update() {
+            return;
         }
     }
 }
 
-async fn try_acquire(api: &Api<Lease>, identity: &str) -> Result<bool> {
-    let now = k8s_openapi::jiff::Timestamp::now();
-    let desired = Lease {
-        metadata: ObjectMeta {
-            name: Some(LEASE_NAME.into()),
-            ..Default::default()
-        },
-        spec: Some(LeaseSpec {
-            holder_identity: Some(identity.into()),
-            lease_duration_seconds: Some(LEASE_DURATION_SECS),
-            acquire_time: Some(k8s_openapi::apimachinery::pkg::apis::meta::v1::MicroTime(now)),
-            renew_time: Some(k8s_openapi::apimachinery::pkg::apis::meta::v1::MicroTime(now)),
-            ..Default::default()
-        }),
-    };
-    match api.create(&PostParams::default(), &desired).await {
-        Ok(_) => Ok(true),
-        Err(kube::Error::Api(e)) if e.code == 409 => {
-            let existing = api.get(LEASE_NAME).await?;
-            if existing.spec.as_ref().and_then(|s| s.holder_identity.as_deref()) == Some(identity)
-                || lease_expired(&existing)
-            {
-                let patch = serde_json::json!({
-                    "spec": {
-                        "holderIdentity": identity,
-                        "leaseDurationSeconds": LEASE_DURATION_SECS,
-                        "renewTime": format_micro(now),
-                    }
-                });
-                api.patch(LEASE_NAME, &PatchParams::default(), &Patch::Merge(&patch))
-                    .await?;
-                return Ok(true);
-            }
-            Ok(false)
-        }
-        Err(e) => Err(e.into()),
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    // grace must be strictly less than duration; the LeaseManager rejects
+    // builds otherwise and we want to catch a misconfig at compile time.
+    const _: () = assert!(LEASE_GRACE_SECS < LEASE_DURATION_SECS);
+
+    #[tokio::test]
+    async fn wait_for_lease_loss_returns_on_transition_to_false() {
+        let (tx, rx) = watch::channel(true);
+        let waiter = tokio::spawn(wait_for_lease_loss(Some(rx)));
+        tx.send(false).unwrap();
+        waiter.await.unwrap();
     }
-}
 
-fn lease_expired(lease: &Lease) -> bool {
-    let Some(spec) = &lease.spec else {
-        return true;
-    };
-    let dur = spec.lease_duration_seconds.unwrap_or(LEASE_DURATION_SECS) as i64;
-    let Some(renew) = &spec.renew_time else {
-        return true;
-    };
-    let now = k8s_openapi::jiff::Timestamp::now();
-    (now.as_second() - renew.0.as_second()) > dur
-}
-
-fn format_micro(t: k8s_openapi::jiff::Timestamp) -> String {
-    // MicroTime is wire-encoded as RFC3339 with microsecond precision; jiff's
-    // default Display format already round-trips that exactly.
-    t.to_string()
-}
-
-fn spawn_renewer(api: Api<Lease>, identity: String) {
-    tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(LEASE_RENEW_INTERVAL).await;
-            let now = k8s_openapi::jiff::Timestamp::now();
-            let patch = serde_json::json!({
-                "spec": {
-                    "holderIdentity": identity,
-                    "renewTime": format_micro(now),
-                }
-            });
-            if let Err(e) = api
-                .patch(LEASE_NAME, &PatchParams::default(), &Patch::Merge(&patch))
-                .await
-            {
-                warn!(error = %e, "lease renewal failed");
-            }
-        }
-    });
+    #[tokio::test]
+    async fn wait_for_lease_loss_returns_on_channel_close() {
+        let (tx, rx) = watch::channel(true);
+        let waiter = tokio::spawn(wait_for_lease_loss(Some(rx)));
+        drop(tx);
+        waiter.await.unwrap();
+    }
 }
