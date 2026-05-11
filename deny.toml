@@ -38,8 +38,9 @@ allow = [
 confidence-threshold = 0.93
 
 [bans]
-multiple-versions = "warn"
-wildcards         = "warn"
+multiple-versions    = "warn"
+wildcards            = "warn"
+allow-wildcard-paths = true
 deny = [
     # rustls is preferred over openssl across the workspace.
     { name = "openssl-sys" },
