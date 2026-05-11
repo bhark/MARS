@@ -1,23 +1,29 @@
-.PHONY: dev-up dev-down dev-logs dev-reseed dev-purge dev-build dev-install
+COMPOSE := docker compose -f docker-compose.yml
 
-dev-build:
-	./build.sh
+.PHONY: up down logs purge seed reseed build
 
-dev-install:
-	./install.sh
+build:
+	$(COMPOSE) build
 
-dev-up: dev-build dev-install
-	systemctl --user start mars-viewer.service
+up:
+	$(COMPOSE) up -d --build --wait
 
-dev-down:
-	systemctl --user stop mars-viewer.service mars-runtime.service mars-compiler.service mars-seed.service mars-postgis.service mars-config.service || true
+down:
+	$(COMPOSE) down
 
-dev-logs:
-	journalctl --user -u 'mars-*' -f
+logs:
+	$(COMPOSE) logs -f
 
-dev-reseed:
-	systemctl --user restart mars-seed.service
+seed:
+	$(COMPOSE) --profile seed run --rm seed
 
-dev-purge: dev-down
-	./uninstall.sh
-	podman volume rm -f mars-artifact-store mars-postgis-data mars-osm-cache mars-compiler-cache mars-compiler-work mars-runtime-cache 2>/dev/null || true
+# wipes the postgis volume first so the next seed starts from a clean DB.
+reseed:
+	$(COMPOSE) stop postgis compiler runtime viewer
+	docker volume rm -f mars-dev_postgis-data
+	$(COMPOSE) up -d --wait postgis
+	$(COMPOSE) --profile seed run --rm seed
+	$(COMPOSE) up -d --wait
+
+purge:
+	$(COMPOSE) down -v --rmi local
