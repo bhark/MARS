@@ -12,7 +12,7 @@ use async_trait::async_trait;
 use futures_core::stream::BoxStream;
 use futures_util::stream;
 use mars_store::{ManifestStore, StoreError};
-use mars_types::{MANIFEST_FORMAT_VERSION, Manifest};
+use mars_types::Manifest;
 
 use crate::store::{CreateNewOutcome, atomic_create_new, atomic_write};
 
@@ -101,27 +101,7 @@ impl FsPublisher {
         let body = tokio::fs::read(&body_path)
             .await
             .map_err(|e| StoreError::Backend(format!("read manifest {pointer}: {e}")))?;
-        // exact-match version gate: v3 is a clean cut from v1/v2, no
-        // tolerance for "accept anything <= max" - see manifest version handling.
-        // peek format_version before the full decode so structural drift
-        // in older payloads surfaces as UnsupportedManifestVersion rather
-        // than as a generic serde error.
-        let peek: serde_json::Value =
-            serde_json::from_slice(&body).map_err(|e| StoreError::Backend(format!("parse manifest {pointer}: {e}")))?;
-        let found = peek
-            .get("format_version")
-            .and_then(serde_json::Value::as_u64)
-            .ok_or_else(|| StoreError::Backend(format!("manifest {pointer}: missing format_version")))?;
-        let found_u32 = u32::try_from(found)
-            .map_err(|_| StoreError::Backend(format!("manifest {pointer}: format_version overflows u32")))?;
-        if found_u32 != MANIFEST_FORMAT_VERSION {
-            return Err(StoreError::UnsupportedManifestVersion {
-                found: found_u32,
-                supported: MANIFEST_FORMAT_VERSION,
-            });
-        }
-        let manifest: Manifest =
-            serde_json::from_value(peek).map_err(|e| StoreError::Backend(format!("parse manifest {pointer}: {e}")))?;
+        let manifest = mars_store::decode_manifest(&body, &pointer)?;
         Ok(Some((pointer, mtime, manifest)))
     }
 }

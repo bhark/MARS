@@ -13,7 +13,8 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_core::stream::BoxStream;
-use mars_types::{ArtifactKey, ContentHash, Manifest};
+use mars_types::{ArtifactKey, ContentHash, MANIFEST_FORMAT_VERSION, Manifest};
+use serde::Deserialize;
 
 /// Errors from the storage subsystem.
 #[derive(Debug, thiserror::Error)]
@@ -49,6 +50,35 @@ pub enum StoreError {
         /// Highest `format_version` this binary understands.
         supported: u32,
     },
+}
+
+/// Decode a manifest body, gating on `format_version`. Single-pass on the
+/// happy path; on parse failure, an inexpensive peek extracts `format_version`
+/// so structural drift surfaces as [`StoreError::UnsupportedManifestVersion`]
+/// rather than an opaque serde error.
+pub fn decode_manifest(bytes: &[u8], context: &str) -> Result<Manifest, StoreError> {
+    #[derive(Deserialize)]
+    struct VersionPeek {
+        format_version: u32,
+    }
+    match serde_json::from_slice::<Manifest>(bytes) {
+        Ok(m) if m.format_version == MANIFEST_FORMAT_VERSION => Ok(m),
+        Ok(m) => Err(StoreError::UnsupportedManifestVersion {
+            found: m.format_version,
+            supported: MANIFEST_FORMAT_VERSION,
+        }),
+        Err(parse_err) => {
+            if let Ok(peek) = serde_json::from_slice::<VersionPeek>(bytes)
+                && peek.format_version != MANIFEST_FORMAT_VERSION
+            {
+                return Err(StoreError::UnsupportedManifestVersion {
+                    found: peek.format_version,
+                    supported: MANIFEST_FORMAT_VERSION,
+                });
+            }
+            Err(StoreError::Backend(format!("parse manifest {context}: {parse_err}")))
+        }
+    }
 }
 
 /// Read/write port for the shared artifact object store.
