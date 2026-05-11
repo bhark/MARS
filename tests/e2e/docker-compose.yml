@@ -1,0 +1,107 @@
+name: mars-e2e
+
+# e2e stack: postgis + fixture-loader + compiler + runtime. project-scoped
+# via `name:` so it never collides with the dev stack. runtime is exposed on
+# 18080 so `make up` (dev) on 8080 can coexist with the e2e harness.
+
+x-mars-image: &mars-image
+  image: localhost/mars:e2e
+  build:
+    context: ../..
+    dockerfile: Dockerfile
+
+services:
+  postgis:
+    image: docker.io/postgis/postgis:18-3.6
+    container_name: mars-e2e-postgis
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - max_replication_slots=8
+      - -c
+      - max_wal_senders=8
+    environment:
+      POSTGRES_DB: mars
+      POSTGRES_USER: mars
+      POSTGRES_PASSWORD: mars
+    volumes:
+      - postgis-data:/var/lib/postgresql
+      - ../../dev/postgis/init.sql:/docker-entrypoint-initdb.d/00-init.sql:ro
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "mars", "-d", "mars"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  fixture-loader:
+    image: docker.io/postgis/postgis:18-3.6
+    container_name: mars-e2e-fixture-loader
+    environment:
+      PG_DSN: postgres://mars:mars@postgis/mars
+    entrypoint: ["/bin/sh", "/loader/fixture-loader.sh"]
+    volumes:
+      - ./fixture-loader.sh:/loader/fixture-loader.sh:ro
+      - ./fixtures/local-map-subset/assert-fixture.sql:/sql/assert-fixture.sql:ro
+      - ./fixtures/local-map-subset/create-replication.sql:/sql/create-replication.sql:ro
+      - ../../target/e2e-fixtures/local-map-subset.sql.gz:/fixture/dump.sql.gz:ro
+    depends_on:
+      postgis:
+        condition: service_healthy
+    restart: "no"
+
+  init-artifact-store:
+    image: docker.io/busybox:stable
+    container_name: mars-e2e-init-artifact-store
+    command: ["chown", "-R", "65532:65532", "/var/lib/mars/store"]
+    volumes:
+      - artifact-store:/var/lib/mars/store
+    restart: "no"
+
+  compiler:
+    <<: *mars-image
+    container_name: mars-e2e-compiler
+    command: ["--mode", "compiler", "--config", "/etc/mars/mars.yaml"]
+    environment:
+      PG_DSN: postgres://mars:mars@postgis/mars
+    volumes:
+      - ./mars.compose.yaml:/etc/mars/mars.yaml:ro
+      - artifact-store:/var/lib/mars/store
+    tmpfs:
+      - /cache:mode=1777
+      - /work:mode=1777
+    depends_on:
+      fixture-loader:
+        condition: service_completed_successfully
+      init-artifact-store:
+        condition: service_completed_successfully
+
+  runtime:
+    <<: *mars-image
+    container_name: mars-e2e-runtime
+    command: ["--mode", "runtime", "--config", "/etc/mars/mars.yaml"]
+    environment:
+      PG_DSN: postgres://mars:mars@postgis/mars
+    ports:
+      - "18080:8080"
+    volumes:
+      - ./mars.compose.yaml:/etc/mars/mars.yaml:ro
+      - artifact-store:/var/lib/mars/store:ro
+    tmpfs:
+      - /cache:mode=1777
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/mars", "healthcheck", "--url", "http://127.0.0.1:8080/readyz"]
+      interval: 5s
+      timeout: 3s
+      start_period: 30s
+      retries: 36
+    depends_on:
+      compiler:
+        condition: service_started
+      init-artifact-store:
+        condition: service_completed_successfully
+
+volumes:
+  postgis-data:
+  artifact-store:
