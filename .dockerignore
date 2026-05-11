@@ -2,5 +2,7 @@ target/
 .git/
 fuzz/
 dev/
-tests/e2e/k3d/
+tests/
+.cargo-diff-capture/
+diff-runs/
 *.sql.gz
