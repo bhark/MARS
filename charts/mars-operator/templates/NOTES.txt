@@ -1,0 +1,16 @@
+The MARS operator has been installed.
+
+1. Confirm the operator pod is ready:
+   kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "mars-operator.fullname" . }}
+
+2. The MarsService CRD is installed cluster-wide. Inspect it with:
+   kubectl explain marsservice
+
+3. Apply a sample MarsService (replace image tag + provide a Secret holding PG_DSN):
+   kubectl apply -f https://raw.githubusercontent.com/bhark/MARS/main/charts/mars-operator/examples/marsservice-s3.yaml
+
+4. Watch reconciliation:
+   kubectl -n {{ .Release.Namespace }} logs -l app.kubernetes.io/name={{ include "mars-operator.name" . }} -f
+
+The CRD is annotated with `helm.sh/resource-policy: keep`, so `helm uninstall`
+will leave it (and any MarsService CRs) in place. Delete manually if needed.

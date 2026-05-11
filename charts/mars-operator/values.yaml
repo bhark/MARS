@@ -1,0 +1,74 @@
+# mars-operator chart values. See README.md for usage notes.
+
+image:
+  repository: ghcr.io/bhark/mars-operator
+  # Empty string defers to Chart.appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# imagePullSecrets are merged into the operator's serviceAccount.
+imagePullSecrets: []
+
+# Multiple replicas are supported - operator coordinates via a Lease.
+replicaCount: 1
+
+# Resource requests/limits for the operator pod itself (not the MARS services
+# it manages). Defaults are intentionally tight; tune for cluster scale.
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+# Standard pod placement knobs.
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Pod security context shared with managed pods.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+serviceAccount:
+  # Create a dedicated SA. Disable to bind cluster role to an existing one.
+  create: true
+  name: ""
+  annotations: {}
+
+rbac:
+  # Set false if installing into a cluster that pre-provisions the ClusterRole.
+  create: true
+
+# Operator HTTP endpoints.
+metrics:
+  enabled: true
+  port: 9090
+  service:
+    type: ClusterIP
+    annotations: {}
+
+health:
+  port: 8081
+
+leaderElection:
+  enabled: true
+
+log:
+  level: info
+  format: json
+
+# Field manager string used for server-side apply on managed children.
+fieldManager: mars-operator
