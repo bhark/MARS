@@ -35,49 +35,6 @@ pub use state::{IndexError, PageIndex, RuntimeState};
 /// default budget of in-flight raw-pixmap pixels across all concurrent renders.
 const DEFAULT_PIXEL_BUDGET: u32 = 128_000_000;
 
-/// default decoded-geometry cache size when constructed without an explicit one.
-const DEFAULT_DECODED_CACHE_BYTES: usize = 256 * 1024 * 1024;
-
-/// Decoded-geometry LRU cache. **Placeholder only:** the current renderer
-/// does not consult or populate this cache; it tracks a configured capacity
-/// and an always-zero `current_bytes` counter so the runtime constructor
-/// surface stays stable while the page-keyed render path matures. Real
-/// per-page geometry caching will plug in here without changing the public
-/// surface.
-#[derive(Debug)]
-pub struct DecodedGeometryCache {
-    capacity_bytes: usize,
-    current_bytes: std::sync::atomic::AtomicUsize,
-}
-
-impl DecodedGeometryCache {
-    /// Build an empty cache sized to `capacity_bytes`.
-    #[must_use]
-    pub fn new(capacity_bytes: usize) -> Self {
-        Self {
-            capacity_bytes,
-            current_bytes: std::sync::atomic::AtomicUsize::new(0),
-        }
-    }
-
-    /// Bytes currently retained.
-    #[must_use]
-    pub fn current_bytes(&self) -> usize {
-        self.current_bytes.load(std::sync::atomic::Ordering::Relaxed)
-    }
-
-    /// Configured capacity in bytes.
-    #[must_use]
-    pub fn capacity_bytes(&self) -> usize {
-        self.capacity_bytes
-    }
-
-    /// Drop all retained decoded geometry.
-    pub fn clear(&self) {
-        self.current_bytes.store(0, std::sync::atomic::Ordering::Relaxed);
-    }
-}
-
 /// Errors surfaced from the runtime.
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
@@ -199,8 +156,6 @@ pub struct Runtime {
     last_reject_reason: ArcSwapOption<String>,
     render_sem: Arc<Semaphore>,
     pixel_budget: u32,
-    decoded_cache: Arc<DecodedGeometryCache>,
-    parallel_emit: mars_config::ParallelEmit,
 }
 
 impl Runtime {
@@ -219,48 +174,12 @@ impl Runtime {
     /// Compose a runtime with a custom pixel budget.
     #[must_use]
     pub fn with_pixel_budget(deps: Deps, pixel_budget: u32, state: Option<Arc<RuntimeState>>) -> Self {
-        Self::with_caches(
-            deps,
-            pixel_budget,
-            Arc::new(DecodedGeometryCache::new(DEFAULT_DECODED_CACHE_BYTES)),
-            state,
-        )
-    }
-
-    /// Compose a runtime with the full set of tunable caches.
-    #[must_use]
-    pub fn with_caches(
-        deps: Deps,
-        pixel_budget: u32,
-        decoded_cache: Arc<DecodedGeometryCache>,
-        state: Option<Arc<RuntimeState>>,
-    ) -> Self {
-        Self::with_full_config(
-            deps,
-            pixel_budget,
-            decoded_cache,
-            mars_config::ParallelEmit::default(),
-            state,
-        )
-    }
-
-    /// Compose a runtime with all tunables plumbed in.
-    #[must_use]
-    pub fn with_full_config(
-        deps: Deps,
-        pixel_budget: u32,
-        decoded_cache: Arc<DecodedGeometryCache>,
-        parallel_emit: mars_config::ParallelEmit,
-        state: Option<Arc<RuntimeState>>,
-    ) -> Self {
         Self {
             state: state.map_or_else(ArcSwapOption::empty, |s| ArcSwapOption::from(Some(s))),
             deps,
             last_reject_reason: ArcSwapOption::empty(),
             render_sem: Arc::new(Semaphore::new(pixel_budget as usize)),
             pixel_budget,
-            decoded_cache,
-            parallel_emit,
         }
     }
 
@@ -268,17 +187,6 @@ impl Runtime {
     #[must_use]
     pub fn last_reject_reason(&self) -> Option<Arc<String>> {
         self.last_reject_reason.load_full()
-    }
-
-    /// Bytes currently retained by the decoded-geometry cache.
-    #[must_use]
-    pub fn decoded_cache_bytes(&self) -> usize {
-        self.decoded_cache.current_bytes()
-    }
-
-    /// Drop all retained decoded geometry.
-    pub fn clear_decoded_cache(&self) {
-        self.decoded_cache.clear();
     }
 
     /// Returns true when an active manifest snapshot is loaded.
@@ -330,9 +238,6 @@ impl Runtime {
         let _permit = self.render_sem.acquire_many(permits).await.map_err(|_| {
             RuntimeError::Render(mars_render_port::RenderError::Backend("render semaphore closed".into()))
         })?;
-        // decoded-geometry cache and parallel-emit knobs are wired here so
-        // future commits can reach them without changing the surface.
-        let _ = (&self.decoded_cache, &self.parallel_emit);
         render::render_plan(&state, &self.deps, plan).await
     }
 
