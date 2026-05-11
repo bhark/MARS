@@ -1,0 +1,109 @@
+# Example MarsService backed by an S3-compatible object store.
+#
+# Prereqs:
+#   1. PostGIS reachable from cluster pods.
+#   2. A Secret in the same namespace holding the PG_DSN connection string:
+#        kubectl -n maps create secret generic mars-postgis \
+#          --from-literal=PG_DSN='postgres://user:pass@postgis:5432/maps'
+#   3. S3 credentials supplied via env or IRSA at the runtime/compiler pod
+#      level (see envFrom below).
+apiVersion: mars.forn.dk/v1alpha1
+kind: MarsService
+metadata:
+  name: example
+  namespace: maps
+spec:
+  image:
+    repository: ghcr.io/bhark/mars
+    tag: v0.1.0
+
+  compiler:
+    storage:
+      cacheSize: 2Gi
+      workSize: 4Gi
+    env:
+      - name: PG_DSN
+        valueFrom:
+          secretKeyRef:
+            name: mars-postgis
+            key: PG_DSN
+    envFrom:
+      - secretRef:
+          name: mars-s3-credentials
+
+  runtime:
+    replicas: 2
+    cache:
+      sizeLimit: 2Gi
+    env:
+      - name: PG_DSN
+        valueFrom:
+          secretKeyRef:
+            name: mars-postgis
+            key: PG_DSN
+    envFrom:
+      - secretRef:
+          name: mars-s3-credentials
+
+  config:
+    service:
+      name: example
+      title: Example MARS service
+      contact_email: ops@example.org
+    source:
+      type: postgis
+      dsn: "${PG_DSN}"
+      native_crs: "EPSG:25832"
+      change_feed:
+        type: pgoutput
+        publication: mars_pub
+        slot: mars_slot
+      pool:
+        max_size: 8
+        statement_timeout_ms: 300000
+        batch_send_timeout_secs: 30
+    artifacts:
+      store:
+        type: s3
+        bucket: mars-artifacts
+        region: eu-west-1
+        prefix: example/
+      cache:
+        path: /cache
+        max_size: 1GiB
+        eviction: lru
+    compiler:
+      compile_binding_parallelism: 4
+      compile_in_flight_pages_budget_bytes: 512MiB
+      compile_spill_dir: /work/spill
+    scales:
+      bands:
+        - { name: detail, max_denom_exclusive: 12500 }
+        - { name: mid, max_denom_exclusive: 250000 }
+        - { name: lo, max_denom_exclusive: 10000000 }
+    cells:
+      grid: regular
+      origin: [0, 0]
+      size_per_band:
+        detail: 512m
+        mid: 4096m
+        lo: 16384m
+      extent:
+        min_x: 850000
+        min_y: 6090000
+        max_x: 895000
+        max_y: 6145000
+    interfaces:
+      wms:
+        enabled: true
+        versions: ["1.3.0"]
+        formats: ["image/png"]
+        max_image_dimension: 2048
+        max_pixels: 4194304
+    reprojection:
+      allowlist: ["EPSG:25832"]
+    styles: {}
+    layers: []
+    observability:
+      log_level: info
+      log_format: json
