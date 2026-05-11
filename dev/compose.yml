@@ -95,7 +95,7 @@ services:
     tmpfs:
       - /cache:mode=1777
     healthcheck:
-      test: ["CMD", "/usr/local/bin/mars", "healthcheck", "--url", "http://127.0.0.1:8080/readyz"]
+      test: ["CMD", "/usr/local/bin/app", "healthcheck", "--url", "http://127.0.0.1:8080/readyz"]
       interval: 5s
       timeout: 3s
       start_period: 30s
