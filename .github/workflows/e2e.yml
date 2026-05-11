@@ -36,7 +36,6 @@ jobs:
           MARS_E2E: "1"
         run: cargo test -p mars --features e2e --locked -- --nocapture
 
-  # the Quadlet stack (scripts/run-e2e.sh) drives rootless podman via
-  # `systemctl --user`, which is not reliable on github-hosted runners
-  # without extra dbus/linger setup. tracked as a follow-up; in the meantime
-  # the in-process testcontainers job covers the same code paths.
+  # scripts/run-e2e.sh now runs against docker compose; wiring a job
+  # for it on github-hosted runners is tracked as a follow-up. the
+  # in-process testcontainers job above covers the same code paths.

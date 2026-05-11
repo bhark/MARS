@@ -77,9 +77,9 @@ cargo test --workspace --locked --all-targets
 cargo deny check
 ```
 
-The end-to-end harness drives a Podman Quadlet stack (postgis + compiler +
-runtime) via systemd `--user` units, loads the local-map-subset fixture into
-PostGIS, and exercises WMS GetCapabilities + GetMap:
+The end-to-end harness drives a docker compose stack (postgis + compiler +
+runtime), loads the local-map-subset fixture into PostGIS, and exercises
+WMS GetCapabilities + GetMap:
 
 ```sh
 ./scripts/run-e2e.sh

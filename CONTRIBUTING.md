@@ -37,7 +37,7 @@ cargo test --workspace --locked --all-targets
 # in-process e2e (testcontainers; requires docker)
 MARS_E2E=1 cargo test -p mars --features e2e -- --nocapture
 
-# Quadlet-stack e2e (rootless podman + systemd --user; linux only)
+# docker compose e2e (postgis + compiler + runtime against a fixture dump)
 ./scripts/run-e2e.sh
 ```
 
