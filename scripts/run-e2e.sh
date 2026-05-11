@@ -3,7 +3,7 @@ set -euo pipefail
 
 # MARS end-to-end harness over the docker compose stack.
 #
-# - brings up tests/e2e/docker-compose.yml (postgis + fixture-loader +
+# - brings up tests/e2e/compose.yml (postgis + fixture-loader +
 #   compiler + runtime)
 # - waits on the runtime healthcheck (subsumes the prior /healthz + /readyz
 #   polling)
@@ -18,7 +18,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 FIXTURE="${MARS_E2E_FIXTURE:-${ROOT}/target/e2e-fixtures/local-map-subset.sql.gz}"
 RUNTIME_PORT="${MARS_E2E_RUNTIME_PORT:-18080}"
-COMPOSE_FILE="${ROOT}/tests/e2e/docker-compose.yml"
+COMPOSE_FILE="${ROOT}/tests/e2e/compose.yml"
 KEEP_STACK="0"
 SKIP_BUILD="0"
 
@@ -27,7 +27,7 @@ usage() {
 usage: scripts/run-e2e.sh [--fixture PATH] [--keep-stack] [--skip-build]
 
 Runs the MARS e2e harness against the docker compose stack at
-tests/e2e/docker-compose.yml. Default fixture path:
+tests/e2e/compose.yml. Default fixture path:
 target/e2e-fixtures/local-map-subset.sql.gz
 EOF
 }

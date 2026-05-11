@@ -1,4 +1,4 @@
-COMPOSE := docker compose -f docker-compose.yml
+COMPOSE := docker compose -f compose.yml
 
 .PHONY: up down logs purge seed reseed build
 
