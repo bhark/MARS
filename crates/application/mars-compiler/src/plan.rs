@@ -129,7 +129,9 @@ impl BindingPlan {
     /// Table portion of `source_table` (`"schema.table"`); the whole string when no dot.
     #[must_use]
     pub fn table(&self) -> &str {
-        self.source_table.split_once('.').map_or(self.source_table.as_str(), |(_, t)| t)
+        self.source_table
+            .split_once('.')
+            .map_or(self.source_table.as_str(), |(_, t)| t)
     }
 }
 

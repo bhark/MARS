@@ -48,7 +48,10 @@ impl FsPublisher {
     }
 
     #[cfg(test)]
-    pub(crate) fn new_with_poll_interval(root: impl Into<PathBuf>, poll_interval: Duration) -> Result<Self, StoreError> {
+    pub(crate) fn new_with_poll_interval(
+        root: impl Into<PathBuf>,
+        poll_interval: Duration,
+    ) -> Result<Self, StoreError> {
         let mut publisher = Self::new(root)?;
         publisher.poll_interval = poll_interval;
         Ok(publisher)

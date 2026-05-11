@@ -61,7 +61,10 @@ async fn fetch_sidecar_bytes(
 fn open_sidecar_readers(
     bytes: &HashMap<BindingId, bytes::Bytes>,
 ) -> Result<HashMap<BindingId, SidecarReader<'_>>, CompilerError> {
-    bytes.iter().map(|(id, b)| Ok((id.clone(), SidecarReader::open(b)?))).collect()
+    bytes
+        .iter()
+        .map(|(id, b)| Ok((id.clone(), SidecarReader::open(b)?)))
+        .collect()
 }
 
 /// Capped exponential backoff schedule for retrying a transient publish.
