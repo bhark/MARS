@@ -6,6 +6,7 @@ license.workspace     = true
 repository.workspace  = true
 authors.workspace     = true
 publish.workspace     = true
+rust-version.workspace = true
 description = "MARS artifact container codec: header / sections / footer. Sync mmap reader and writer."
 build       = "build.rs"
 

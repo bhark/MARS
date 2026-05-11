@@ -6,6 +6,7 @@ license.workspace     = true
 repository.workspace  = true
 authors.workspace     = true
 publish.workspace     = true
+rust-version.workspace = true
 description = "MARS grid math: cell coordinates, scale-band selection, tile-matrix-set algorithms."
 
 [lints]

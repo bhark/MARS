@@ -6,6 +6,7 @@ license.workspace     = true
 repository.workspace  = true
 authors.workspace     = true
 publish.workspace     = true
+rust-version.workspace = true
 description = "PostgreSQL adapter for mars-source: pgoutput logical decoding plus a polling fallback. Owns SQL lowering for mars-expr ASTs."
 
 [lints]

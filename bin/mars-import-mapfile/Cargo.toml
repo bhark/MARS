@@ -6,6 +6,7 @@ license.workspace     = true
 repository.workspace  = true
 authors.workspace     = true
 publish.workspace     = true
+rust-version.workspace = true
 description = "Translate a MapServer mapfile into a MARS YAML config. Best-effort; no tokio."
 
 [[bin]]

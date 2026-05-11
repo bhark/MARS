@@ -6,6 +6,7 @@ license.workspace     = true
 repository.workspace  = true
 authors.workspace     = true
 publish.workspace     = true
+rust-version.workspace = true
 description = "Renderer port. Tiny draw-op vocabulary; does not name tiny-skia."
 
 [lints]

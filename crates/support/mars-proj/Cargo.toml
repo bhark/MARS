@@ -6,6 +6,7 @@ license.workspace     = true
 repository.workspace  = true
 authors.workspace     = true
 publish.workspace     = true
+rust-version.workspace = true
 description = "Safe wrapper around the proj C library. Per-thread PJ_CONTEXT, transformer cache."
 
 [lints]

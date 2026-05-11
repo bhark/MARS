@@ -26,6 +26,7 @@ members = [
     "bin/mars-import-mapfile",
     "bin/mars-compile",
     "bin/mars-bin-shared",
+    "bin/mars-operator",
 ]
 
 # fuzz crate excluded from workspace builds: it requires nightly + libfuzzer
@@ -40,6 +41,7 @@ exclude = [
 [workspace.package]
 version = "0.0.1"
 edition = "2024"
+rust-version = "1.95"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/bhark/MARS"
 authors = ["MARS contributors"]
@@ -95,6 +97,8 @@ hashlink            = "0.11.0"
 humantime           = "2.3.0"
 jpeg-decoder        = "0.3.2"
 jpeg-encoder        = "0.7.0"
+k8s-openapi         = { version = "0.27.1", default-features = false, features = ["v1_31"] }
+kube                = { version = "3.1.0", default-features = false, features = ["client", "runtime", "derive", "rustls-tls", "ring"] }
 libfuzzer-sys       = "0.4.12"
 memmap2             = "0.9.10"
 object_store        = { version = "0.13.2", default-features = false, features = ["aws"] }
@@ -117,6 +121,7 @@ rustls              = "0.23.40"
 rustls-native-certs = "0.8.3"
 rustybuzz           = "0.20.1"
 rstar               = "0.12.2"
+schemars            = "1.2.1"
 serde               = { version = "1.0.228", features = ["derive", "rc"] }
 serde_json          = "1.0.149"
 serde_yaml_ng       = "0.10.0"

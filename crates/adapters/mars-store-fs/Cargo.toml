@@ -6,6 +6,7 @@ license.workspace     = true
 repository.workspace  = true
 authors.workspace     = true
 publish.workspace     = true
+rust-version.workspace = true
 description = "Filesystem-backed mars-store adapter. Doubles as the node-local SSD cache (mirrored key layout)."
 
 [lints]

@@ -6,6 +6,7 @@ license.workspace    = true
 repository.workspace = true
 authors.workspace    = true
 publish.workspace    = true
+rust-version.workspace = true
 description = "Shared composition wiring for the mars / mars-compile bins. Not a library for use outside bin/."
 
 [lib]

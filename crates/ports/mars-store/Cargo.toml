@@ -6,6 +6,7 @@ license.workspace     = true
 repository.workspace  = true
 authors.workspace     = true
 publish.workspace     = true
+rust-version.workspace = true
 description = "Port traits for the artifact object store, local cache, and manifest pub/sub."
 
 [lints]

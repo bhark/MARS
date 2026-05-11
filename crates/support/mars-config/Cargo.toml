@@ -6,6 +6,7 @@ license.workspace     = true
 repository.workspace  = true
 authors.workspace     = true
 publish.workspace     = true
+rust-version.workspace = true
 description = "MARS service configuration: YAML model, !include resolver, ${ENV} substitution, validation."
 
 [lints]

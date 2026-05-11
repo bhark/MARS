@@ -6,6 +6,7 @@ license.workspace     = true
 repository.workspace  = true
 authors.workspace     = true
 publish.workspace     = true
+rust-version.workspace = true
 description = "WMTS 1.0.0 parameter parsing, capabilities, tile-cache key shape."
 
 [lints]

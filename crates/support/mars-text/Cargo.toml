@@ -6,6 +6,7 @@ license.workspace     = true
 repository.workspace  = true
 authors.workspace     = true
 publish.workspace     = true
+rust-version.workspace = true
 description = "Font discovery, shaping (rustybuzz), and glyph rasterisation for MARS labels."
 
 [lints]

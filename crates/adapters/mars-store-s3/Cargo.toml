@@ -6,6 +6,7 @@ license.workspace     = true
 repository.workspace  = true
 authors.workspace     = true
 publish.workspace     = true
+rust-version.workspace = true
 description = "Object-store adapter for mars-store backed by `object_store` (S3 / MinIO / R2 / GCS)."
 
 [lints]

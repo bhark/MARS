@@ -6,6 +6,7 @@ license.workspace     = true
 repository.workspace  = true
 authors.workspace     = true
 publish.workspace     = true
+rust-version.workspace = true
 description = "CPU rasteriser implementation of mars-render-port::Renderer (tiny-skia + rustybuzz)."
 
 [lints]

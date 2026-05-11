@@ -6,6 +6,7 @@ license.workspace     = true
 repository.workspace  = true
 authors.workspace     = true
 publish.workspace     = true
+rust-version.workspace = true
 description = "MARS core value types: Bbox, ContentHash, RequestId, identity newtypes, manifest v3 DTOs."
 
 [lints]

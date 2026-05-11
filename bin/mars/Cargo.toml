@@ -6,6 +6,7 @@ license.workspace     = true
 repository.workspace  = true
 authors.workspace     = true
 publish.workspace     = true
+rust-version.workspace = true
 description = "MARS service binary. --mode {runtime|compiler|all-in-one} + validate / inspect subcommands."
 
 [[bin]]
