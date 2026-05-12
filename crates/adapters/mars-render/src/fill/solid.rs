@@ -6,11 +6,7 @@ use tiny_skia::{FillRule, Paint, Pixmap, Transform};
 use crate::canvas::{colour_to_tsk, scaled_alpha_colour};
 
 pub(crate) fn draw(pm: &mut Pixmap, path: &tiny_skia::Path, c: Colour, alpha: f32) {
-    let colour = if alpha >= 1.0 {
-        c
-    } else {
-        scaled_alpha_colour(c, alpha)
-    };
+    let colour = if alpha >= 1.0 { c } else { scaled_alpha_colour(c, alpha) };
     let mut paint = Paint::default();
     paint.set_color(colour_to_tsk(colour));
     paint.anti_alias = true;
