@@ -228,6 +228,18 @@ impl Ord for Cell {
     }
 }
 
+/// Hard cap on the seed-cell tiling. thin/elongated bboxes (very small
+/// width.min(height)) would otherwise generate `(w*h)/cell_size^2` cells,
+/// quadratic in the aspect ratio. when the natural tiling exceeds this we
+/// upscale cell_size until the count fits.
+const MAX_SEED_CELLS: usize = 1024;
+
+/// Hard cap on quadtree growth. each pop expands into 4 children; with
+/// pathological precision tuning the heap could grow without bound. when
+/// we hit this many pushed cells we stop refining and return the best
+/// candidate so far - it is still strictly better than the centroid seed.
+const MAX_HEAP_CELLS: usize = 100_000;
+
 /// Mapbox-style pole of inaccessibility. iterative quadtree refinement keyed
 /// by an upper-bound interior distance. precision is the tolerance in CRS
 /// units; smaller = more iterations.
@@ -242,14 +254,21 @@ pub fn pole_of_inaccessibility(polygon: &[Vec<Coord>], precision: f64) -> (f64, 
     let (minx, miny, maxx, maxy) = ring_bbox(outer);
     let width = maxx - minx;
     let height = maxy - miny;
-    let cell_size = width.min(height);
-    if cell_size <= 0.0 {
+    if width <= 0.0 || height <= 0.0 {
         return ((minx + maxx) * 0.5, (miny + maxy) * 0.5);
+    }
+    // upscale cell_size until the seed-cell count fits the cap. avoids
+    // quadratic blow-up on very elongated polygons (10000x1 bbox would
+    // otherwise seed ~10k cells).
+    let mut cell_size = width.min(height);
+    let nx = (width / cell_size).ceil() as usize;
+    let ny = (height / cell_size).ceil() as usize;
+    if nx.saturating_mul(ny) > MAX_SEED_CELLS {
+        let scale = ((nx * ny) as f64 / MAX_SEED_CELLS as f64).sqrt();
+        cell_size *= scale;
     }
     let mut h = cell_size / 2.0;
 
-    // seed: bbox-tiled cells. always feed the centroid as an initial best so
-    // we never return a point worse than the (cheap) centroid.
     let mut heap: BinaryHeap<Cell> = BinaryHeap::new();
     let mut x = minx;
     while x < maxx {
@@ -263,16 +282,12 @@ pub fn pole_of_inaccessibility(polygon: &[Vec<Coord>], precision: f64) -> (f64, 
 
     let (ccx, ccy) = centroid(polygon);
     let mut best = Cell::new(ccx, ccy, 0.0, polygon);
-    let centre = Cell::new(
-        (minx + maxx) * 0.5,
-        (miny + maxy) * 0.5,
-        0.0,
-        polygon,
-    );
+    let centre = Cell::new((minx + maxx) * 0.5, (miny + maxy) * 0.5, 0.0, polygon);
     if centre.d > best.d {
         best = centre;
     }
 
+    let mut pushed: usize = heap.len();
     while let Some(cell) = heap.pop() {
         if cell.d > best.d {
             best = Cell {
@@ -283,17 +298,20 @@ pub fn pole_of_inaccessibility(polygon: &[Vec<Coord>], precision: f64) -> (f64, 
                 max_d: cell.max_d,
             };
         }
-        // pruning: any cell whose upper bound is not better than current best
-        // by more than `precision` can be skipped (and so can every cell still
-        // below it in the heap).
         if cell.max_d - best.d <= precision {
             continue;
+        }
+        if pushed >= MAX_HEAP_CELLS {
+            // pathological precision/polygon combination; stop refining.
+            // returns the best candidate found so far.
+            break;
         }
         h = cell.half / 2.0;
         heap.push(Cell::new(cell.x - h, cell.y - h, h, polygon));
         heap.push(Cell::new(cell.x + h, cell.y - h, h, polygon));
         heap.push(Cell::new(cell.x - h, cell.y + h, h, polygon));
         heap.push(Cell::new(cell.x + h, cell.y + h, h, polygon));
+        pushed += 4;
     }
     (best.x, best.y)
 }
@@ -424,6 +442,27 @@ mod tests {
         let prec = default_precision(&poly);
         let (cx, cy) = pole_of_inaccessibility(&poly, prec);
         assert!(point_in_ring((cx, cy), &poly[0]), "anchor outside U: ({cx},{cy})");
+    }
+
+    #[test]
+    fn polylabel_thin_polygon_terminates_quickly() {
+        // pathological case: 10_000 x 1 bbox. without the seed-cell cap the
+        // natural tiling would seed ~10k cells. result must still land inside.
+        let poly = vec![rect(0.0, 0.0, 10_000.0, 1.0)];
+        let (cx, cy) = pole_of_inaccessibility(&poly, default_precision(&poly));
+        assert!(point_in_ring((cx, cy), &poly[0]), "thin-polygon anchor not inside: ({cx},{cy})");
+    }
+
+    #[test]
+    fn polylabel_extreme_precision_terminates_at_heap_cap() {
+        // 100x100 polygon with an absurdly small precision; the heap-size
+        // guard must stop refinement before it grows without bound.
+        let poly = vec![rect(0.0, 0.0, 100.0, 100.0)];
+        let (cx, cy) = pole_of_inaccessibility(&poly, 1e-9);
+        // even with the guard tripping early, the answer is still strictly
+        // better than (or equal to) the centroid - here, (50, 50).
+        assert!((cx - 50.0).abs() < 5.0);
+        assert!((cy - 50.0).abs() < 5.0);
     }
 
     #[test]
