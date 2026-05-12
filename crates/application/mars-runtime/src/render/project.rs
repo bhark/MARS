@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use mars_artifact::{FeatureGeom, GeomKind};
 use mars_render_port::{DrawOp, Path, Subpath};
-use mars_style::Style;
+use mars_style::{MarkerSymbol, Style};
 use mars_types::Bbox;
 
 use crate::RuntimeError;
@@ -98,21 +98,35 @@ fn project_ring(coords: &[(f64, f64)], xform: &mars_proj::Transformer) -> Result
 
 pub(super) fn feature_to_drawop(g: &GeomKind, viewport: Bbox, w: u32, h: u32, style: Arc<Style>) -> Option<DrawOp> {
     let path = match g {
-        GeomKind::Point(c) => single_point_path(*c, viewport, w, h),
+        // point geometries with a marker symbol tessellate to the marker
+        // shape at the projected pixel position; without a marker we emit a
+        // zero-extent path (caller's stroke arm may still draw, but no fill).
+        GeomKind::Point(c) => match style.marker {
+            Some(m) => marker_path_at(m, world_to_pixel(*c, viewport, w, h)),
+            None => single_point_path(*c, viewport, w, h),
+        },
         GeomKind::LineString(coords) => Path {
             subpaths: vec![ring_to_subpath(coords, viewport, w, h, false)],
         },
         GeomKind::Polygon(rings) => Path {
             subpaths: rings.iter().map(|r| ring_to_subpath(r, viewport, w, h, true)).collect(),
         },
-        GeomKind::MultiPoint(coords) => Path {
-            subpaths: coords
-                .iter()
-                .map(|&c| Subpath {
-                    points: vec![world_to_pixel(c, viewport, w, h)],
-                    closed: false,
-                })
-                .collect(),
+        GeomKind::MultiPoint(coords) => match style.marker {
+            Some(m) => Path {
+                subpaths: coords
+                    .iter()
+                    .flat_map(|&c| marker_path_at(m, world_to_pixel(c, viewport, w, h)).subpaths)
+                    .collect(),
+            },
+            None => Path {
+                subpaths: coords
+                    .iter()
+                    .map(|&c| Subpath {
+                        points: vec![world_to_pixel(c, viewport, w, h)],
+                        closed: false,
+                    })
+                    .collect(),
+            },
         },
         GeomKind::MultiLineString(parts) => Path {
             subpaths: parts
@@ -131,6 +145,144 @@ pub(super) fn feature_to_drawop(g: &GeomKind, viewport: Bbox, w: u32, h: u32, st
         return None;
     }
     Some(DrawOp::Path { path, style })
+}
+
+/// tessellate a `MarkerSymbol` to a closed `Path` centred at `pos` in pixel
+/// space. shapes are drawn outline-and-fill-friendly (closed subpaths) so
+/// the renderer's `draw_path` fills and strokes per the enclosing `Style`.
+///
+/// pin is a teardrop (circle bulb + triangle tail) - it's the only marker
+/// where the visual centre is *not* `pos`; we anchor the tip at `pos` so
+/// pins look like map pins, with the bulb above.
+pub(super) fn marker_path_at(m: MarkerSymbol, pos: (f32, f32)) -> Path {
+    let (cx, cy) = pos;
+    let s = m.size();
+    let r = s * 0.5;
+    match m {
+        MarkerSymbol::Circle { .. } => {
+            // an N-segment polygon approximates a circle. 24 keeps it smooth
+            // up to ~32 px without bloating the path.
+            const N: usize = 24;
+            let pts: Vec<(f32, f32)> = (0..N)
+                .map(|i| {
+                    let theta = (i as f32) * std::f32::consts::TAU / N as f32;
+                    (cx + r * theta.cos(), cy + r * theta.sin())
+                })
+                .collect();
+            Path {
+                subpaths: vec![Subpath { points: pts, closed: true }],
+            }
+        }
+        MarkerSymbol::Square { .. } => Path {
+            subpaths: vec![Subpath {
+                points: vec![
+                    (cx - r, cy - r),
+                    (cx + r, cy - r),
+                    (cx + r, cy + r),
+                    (cx - r, cy + r),
+                ],
+                closed: true,
+            }],
+        },
+        MarkerSymbol::Triangle { .. } => {
+            // equilateral triangle, point up. circumradius = r.
+            let half_base = r * 0.866_025_4_f32;
+            Path {
+                subpaths: vec![Subpath {
+                    points: vec![(cx, cy - r), (cx + half_base, cy + r * 0.5), (cx - half_base, cy + r * 0.5)],
+                    closed: true,
+                }],
+            }
+        }
+        MarkerSymbol::Cross { .. } => {
+            // a plus sign. arm half-width = s/6; visually balanced.
+            let aw = s / 6.0;
+            Path {
+                subpaths: vec![Subpath {
+                    points: vec![
+                        (cx - aw, cy - r),
+                        (cx + aw, cy - r),
+                        (cx + aw, cy - aw),
+                        (cx + r, cy - aw),
+                        (cx + r, cy + aw),
+                        (cx + aw, cy + aw),
+                        (cx + aw, cy + r),
+                        (cx - aw, cy + r),
+                        (cx - aw, cy + aw),
+                        (cx - r, cy + aw),
+                        (cx - r, cy - aw),
+                        (cx - aw, cy - aw),
+                    ],
+                    closed: true,
+                }],
+            }
+        }
+        MarkerSymbol::X { .. } => {
+            // a saltire (X). diagonal arm half-width = s/6.
+            let aw = s / 6.0;
+            // outer corner extents along each diagonal; the arm runs from
+            // (-r, -r+aw*sqrt2) through (0,0) etc. for simplicity we
+            // describe two crossing strokes as a single 12-vertex polygon
+            // by rotating the Cross by 45 degrees.
+            let cos45 = std::f32::consts::FRAC_1_SQRT_2;
+            let rotate = |x: f32, y: f32| -> (f32, f32) {
+                (cx + (x - cx) * cos45 - (y - cy) * cos45, cy + (x - cx) * cos45 + (y - cy) * cos45)
+            };
+            let pts = [
+                (cx - aw, cy - r),
+                (cx + aw, cy - r),
+                (cx + aw, cy - aw),
+                (cx + r, cy - aw),
+                (cx + r, cy + aw),
+                (cx + aw, cy + aw),
+                (cx + aw, cy + r),
+                (cx - aw, cy + r),
+                (cx - aw, cy + aw),
+                (cx - r, cy + aw),
+                (cx - r, cy - aw),
+                (cx - aw, cy - aw),
+            ];
+            Path {
+                subpaths: vec![Subpath {
+                    points: pts.iter().map(|&(x, y)| rotate(x, y)).collect(),
+                    closed: true,
+                }],
+            }
+        }
+        MarkerSymbol::Pin { .. } => {
+            // teardrop. bulb circle of radius r centred 1.4*r above the tip
+            // (the geometric anchor at `pos`). tangents from the tip touch
+            // the bulb at +/- asin(r / 1.4r) from vertical; the arc sweeps
+            // the long way over the top of the bulb between the two tangent
+            // points, then a single segment closes back to the tip.
+            const N: usize = 22;
+            let dy = r * 1.4;
+            let bulb_cy = cy - dy;
+            let alpha = (r / dy).asin();
+            let start = std::f32::consts::FRAC_PI_2 + alpha;
+            let end = std::f32::consts::FRAC_PI_2 - alpha + std::f32::consts::TAU;
+            let mut pts: Vec<(f32, f32)> = (0..=N)
+                .map(|i| {
+                    let t = i as f32 / N as f32;
+                    let theta = start + (end - start) * t;
+                    (cx + r * theta.cos(), bulb_cy + r * theta.sin())
+                })
+                .collect();
+            pts.push((cx, cy));
+            Path {
+                subpaths: vec![Subpath { points: pts, closed: true }],
+            }
+        }
+        // future MarkerSymbol variants land additively. fall back to a
+        // zero-extent single-point path so the renderer's stroke arm still
+        // runs but no marker shape is drawn.
+        _ => Path {
+            subpaths: vec![Subpath {
+                points: vec![(cx, cy)],
+                closed: false,
+            }],
+        },
+    }
 }
 
 fn ring_to_subpath(coords: &[(f64, f64)], viewport: Bbox, w: u32, h: u32, closed: bool) -> Subpath {
@@ -239,6 +391,150 @@ mod tests {
             assert!(!path.subpaths[0].closed);
         } else {
             panic!("expected DrawOp::Path");
+        }
+    }
+
+    fn bbox_of(path: &Path) -> (f32, f32, f32, f32) {
+        let mut minx = f32::INFINITY;
+        let mut miny = f32::INFINITY;
+        let mut maxx = f32::NEG_INFINITY;
+        let mut maxy = f32::NEG_INFINITY;
+        for sp in &path.subpaths {
+            for &(x, y) in &sp.points {
+                if x < minx {
+                    minx = x;
+                }
+                if y < miny {
+                    miny = y;
+                }
+                if x > maxx {
+                    maxx = x;
+                }
+                if y > maxy {
+                    maxy = y;
+                }
+            }
+        }
+        (minx, miny, maxx, maxy)
+    }
+
+    fn assert_marker_centred(path: &Path, pos: (f32, f32), expected_extent: f32, tol: f32) {
+        assert!(!path.subpaths.is_empty(), "empty path");
+        for sp in &path.subpaths {
+            assert!(sp.closed, "marker subpath must be closed");
+        }
+        let (minx, miny, maxx, maxy) = bbox_of(path);
+        let cx = (minx + maxx) * 0.5;
+        let cy = (miny + maxy) * 0.5;
+        let w = maxx - minx;
+        let h = maxy - miny;
+        assert!((cx - pos.0).abs() < tol, "x centre off: {cx} vs {}", pos.0);
+        assert!((cy - pos.1).abs() < tol, "y centre off: {cy} vs {}", pos.1);
+        assert!(
+            (w - expected_extent).abs() < tol && (h - expected_extent).abs() < tol,
+            "extent {w}x{h} != {expected_extent}",
+        );
+    }
+
+    #[test]
+    fn marker_circle_is_closed_and_centred() {
+        let p = marker_path_at(MarkerSymbol::Circle { size: 10.0 }, (50.0, 50.0));
+        assert_marker_centred(&p, (50.0, 50.0), 10.0, 0.5);
+    }
+
+    #[test]
+    fn marker_square_has_four_vertices_and_is_centred() {
+        let p = marker_path_at(MarkerSymbol::Square { size: 8.0 }, (32.0, 16.0));
+        assert_marker_centred(&p, (32.0, 16.0), 8.0, 0.001);
+        assert_eq!(p.subpaths[0].points.len(), 4);
+    }
+
+    #[test]
+    fn marker_triangle_has_three_vertices() {
+        let p = marker_path_at(MarkerSymbol::Triangle { size: 12.0 }, (10.0, 10.0));
+        assert_eq!(p.subpaths[0].points.len(), 3);
+        assert!(p.subpaths[0].closed);
+    }
+
+    #[test]
+    fn marker_cross_has_twelve_vertices() {
+        let p = marker_path_at(MarkerSymbol::Cross { size: 12.0 }, (0.0, 0.0));
+        assert_eq!(p.subpaths[0].points.len(), 12);
+        assert_marker_centred(&p, (0.0, 0.0), 12.0, 0.001);
+    }
+
+    #[test]
+    fn marker_x_has_twelve_vertices() {
+        let p = marker_path_at(MarkerSymbol::X { size: 12.0 }, (0.0, 0.0));
+        assert_eq!(p.subpaths[0].points.len(), 12);
+        // X is a 45-degree rotation of the cross; symmetric around centre.
+        let (minx, miny, maxx, maxy) = bbox_of(&p);
+        let cx = (minx + maxx) * 0.5;
+        let cy = (miny + maxy) * 0.5;
+        assert!(cx.abs() < 0.5);
+        assert!(cy.abs() < 0.5);
+    }
+
+    #[test]
+    fn marker_pin_tip_is_at_anchor_bulb_above() {
+        let pos = (10.0, 100.0);
+        let p = marker_path_at(MarkerSymbol::Pin { size: 8.0 }, pos);
+        assert!(p.subpaths[0].closed);
+        let (_, miny, _, maxy) = bbox_of(&p);
+        // tip at pos.1 = 100; bulb extends upward (smaller y in pixel space).
+        assert!((maxy - 100.0).abs() < 0.5, "pin tip not at anchor: maxy={maxy}");
+        assert!(miny < 100.0 - 4.0, "pin bulb not above tip: miny={miny}");
+    }
+
+    #[test]
+    fn feature_to_drawop_point_uses_marker_when_set() {
+        let geom = GeomKind::Point((5.0, 5.0));
+        let v = Bbox::new(0.0, 0.0, 10.0, 10.0);
+        let style = Arc::new(Style {
+            fill: Some(FillPaint::Solid(Colour::rgba(0, 0, 0, 255))),
+            marker: Some(MarkerSymbol::Circle { size: 12.0 }),
+            ..Default::default()
+        });
+        let op = feature_to_drawop(&geom, v, 100, 100, style).unwrap();
+        let DrawOp::Path { path, .. } = op else {
+            panic!("expected path");
+        };
+        // a marker emits a closed circle with N=24 vertices, not a single
+        // anchor point.
+        assert_eq!(path.subpaths.len(), 1);
+        assert!(path.subpaths[0].closed);
+        assert!(path.subpaths[0].points.len() >= 12);
+    }
+
+    #[test]
+    fn feature_to_drawop_point_without_marker_emits_single_anchor() {
+        let geom = GeomKind::Point((5.0, 5.0));
+        let v = Bbox::new(0.0, 0.0, 10.0, 10.0);
+        let op = feature_to_drawop(&geom, v, 100, 100, test_style()).unwrap();
+        let DrawOp::Path { path, .. } = op else {
+            panic!("expected path");
+        };
+        assert_eq!(path.subpaths.len(), 1);
+        assert!(!path.subpaths[0].closed);
+        assert_eq!(path.subpaths[0].points.len(), 1);
+    }
+
+    #[test]
+    fn feature_to_drawop_multipoint_marker_emits_one_subpath_per_point() {
+        let geom = GeomKind::MultiPoint(vec![(2.0, 2.0), (5.0, 5.0), (8.0, 8.0)]);
+        let v = Bbox::new(0.0, 0.0, 10.0, 10.0);
+        let style = Arc::new(Style {
+            marker: Some(MarkerSymbol::Square { size: 6.0 }),
+            ..Default::default()
+        });
+        let op = feature_to_drawop(&geom, v, 100, 100, style).unwrap();
+        let DrawOp::Path { path, .. } = op else {
+            panic!("expected path");
+        };
+        assert_eq!(path.subpaths.len(), 3);
+        for sp in &path.subpaths {
+            assert!(sp.closed);
+            assert_eq!(sp.points.len(), 4);
         }
     }
 }
