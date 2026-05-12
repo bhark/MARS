@@ -4,7 +4,7 @@ use std::collections::{BTreeSet, HashSet};
 
 use tracing::warn;
 
-use crate::emitter::{ClassSkeleton, LabelSkeleton, LayerSkeleton, Skeleton, SourceSkeleton, SymbolDef};
+use crate::emitter::{ClassSkeleton, LabelSkeleton, LayerSkeleton, MarkerKind, Skeleton, SourceSkeleton, SymbolDef};
 #[cfg(test)]
 use crate::scanner::scan;
 use crate::scanner::{Token, block_range, is_block_opener};
@@ -366,7 +366,7 @@ fn parse_symbol(body: &[Token]) -> Option<(String, SymbolDef)> {
     let def = match type_up.as_str() {
         "ELLIPSE" => SymbolDef::Circle,
         "HATCH" => SymbolDef::Hatch { angle_deg, size },
-        "VECTOR" => SymbolDef::NamedShape(name.to_ascii_lowercase()),
+        "VECTOR" => SymbolDef::NamedShape(MarkerKind::from_lowercase(&name.to_ascii_lowercase())?),
         _ => return None,
     };
     Some((name, def))
@@ -741,7 +741,7 @@ END
             .find(|s| s.name.starts_with("point_stops_"))
             .expect("point style emitted");
         let m = style.marker.as_ref().expect("marker resolved from SYMBOL");
-        assert_eq!(m.kind, "circle");
+        assert_eq!(m.kind, MarkerKind::Circle);
         assert!((m.size - 8.0).abs() < f32::EPSILON);
     }
 
@@ -779,7 +779,7 @@ END
             .iter()
             .find(|s| s.name.starts_with("poly_wetlands_"))
             .expect("polygon style emitted");
-        match style.fill.as_ref() {
+        match style.fill {
             Some(crate::emitter::EmitFill::Hatch {
                 spacing,
                 angle_deg,
@@ -789,7 +789,7 @@ END
                 assert!((spacing - 4.0).abs() < f32::EPSILON);
                 assert!((angle_deg - 45.0).abs() < f32::EPSILON);
                 assert!((line_width - 0.5).abs() < f32::EPSILON);
-                assert_eq!(colour, "#646e78");
+                assert_eq!(colour, mars_style::Colour::rgb(100, 110, 120));
             }
             other => panic!("expected hatch fill, got {other:?}"),
         }

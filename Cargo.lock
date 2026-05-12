@@ -2602,6 +2602,7 @@ dependencies = [
  "anyhow",
  "clap",
  "mars-expr",
+ "mars-style",
  "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",

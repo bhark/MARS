@@ -22,4 +22,5 @@ anyhow             = { workspace = true }
 tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }
 mars-expr          = { workspace = true }
+mars-style         = { workspace = true }
 thiserror          = { workspace = true }

@@ -1,15 +1,16 @@
 //! style, class, and label parsing for the mapfile translator.
 
+use mars_style::Colour;
 use tracing::warn;
 
-use crate::emitter::{ClassSkeleton, EmitFill, EmitMarker, LabelSkeleton, Skeleton, StyleDef, SymbolDef, rgb_to_hex, slugify};
+use crate::emitter::{ClassSkeleton, EmitFill, EmitMarker, LabelSkeleton, MarkerKind, Skeleton, StyleDef, SymbolDef, slugify};
 use crate::scanner::{Token, block_range, is_block_opener};
 use crate::translate::{is_unsupported, normalize_n_plus_one};
 
 #[derive(Debug, Default)]
 struct StyleBlock {
-    color: Option<(u8, u8, u8)>,
-    outlinecolor: Option<(u8, u8, u8)>,
+    color: Option<Colour>,
+    outlinecolor: Option<Colour>,
     width: Option<f32>,
     outlinewidth: Option<f32>,
     pattern: Option<Vec<f32>>,
@@ -160,12 +161,12 @@ fn parse_style_block(body: &[Token]) -> StyleBlock {
         match kw.as_str() {
             "COLOR" if t.args.len() >= 3 => {
                 if let (Ok(r), Ok(g), Ok(b)) = (t.args[0].parse(), t.args[1].parse(), t.args[2].parse()) {
-                    st.color = Some((r, g, b));
+                    st.color = Some(Colour::rgb(r, g, b));
                 }
             }
             "OUTLINECOLOR" if t.args.len() >= 3 => {
                 if let (Ok(r), Ok(g), Ok(b)) = (t.args[0].parse(), t.args[1].parse(), t.args[2].parse()) {
-                    st.outlinecolor = Some((r, g, b));
+                    st.outlinecolor = Some(Colour::rgb(r, g, b));
                 }
             }
             "WIDTH" => {
@@ -215,7 +216,7 @@ fn parse_style_block(body: &[Token]) -> StyleBlock {
 #[derive(Debug, Default)]
 struct CollapsedStyle {
     fill: Option<EmitFill>,
-    stroke: Option<String>,
+    stroke: Option<Colour>,
     width: Option<f32>,
     dasharray: Option<Vec<f32>>,
     marker: Option<EmitMarker>,
@@ -244,41 +245,21 @@ fn collapse_styles(
             match symbols.get(sym_name) {
                 Some(SymbolDef::Circle) => {
                     resolved_marker = Some(EmitMarker {
-                        kind: "circle",
+                        kind: MarkerKind::Circle,
                         size: s.size.unwrap_or(6.0),
                     });
                 }
                 Some(SymbolDef::NamedShape(kind)) => {
-                    if let Some(k) = match kind.as_str() {
-                        "circle" => Some("circle"),
-                        "square" => Some("square"),
-                        "triangle" => Some("triangle"),
-                        "cross" => Some("cross"),
-                        "x" => Some("x"),
-                        "pin" => Some("pin"),
-                        _ => None,
-                    } {
-                        resolved_marker = Some(EmitMarker {
-                            kind: k,
-                            size: s.size.unwrap_or(6.0),
-                        });
-                    } else {
-                        warn!(
-                            line = line,
-                            symbol = sym_name.as_str(),
-                            shape = kind.as_str(),
-                            "STYLE.SYMBOL references unrecognised named shape; ignoring"
-                        );
-                    }
+                    resolved_marker = Some(EmitMarker {
+                        kind: *kind,
+                        size: s.size.unwrap_or(6.0),
+                    });
                 }
                 Some(SymbolDef::Hatch { angle_deg, size }) => {
                     let spacing = s.size.or(*size).unwrap_or(6.0);
                     let angle = s.angle_deg.or(*angle_deg).unwrap_or(0.0);
                     let line_width = s.width.unwrap_or(1.0);
-                    let colour = s
-                        .color
-                        .map(|(r, g, b)| rgb_to_hex(r, g, b))
-                        .unwrap_or_else(|| "#000000".into());
+                    let colour = s.color.unwrap_or(Colour::rgb(0, 0, 0));
                     resolved_hatch = Some(EmitFill::Hatch {
                         spacing,
                         angle_deg: angle,
@@ -297,17 +278,9 @@ fn collapse_styles(
         }
     }
 
-    let solid_fill = styles
-        .iter()
-        .rev()
-        .find_map(|s| s.color)
-        .map(|(r, g, b)| rgb_to_hex(r, g, b))
-        .map(EmitFill::Hex);
+    let solid_fill = styles.iter().rev().find_map(|s| s.color).map(EmitFill::Hex);
     let fill = resolved_hatch.or(solid_fill);
-    let stroke = styles
-        .iter()
-        .find_map(|s| s.outlinecolor)
-        .map(|(r, g, b)| rgb_to_hex(r, g, b));
+    let stroke = styles.iter().find_map(|s| s.outlinecolor);
     let width = styles.iter().find_map(|s| s.width.or(s.outlinewidth));
     let dasharray = styles.iter().find_map(|s| s.pattern.clone());
     CollapsedStyle {
@@ -322,7 +295,7 @@ fn collapse_styles(
 fn canonical_signature(
     style_type: &str,
     fill: Option<&EmitFill>,
-    stroke: Option<&String>,
+    stroke: Option<&Colour>,
     width: Option<f32>,
     dasharray: Option<&Vec<f32>>,
     marker: Option<&EmitMarker>,
@@ -332,8 +305,8 @@ fn canonical_signature(
     let _ = write!(s, "kind={style_type}");
     if let Some(f) = fill {
         match f {
-            EmitFill::Hex(h) => {
-                let _ = write!(s, ",fill={h}");
+            EmitFill::Hex(c) => {
+                let _ = write!(s, ",fill={c}");
             }
             EmitFill::Hatch {
                 spacing,
@@ -345,8 +318,8 @@ fn canonical_signature(
             }
         }
     }
-    if let Some(v) = stroke {
-        let _ = write!(s, ",stroke={v}");
+    if let Some(c) = stroke {
+        let _ = write!(s, ",stroke={c}");
     }
     if let Some(v) = width {
         let _ = write!(s, ",width={v}");
@@ -355,7 +328,7 @@ fn canonical_signature(
         let _ = write!(s, ",dash={arr:?}");
     }
     if let Some(m) = marker {
-        let _ = write!(s, ",marker={}-{}", m.kind, m.size);
+        let _ = write!(s, ",marker={}-{}", m.kind.as_wire(), m.size);
     }
     s
 }
@@ -369,8 +342,8 @@ pub(crate) fn parse_label(
     let mut text: Option<String> = None;
     let mut font: Option<String> = None;
     let mut size: Option<f32> = None;
-    let mut color: Option<(u8, u8, u8)> = None;
-    let mut outlinecolor: Option<(u8, u8, u8)> = None;
+    let mut color: Option<Colour> = None;
+    let mut outlinecolor: Option<Colour> = None;
     let mut outlinewidth: Option<f32> = None;
 
     for t in body {
@@ -381,12 +354,12 @@ pub(crate) fn parse_label(
             "SIZE" => size = t.args.first().and_then(|a| a.parse().ok()),
             "COLOR" if t.args.len() >= 3 => {
                 if let (Ok(r), Ok(g), Ok(b)) = (t.args[0].parse(), t.args[1].parse(), t.args[2].parse()) {
-                    color = Some((r, g, b));
+                    color = Some(Colour::rgb(r, g, b));
                 }
             }
             "OUTLINECOLOR" if t.args.len() >= 3 => {
                 if let (Ok(r), Ok(g), Ok(b)) = (t.args[0].parse(), t.args[1].parse(), t.args[2].parse()) {
-                    outlinecolor = Some((r, g, b));
+                    outlinecolor = Some(Colour::rgb(r, g, b));
                 }
             }
             "OUTLINEWIDTH" => {
@@ -398,9 +371,7 @@ pub(crate) fn parse_label(
 
     let text = text?;
     let style_name = format!("label_{}", slugify(layer_name));
-    let fill = color
-        .map(|(r, g, b)| rgb_to_hex(r, g, b))
-        .unwrap_or_else(|| "#000000".into());
+    let fill = color.unwrap_or(Colour::rgb(0, 0, 0));
     // label styles are not deduped against geometry styles
     skel.styles.push(StyleDef {
         name: style_name.clone(),
@@ -412,7 +383,7 @@ pub(crate) fn parse_label(
         marker: None,
         font_family: font.or_else(|| Some("sans-serif".into())),
         font_size: size.or(Some(12.0)),
-        halo_color: outlinecolor.map(|(r, g, b)| rgb_to_hex(r, g, b)),
+        halo_color: outlinecolor,
         halo_width: outlinewidth,
     });
 
@@ -443,15 +414,15 @@ mod tests {
             },
         ];
         let st = parse_style_block(&toks);
-        assert_eq!(st.color, Some((255, 0, 0)));
+        assert_eq!(st.color, Some(Colour::rgb(255, 0, 0)));
         assert_eq!(st.width, Some(2.5));
     }
 
     #[test]
     fn collapse_styles_picks_first_fill_and_stroke() {
         let styles = vec![StyleBlock {
-            color: Some((255, 0, 0)),
-            outlinecolor: Some((0, 0, 0)),
+            color: Some(Colour::rgb(255, 0, 0)),
+            outlinecolor: Some(Colour::rgb(0, 0, 0)),
             width: Some(1.0),
             outlinewidth: None,
             pattern: None,
@@ -460,8 +431,8 @@ mod tests {
             size: None,
         }];
         let c = collapse_styles(&styles, 1, &Default::default());
-        assert_eq!(c.fill, Some(EmitFill::Hex("#ff0000".into())));
-        assert_eq!(c.stroke, Some("#000000".into()));
+        assert_eq!(c.fill, Some(EmitFill::Hex(Colour::rgb(255, 0, 0))));
+        assert_eq!(c.stroke, Some(Colour::rgb(0, 0, 0)));
         assert_eq!(c.width, Some(1.0));
         assert!(c.marker.is_none());
     }
@@ -471,16 +442,16 @@ mod tests {
         let mut symbols = std::collections::HashMap::new();
         symbols.insert("circle".into(), SymbolDef::Circle);
         let styles = vec![StyleBlock {
-            color: Some((10, 20, 30)),
+            color: Some(Colour::rgb(10, 20, 30)),
             symbol: Some("circle".into()),
             size: Some(8.0),
             ..Default::default()
         }];
         let c = collapse_styles(&styles, 1, &symbols);
         // STYLE.COLOR still emits a solid fill - it's the marker body.
-        assert_eq!(c.fill, Some(EmitFill::Hex("#0a141e".into())));
+        assert_eq!(c.fill, Some(EmitFill::Hex(Colour::rgb(10, 20, 30))));
         let m = c.marker.unwrap();
-        assert_eq!(m.kind, "circle");
+        assert_eq!(m.kind, MarkerKind::Circle);
         assert!((m.size - 8.0).abs() < f32::EPSILON);
     }
 
@@ -495,7 +466,7 @@ mod tests {
             },
         );
         let styles = vec![StyleBlock {
-            color: Some((64, 64, 64)),
+            color: Some(Colour::rgb(64, 64, 64)),
             width: Some(0.5),
             symbol: Some("lines".into()),
             ..Default::default()
@@ -511,7 +482,7 @@ mod tests {
                 assert!((spacing - 4.0).abs() < f32::EPSILON);
                 assert!((angle_deg - 45.0).abs() < f32::EPSILON);
                 assert!((line_width - 0.5).abs() < f32::EPSILON);
-                assert_eq!(colour, "#404040");
+                assert_eq!(colour, Colour::rgb(64, 64, 64));
             }
             other => panic!("expected hatch fill, got {other:?}"),
         }
