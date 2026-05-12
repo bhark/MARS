@@ -52,7 +52,8 @@ fn check_declared_covers(
             return Err(ConfigError::Invalid(format!(
                 "layer {} source[{i}] (from {:?}) does not declare attribute {name:?} \
                  referenced by a class when: or label text",
-                layer.name, binding.source_descriptor()
+                layer.name,
+                binding.source_descriptor()
             )));
         }
     }
@@ -84,7 +85,8 @@ fn check_filter_idents(
             return Err(ConfigError::Invalid(format!(
                 "layer {} source[{i}] (from {:?}) filter references unknown ident {name:?}; \
                  declare it in `attributes` or as `id_column`",
-                layer.name, binding.source_descriptor()
+                layer.name,
+                binding.source_descriptor()
             )));
         }
     }

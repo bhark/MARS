@@ -608,7 +608,10 @@ mod tests {
                 is_red(p) && (20.0..44.0).contains(&x) && (20.0..44.0).contains(&y)
             })
             .count();
-        assert!(inside_red > 100, "hatch produced too few inside-poly red pixels: {inside_red}");
+        assert!(
+            inside_red > 100,
+            "hatch produced too few inside-poly red pixels: {inside_red}"
+        );
 
         let outside_red = rgba
             .chunks_exact(4)
@@ -619,7 +622,10 @@ mod tests {
                 is_red(p) && !((20.0..44.0).contains(&x) && (20.0..44.0).contains(&y))
             })
             .count();
-        assert_eq!(outside_red, 0, "hatch leaked outside polygon clip mask: {outside_red} px");
+        assert_eq!(
+            outside_red, 0,
+            "hatch leaked outside polygon clip mask: {outside_red} px"
+        );
     }
 
     #[test]
@@ -647,7 +653,10 @@ mod tests {
             .chunks_exact(4)
             .filter(|p| p[0] > 150 && p[1] < 80 && p[2] < 80 && p[3] > 0)
             .count();
-        assert!(red_count > 100, "diagonal hatch produced too few red pixels: {red_count}");
+        assert!(
+            red_count > 100,
+            "diagonal hatch produced too few red pixels: {red_count}"
+        );
     }
 
     #[test]

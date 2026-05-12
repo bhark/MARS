@@ -170,17 +170,15 @@ pub(super) fn marker_path_at(m: &MarkerSymbol, pos: (f32, f32)) -> Path {
                 })
                 .collect();
             Path {
-                subpaths: vec![Subpath { points: pts, closed: true }],
+                subpaths: vec![Subpath {
+                    points: pts,
+                    closed: true,
+                }],
             }
         }
         MarkerSymbol::Square { .. } => Path {
             subpaths: vec![Subpath {
-                points: vec![
-                    (cx - r, cy - r),
-                    (cx + r, cy - r),
-                    (cx + r, cy + r),
-                    (cx - r, cy + r),
-                ],
+                points: vec![(cx - r, cy - r), (cx + r, cy - r), (cx + r, cy + r), (cx - r, cy + r)],
                 closed: true,
             }],
         },
@@ -189,7 +187,11 @@ pub(super) fn marker_path_at(m: &MarkerSymbol, pos: (f32, f32)) -> Path {
             let half_base = r * 0.866_025_4_f32;
             Path {
                 subpaths: vec![Subpath {
-                    points: vec![(cx, cy - r), (cx + half_base, cy + r * 0.5), (cx - half_base, cy + r * 0.5)],
+                    points: vec![
+                        (cx, cy - r),
+                        (cx + half_base, cy + r * 0.5),
+                        (cx - half_base, cy + r * 0.5),
+                    ],
                     closed: true,
                 }],
             }
@@ -226,7 +228,10 @@ pub(super) fn marker_path_at(m: &MarkerSymbol, pos: (f32, f32)) -> Path {
             // by rotating the Cross by 45 degrees.
             let cos45 = std::f32::consts::FRAC_1_SQRT_2;
             let rotate = |x: f32, y: f32| -> (f32, f32) {
-                (cx + (x - cx) * cos45 - (y - cy) * cos45, cy + (x - cx) * cos45 + (y - cy) * cos45)
+                (
+                    cx + (x - cx) * cos45 - (y - cy) * cos45,
+                    cy + (x - cx) * cos45 + (y - cy) * cos45,
+                )
             };
             let pts = [
                 (cx - aw, cy - r),
@@ -270,7 +275,10 @@ pub(super) fn marker_path_at(m: &MarkerSymbol, pos: (f32, f32)) -> Path {
                 .collect();
             pts.push((cx, cy));
             Path {
-                subpaths: vec![Subpath { points: pts, closed: true }],
+                subpaths: vec![Subpath {
+                    points: pts,
+                    closed: true,
+                }],
             }
         }
         MarkerSymbol::VectorShape {

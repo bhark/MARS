@@ -80,7 +80,14 @@ pub(super) fn prepare_labels(
         // polyline candidates expand into multiple samples along the line
         // when the layer placement is Placement::Line; otherwise fall through
         // to the historical midpoint anchor.
-        if let (LabelShape::Polyline(points), Placement::Line { repeat_m, max_angle_delta_deg }) = (&c.shape, placement) {
+        if let (
+            LabelShape::Polyline(points),
+            Placement::Line {
+                repeat_m,
+                max_angle_delta_deg,
+            },
+        ) = (&c.shape, placement)
+        {
             sample_polyline_labels(
                 points,
                 xform.as_deref(),
@@ -312,7 +319,12 @@ fn angle_diff(a: f32, b: f32) -> f32 {
 /// the unrotated bbox around the anchor and takes their extent.
 fn rotated_label_bbox(anchor: (f32, f32), half_w: f32, half_h: f32, angle_rad: f32) -> (f32, f32, f32, f32) {
     let (sin_a, cos_a) = angle_rad.sin_cos();
-    let corners = [(-half_w, -half_h), (half_w, -half_h), (half_w, half_h), (-half_w, half_h)];
+    let corners = [
+        (-half_w, -half_h),
+        (half_w, -half_h),
+        (half_w, half_h),
+        (-half_w, half_h),
+    ];
     let mut minx = f32::INFINITY;
     let mut miny = f32::INFINITY;
     let mut maxx = f32::NEG_INFINITY;

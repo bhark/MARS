@@ -80,7 +80,9 @@ pub enum PlanError {
     /// build a plan for snapshot execution of view-shaped bindings.
     /// Config validation accepts the binding; the limitation surfaces here
     /// so operators get a clear message instead of a downstream SQL error.
-    #[error("layer {layer} source binding {descriptor} uses sql: inline SELECT; the compiler does not yet execute view-shaped bindings")]
+    #[error(
+        "layer {layer} source binding {descriptor} uses sql: inline SELECT; the compiler does not yet execute view-shaped bindings"
+    )]
     SqlBindingNotImplemented {
         /// layer name
         layer: LayerId,

@@ -50,7 +50,12 @@ fn scaled_alpha(c: Colour, scale: f32) -> Color {
 fn scaled_alpha_colour(c: Colour, scale: f32) -> Colour {
     let s = scale.clamp(0.0, 1.0);
     let a = ((c.a as f32) * s).round().clamp(0.0, 255.0) as u8;
-    Colour { r: c.r, g: c.g, b: c.b, a }
+    Colour {
+        r: c.r,
+        g: c.g,
+        b: c.b,
+        a,
+    }
 }
 
 /// true iff the path's AABB has non-zero extent on both axes. tiny-skia's
@@ -122,7 +127,14 @@ fn draw_fill(pm: &mut Pixmap, path: &tiny_skia::Path, fill: FillPaint) {
 /// pixmap and stamp it under the mask, trading the per-polygon stroke ops
 /// for a single textured fill. landed only if hatch turns up in a hot
 /// cadastral tile path; the current cost is acceptable for beta.
-fn draw_hatch_fill(pm: &mut Pixmap, path: &tiny_skia::Path, spacing: f32, angle_deg: f32, line_width: f32, colour: Colour) {
+fn draw_hatch_fill(
+    pm: &mut Pixmap,
+    path: &tiny_skia::Path,
+    spacing: f32,
+    angle_deg: f32,
+    line_width: f32,
+    colour: Colour,
+) {
     if !(spacing.is_finite() && spacing > 0.0 && line_width.is_finite() && line_width > 0.0 && angle_deg.is_finite()) {
         return;
     }
@@ -264,9 +276,9 @@ pub(crate) fn draw_path(pm: &mut Pixmap, path: &PortPath, style: &Style) {
                 }
             }
             let stroke_path = match style.stroke_offset_px {
-                Some(d) if d.is_finite() && d.abs() > f32::EPSILON => {
-                    offset_polyline(path, d).and_then(|p| build_path(&p)).unwrap_or(tsk_path)
-                }
+                Some(d) if d.is_finite() && d.abs() > f32::EPSILON => offset_polyline(path, d)
+                    .and_then(|p| build_path(&p))
+                    .unwrap_or(tsk_path),
                 _ => tsk_path,
             };
             pm.stroke_path(&stroke_path, &paint, &stroke, Transform::identity(), None);
@@ -297,7 +309,11 @@ fn offset_polyline(path: &PortPath, d: f32) -> Option<PortPath> {
             out.push(sub.clone());
         }
     }
-    if !produced { None } else { Some(PortPath { subpaths: out }) }
+    if !produced {
+        None
+    } else {
+        Some(PortPath { subpaths: out })
+    }
 }
 
 fn offset_open_subpath(sub: &PortSubpath, d: f32) -> Option<PortSubpath> {

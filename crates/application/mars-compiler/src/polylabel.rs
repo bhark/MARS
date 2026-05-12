@@ -222,9 +222,7 @@ impl PartialOrd for Cell {
 impl Ord for Cell {
     fn cmp(&self, other: &Self) -> Ordering {
         // BinaryHeap is a max-heap; ordering by max_d gives best-first.
-        self.max_d
-            .partial_cmp(&other.max_d)
-            .unwrap_or(Ordering::Equal)
+        self.max_d.partial_cmp(&other.max_d).unwrap_or(Ordering::Equal)
     }
 }
 
@@ -356,13 +354,7 @@ mod tests {
     use super::*;
 
     fn rect(minx: f64, miny: f64, maxx: f64, maxy: f64) -> Vec<Coord> {
-        vec![
-            (minx, miny),
-            (maxx, miny),
-            (maxx, maxy),
-            (minx, maxy),
-            (minx, miny),
-        ]
+        vec![(minx, miny), (maxx, miny), (maxx, maxy), (minx, maxy), (minx, miny)]
     }
 
     #[test]
@@ -408,7 +400,10 @@ mod tests {
         let prec = default_precision(&poly);
         let (cx, cy) = pole_of_inaccessibility(&poly, prec);
         // bbox-centroid would be (5,5), which is in the gap -> NOT inside.
-        assert!(point_in_ring((cx, cy), &poly[0]), "polylabel anchor outside L: ({cx},{cy})");
+        assert!(
+            point_in_ring((cx, cy), &poly[0]),
+            "polylabel anchor outside L: ({cx},{cy})"
+        );
     }
 
     #[test]
@@ -450,7 +445,10 @@ mod tests {
         // natural tiling would seed ~10k cells. result must still land inside.
         let poly = vec![rect(0.0, 0.0, 10_000.0, 1.0)];
         let (cx, cy) = pole_of_inaccessibility(&poly, default_precision(&poly));
-        assert!(point_in_ring((cx, cy), &poly[0]), "thin-polygon anchor not inside: ({cx},{cy})");
+        assert!(
+            point_in_ring((cx, cy), &poly[0]),
+            "thin-polygon anchor not inside: ({cx},{cy})"
+        );
     }
 
     #[test]
