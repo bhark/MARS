@@ -20,6 +20,9 @@ spec:
       storageClass: ""
     env:
       - { name: AWS_REGION, value: us-east-1 }
+      # the s3 sdk otherwise stalls on http://169.254.169.254/latest/api/token
+      # for ~14s per request looking for ec2 instance metadata
+      - { name: AWS_EC2_METADATA_DISABLED, value: "true" }
       - { name: PG_DSN, value: "postgres://mars:mars@postgis:5432/mars" }
     envFrom:
       - secretRef:
@@ -37,6 +40,7 @@ spec:
       port: 8080
     env:
       - { name: AWS_REGION, value: us-east-1 }
+      - { name: AWS_EC2_METADATA_DISABLED, value: "true" }
       - { name: PG_DSN, value: "postgres://mars:mars@postgis:5432/mars" }
     envFrom:
       - secretRef:
@@ -94,6 +98,64 @@ spec:
     interfaces:
       wms:  { enabled: true }
       wmts: { enabled: true }
+    reprojection:
+      allowlist: [EPSG:25832]
+    styles:
+      poly_land:           { type: polygon, fill: "#ffffff" }
+      poly_water:          { type: polygon, fill: "#dcf0ff", stroke: "#2896e6", stroke_width: 0.15 }
+      poly_settlement:     { type: polygon, fill: "#f2f2f2" }
+      poly_building:       { type: polygon, fill: "#d2d2d2", stroke: "#a0a0a0", stroke_width: 0.6 }
+      poly_building_temp:  { type: polygon, fill: "#ebebeb", stroke: "#a0a0a0", stroke_width: 0.6, stroke_dasharray: [5, 3], stroke_linecap: butt }
+      line_road_major:     { type: line, stroke: "#bebebe", stroke_width: 1.6 }
+      line_road_minor:     { type: line, stroke: "#c8c8c8", stroke_width: 0.8 }
+      line_waterway_wide:  { type: line, stroke: "#dcf0ff", stroke_width: 1.2 }
+      line_waterway_narrow: { type: line, stroke: "#dcf0ff", stroke_width: 0.5 }
+    layers:
+      - name: land
+        title: "Land"
+        type: polygon
+        sources:
+          - { band: lo, from: e2e_source.land, geometry_column: geom, id_column: id }
+        classes:
+          - { name: default, title: "Land", style: { type: ref, name: poly_land } }
+      - name: water
+        title: "Water"
+        type: polygon
+        sources:
+          - { band: mid, from: e2e_source.water, geometry_column: geom, id_column: id }
+        classes:
+          - { name: default, title: "Water", style: { type: ref, name: poly_water } }
+      - name: settlements
+        title: "Settlements"
+        type: polygon
+        sources:
+          - { band: mid, from: e2e_source.settlements, geometry_column: geom, id_column: id }
+        classes:
+          - { name: default, title: "Settlements", style: { type: ref, name: poly_settlement } }
+      - name: roads
+        title: "Roads"
+        type: line
+        sources:
+          - { band: hi, from: e2e_source.roads, geometry_column: geom, id_column: id, attributes: [kind] }
+        classes:
+          - { name: major, title: "Major roads", when: "kind = 'major'", style: { type: ref, name: line_road_major } }
+          - { name: minor, title: "Minor roads", style: { type: ref, name: line_road_minor } }
+      - name: buildings
+        title: "Buildings"
+        type: polygon
+        sources:
+          - { band: detail, from: e2e_source.buildings, geometry_column: geom, id_column: id, attributes: [kind, status] }
+        classes:
+          - { name: temporary, title: "Temporary buildings", when: "status = 'temporary'", style: { type: ref, name: poly_building_temp } }
+          - { name: default, title: "Buildings", style: { type: ref, name: poly_building } }
+      - name: waterways
+        title: "Waterways"
+        type: line
+        sources:
+          - { band: hi, from: e2e_source.waterways, geometry_column: geom, id_column: id, attributes: [width_class] }
+        classes:
+          - { name: wide, title: "Wide waterways", when: "width_class = 'wide'", style: { type: ref, name: line_waterway_wide } }
+          - { name: narrow, title: "Waterways", style: { type: ref, name: line_waterway_narrow } }
     observability:
       log_level: info
       log_format: json
