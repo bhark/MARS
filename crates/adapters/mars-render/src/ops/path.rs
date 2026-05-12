@@ -1,4 +1,8 @@
-//! tiny-skia rasterisation helpers.
+//! `DrawOp::Path` handler. assembles the fill + stroke pipeline using
+//! `prepare`, `fill`, and `stroke`. uses even-odd fill rule (matches
+//! mapserver/qgis expectations for self-intersecting symbol geometry;
+//! non-zero would change the visual outcome of holes-as-CCW-rings produced
+//! upstream).
 
 use mars_render_port::Path as PortPath;
 use mars_style::Style;
@@ -9,10 +13,7 @@ use crate::path::build_path;
 use crate::prepare;
 use crate::stroke;
 
-/// draw a single styled path. uses even-odd fill rule (matches mapserver/qgis
-/// expectations for self-intersecting symbol geometry; non-zero would change
-/// the visual outcome of holes-as-CCW-rings produced upstream).
-pub(crate) fn draw_path(pm: &mut Pixmap, path: &PortPath, style: &Style) {
+pub(crate) fn draw(pm: &mut Pixmap, path: &PortPath, style: &Style) {
     let Some(tsk_path) = build_path(path) else {
         return;
     };
@@ -30,5 +31,3 @@ pub(crate) fn draw_path(pm: &mut Pixmap, path: &PortPath, style: &Style) {
         stroke::draw(pm, path, &tsk_path, stroke_resolved);
     }
 }
-
-

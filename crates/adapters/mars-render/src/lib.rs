@@ -6,10 +6,10 @@ mod canvas;
 mod encode;
 mod fill;
 mod label;
+mod ops;
 mod path;
 mod path_offset;
 mod prepare;
-mod raster;
 mod stroke;
 
 use std::sync::Arc;
@@ -49,17 +49,7 @@ impl Renderer for TinySkiaRenderer {
         }
 
         for op in ops {
-            match op {
-                DrawOp::Path { path, style } => raster::draw_path(&mut pm, path, style),
-                DrawOp::Label {
-                    anchor,
-                    text,
-                    style,
-                    angle_rad,
-                } => {
-                    label::draw(&mut pm, *anchor, text, style, *angle_rad, &self.fonts)?;
-                }
-            }
+            ops::dispatch(&mut pm, op, &self.fonts)?;
         }
 
         let width = pm.width();
