@@ -1,7 +1,8 @@
 //! WMS 1.3.0 KVP request parsing.
 //!
-//! Covers `GetMap` and `GetCapabilities`. Other request kinds reject
-//! with `WmsError::NotImplemented` so they round-trip to an XML exception in
+//! Covers `GetMap`, `GetCapabilities`, `GetFeatureInfo`, and
+//! `GetLegendGraphic`. SLD-related requests reject with
+//! `WmsError::NotImplemented` so they round-trip to an XML exception in
 //! the edge.
 //!
 //! KVP semantics: parameter names are case-insensitive (lowercased on parse,
