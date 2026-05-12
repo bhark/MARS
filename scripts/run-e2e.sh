@@ -106,7 +106,13 @@ fi
 
 if ! kind get clusters | grep -qx "${CLUSTER}"; then
   log "creating kind cluster ${CLUSTER}"
-  kind create cluster --name "${CLUSTER}" --config "${ROOT}/tests/e2e/kind.yaml"
+  # render kind.yaml.tmpl with an absolute hostPath; kind resolves relative
+  # extraMounts against the invoker's cwd, so the template lets the script be
+  # run from anywhere without misplacing the fixture mount.
+  KIND_CFG="$(mktemp -t mars-e2e-kind.XXXXXX.yaml)"
+  sed "s|{{REPO_ROOT}}|${ROOT}|g" "${ROOT}/tests/e2e/kind.yaml.tmpl" > "${KIND_CFG}"
+  kind create cluster --name "${CLUSTER}" --config "${KIND_CFG}"
+  rm -f "${KIND_CFG}"
 else
   log "kind cluster ${CLUSTER} already exists; reusing"
 fi

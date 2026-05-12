@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # fetch the public test data dump into target/e2e-fixtures/. the kind suite
-# mounts this dir into the cluster via the extra-mount declared in kind.yaml.
+# mounts this dir into the cluster via the extra-mount declared in kind.yaml.tmpl.
 #
 # hosting: configure `MARS_E2E_FIXTURE_URL` to a maintainer-hosted github-
 # releases asset (or any HTTP/HTTPS url). a SHA256 is verified against

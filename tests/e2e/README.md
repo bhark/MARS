@@ -38,7 +38,7 @@ pods, logs for every container, events ordered by timestamp).
 ```
 tests/e2e/
 ├── Cargo.toml                    # excluded from the root workspace
-├── kind.yaml                     # cluster config (single node + extraMount)
+├── kind.yaml.tmpl                # cluster config template (rendered by run-e2e.sh)
 ├── src/                          # driver crate (kube::Client wiring, http,
 │                                 # deploy helpers, waits)
 ├── tests/
