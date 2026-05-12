@@ -192,13 +192,19 @@ impl ManifestStore for S3Publisher {
                     "manifest body v{n} already exists; refusing to overwrite (orphaned publish or concurrent writer)"
                 )));
             }
-            Err(object_store::Error::NotSupported { .. }) if self.allow_non_atomic_publish => {
+            // backends that disable conditional put (Garage, SeaweedFS, etc) return
+            // Error::NotImplemented from object_store; explicit non-CAS backends
+            // surface as Error::NotSupported. both mean "cannot CAS"; fall back to
+            // a plain overwrite only when the operator has opted in.
+            Err(object_store::Error::NotSupported { .. } | object_store::Error::NotImplemented { .. })
+                if self.allow_non_atomic_publish =>
+            {
                 self.backend
                     .put(&body_path, body.into())
                     .await
                     .map_err(|e| StoreError::Backend(format!("s3 put manifest body: {e}")))?;
             }
-            Err(object_store::Error::NotSupported { .. }) => {
+            Err(object_store::Error::NotSupported { .. } | object_store::Error::NotImplemented { .. }) => {
                 return Err(StoreError::Backend(
                     "s3 backend does not support conditional create; set allow_non_atomic_publish to override".into(),
                 ));
@@ -222,7 +228,8 @@ impl ManifestStore for S3Publisher {
         {
             Ok(_) => Ok(n),
             // bucket lacks CAS support -> fall back to overwrite only when allowed.
-            Err(object_store::Error::NotSupported { .. }) => {
+            // see body-put match above for why both error variants are caught here.
+            Err(object_store::Error::NotSupported { .. } | object_store::Error::NotImplemented { .. }) => {
                 if self.allow_non_atomic_publish {
                     tracing::warn!(
                         "s3 backend does not support conditional put; manifest swap is not atomic across writers"
