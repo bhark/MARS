@@ -38,7 +38,10 @@ async fn render_assembles_layers_in_plan_order_under_skewed_completion() {
     let path_fills: Vec<u8> = log
         .iter()
         .filter_map(|op| match op {
-            DrawOp::Path { style, .. } => style.fill.map(|c| c.r),
+            DrawOp::Path { style, .. } => match style.fill {
+                Some(mars_style::FillPaint::Solid(c)) => Some(c.r),
+                _ => None,
+            },
             _ => None,
         })
         .collect();
@@ -65,7 +68,10 @@ async fn render_assembles_layers_in_plan_order_without_skew() {
     let path_fills: Vec<u8> = log
         .iter()
         .filter_map(|op| match op {
-            DrawOp::Path { style, .. } => style.fill.map(|c| c.r),
+            DrawOp::Path { style, .. } => match style.fill {
+                Some(mars_style::FillPaint::Solid(c)) => Some(c.r),
+                _ => None,
+            },
             _ => None,
         })
         .collect();

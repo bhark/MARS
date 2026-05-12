@@ -9,14 +9,14 @@ use std::sync::Arc;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use mars_render::{TinySkiaEncoder, TinySkiaRenderer};
 use mars_render_port::{Canvas, DrawOp, Encoder, ImageFormat, Path as PortPath, Pixmap, Renderer, Subpath};
-use mars_style::{Colour, Style};
+use mars_style::{Colour, FillPaint, Style};
 
 const CANVAS_W: u32 = 1024;
 const CANVAS_H: u32 = 1024;
 
 fn fill_red() -> Arc<Style> {
     Arc::new(Style {
-        fill: Some(Colour::rgba(200, 60, 40, 255)),
+        fill: Some(FillPaint::Solid(Colour::rgba(200, 60, 40, 255))),
         ..Default::default()
     })
 }

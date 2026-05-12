@@ -100,11 +100,169 @@ pub enum LineJoin {
     Bevel,
 }
 
+/// Point marker symbol set. Extensible via `#[non_exhaustive]` and the tagged
+/// `kind:` discriminator - future variants (e.g. `Path { svg }`, `Pixmap { uri }`)
+/// land additively without breaking existing wire form.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum MarkerSymbol {
+    Circle {
+        #[serde(default = "MarkerSymbol::default_size")]
+        size: f32,
+    },
+    Square {
+        #[serde(default = "MarkerSymbol::default_size")]
+        size: f32,
+    },
+    Triangle {
+        #[serde(default = "MarkerSymbol::default_size")]
+        size: f32,
+    },
+    Cross {
+        #[serde(default = "MarkerSymbol::default_size")]
+        size: f32,
+    },
+    X {
+        #[serde(default = "MarkerSymbol::default_size")]
+        size: f32,
+    },
+    Pin {
+        #[serde(default = "MarkerSymbol::default_size")]
+        size: f32,
+    },
+}
+
+impl MarkerSymbol {
+    const fn default_size() -> f32 {
+        6.0
+    }
+
+    /// Marker bounding-box edge length in pixels. Pin is teardrop, so size
+    /// is the bulb diameter; the pin extends downward by ~1.5x.
+    #[must_use]
+    pub const fn size(&self) -> f32 {
+        match *self {
+            Self::Circle { size }
+            | Self::Square { size }
+            | Self::Triangle { size }
+            | Self::Cross { size }
+            | Self::X { size }
+            | Self::Pin { size } => size,
+        }
+    }
+}
+
+/// Polygon fill paint. `Solid` is a bare hex string on the wire; `Hatch` is a
+/// tagged map. `#[non_exhaustive]` so future variants (cross-hatch, dots,
+/// pixmap) land additively.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub enum FillPaint {
+    Solid(Colour),
+    Hatch {
+        spacing: f32,
+        angle_deg: f32,
+        line_width: f32,
+        colour: Colour,
+    },
+}
+
+impl Serialize for FillPaint {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        match *self {
+            // bare hex string preserves wire-format symmetry with the legacy
+            // `fill: Option<Colour>` form. existing configs and goldens stay
+            // diff-clean.
+            Self::Solid(c) => c.serialize(s),
+            Self::Hatch {
+                spacing,
+                angle_deg,
+                line_width,
+                colour,
+            } => {
+                let mut st = s.serialize_struct("Hatch", 5)?;
+                st.serialize_field("kind", "hatch")?;
+                st.serialize_field("spacing", &spacing)?;
+                st.serialize_field("angle_deg", &angle_deg)?;
+                st.serialize_field("line_width", &line_width)?;
+                st.serialize_field("colour", &colour)?;
+                st.end()
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for FillPaint {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        // accept either a hex string (Solid, legacy form preserved for
+        // wire-format symmetry) or a tagged map (Hatch et al.).
+        d.deserialize_any(FillPaintVisitor)
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum FillPaintTagged {
+    Solid {
+        colour: Colour,
+    },
+    Hatch {
+        spacing: f32,
+        angle_deg: f32,
+        line_width: f32,
+        colour: Colour,
+    },
+}
+
+impl From<FillPaintTagged> for FillPaint {
+    fn from(t: FillPaintTagged) -> Self {
+        match t {
+            FillPaintTagged::Solid { colour } => Self::Solid(colour),
+            FillPaintTagged::Hatch {
+                spacing,
+                angle_deg,
+                line_width,
+                colour,
+            } => Self::Hatch {
+                spacing,
+                angle_deg,
+                line_width,
+                colour,
+            },
+        }
+    }
+}
+
+struct FillPaintVisitor;
+
+impl<'de> serde::de::Visitor<'de> for FillPaintVisitor {
+    type Value = FillPaint;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("a hex colour string (#rrggbb / #rrggbbaa) or a tagged map (kind: solid|hatch)")
+    }
+
+    fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
+        Colour::from_str(v).map(FillPaint::Solid).map_err(E::custom)
+    }
+
+    fn visit_string<E: serde::de::Error>(self, v: String) -> Result<Self::Value, E> {
+        self.visit_str(&v)
+    }
+
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
+        let tagged = FillPaintTagged::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
+        Ok(tagged.into())
+    }
+}
+
 /// Polygon / line / point fill+stroke style.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct Style {
     #[serde(default)]
-    pub fill: Option<Colour>,
+    pub fill: Option<FillPaint>,
     #[serde(default)]
     pub stroke: Option<Colour>,
     #[serde(default)]
@@ -115,6 +273,10 @@ pub struct Style {
     pub stroke_linecap: Option<LineCap>,
     #[serde(default)]
     pub stroke_linejoin: Option<LineJoin>,
+    /// Point marker. Only meaningful when this style applies to a point
+    /// geometry; the runtime ignores it for line/polygon dispatch.
+    #[serde(default)]
+    pub marker: Option<MarkerSymbol>,
 }
 
 /// Label-typed style.
@@ -179,11 +341,15 @@ impl Placement {
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum PolygonStrategy {
-    /// Place the label at the polygon centroid.
+    /// Pole-of-inaccessibility (Mapbox polylabel): iterative interior-point
+    /// search. Always lands inside the polygon, even on L-shapes, donuts, and
+    /// concave geometry. Default for beta credibility.
     #[default]
+    #[serde(alias = "inner_skeleton")] // one-release migration from the v1.0 placeholder name
+    Polylabel,
+    /// True area-weighted polygon centroid (shoelace). Cheaper than polylabel,
+    /// but can land outside concave polygons.
     Centroid,
-    /// Reserved for v1.1: constrained inner-skeleton sample.
-    InnerSkeleton,
 }
 
 /// Per-layer label-survival policy across decimation levels.
@@ -233,7 +399,7 @@ pub fn default_placement(kind: LayerGeomKind) -> Placement {
             max_angle_delta_deg: 25.0,
         },
         LayerGeomKind::Polygon => Placement::Polygon {
-            strategy: PolygonStrategy::Centroid,
+            strategy: PolygonStrategy::Polylabel,
         },
         LayerGeomKind::Point => Placement::Point,
     }
@@ -301,12 +467,79 @@ mod tests {
 
     #[test]
     fn polygon_style_from_spec_example_round_trips() {
-        // mirrors: a `bygning_*` polygon style.
-        let json = r##"{"fill":"#fafafa","stroke":"#b4b4b4","stroke_width":0.6}"##;
-        let s: Style = serde_json::from_str(json).unwrap();
-        assert_eq!(s.fill.unwrap(), Colour::rgba(0xfa, 0xfa, 0xfa, 0xff));
+        // mirrors: a typical filled polygon style. bare-hex fill survives the
+        // FillPaint migration.
+        let yaml = "fill: '#fafafa'\nstroke: '#b4b4b4'\nstroke_width: 0.6\n";
+        let s: Style = serde_yaml_ng::from_str(yaml).unwrap();
+        assert!(matches!(s.fill, Some(FillPaint::Solid(c)) if c == Colour::rgba(0xfa, 0xfa, 0xfa, 0xff)));
         assert_eq!(s.stroke.unwrap(), Colour::rgba(0xb4, 0xb4, 0xb4, 0xff));
         assert!((s.stroke_width.unwrap() - 0.6).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn fill_paint_solid_yaml_roundtrip_bare_hex() {
+        let yaml = "'#fafafa'\n";
+        let fp: FillPaint = serde_yaml_ng::from_str(yaml).unwrap();
+        assert!(matches!(fp, FillPaint::Solid(c) if c == Colour::rgba(0xfa, 0xfa, 0xfa, 0xff)));
+        let out = serde_yaml_ng::to_string(&fp).unwrap();
+        assert_eq!(out.trim(), "'#fafafa'");
+    }
+
+    #[test]
+    fn fill_paint_solid_tagged_form_also_parses() {
+        let yaml = "kind: solid\ncolour: '#010203'\n";
+        let fp: FillPaint = serde_yaml_ng::from_str(yaml).unwrap();
+        assert!(matches!(fp, FillPaint::Solid(c) if c == Colour::rgba(1, 2, 3, 0xff)));
+    }
+
+    #[test]
+    fn fill_paint_hatch_yaml_roundtrip_tagged() {
+        let yaml = "kind: hatch\nspacing: 4.0\nangle_deg: 45.0\nline_width: 0.5\ncolour: '#404040'\n";
+        let fp: FillPaint = serde_yaml_ng::from_str(yaml).unwrap();
+        match fp {
+            FillPaint::Hatch {
+                spacing,
+                angle_deg,
+                line_width,
+                colour,
+            } => {
+                assert!((spacing - 4.0).abs() < f32::EPSILON);
+                assert!((angle_deg - 45.0).abs() < f32::EPSILON);
+                assert!((line_width - 0.5).abs() < f32::EPSILON);
+                assert_eq!(colour, Colour::rgba(0x40, 0x40, 0x40, 0xff));
+            }
+            _ => panic!("expected hatch"),
+        }
+        let out = serde_yaml_ng::to_string(&fp).unwrap();
+        assert!(out.contains("kind: hatch"));
+        assert!(out.contains("spacing: 4.0"));
+        assert!(out.contains("angle_deg: 45.0"));
+        assert!(out.contains("line_width: 0.5"));
+        assert!(out.contains("colour: '#404040'"));
+    }
+
+    #[test]
+    fn marker_symbol_yaml_roundtrip() {
+        let yaml = "kind: circle\nsize: 8.0\n";
+        let m: MarkerSymbol = serde_yaml_ng::from_str(yaml).unwrap();
+        assert!(matches!(m, MarkerSymbol::Circle { size } if (size - 8.0).abs() < f32::EPSILON));
+        let out = serde_yaml_ng::to_string(&m).unwrap();
+        assert!(out.contains("kind: circle"));
+        assert!(out.contains("size: 8"));
+    }
+
+    #[test]
+    fn marker_symbol_default_size_kicks_in() {
+        let m: MarkerSymbol = serde_yaml_ng::from_str("kind: triangle").unwrap();
+        assert!(matches!(m, MarkerSymbol::Triangle { size } if (size - 6.0).abs() < f32::EPSILON));
+    }
+
+    #[test]
+    fn style_with_marker_roundtrip() {
+        let yaml = "stroke: '#000000'\nstroke_width: 1.0\nfill: '#ff0000'\nmarker:\n  kind: pin\n  size: 10.0\n";
+        let s: Style = serde_yaml_ng::from_str(yaml).unwrap();
+        assert!(matches!(s.fill, Some(FillPaint::Solid(c)) if c == Colour::rgba(0xff, 0, 0, 0xff)));
+        assert!(matches!(s.marker, Some(MarkerSymbol::Pin { size }) if (size - 10.0).abs() < f32::EPSILON));
     }
 
     #[test]
@@ -342,15 +575,33 @@ mod tests {
         assert!(matches!(
             p,
             Placement::Polygon {
+                strategy: PolygonStrategy::Polylabel
+            }
+        ));
+
+        let p: Placement = serde_yaml_ng::from_str("kind: polygon\nstrategy: polylabel").unwrap();
+        assert!(matches!(
+            p,
+            Placement::Polygon {
+                strategy: PolygonStrategy::Polylabel
+            }
+        ));
+
+        let p: Placement = serde_yaml_ng::from_str("kind: polygon\nstrategy: centroid").unwrap();
+        assert!(matches!(
+            p,
+            Placement::Polygon {
                 strategy: PolygonStrategy::Centroid
             }
         ));
 
+        // one-release migration alias: legacy `inner_skeleton` must parse and
+        // map to Polylabel.
         let p: Placement = serde_yaml_ng::from_str("kind: polygon\nstrategy: inner_skeleton").unwrap();
         assert!(matches!(
             p,
             Placement::Polygon {
-                strategy: PolygonStrategy::InnerSkeleton
+                strategy: PolygonStrategy::Polylabel
             }
         ));
     }
@@ -365,7 +616,7 @@ mod tests {
         assert!(matches!(
             default_placement(LayerGeomKind::Polygon),
             Placement::Polygon {
-                strategy: PolygonStrategy::Centroid
+                strategy: PolygonStrategy::Polylabel
             }
         ));
     }

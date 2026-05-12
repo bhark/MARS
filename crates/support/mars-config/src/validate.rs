@@ -12,6 +12,7 @@ mod crs;
 mod label;
 mod layer;
 mod service;
+mod style;
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -40,6 +41,7 @@ pub fn validate(config: &mut Config, config_dir: &Path) -> Result<(), ConfigErro
     service::validate_service(config)?;
     compiler::validate_compiler_and_render(config)?;
     crs::validate_native_crs(config)?;
+    style::validate_styles(&config.styles)?;
 
     let bands = band::validate_bands(config)?;
     layer::validate_layers(config, &bands)?;

@@ -1,7 +1,7 @@
 //! tiny-skia rasterisation helpers.
 
 use mars_render_port::{Path as PortPath, RenderError};
-use mars_style::{Colour, LabelStyle, LineCap as SLineCap, LineJoin as SLineJoin, Style};
+use mars_style::{Colour, FillPaint, LabelStyle, LineCap as SLineCap, LineJoin as SLineJoin, Style};
 use mars_text::{Fonts, GlyphMask};
 use tiny_skia::{Color, FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Stroke, StrokeDash, Transform};
 
@@ -84,7 +84,11 @@ pub(crate) fn draw_path(pm: &mut Pixmap, path: &PortPath, style: &Style) {
         return;
     };
 
-    if let Some(fill) = style.fill
+    // commit 1: only Solid paths are honoured here; Hatch lands in commit 4.
+    // until then a Hatch fill is a no-op (the polygon's outline still draws
+    // via the stroke arm below) so behavior is forward-compatible without
+    // partially-rendered cells.
+    if let Some(FillPaint::Solid(fill)) = style.fill
         && is_fillable(&tsk_path)
     {
         let mut paint = Paint::default();

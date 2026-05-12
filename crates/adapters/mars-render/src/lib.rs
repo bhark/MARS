@@ -151,7 +151,7 @@ mod tests {
 
     use super::*;
     use mars_render_port::{Path as PortPath, Subpath};
-    use mars_style::{Colour, Style};
+    use mars_style::{Colour, FillPaint, Style};
 
     fn red() -> Colour {
         Colour {
@@ -253,7 +253,7 @@ mod tests {
         let ops = vec![DrawOp::Path {
             path: square(32.0, 32.0, 16.0),
             style: Arc::new(Style {
-                fill: Some(red()),
+                fill: Some(FillPaint::Solid(red())),
                 ..Default::default()
             }),
         }];
@@ -272,7 +272,7 @@ mod tests {
         let ops = vec![DrawOp::Path {
             path: square(32.0, 32.0, 16.0),
             style: Arc::new(Style {
-                fill: Some(red()),
+                fill: Some(FillPaint::Solid(red())),
                 ..Default::default()
             }),
         }];
@@ -367,7 +367,7 @@ mod tests {
         let ops = vec![DrawOp::Path {
             path,
             style: Arc::new(Style {
-                fill: Some(red()),
+                fill: Some(FillPaint::Solid(red())),
                 ..Default::default()
             }),
         }];
@@ -477,7 +477,7 @@ mod tests {
         let ops = vec![DrawOp::Path {
             path: square(16.0, 16.0, 8.0),
             style: Arc::new(Style {
-                fill: Some(red()),
+                fill: Some(FillPaint::Solid(red())),
                 ..Default::default()
             }),
         }];
@@ -540,7 +540,7 @@ mod tests {
         let ops = vec![DrawOp::Path {
             path: square(32.0, 32.0, 16.0),
             style: Arc::new(Style {
-                fill: Some(mars_style::Colour::rgb(220, 240, 255)),
+                fill: Some(FillPaint::Solid(mars_style::Colour::rgb(220, 240, 255))),
                 stroke: Some(mars_style::Colour::rgb(40, 150, 230)),
                 stroke_width: Some(0.15),
                 ..Default::default()
@@ -574,7 +574,7 @@ mod tests {
         let ops = vec![DrawOp::Path {
             path: square(32.0, 32.0, 16.0),
             style: Arc::new(Style {
-                fill: Some(red()),
+                fill: Some(FillPaint::Solid(red())),
                 ..Default::default()
             }),
         }];

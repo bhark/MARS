@@ -35,7 +35,7 @@ use mars_render_port::{Canvas, DrawOp, EncodeError, Encoder, ImageFormat, Pixmap
 use mars_runtime::{Deps, Fonts, RenderPlan, Runtime, RuntimeState};
 use mars_store::mem::{InMemoryCache, InMemoryStore};
 use mars_store::{LocalCache, ObjectStore};
-use mars_style::{Colour, LabelStyle, LabelSurvival, Style, Stylesheet};
+use mars_style::{Colour, FillPaint, LabelStyle, LabelSurvival, Style, Stylesheet};
 use mars_types::{
     Bbox, BindingId, BindingMetadata, CrsCode, DecimationLevel, HilbertKey, ImageFormat as TImageFormat, LayerId,
     LayerSidecarEntry, LayerSidecarKind, MANIFEST_FORMAT_VERSION, Manifest, PageEntry, PageId, PageKey,
@@ -475,12 +475,12 @@ fn build_minimal_stylesheet() -> Stylesheet {
 
 fn default_style() -> Style {
     Style {
-        fill: Some(Colour {
+        fill: Some(FillPaint::Solid(Colour {
             r: 200,
             g: 200,
             b: 200,
             a: 255,
-        }),
+        })),
         stroke: Some(Colour {
             r: 64,
             g: 64,
@@ -491,6 +491,7 @@ fn default_style() -> Style {
         stroke_dasharray: None,
         stroke_linecap: None,
         stroke_linejoin: None,
+        marker: None,
     }
 }
 
@@ -823,17 +824,18 @@ fn build_multi_layer_stylesheet(n_layers: usize) -> Stylesheet {
         // distinct fill colour per layer so tests can recover layer index
         // from the emitted DrawOp::Path style.
         let style = Style {
-            fill: Some(Colour {
+            fill: Some(FillPaint::Solid(Colour {
                 r: (10 * (i + 1)) as u8,
                 g: 0,
                 b: 0,
                 a: 255,
-            }),
+            })),
             stroke: None,
             stroke_width: None,
             stroke_dasharray: None,
             stroke_linecap: None,
             stroke_linejoin: None,
+            marker: None,
         };
         ss.geometry.insert(format!("layer_{i}__main"), Arc::new(style));
     }

@@ -165,23 +165,24 @@ pub(super) fn world_to_pixel(c: (f64, f64), viewport: Bbox, w: u32, h: u32) -> (
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
-    use mars_style::Colour;
+    use mars_style::{Colour, FillPaint};
 
     use super::*;
 
     fn test_style() -> Arc<Style> {
         Arc::new(Style {
-            fill: Some(Colour {
+            fill: Some(FillPaint::Solid(Colour {
                 r: 0,
                 g: 0,
                 b: 0,
                 a: 255,
-            }),
+            })),
             stroke: None,
             stroke_width: None,
             stroke_dasharray: None,
             stroke_linecap: None,
             stroke_linejoin: None,
+            marker: None,
         })
     }
 
