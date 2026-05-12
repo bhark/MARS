@@ -76,6 +76,25 @@ pub(crate) fn fill_background(pm: &mut Pixmap, c: Colour) {
     pm.fill(colour_to_tsk(c));
 }
 
+/// dispatch on the `FillPaint` variant. Solid paints with the colour;
+/// Hatch is implemented in a follow-up commit and is currently a no-op so
+/// the stroke arm still runs (outline-only render is the conservative
+/// fallback when the fill cannot be honoured).
+fn draw_fill(pm: &mut Pixmap, path: &tiny_skia::Path, fill: FillPaint) {
+    match fill {
+        FillPaint::Solid(c) => {
+            let mut paint = Paint::default();
+            paint.set_color(colour_to_tsk(c));
+            paint.anti_alias = true;
+            pm.fill_path(path, &paint, FillRule::EvenOdd, Transform::identity(), None);
+        }
+        // hatch and other procedural paints land in the next commit.
+        FillPaint::Hatch { .. } => {}
+        // future FillPaint variants are forward-compatible no-ops.
+        _ => {}
+    }
+}
+
 /// draw a single styled path. uses even-odd fill rule (matches mapserver/qgis
 /// expectations for self-intersecting symbol geometry; non-zero would change
 /// the visual outcome of holes-as-CCW-rings produced upstream).
@@ -84,17 +103,10 @@ pub(crate) fn draw_path(pm: &mut Pixmap, path: &PortPath, style: &Style) {
         return;
     };
 
-    // commit 1: only Solid paths are honoured here; Hatch lands in commit 4.
-    // until then a Hatch fill is a no-op (the polygon's outline still draws
-    // via the stroke arm below) so behavior is forward-compatible without
-    // partially-rendered cells.
-    if let Some(FillPaint::Solid(fill)) = style.fill
+    if let Some(fill) = style.fill
         && is_fillable(&tsk_path)
     {
-        let mut paint = Paint::default();
-        paint.set_color(colour_to_tsk(fill));
-        paint.anti_alias = true;
-        pm.fill_path(&tsk_path, &paint, FillRule::EvenOdd, Transform::identity(), None);
+        draw_fill(pm, &tsk_path, fill);
     }
 
     if let Some(stroke_col) = style.stroke {
