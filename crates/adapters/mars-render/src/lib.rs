@@ -9,6 +9,7 @@ mod path;
 mod path_offset;
 mod prepare;
 mod raster;
+mod stroke;
 
 use std::sync::Arc;
 
@@ -273,67 +274,6 @@ mod tests {
     }
 
     #[test]
-    fn stroked_line_has_pixels() {
-        let canvas = Canvas {
-            width: 64,
-            height: 64,
-            background: None,
-        };
-        let path = PortPath {
-            subpaths: vec![Subpath {
-                points: vec![(8.0, 32.0), (56.0, 32.0)],
-                closed: false,
-            }],
-        };
-        let ops = vec![DrawOp::Path {
-            path,
-            style: Arc::new(Style {
-                stroke: Some(red()),
-                stroke_width: Some(2.0),
-                ..Default::default()
-            }),
-        }];
-        let png_bytes = render_png(canvas, &ops);
-        let (w, _, rgba) = decode(&png_bytes);
-        let row = 32usize * w as usize * 4;
-        let on_row: usize = rgba[row..row + w as usize * 4]
-            .chunks_exact(4)
-            .filter(|p| p[3] > 0)
-            .count();
-        assert!(on_row >= 40, "expected stroked pixels on row 32, got {on_row}");
-    }
-
-    #[test]
-    fn open_linestring_does_not_close() {
-        // a v-shaped open line drawn near the top-left corner should not have
-        // pixels in the bottom-right, which it would if tiny-skia closed it.
-        let canvas = Canvas {
-            width: 64,
-            height: 64,
-            background: None,
-        };
-        let path = PortPath {
-            subpaths: vec![Subpath {
-                points: vec![(10.0, 10.0), (30.0, 10.0), (30.0, 30.0)],
-                closed: false,
-            }],
-        };
-        let ops = vec![DrawOp::Path {
-            path,
-            style: Arc::new(Style {
-                stroke: Some(red()),
-                stroke_width: Some(1.0),
-                ..Default::default()
-            }),
-        }];
-        let png_bytes = render_png(canvas, &ops);
-        let (w, _, rgba) = decode(&png_bytes);
-        // bottom-right corner should remain transparent
-        let br = ((w - 2) * 4) as usize + ((w * (canvas.height - 2)) * 4) as usize;
-        assert_eq!(rgba[br + 3], 0, "open linestring must not close to bottom-right");
-    }
-
-    #[test]
     fn label_op_is_skipped_not_errored() {
         let canvas = Canvas {
             width: 8,
@@ -461,45 +401,6 @@ mod tests {
     }
 
     #[test]
-    fn subpixel_stroke_0_15_is_visible_and_soft() {
-        // a 0.15 px stroke must be visible (regression: tiny-skia drops thin
-        // strokes outright) AND must be soft, not full-intensity. AGG-style
-        // emulation = 1px stroke at proportional alpha. concretely: edge
-        // pixels are tinted toward stroke from fill, but never approach the
-        // raw stroke colour.
-        let canvas = Canvas {
-            width: 64,
-            height: 64,
-            background: Some(white()),
-        };
-        let ops = vec![DrawOp::Path {
-            path: square(32.0, 32.0, 16.0),
-            style: Arc::new(Style {
-                fill: Some(FillPaint::Solid(mars_style::Colour::rgb(220, 240, 255))),
-                stroke: Some(mars_style::Colour::rgb(40, 150, 230)),
-                stroke_width: Some(0.15),
-                ..Default::default()
-            }),
-        }];
-        let (_, _, rgba) = decode(&render_png(canvas, &ops));
-
-        // pixels with red strictly below pure fill (220) require stroke
-        // contribution: pure white->fill anti-alias only produces r in
-        // [220, 255]. their existence proves the stroke actually rendered.
-        let stroke_tinted = rgba.chunks_exact(4).filter(|p| p[0] < 220 && p[3] > 0).count();
-        assert!(stroke_tinted > 0, "sub-pixel stroke produced no visible tint");
-
-        // and: no pixel should be saturated toward the raw stroke colour.
-        // a full-alpha 1px stroke would produce pixels with r near 40; under
-        // 15% alpha-scaled emulation r should stay well above ~150.
-        let saturated = rgba.chunks_exact(4).filter(|p| p[0] < 120).count();
-        assert_eq!(
-            saturated, 0,
-            "sub-pixel stroke is rendering at full intensity ({saturated} saturated px)"
-        );
-    }
-
-    #[test]
     fn rotated_label_lands_in_rotated_bbox() {
         // 90-degree rotation: a horizontal label anchored at the centre
         // should produce painted pixels along a vertical strip, not a
@@ -563,43 +464,6 @@ mod tests {
         // upright run is wide and short; rotated run is tall and narrow.
         assert!(uw > uh, "upright label not horizontally extended: {uw}x{uh}");
         assert!(rh > rw, "rotated label not vertically extended: {rw}x{rh}");
-    }
-
-    #[test]
-    fn stroke_offset_shifts_line_perpendicular() {
-        // a horizontal line at y=32 with stroke_offset_px=+8 (right-hand of
-        // direction of travel, y-down) should paint near y=40, not y=32.
-        let canvas = Canvas {
-            width: 64,
-            height: 64,
-            background: None,
-        };
-        let path = PortPath {
-            subpaths: vec![Subpath {
-                points: vec![(8.0, 32.0), (56.0, 32.0)],
-                closed: false,
-            }],
-        };
-        let ops = vec![DrawOp::Path {
-            path,
-            style: Arc::new(Style {
-                stroke: Some(red()),
-                stroke_width: Some(2.0),
-                stroke_offset_px: Some(8.0),
-                ..Default::default()
-            }),
-        }];
-        let png_bytes = render_png(canvas, &ops);
-        let (w, _, rgba) = decode(&png_bytes);
-        // row 40 should carry the stroke; row 32 should be empty.
-        let row_has_pixels = |y: usize| {
-            let off = y * w as usize * 4;
-            rgba[off..off + w as usize * 4]
-                .chunks_exact(4)
-                .any(|p| p[3] > 0 && p[0] > 150)
-        };
-        assert!(!row_has_pixels(32), "stroke wasn't displaced from y=32");
-        assert!(row_has_pixels(40), "stroke didn't land at y=40");
     }
 
     #[test]

@@ -4,10 +4,11 @@
 //! adding a new `Style` field touches `resolve` in one place; downstream code
 //! reads from `Resolved*` instead of re-doing the Option dance per call site.
 
-use mars_style::{FillPaint, Style};
+use mars_style::{FillPaint, StrokeGap, Style};
 use tiny_skia::{LineCap, LineJoin, StrokeDash};
 
 use crate::canvas::{map_cap, map_join};
+use crate::stroke;
 
 #[derive(Debug)]
 pub(crate) struct Resolved {
@@ -40,6 +41,9 @@ pub(crate) struct ResolvedStroke {
     /// 0 if unset; positive = right of direction of travel in y-down pixel
     /// space.
     pub offset_px: f32,
+    /// stamped-marker-along-line. parity stub today; the stroke pipeline
+    /// logs at debug when present.
+    pub gap: Option<StrokeGap>,
 }
 
 pub(crate) fn resolve(style: &Style) -> Resolved {
@@ -57,16 +61,7 @@ pub(crate) fn resolve(style: &Style) -> Resolved {
         } else {
             (requested, 1.0)
         };
-        let dash = style.stroke_dasharray.as_ref().and_then(|dashes| {
-            if dashes.is_empty() {
-                return None;
-            }
-            let built = StrokeDash::new(dashes.clone(), 0.0);
-            if built.is_none() {
-                tracing::warn!(dashes = ?dashes, "invalid stroke dash array: odd length, rendering solid");
-            }
-            built
-        });
+        let dash = style.stroke_dasharray.as_deref().and_then(stroke::dash::build);
         let offset_px = match style.stroke_offset_px {
             Some(d) if d.is_finite() && d.abs() > f32::EPSILON => d,
             _ => 0.0,
@@ -79,6 +74,7 @@ pub(crate) fn resolve(style: &Style) -> Resolved {
             join: style.stroke_linejoin.map(map_join).unwrap_or(LineJoin::Miter),
             dash,
             offset_px,
+            gap: style.stroke_gap,
         })
     });
 
@@ -118,6 +114,7 @@ mod tests {
         assert!((st.width - 2.0).abs() < 1e-6);
         assert!(st.dash.is_none());
         assert_eq!(st.offset_px, 0.0);
+        assert!(st.gap.is_none());
     }
 
     #[test]

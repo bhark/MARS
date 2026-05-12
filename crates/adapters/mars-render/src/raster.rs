@@ -3,13 +3,13 @@
 use mars_render_port::{Path as PortPath, RenderError};
 use mars_style::{Colour, LabelStyle, Style};
 use mars_text::{Fonts, GlyphMask};
-use tiny_skia::{Paint, Pixmap, Stroke, Transform};
+use tiny_skia::Pixmap;
 
-use crate::canvas::{div255, scaled_alpha};
+use crate::canvas::div255;
 use crate::fill;
 use crate::path::build_path;
-use crate::path_offset::offset_polyline;
 use crate::prepare;
+use crate::stroke;
 
 /// draw a single styled path. uses even-odd fill rule (matches mapserver/qgis
 /// expectations for self-intersecting symbol geometry; non-zero would change
@@ -24,36 +24,12 @@ pub(crate) fn draw_path(pm: &mut Pixmap, path: &PortPath, style: &Style) {
         fill::draw(pm, &tsk_path, fill_resolved);
     }
 
-    if style.stroke_gap.is_some() {
-        // stamped-marker-along-line is on the parity backlog. fire once per
-        // style so the warning shows up in tests without spamming hot tile
-        // paths; downgrade to debug once stroke_gap stamping lands.
-        tracing::debug!("Style::stroke_gap set but stamped-along-line marker rendering is not yet implemented");
-    }
     if matches!(style.marker, Some(mars_style::MarkerSymbol::Glyph { .. })) {
         tracing::debug!("Style::marker glyph rendering is not yet implemented in the renderer");
     }
 
-    if let Some(stroke) = resolved.stroke {
-        let mut paint = Paint::default();
-        paint.set_color(scaled_alpha(stroke.colour, stroke.alpha));
-        paint.anti_alias = true;
-
-        let tsk_stroke = Stroke {
-            width: stroke.width,
-            line_cap: stroke.cap,
-            line_join: stroke.join,
-            dash: stroke.dash,
-            ..Stroke::default()
-        };
-        let stroke_path = if stroke.offset_px != 0.0 {
-            offset_polyline(path, stroke.offset_px)
-                .and_then(|p| build_path(&p))
-                .unwrap_or(tsk_path)
-        } else {
-            tsk_path
-        };
-        pm.stroke_path(&stroke_path, &paint, &tsk_stroke, Transform::identity(), None);
+    if let Some(stroke_resolved) = &resolved.stroke {
+        stroke::draw(pm, path, &tsk_path, stroke_resolved);
     }
 }
 
