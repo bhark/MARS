@@ -32,7 +32,7 @@ async fn rendering_goldens() -> Result<()> {
 
     // ensure runtime is serving before we render.
     wait::until("runtime /readyz returns 200", Duration::from_secs(300), || async {
-        let r = http::get(client.clone(), ns, "mars-mars-e2e", 8080, "/readyz").await?;
+        let r = http::get(client.clone(), ns, "mars-e2e-runtime", 8080, "/readyz").await?;
         if r.status == 200 { Ok(Some(())) } else { Ok(None) }
     })
     .await?;
@@ -42,7 +42,7 @@ async fn rendering_goldens() -> Result<()> {
     std::fs::create_dir_all(&goldens).context("ensure goldens dir")?;
 
     for case in CASES {
-        let r = http::get(client.clone(), ns, "mars-mars-e2e", 8080, case.path_and_query).await?;
+        let r = http::get(client.clone(), ns, "mars-e2e-runtime", 8080, case.path_and_query).await?;
         if r.status != 200 {
             return Err(anyhow!(
                 "case {}: status {} ({} bytes)",

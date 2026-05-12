@@ -13,25 +13,25 @@ async fn bootstrap() -> Result<()> {
     let client = scenario.client.clone();
     let ns = &scenario.ns.name;
 
-    // operator-rendered Deployments: names match the operator's child-builder
-    // convention (`mars-{name}-runtime` / `-compiler`). update if the operator
-    // changes its naming.
-    wait::deployment_ready(client.clone(), ns, "mars-mars-e2e-runtime", Duration::from_secs(300)).await?;
-    wait::deployment_ready(client.clone(), ns, "mars-mars-e2e-compiler", Duration::from_secs(300)).await?;
+    // operator-rendered Deployments + Service: names follow the child-builder
+    // convention `{svc}-{role}` (see bin/mars-operator/src/children/labels.rs).
+    // update if the operator changes its naming.
+    wait::deployment_ready(client.clone(), ns, "mars-e2e-runtime", Duration::from_secs(300)).await?;
+    wait::deployment_ready(client.clone(), ns, "mars-e2e-compiler", Duration::from_secs(300)).await?;
 
     // /healthz: always 200 once the http server is listening.
-    let r = http::get(client.clone(), ns, "mars-mars-e2e", 8080, "/healthz").await?;
+    let r = http::get(client.clone(), ns, "mars-e2e-runtime", 8080, "/healthz").await?;
     assert_eq!(r.status, 200, "/healthz status");
 
     // /readyz: 200 once a manifest has been loaded from the artifact store.
     wait::until("runtime /readyz returns 200", Duration::from_secs(300), || async {
-        let r = http::get(client.clone(), ns, "mars-mars-e2e", 8080, "/readyz").await?;
+        let r = http::get(client.clone(), ns, "mars-e2e-runtime", 8080, "/readyz").await?;
         if r.status == 200 { Ok(Some(())) } else { Ok(None) }
     })
     .await?;
 
     // /metrics: parse + assert manifest version published, no rejects.
-    let r = http::get(client.clone(), ns, "mars-mars-e2e", 8080, "/metrics").await?;
+    let r = http::get(client.clone(), ns, "mars-e2e-runtime", 8080, "/metrics").await?;
     assert_eq!(r.status, 200);
     let scraped = metrics::Scraped::parse(&r.body)?;
     let version = scraped.gauge("mars_manifest_version")?;
