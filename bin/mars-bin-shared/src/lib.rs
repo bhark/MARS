@@ -98,13 +98,26 @@ pub fn build_store_and_publisher(cfg: &Config) -> Result<(Arc<dyn ObjectStore>, 
                     "artifacts.store.endpoint uses http://; set artifacts.store.allow_http=true to permit plaintext"
                 ));
             }
+            // explicit env-cred passthrough: object_store's default chain still
+            // probes imds (169.254.169.254) and ignores AWS_EC2_METADATA_DISABLED,
+            // which stalls hot starts for ~14s/request in environments without
+            // ec2 metadata. binding both env vars onto the builder short-circuits
+            // the chain entirely; absence preserves the chain for IRSA / instance
+            // profile / shared-creds workflows.
+            let (access_key_id, secret_access_key) = match (
+                std::env::var("AWS_ACCESS_KEY_ID").ok(),
+                std::env::var("AWS_SECRET_ACCESS_KEY").ok(),
+            ) {
+                (Some(a), Some(s)) if !a.is_empty() && !s.is_empty() => (Some(a), Some(s)),
+                _ => (None, None),
+            };
             let s3 = S3Config {
                 endpoint: cfg.artifacts.store.endpoint.clone(),
                 region,
                 bucket,
                 prefix: cfg.artifacts.store.prefix.clone().unwrap_or_default(),
-                access_key_id: None,
-                secret_access_key: None,
+                access_key_id,
+                secret_access_key,
                 allow_http: endpoint_is_plaintext,
                 allow_non_atomic_publish: cfg.artifacts.store.allow_non_atomic_publish,
                 conditional_put: cfg.artifacts.store.conditional_put.clone(),
