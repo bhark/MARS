@@ -1,0 +1,135 @@
+# single-node seaweedfs for s3-compatible artifact storage. ephemeral
+# emptyDir; tests don't outlive the namespace. credentials are static (mounted
+# via secret + iam configmap) so the test runner doesn't need to bootstrap the
+# backend out-of-band.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mars-s3-credentials
+type: Opaque
+stringData:
+  # consumed by MarsService.spec.{runtime,compiler}.envFrom; also referenced
+  # by the bucket-init Job below. weak on purpose - single-namespace test.
+  AWS_ACCESS_KEY_ID: "mars-e2e-key"
+  AWS_SECRET_ACCESS_KEY: "mars-e2e-secret-key-do-not-use-anywhere-real"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: seaweedfs-iam
+data:
+  iam.json: |
+    {
+      "identities": [
+        {
+          "name": "mars",
+          "credentials": [
+            {
+              "accessKey": "mars-e2e-key",
+              "secretKey": "mars-e2e-secret-key-do-not-use-anywhere-real"
+            }
+          ],
+          "actions": ["Admin", "Read", "Write", "List", "Tagging"]
+        }
+      ]
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: seaweedfs
+  labels:
+    app: seaweedfs
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: seaweedfs
+  template:
+    metadata:
+      labels:
+        app: seaweedfs
+    spec:
+      containers:
+        - name: seaweedfs
+          image: chrislusf/seaweedfs:4.23
+          args:
+            - server
+            - -s3
+            - -s3.config=/etc/seaweedfs/iam.json
+            - -dir=/data
+            - -master.volumeSizeLimitMB=128
+          ports:
+            - { name: s3, containerPort: 8333 }
+          readinessProbe:
+            tcpSocket: { port: 8333 }
+            initialDelaySeconds: 2
+            periodSeconds: 2
+          volumeMounts:
+            - { name: iam,  mountPath: /etc/seaweedfs }
+            - { name: data, mountPath: /data }
+      volumes:
+        - name: iam
+          configMap:
+            name: seaweedfs-iam
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: seaweedfs
+spec:
+  selector:
+    app: seaweedfs
+  ports:
+    - { name: s3, port: 8333, targetPort: 8333 }
+---
+# create the mars-artifacts bucket via the standard S3 API. mars-store-s3
+# does not call CreateBucket; the bucket must exist before any PutObject.
+# pod-to-pod traffic avoids the apiserver proxy auth strip that prevented
+# the previous out-of-cluster admin-api bootstrap.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: seaweedfs-bucket-init
+spec:
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: bucket-init
+          image: amazon/aws-cli:2.34.45
+          envFrom:
+            - secretRef:
+                name: mars-s3-credentials
+          env:
+            - { name: AWS_REGION,      value: us-east-1 }
+            - { name: AWS_EC2_METADATA_DISABLED, value: "true" }
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              endpoint=http://seaweedfs:8333
+              echo "[init] waiting for seaweedfs s3 endpoint"
+              i=0
+              until aws --endpoint-url "$endpoint" s3 ls >/dev/null 2>&1; do
+                i=$((i + 1))
+                if [ "$i" -ge 60 ]; then
+                  echo "[init] seaweedfs s3 endpoint not ready after 60 attempts" >&2
+                  exit 1
+                fi
+                sleep 2
+              done
+              echo "[init] creating bucket mars-artifacts"
+              if aws --endpoint-url "$endpoint" s3api head-bucket --bucket mars-artifacts >/dev/null 2>&1; then
+                echo "[init] bucket already exists"
+              else
+                aws --endpoint-url "$endpoint" s3 mb s3://mars-artifacts
+              fi
+              echo "[init] done"

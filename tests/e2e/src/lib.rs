@@ -7,7 +7,6 @@
 pub mod cluster;
 pub mod deploy;
 pub mod fixtures;
-pub mod garage;
 pub mod http;
 pub mod metrics;
 pub mod namespace;

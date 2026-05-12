@@ -1,10 +1,10 @@
 //! shared scenario builder. each test calls `Scenario::up(prefix).await?` to
-//! get a freshly provisioned namespace with garage + postgis + the fixture
+//! get a freshly provisioned namespace with seaweedfs + postgis + the fixture
 //! loaded + a MarsService applied. drop = namespace teardown (unless
 //! MARS_E2E_KEEP=1).
 
 use anyhow::{Context, Result, anyhow};
-use mars_e2e_kind::{cluster, deploy, fixtures, garage, namespace::NamespaceGuard, wait};
+use mars_e2e_kind::{cluster, deploy, fixtures, namespace::NamespaceGuard, wait};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -26,18 +26,26 @@ impl Scenario {
         let disc = deploy::discovery(client.clone()).await?;
         let mtmpl = manifests_dir();
 
-        // garage first; its bootstrap writes the Secret that MarsService needs.
+        // seaweedfs first; the bundled bucket-init Job creates mars-artifacts
+        // (mars-store-s3 never calls CreateBucket) and the Secret with static
+        // AK/SK is part of the same manifest, so MarsService can come up next.
         deploy::apply_template(
             client.clone(),
             &disc,
             &ns.name,
-            mtmpl.join("garage.yaml.tmpl"),
+            mtmpl.join("seaweedfs.yaml.tmpl"),
             &HashMap::new(),
         )
         .await
-        .context("apply garage manifest")?;
-        wait::deployment_ready(client.clone(), &ns.name, "garage", Duration::from_secs(120)).await?;
-        garage::bootstrap(client.clone(), &ns.name).await?;
+        .context("apply seaweedfs manifest")?;
+        wait::deployment_ready(client.clone(), &ns.name, "seaweedfs", Duration::from_secs(120)).await?;
+        wait::job_succeeded(
+            client.clone(),
+            &ns.name,
+            "seaweedfs-bucket-init",
+            Duration::from_secs(120),
+        )
+        .await?;
 
         // postgis in parallel with the fixture loader's setup steps would be
         // ideal; for simplicity, serial.

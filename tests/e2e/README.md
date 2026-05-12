@@ -3,7 +3,7 @@
 A true end-to-end harness: spins up a [kind](https://kind.sigs.k8s.io/) cluster,
 builds the `mars` and `mars-operator` images locally, helm-installs the
 operator chart, then asserts production-equivalent behaviour through a real
-`MarsService` CR pointing at an in-cluster Garage (S3-compatible) and PostGIS.
+`MarsService` CR pointing at an in-cluster SeaweedFS (S3-compatible) and PostGIS.
 
 The faster docker-compose smoke lives at `scripts/run-integration.sh` and is
 intentionally narrower in scope (no operator, no S3, no kind).
@@ -40,7 +40,7 @@ tests/e2e/
 ├── Cargo.toml                    # excluded from the root workspace
 ├── kind.yaml                     # cluster config (single node + extraMount)
 ├── src/                          # driver crate (kube::Client wiring, http,
-│                                 # garage admin api, deploy helpers, waits)
+│                                 # deploy helpers, waits)
 ├── tests/
 │   ├── e2e_suite.rs              # single test binary; declares submodules
 │   └── e2e_suite/

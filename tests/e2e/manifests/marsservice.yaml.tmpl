@@ -1,6 +1,6 @@
-# MarsService CR pointing at the in-namespace garage + postgis. the operator
-# (cluster-scoped, single install) reconciles this into ConfigMap + PVCs +
-# compiler/runtime Deployments + Service.
+# MarsService CR pointing at the in-namespace seaweedfs + postgis. the
+# operator (cluster-scoped, single install) reconciles this into ConfigMap +
+# PVCs + compiler/runtime Deployments + Service.
 apiVersion: mars.forn.dk/v1alpha1
 kind: MarsService
 metadata:
@@ -19,7 +19,7 @@ spec:
       workSize: 1Gi
       storageClass: ""
     env:
-      - { name: AWS_REGION, value: garage }
+      - { name: AWS_REGION, value: us-east-1 }
       - { name: PG_DSN, value: "postgres://mars:mars@postgis:5432/mars" }
     envFrom:
       - secretRef:
@@ -36,7 +36,7 @@ spec:
       serviceType: ClusterIP
       port: 8080
     env:
-      - { name: AWS_REGION, value: garage }
+      - { name: AWS_REGION, value: us-east-1 }
       - { name: PG_DSN, value: "postgres://mars:mars@postgis:5432/mars" }
     envFrom:
       - secretRef:
@@ -62,8 +62,8 @@ spec:
     artifacts:
       store:
         type: s3
-        endpoint: "http://garage:3900"
-        region: garage
+        endpoint: "http://seaweedfs:8333"
+        region: us-east-1
         bucket: mars-artifacts
         prefix: e2e
         allow_http: true

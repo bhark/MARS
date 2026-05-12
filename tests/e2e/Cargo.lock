@@ -1042,7 +1042,6 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "async-trait",
- "base64",
  "bytes",
  "futures-util",
  "http",
@@ -1053,7 +1052,6 @@ dependencies = [
  "prometheus-parse",
  "rand",
  "serde",
- "serde_json",
  "serde_yaml_ng",
  "tempfile",
  "tokio",
