@@ -4,6 +4,7 @@
 
 mod encode;
 mod path;
+mod path_offset;
 mod raster;
 
 use std::sync::Arc;
