@@ -2756,7 +2756,6 @@ dependencies = [
  "futures-core",
  "futures-util",
  "mars-types",
- "parking_lot",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

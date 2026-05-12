@@ -5,15 +5,18 @@
 //! application-layer tests, keeping the test surface aligned with the port
 //! traits.
 
+// test-utils fake; poisoning means a prior test panicked while holding the
+// lock - propagate that as a panic here too, no recovery path is meaningful.
+#![allow(clippy::expect_used)]
+
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_core::stream::BoxStream;
 use futures_util::stream;
 use mars_types::{ArtifactKey, ContentHash, Manifest};
-use parking_lot::Mutex;
 
 use crate::{LocalCache, ManifestStore, ObjectStore, StoreError};
 
@@ -39,7 +42,7 @@ impl InMemoryStore {
 #[async_trait]
 impl ObjectStore for InMemoryStore {
     async fn get(&self, key: &ArtifactKey, expected: ContentHash) -> Result<Bytes, StoreError> {
-        let lock = self.data.lock();
+        let lock = self.data.lock().expect("mem store mutex poisoned");
         let (bytes, hash) = lock.get(key).ok_or_else(|| StoreError::NotFound(key.clone()))?;
         if *hash != expected {
             return Err(StoreError::HashMismatch { key: key.clone() });
@@ -49,19 +52,19 @@ impl ObjectStore for InMemoryStore {
 
     async fn put(&self, key: &ArtifactKey, body: Bytes) -> Result<ContentHash, StoreError> {
         let hash = compute_hash(&body);
-        let mut lock = self.data.lock();
+        let mut lock = self.data.lock().expect("mem store mutex poisoned");
         lock.insert(key.clone(), (body, hash));
         Ok(hash)
     }
 
     async fn delete(&self, key: &ArtifactKey) -> Result<(), StoreError> {
-        let mut lock = self.data.lock();
+        let mut lock = self.data.lock().expect("mem store mutex poisoned");
         lock.remove(key);
         Ok(())
     }
 
     async fn list(&self, prefix: &str) -> Result<Vec<ArtifactKey>, StoreError> {
-        let lock = self.data.lock();
+        let lock = self.data.lock().expect("mem store mutex poisoned");
         let keys: Vec<_> = lock
             .keys()
             .filter(|k| k.as_str().starts_with(prefix))
@@ -95,7 +98,7 @@ impl LocalCache for InMemoryCache {
         origin: &dyn ObjectStore,
     ) -> Result<Bytes, StoreError> {
         {
-            let lock = self.data.lock();
+            let lock = self.data.lock().expect("mem store mutex poisoned");
             if let Some(bytes) = lock.get(key) {
                 // verify hash on cached entry
                 let actual = compute_hash(bytes);
@@ -105,7 +108,7 @@ impl LocalCache for InMemoryCache {
             }
         }
         let bytes = origin.get(key, expected).await?;
-        let mut lock = self.data.lock();
+        let mut lock = self.data.lock().expect("mem store mutex poisoned");
         lock.insert(key.clone(), bytes.clone());
         Ok(bytes)
     }
@@ -130,13 +133,13 @@ impl InMemoryPublisher {
 #[async_trait]
 impl ManifestStore for InMemoryPublisher {
     async fn publish(&self, manifest: &Manifest) -> Result<u64, StoreError> {
-        let mut lock = self.manifest.lock();
+        let mut lock = self.manifest.lock().expect("mem store mutex poisoned");
         *lock = Some(manifest.clone());
         Ok(manifest.version)
     }
 
     async fn current(&self) -> Result<Option<Manifest>, StoreError> {
-        let lock = self.manifest.lock();
+        let lock = self.manifest.lock().expect("mem store mutex poisoned");
         Ok(lock.clone())
     }
 
