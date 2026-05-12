@@ -3,13 +3,25 @@ use mars_types::LayerId;
 use crate::ConfigError;
 use crate::model::{SimplifierKind, SourceBinding};
 
-/// Reject `from:` strings that are not a single change-feed-mappable table.
-/// v1 restriction: a binding must point at one
-/// real table or a single-table view so pgoutput events map to a single
-/// feature_id. Multi-table joins, embedded SELECTs, or compound DDL fragments
-/// are rejected here, far from the snapshot path that would otherwise fail
-/// opaquely later.
-pub(super) fn validate_binding_from(layer: &LayerId, idx: usize, from: &str) -> Result<(), ConfigError> {
+/// Validate the source of a binding: exactly one of `from:` (table reference)
+/// or `sql:` (inline SELECT) must be set. `from` restrictions: single
+/// change-feed-mappable table or single-table view, schema-qualified at most;
+/// joins/subselects/DDL fragments rejected so the snapshot path doesn't fail
+/// opaquely later. `sql` bindings are snapshot-only.
+pub(super) fn validate_binding_source(layer: &LayerId, idx: usize, binding: &SourceBinding) -> Result<(), ConfigError> {
+    match (binding.from.as_deref(), binding.sql.as_deref()) {
+        (None, None) => Err(ConfigError::Invalid(format!(
+            "layer {layer} source[{idx}] must set exactly one of `from:` or `sql:`"
+        ))),
+        (Some(_), Some(_)) => Err(ConfigError::Invalid(format!(
+            "layer {layer} source[{idx}] sets both `from:` and `sql:`; they are mutually exclusive"
+        ))),
+        (Some(from), None) => validate_table_from(layer, idx, from),
+        (None, Some(sql)) => validate_sql_binding(layer, idx, sql),
+    }
+}
+
+fn validate_table_from(layer: &LayerId, idx: usize, from: &str) -> Result<(), ConfigError> {
     let trimmed = from.trim();
     if trimmed.is_empty() {
         return Err(ConfigError::Invalid(format!(
@@ -23,14 +35,36 @@ pub(super) fn validate_binding_from(layer: &LayerId, idx: usize, from: &str) -> 
     if let Some(needle) = bad_substr {
         return Err(ConfigError::Invalid(format!(
             "layer {layer} source[{idx}] from {from:?} is not a single-table reference \
-             (contains {needle:?}); v1 bindings must name one table or a single-table view \
-             so the change-feed can map events to feature ids"
+             (contains {needle:?}); use `sql:` for inline SELECTs or name one table"
         )));
     }
     // single-segment names route to `public`; allow at most `schema.table`.
     if trimmed.matches('.').count() > 1 {
         return Err(ConfigError::Invalid(format!(
             "layer {layer} source[{idx}] from {from:?} must be `table` or `schema.table`"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_sql_binding(layer: &LayerId, idx: usize, sql: &str) -> Result<(), ConfigError> {
+    let trimmed = sql.trim();
+    if trimmed.is_empty() {
+        return Err(ConfigError::Invalid(format!(
+            "layer {layer} source[{idx}] sql must not be empty"
+        )));
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if !lower.starts_with("select") && !lower.starts_with("(select") {
+        return Err(ConfigError::Invalid(format!(
+            "layer {layer} source[{idx}] sql must be a SELECT statement; got {sql:?}"
+        )));
+    }
+    // semicolon-terminated statements would expose the snapshot subquery to
+    // statement injection; reject anything that closes the SELECT.
+    if trimmed.contains(';') {
+        return Err(ConfigError::Invalid(format!(
+            "layer {layer} source[{idx}] sql contains `;`; only a single SELECT is permitted"
         )));
     }
     Ok(())
@@ -171,6 +205,70 @@ mod tests {
                 "expected single-table rejection for {bad:?}, got {err:?}"
             );
         }
+    }
+
+    #[test]
+    fn rejects_both_from_and_sql_set() {
+        let mut cfg = minimal_config();
+        let mut b = binding("table");
+        b.sql = Some("SELECT 1".into());
+        cfg.layers = vec![layer_with_binding(b)];
+        let err = validate(&mut cfg, Path::new(".")).unwrap_err();
+        assert!(
+            matches!(&err, crate::ConfigError::Invalid(s) if s.contains("mutually exclusive")),
+            "expected mutually-exclusive rejection, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_neither_from_nor_sql_set() {
+        let mut cfg = minimal_config();
+        let mut b = binding("table");
+        b.from = None;
+        cfg.layers = vec![layer_with_binding(b)];
+        let err = validate(&mut cfg, Path::new(".")).unwrap_err();
+        assert!(
+            matches!(&err, crate::ConfigError::Invalid(s) if s.contains("exactly one")),
+            "expected one-of rejection, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn accepts_sql_binding() {
+        let mut cfg = minimal_config();
+        let mut b = binding("ignored");
+        b.from = None;
+        b.sql = Some("SELECT id, geom FROM a JOIN b USING (k)".into());
+        cfg.layers = vec![layer_with_binding(b)];
+        validate(&mut cfg, Path::new(".")).expect("sql binding accepted");
+    }
+
+    #[test]
+    fn rejects_sql_with_semicolon() {
+        let mut cfg = minimal_config();
+        let mut b = binding("ignored");
+        b.from = None;
+        b.sql = Some("SELECT 1; DROP TABLE x".into());
+        cfg.layers = vec![layer_with_binding(b)];
+        let err = validate(&mut cfg, Path::new(".")).unwrap_err();
+        assert!(
+            matches!(&err, crate::ConfigError::Invalid(s) if s.contains("only a single SELECT")),
+            "expected semicolon rejection, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_sql_without_select_prefix() {
+        let mut cfg = minimal_config();
+        let mut b = binding("ignored");
+        b.from = None;
+        b.sql = Some("UPDATE t SET x = 1".into());
+        cfg.layers = vec![layer_with_binding(b)];
+        let err = validate(&mut cfg, Path::new(".")).unwrap_err();
+        assert!(
+            matches!(&err, crate::ConfigError::Invalid(s) if s.contains("must be a SELECT")),
+            "expected SELECT requirement, got {err:?}"
+        );
     }
 
     #[test]

@@ -197,7 +197,10 @@ pub(super) fn resolve_band_routing(config: &mut Config) -> Result<(), ConfigErro
                     Some(explicit) => intersect_scale_windows(explicit, &tier_window).ok_or_else(|| {
                         ConfigError::Invalid(format!(
                             "layer {} source from {:?} explicit scale window {:?} is disjoint from tier window {:?}",
-                            layer.name, source.from, explicit, tier_window
+                            layer.name,
+                            source.source_descriptor(),
+                            explicit,
+                            tier_window
                         ))
                     })?,
                 };
@@ -318,13 +321,13 @@ mod tests {
             SourceBinding {
                 band: Some("hi".into()),
                 max_denom: Some(8_000),
-                from: "a".into(),
+                from: Some("a".into()),
                 ..binding("a")
             },
             SourceBinding {
                 band: Some("hi".into()),
                 max_denom: Some(25_000),
-                from: "b".into(),
+                from: Some("b".into()),
                 ..binding("b")
             },
         ])];
@@ -343,7 +346,7 @@ mod tests {
         cfg.layers = vec![tiered_layer(vec![SourceBinding {
             band: Some("mid".into()),
             max_denom: None,
-            from: "a".into(),
+            from: Some("a".into()),
             ..binding("a")
         }])];
         validate(&mut cfg, Path::new(".")).expect("validate");
@@ -359,13 +362,13 @@ mod tests {
             SourceBinding {
                 band: Some("hi".into()),
                 max_denom: Some(10_000),
-                from: "a".into(),
+                from: Some("a".into()),
                 ..binding("a")
             },
             SourceBinding {
                 band: Some("hi".into()),
                 max_denom: Some(10_000),
-                from: "b".into(),
+                from: Some("b".into()),
                 ..binding("b")
             },
         ])];
@@ -379,7 +382,7 @@ mod tests {
         cfg.layers = vec![tiered_layer(vec![SourceBinding {
             band: Some("hi".into()),
             max_denom: Some(50_000),
-            from: "a".into(),
+            from: Some("a".into()),
             ..binding("a")
         }])];
         let err = validate(&mut cfg, Path::new(".")).unwrap_err();
@@ -395,13 +398,13 @@ mod tests {
             SourceBinding {
                 band: Some("mid".into()),
                 max_denom: Some(25_000),
-                from: "a".into(),
+                from: Some("a".into()),
                 ..binding("a")
             },
             SourceBinding {
                 band: Some("mid".into()),
                 max_denom: Some(250_000),
-                from: "b".into(),
+                from: Some("b".into()),
                 ..binding("b")
             },
         ])];
@@ -419,13 +422,13 @@ mod tests {
             SourceBinding {
                 band: Some("hi".into()),
                 max_denom: Some(25_000),
-                from: "a".into(),
+                from: Some("a".into()),
                 ..binding("a")
             },
             SourceBinding {
                 band: Some("hi".into()),
                 max_denom: Some(25_000),
-                from: "b".into(),
+                from: Some("b".into()),
                 ..binding("b")
             },
         ])];

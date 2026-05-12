@@ -79,8 +79,16 @@ pub struct SourceBinding {
     /// covers the whole band (back-compat shorthand).
     #[serde(default, rename = "max_denom_exclusive")]
     pub max_denom: Option<u64>,
-    /// Source table or relation.
-    pub from: String,
+    /// Source table or relation. One of `from` (table) or `sql` (raw view
+    /// SELECT) must be set. `from` is the common path; `sql` covers the
+    /// inline-subquery bindings mapserver expresses in `DATA` blocks.
+    #[serde(default)]
+    pub from: Option<String>,
+    /// Inline `SELECT` driving this binding. Snapshot-only - logical
+    /// replication change-feed bindings remain table-only. The compiler
+    /// wraps this as `FROM (<sql>) AS src`. Mutually exclusive with `from`.
+    #[serde(default)]
+    pub sql: Option<String>,
     /// Optional binding-level filter expression (mars-expr DSL). When set,
     /// the compiler ANDs this into the source SELECT so artifacts only
     /// materialise rows the filter accepts. Mirrors MapServer DATA inline
@@ -155,12 +163,40 @@ pub enum SimplifierKind {
 
 impl SourceBinding {
     /// Split `from` into `(schema, table)`. Single-segment names route to
-    /// `public` to match the postgres adapter convention.
+    /// `public` to match the postgres adapter convention. Returns `None`
+    /// when the binding is a `sql:` view rather than a table binding.
     #[must_use]
-    pub fn schema_table(&self) -> (&str, &str) {
-        match self.from.split_once('.') {
+    pub fn schema_table(&self) -> Option<(&str, &str)> {
+        let from = self.from.as_deref()?;
+        Some(match from.split_once('.') {
             Some((s, t)) => (s, t),
-            None => ("public", self.from.as_str()),
+            None => ("public", from),
+        })
+    }
+
+    /// True when this binding is backed by an inline `sql:` SELECT.
+    #[must_use]
+    pub fn is_sql_binding(&self) -> bool {
+        self.sql.is_some()
+    }
+
+    /// Diagnostic descriptor for the binding source: the table reference or
+    /// a truncated SQL snippet. Used in validation error messages so the
+    /// operator can find the offending binding regardless of source kind.
+    #[must_use]
+    pub fn source_descriptor(&self) -> String {
+        if let Some(t) = &self.from {
+            return t.clone();
+        }
+        if let Some(s) = &self.sql {
+            let trimmed = s.split_whitespace().collect::<Vec<_>>().join(" ");
+            if trimmed.len() > 80 {
+                format!("sql:{}…", &trimmed[..80])
+            } else {
+                format!("sql:{trimmed}")
+            }
+        } else {
+            "<unset>".to_string()
         }
     }
 

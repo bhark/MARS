@@ -41,7 +41,7 @@ fn validate_sources(layer: &Layer, bands: &BandIndex) -> Result<(), ConfigError>
                 layer.name
             )));
         }
-        binding::validate_binding_from(&layer.name, i, &src.from)?;
+        binding::validate_binding_source(&layer.name, i, src)?;
         binding::validate_binding_levels(&layer.name, i, src)?;
     }
     Ok(())

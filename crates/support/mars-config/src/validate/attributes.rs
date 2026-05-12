@@ -52,7 +52,7 @@ fn check_declared_covers(
             return Err(ConfigError::Invalid(format!(
                 "layer {} source[{i}] (from {:?}) does not declare attribute {name:?} \
                  referenced by a class when: or label text",
-                layer.name, binding.from
+                layer.name, binding.source_descriptor()
             )));
         }
     }
@@ -71,7 +71,8 @@ fn check_filter_idents(
     let expr = mars_expr::parse(filter).map_err(|e| {
         ConfigError::Invalid(format!(
             "layer {} source[{i}] (from {:?}) filter parse error: {e}",
-            layer.name, binding.from
+            layer.name,
+            binding.source_descriptor()
         ))
     })?;
     let mut idents: BTreeSet<String> = BTreeSet::new();
@@ -83,7 +84,7 @@ fn check_filter_idents(
             return Err(ConfigError::Invalid(format!(
                 "layer {} source[{i}] (from {:?}) filter references unknown ident {name:?}; \
                  declare it in `attributes` or as `id_column`",
-                layer.name, binding.from
+                layer.name, binding.source_descriptor()
             )));
         }
     }

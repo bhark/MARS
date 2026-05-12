@@ -76,6 +76,17 @@ pub enum PlanError {
         #[source]
         source: mars_expr::ExprError,
     },
+    /// A binding uses `sql:` (inline SELECT) but the compiler does not yet
+    /// build a plan for snapshot execution of view-shaped bindings.
+    /// Config validation accepts the binding; the limitation surfaces here
+    /// so operators get a clear message instead of a downstream SQL error.
+    #[error("layer {layer} source binding {descriptor} uses sql: inline SELECT; the compiler does not yet execute view-shaped bindings")]
+    SqlBindingNotImplemented {
+        /// layer name
+        layer: LayerId,
+        /// truncated SQL or other source descriptor for diagnostics
+        descriptor: String,
+    },
 }
 
 /// One (level, decimation rules) entry on a [`BindingPlan`].
@@ -198,7 +209,13 @@ pub fn build_bootstrap_plan(cfg: &Config) -> Result<BootstrapPlan, PlanError> {
 
     for layer in &cfg.layers {
         for binding in &layer.sources {
-            let id = binding_id_for(&binding.from)?;
+            let Some(from) = binding.from.as_deref() else {
+                return Err(PlanError::SqlBindingNotImplemented {
+                    layer: layer.name.clone(),
+                    descriptor: binding.source_descriptor(),
+                });
+            };
+            let id = binding_id_for(from)?;
             let sidecar_warn =
                 binding
                     .resolved_sidecar_size_warn_bytes()
@@ -215,7 +232,7 @@ pub fn build_bootstrap_plan(cfg: &Config) -> Result<BootstrapPlan, PlanError> {
             };
             let plan = BindingPlan {
                 binding_id: id.clone(),
-                source_table: binding.from.clone(),
+                source_table: from.to_owned(),
                 geometry_column: binding.geometry_column.clone(),
                 id_column: binding.id_column.clone(),
                 attributes: binding.attributes.clone(),
@@ -526,7 +543,8 @@ mod tests {
             band: None,
             max_denom: None,
             filter: None,
-            from: from.into(),
+            from: Some(from.into()),
+            sql: None,
             geometry_column: "geom".into(),
             id_column: Some("id".into()),
             attributes: vec!["name".into()],

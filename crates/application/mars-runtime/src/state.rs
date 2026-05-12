@@ -306,7 +306,14 @@ fn validate_config_against_manifest(
         }
         let mut any_in_manifest = false;
         for source in &layer.sources {
-            let id = match BindingId::try_new(source.from.as_str()) {
+            let Some(from) = source.from.as_deref() else {
+                // sql: bindings have no fixed table-derived binding id and
+                // are not yet routable at the manifest level. skip the
+                // manifest-membership probe so the layer can still appear in
+                // capabilities while the snapshot path catches up.
+                continue;
+            };
+            let id = match BindingId::try_new(from) {
                 Ok(id) => id,
                 // invalid binding id is a config-level error already enforced
                 // by mars-config; we still fail closed here so a stale
@@ -314,7 +321,7 @@ fn validate_config_against_manifest(
                 Err(e) => {
                     return Err(RuntimeError::ConfigManifestMismatch {
                         layer: layer.name.as_str().to_owned(),
-                        reason: format!("source `from = \"{}\"` is not a valid binding id: {e}", source.from),
+                        reason: format!("source `from = \"{from}\"` is not a valid binding id: {e}"),
                     });
                 }
             };

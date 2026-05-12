@@ -17,7 +17,17 @@ pub(crate) fn build_replication_topology(cfg: &Config) -> Result<ReplicationTopo
     let mut seen: BTreeMap<(String, String), CollectionTopology> = BTreeMap::new();
     for layer in &cfg.layers {
         for binding in &layer.sources {
-            let (schema, table) = binding.schema_table();
+            // raw-SQL bindings are snapshot-only and don't participate in the
+            // logical-replication topology; the change-feed cannot route
+            // pgoutput events back to an inline view. config validation
+            // already accepts the binding; skip it here.
+            let Some((schema, table)) = binding.schema_table() else {
+                continue;
+            };
+            let from = match binding.from.as_deref() {
+                Some(from) => from,
+                None => continue,
+            };
             let id_column = binding.id_column.as_deref().unwrap_or("id");
             let key = (schema.to_string(), table.to_string());
             if let Some(existing) = seen.get(&key) {
@@ -35,11 +45,11 @@ pub(crate) fn build_replication_topology(cfg: &Config) -> Result<ReplicationTopo
                         id_column
                     ));
                 }
-                if existing.collection.as_str() != binding.from {
+                if existing.collection.as_str() != from {
                     return Err(anyhow!(
                         "source relation {schema}.{table} is declared with multiple source names: {:?} vs {:?}",
                         existing.collection.as_str(),
-                        binding.from
+                        from
                     ));
                 }
                 continue;
@@ -47,7 +57,7 @@ pub(crate) fn build_replication_topology(cfg: &Config) -> Result<ReplicationTopo
             seen.insert(
                 key,
                 CollectionTopology {
-                    collection: SourceCollectionId::new(binding.from.clone()),
+                    collection: SourceCollectionId::new(from.to_owned()),
                     schema: schema.to_string(),
                     table: table.to_string(),
                     geometry_column: binding.geometry_column.clone(),
@@ -188,7 +198,8 @@ mod tests {
                     band: None,
                     max_denom: None,
                     filter: None,
-                    from: from.into(),
+                    from: Some(from.into()),
+                    sql: None,
                     geometry_column: geom.into(),
                     id_column: None,
                     attributes: vec![],
@@ -296,7 +307,8 @@ mod tests {
                     band: Some("hi".into()),
                     max_denom: Some(8_000),
                     filter: None,
-                    from: "public.bygning".into(),
+                    from: Some("public.bygning".into()),
+                    sql: None,
                     geometry_column: "geom".into(),
                     id_column: None,
                     attributes: vec![],
@@ -311,7 +323,8 @@ mod tests {
                     band: Some("hi".into()),
                     max_denom: Some(10_000),
                     filter: None,
-                    from: "public.bygning_1m".into(),
+                    from: Some("public.bygning_1m".into()),
+                    sql: None,
                     geometry_column: "geom".into(),
                     id_column: None,
                     attributes: vec![],
@@ -326,7 +339,8 @@ mod tests {
                     band: Some("hi".into()),
                     max_denom: Some(25_000),
                     filter: None,
-                    from: "public.bygning_2m".into(),
+                    from: Some("public.bygning_2m".into()),
+                    sql: None,
                     geometry_column: "geom".into(),
                     id_column: None,
                     attributes: vec![],

@@ -40,7 +40,12 @@ pub fn pick_binding_and_level(
         if !scale_window_covers(source.scale.as_ref(), request_denom) {
             continue;
         }
-        let id = match BindingId::try_new(source.from.as_str()) {
+        let Some(from) = source.from.as_deref() else {
+            // sql: bindings have no fixed table-derived id at this layer; the
+            // compiler refuses to plan them, so skip routing here too.
+            continue;
+        };
+        let id = match BindingId::try_new(from) {
             Ok(id) => id,
             Err(_) => continue,
         };
@@ -259,7 +264,8 @@ mod tests {
             band: None,
             max_denom: None,
             filter: None,
-            from: from.into(),
+            from: Some(from.into()),
+            sql: None,
             geometry_column: "geom".into(),
             id_column: None,
             attributes: vec![],
