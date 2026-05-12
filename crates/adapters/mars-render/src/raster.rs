@@ -44,6 +44,15 @@ fn scaled_alpha(c: Colour, scale: f32) -> Color {
     Color::from_rgba8(c.r, c.g, c.b, a)
 }
 
+/// returns `c` with alpha multiplied by `scale` (clamped to [0,1]). same idea
+/// as `scaled_alpha` but yields a `Colour` so callers can re-thread the
+/// result through `FillPaint::Hatch::colour` or further-scaled paths.
+fn scaled_alpha_colour(c: Colour, scale: f32) -> Colour {
+    let s = scale.clamp(0.0, 1.0);
+    let a = ((c.a as f32) * s).round().clamp(0.0, 255.0) as u8;
+    Colour { r: c.r, g: c.g, b: c.b, a }
+}
+
 /// true iff the path's AABB has non-zero extent on both axes. tiny-skia's
 /// `fill_path` rejects degenerate-bbox paths (collapsed to a point or a
 /// horizontal/vertical line) with a `log::warn`; gating here suppresses that
@@ -204,11 +213,14 @@ pub(crate) fn draw_path(pm: &mut Pixmap, path: &PortPath, style: &Style) {
     let Some(tsk_path) = build_path(path) else {
         return;
     };
+    // style-wide opacity multiplies into fill/stroke alpha; missing or
+    // out-of-range values fall through as opaque.
+    let opacity = style.opacity.unwrap_or(1.0).clamp(0.0, 1.0);
 
     if let Some(fill) = style.fill
         && is_fillable(&tsk_path)
     {
-        draw_fill(pm, &tsk_path, fill);
+        draw_fill(pm, &tsk_path, fill_with_opacity(fill, opacity));
     }
 
     if let Some(stroke_col) = style.stroke {
@@ -224,7 +236,7 @@ pub(crate) fn draw_path(pm: &mut Pixmap, path: &PortPath, style: &Style) {
                 (requested, 1.0)
             };
             let mut paint = Paint::default();
-            paint.set_color(scaled_alpha(stroke_col, alpha_scale));
+            paint.set_color(scaled_alpha(stroke_col, alpha_scale * opacity));
             paint.anti_alias = true;
 
             let mut stroke = Stroke {
@@ -243,6 +255,30 @@ pub(crate) fn draw_path(pm: &mut Pixmap, path: &PortPath, style: &Style) {
             }
             pm.stroke_path(&tsk_path, &paint, &stroke, Transform::identity(), None);
         }
+    }
+}
+
+/// apply `opacity` to a `FillPaint`. `Solid` re-wraps the alpha-scaled colour;
+/// `Hatch` rescales its line colour. forward-compatible no-op for future
+/// variants.
+fn fill_with_opacity(fill: FillPaint, opacity: f32) -> FillPaint {
+    if opacity >= 1.0 {
+        return fill;
+    }
+    match fill {
+        FillPaint::Solid(c) => FillPaint::Solid(scaled_alpha_colour(c, opacity)),
+        FillPaint::Hatch {
+            spacing,
+            angle_deg,
+            line_width,
+            colour,
+        } => FillPaint::Hatch {
+            spacing,
+            angle_deg,
+            line_width,
+            colour: scaled_alpha_colour(colour, opacity),
+        },
+        other => other,
     }
 }
 

@@ -676,6 +676,60 @@ mod tests {
     }
 
     #[test]
+    fn style_opacity_halves_fill_alpha() {
+        // opaque red square at opacity 0.5 on a transparent canvas: every
+        // covered pixel should land near alpha 128, not 255. proves
+        // style.opacity multiplies through to fill alpha.
+        let canvas = Canvas {
+            width: 32,
+            height: 32,
+            background: None,
+        };
+        let ops = vec![DrawOp::Path {
+            path: square(16.0, 16.0, 8.0),
+            style: Arc::new(Style {
+                fill: Some(FillPaint::Solid(red())),
+                opacity: Some(0.5),
+                ..Default::default()
+            }),
+        }];
+        let png_bytes = render_png(canvas, &ops);
+        let (_, _, rgba) = decode(&png_bytes);
+        // count pixels with the expected half-alpha. tolerate +/- 4 LSB for
+        // edge anti-aliasing.
+        let half = rgba
+            .chunks_exact(4)
+            .filter(|p| p[3] > 100 && p[3] < 160 && p[0] > 100)
+            .count();
+        assert!(half > 100, "expected half-alpha pixels, got {half}");
+        // no fully-opaque red.
+        let full = rgba.chunks_exact(4).filter(|p| p[3] >= 250).count();
+        assert_eq!(full, 0, "opacity didn't gate fill alpha");
+    }
+
+    #[test]
+    fn style_opacity_zero_paints_nothing() {
+        let canvas = Canvas {
+            width: 16,
+            height: 16,
+            background: None,
+        };
+        let ops = vec![DrawOp::Path {
+            path: square(8.0, 8.0, 4.0),
+            style: Arc::new(Style {
+                fill: Some(FillPaint::Solid(red())),
+                stroke: Some(red()),
+                stroke_width: Some(1.0),
+                opacity: Some(0.0),
+                ..Default::default()
+            }),
+        }];
+        let (_, _, rgba) = decode(&render_png(canvas, &ops));
+        let painted = rgba.chunks_exact(4).filter(|p| p[3] > 0).count();
+        assert_eq!(painted, 0, "opacity=0 should produce a fully transparent result");
+    }
+
+    #[test]
     fn golden_square_matches() {
         let canvas = Canvas {
             width: 64,
