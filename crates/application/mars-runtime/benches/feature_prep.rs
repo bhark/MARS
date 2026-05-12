@@ -131,10 +131,7 @@ fn build_stylesheet() -> Stylesheet {
             fill: Some(FillPaint::Solid(Colour::rgba(20 + c as u8 * 28, 100, 200, 220))),
             stroke: Some(Colour::rgba(10, 30, 80, 255)),
             stroke_width: Some(1.0),
-            stroke_dasharray: None,
-            stroke_linecap: None,
-            stroke_linejoin: None,
-            marker: None,
+            ..Default::default()
         };
         geometry.insert(format!("style_{c}"), Arc::new(s));
     }
@@ -149,10 +146,7 @@ fn fallback_style() -> Arc<Style> {
         fill: Some(FillPaint::Solid(Colour::rgba(64, 128, 220, 200))),
         stroke: Some(Colour::rgba(32, 64, 110, 255)),
         stroke_width: Some(1.0),
-        stroke_dasharray: None,
-        stroke_linecap: None,
-        stroke_linejoin: None,
-        marker: None,
+        ..Default::default()
     })
 }
 

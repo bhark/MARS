@@ -103,7 +103,7 @@ pub enum LineJoin {
 /// Point marker symbol set. Extensible via `#[non_exhaustive]` and the tagged
 /// `kind:` discriminator - future variants (e.g. `Path { svg }`, `Pixmap { uri }`)
 /// land additively without breaking existing wire form.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum MarkerSymbol {
@@ -131,6 +131,36 @@ pub enum MarkerSymbol {
         #[serde(default = "MarkerSymbol::default_size")]
         size: f32,
     },
+    /// Arbitrary closed polygon described by a point list in a unit-square
+    /// local frame; `anchor` is the local-frame position that maps to the
+    /// feature anchor, and `size` is the pixel edge length of the unit
+    /// square. mirrors mapserver SYMBOL TYPE VECTOR with explicit POINTS.
+    VectorShape {
+        /// Polygon vertices in the symbol's local frame. The frame is
+        /// normalised to `[0, 1] x [0, 1]` by mapserver convention; the
+        /// renderer scales by `size`.
+        points: Vec<(f32, f32)>,
+        /// Local-frame point that maps to the feature anchor. Defaults to
+        /// the local-frame centre `(0.5, 0.5)`.
+        #[serde(default = "MarkerSymbol::default_vector_anchor")]
+        anchor: (f32, f32),
+        /// True for a filled polygon, false for an open polyline stroke.
+        #[serde(default = "MarkerSymbol::default_filled")]
+        filled: bool,
+        #[serde(default = "MarkerSymbol::default_size")]
+        size: f32,
+    },
+    /// Single text glyph rasterised from a registered font. Used for
+    /// mapfile `SYMBOL TYPE TRUETYPE` with a `CHARACTER` body.
+    Glyph {
+        font_family: String,
+        /// Glyph character (or grapheme cluster). The renderer shapes and
+        /// rasterises it the same way a label run is shaped.
+        #[serde(alias = "character")]
+        ch: String,
+        #[serde(default = "MarkerSymbol::default_size")]
+        size: f32,
+    },
 }
 
 impl MarkerSymbol {
@@ -138,19 +168,43 @@ impl MarkerSymbol {
         6.0
     }
 
+    const fn default_vector_anchor() -> (f32, f32) {
+        (0.5, 0.5)
+    }
+
+    const fn default_filled() -> bool {
+        true
+    }
+
     /// Marker bounding-box edge length in pixels. Pin is teardrop, so size
     /// is the bulb diameter; the pin extends downward by ~1.5x.
     #[must_use]
-    pub const fn size(&self) -> f32 {
-        match *self {
+    pub fn size(&self) -> f32 {
+        match self {
             Self::Circle { size }
             | Self::Square { size }
             | Self::Triangle { size }
             | Self::Cross { size }
             | Self::X { size }
-            | Self::Pin { size } => size,
+            | Self::Pin { size }
+            | Self::VectorShape { size, .. }
+            | Self::Glyph { size, .. } => *size,
         }
     }
+}
+
+/// Stroke-along-line marker repeat policy. Used by line/polyline strokes
+/// that want to stamp a marker glyph along the path (e.g. arrow shafts).
+/// mapserver maps `GAP` -> `interval_px` (negative gap is treated as
+/// `|gap|`; the sign carries direction in mapserver but is not modelled
+/// here) and `INITIALGAP` -> `initial_px`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct StrokeGap {
+    /// Arc-length distance between successive marker stamps in pixels.
+    pub interval_px: f32,
+    /// Arc-length offset from the path's start to the first stamp.
+    #[serde(default)]
+    pub initial_px: f32,
 }
 
 /// Polygon fill paint. `Solid` is a bare hex string on the wire; `Hatch` is a
@@ -273,6 +327,24 @@ pub struct Style {
     /// geometry; the runtime ignores it for line/polygon dispatch.
     #[serde(default)]
     pub marker: Option<MarkerSymbol>,
+    /// Style-wide alpha multiplier in `[0.0, 1.0]`. Applies to fill, stroke,
+    /// marker, and label colours so partial transparency expressed at the
+    /// style level composes with each paint's own colour alpha. mirrors
+    /// mapserver's `COMPOSITE OPACITY <n>`.
+    #[serde(default)]
+    pub opacity: Option<f32>,
+    /// Perpendicular stroke offset in pixels, positive = right of direction
+    /// of travel. Used for parallel double-strokes (railway centrelines,
+    /// road bevels). Closed paths reject the offset with a warning -
+    /// self-intersection is acceptable for v1 on tight corners. mirrors
+    /// mapserver's `OFFSET <x> -99`.
+    #[serde(default)]
+    pub stroke_offset_px: Option<f32>,
+    /// Marker stamp policy along the path. Each stamp uses `Style::marker`
+    /// rotated to the local tangent. mirrors mapserver's `GAP` /
+    /// `INITIALGAP`.
+    #[serde(default)]
+    pub stroke_gap: Option<StrokeGap>,
 }
 
 /// Label-typed style.
@@ -625,6 +697,96 @@ mod tests {
         assert!(matches!(i, LabelSurvival::Independent));
         let f: LabelSurvival = serde_yaml_ng::from_str("follow_geometry").unwrap();
         assert!(matches!(f, LabelSurvival::FollowGeometry));
+    }
+
+    #[test]
+    fn style_opacity_offset_gap_default_to_none() {
+        let s = Style::default();
+        assert!(s.opacity.is_none());
+        assert!(s.stroke_offset_px.is_none());
+        assert!(s.stroke_gap.is_none());
+    }
+
+    #[test]
+    fn style_opacity_offset_gap_roundtrip_yaml() {
+        let yaml = "stroke: '#000000'\nstroke_width: 1.0\nopacity: 0.5\nstroke_offset_px: 2.0\nstroke_gap:\n  interval_px: 12.0\n  initial_px: 3.0\n";
+        let s: Style = serde_yaml_ng::from_str(yaml).unwrap();
+        assert!((s.opacity.unwrap() - 0.5).abs() < f32::EPSILON);
+        assert!((s.stroke_offset_px.unwrap() - 2.0).abs() < f32::EPSILON);
+        let g = s.stroke_gap.unwrap();
+        assert!((g.interval_px - 12.0).abs() < f32::EPSILON);
+        assert!((g.initial_px - 3.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn stroke_gap_initial_defaults_to_zero() {
+        let g: StrokeGap = serde_yaml_ng::from_str("interval_px: 8.0\n").unwrap();
+        assert!((g.interval_px - 8.0).abs() < f32::EPSILON);
+        assert!(g.initial_px.abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn marker_vector_shape_roundtrip() {
+        let yaml = "kind: vector_shape\npoints: [[0.0, 0.0], [1.0, 0.0], [0.5, 1.0]]\nsize: 10.0\n";
+        let m: MarkerSymbol = serde_yaml_ng::from_str(yaml).unwrap();
+        match m {
+            MarkerSymbol::VectorShape {
+                points,
+                anchor,
+                filled,
+                size,
+            } => {
+                assert_eq!(points.len(), 3);
+                // anchor defaults to (0.5, 0.5)
+                assert!((anchor.0 - 0.5).abs() < f32::EPSILON);
+                assert!((anchor.1 - 0.5).abs() < f32::EPSILON);
+                assert!(filled);
+                assert!((size - 10.0).abs() < f32::EPSILON);
+            }
+            _ => panic!("expected vector_shape"),
+        }
+    }
+
+    #[test]
+    fn marker_glyph_roundtrip_accepts_character_alias() {
+        let yaml = "kind: glyph\nfont_family: \"Sans\"\ncharacter: \"T\"\nsize: 14.0\n";
+        let m: MarkerSymbol = serde_yaml_ng::from_str(yaml).unwrap();
+        match m {
+            MarkerSymbol::Glyph { font_family, ch, size } => {
+                assert_eq!(font_family, "Sans");
+                assert_eq!(ch, "T");
+                assert!((size - 14.0).abs() < f32::EPSILON);
+            }
+            _ => panic!("expected glyph"),
+        }
+    }
+
+    #[test]
+    fn marker_size_works_for_all_variants() {
+        assert!((MarkerSymbol::Circle { size: 7.0 }.size() - 7.0).abs() < f32::EPSILON);
+        assert!(
+            (MarkerSymbol::VectorShape {
+                points: vec![(0.0, 0.0), (1.0, 0.0), (0.5, 1.0)],
+                anchor: (0.5, 0.5),
+                filled: true,
+                size: 9.0,
+            }
+            .size()
+                - 9.0)
+                .abs()
+                < f32::EPSILON
+        );
+        assert!(
+            (MarkerSymbol::Glyph {
+                font_family: "Sans".into(),
+                ch: "X".into(),
+                size: 11.0,
+            }
+            .size()
+                - 11.0)
+                .abs()
+                < f32::EPSILON
+        );
     }
 
     #[test]

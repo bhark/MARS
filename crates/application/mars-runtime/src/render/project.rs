@@ -101,7 +101,7 @@ pub(super) fn feature_to_drawop(g: &GeomKind, viewport: Bbox, w: u32, h: u32, st
         // point geometries with a marker symbol tessellate to the marker
         // shape at the projected pixel position; without a marker we emit a
         // zero-extent path (caller's stroke arm may still draw, but no fill).
-        GeomKind::Point(c) => match style.marker {
+        GeomKind::Point(c) => match style.marker.as_ref() {
             Some(m) => marker_path_at(m, world_to_pixel(*c, viewport, w, h)),
             None => single_point_path(*c, viewport, w, h),
         },
@@ -111,7 +111,7 @@ pub(super) fn feature_to_drawop(g: &GeomKind, viewport: Bbox, w: u32, h: u32, st
         GeomKind::Polygon(rings) => Path {
             subpaths: rings.iter().map(|r| ring_to_subpath(r, viewport, w, h, true)).collect(),
         },
-        GeomKind::MultiPoint(coords) => match style.marker {
+        GeomKind::MultiPoint(coords) => match style.marker.as_ref() {
             Some(m) => Path {
                 subpaths: coords
                     .iter()
@@ -154,7 +154,7 @@ pub(super) fn feature_to_drawop(g: &GeomKind, viewport: Bbox, w: u32, h: u32, st
 /// pin is a teardrop (circle bulb + triangle tail) - it's the only marker
 /// where the visual centre is *not* `pos`; we anchor the tip at `pos` so
 /// pins look like map pins, with the bulb above.
-pub(super) fn marker_path_at(m: MarkerSymbol, pos: (f32, f32)) -> Path {
+pub(super) fn marker_path_at(m: &MarkerSymbol, pos: (f32, f32)) -> Path {
     let (cx, cy) = pos;
     let s = m.size();
     let r = s * 0.5;
@@ -273,6 +273,36 @@ pub(super) fn marker_path_at(m: MarkerSymbol, pos: (f32, f32)) -> Path {
                 subpaths: vec![Subpath { points: pts, closed: true }],
             }
         }
+        MarkerSymbol::VectorShape {
+            points,
+            anchor,
+            filled,
+            size,
+        } => {
+            // local frame -> pixel: scale by size, translate so anchor maps
+            // to pos. local-frame y is mapserver-y-down by convention, so the
+            // sign is preserved as-is (pixel space is also y-down).
+            let (ax, ay) = *anchor;
+            let s = *size;
+            let pts: Vec<(f32, f32)> = points
+                .iter()
+                .map(|(lx, ly)| (cx + (lx - ax) * s, cy + (ly - ay) * s))
+                .collect();
+            Path {
+                subpaths: vec![Subpath {
+                    points: pts,
+                    closed: *filled,
+                }],
+            }
+        }
+        // glyph markers paint via the font path in raster::draw_path; emit a
+        // single-anchor subpath so the renderer can stamp at the point.
+        MarkerSymbol::Glyph { .. } => Path {
+            subpaths: vec![Subpath {
+                points: vec![(cx, cy)],
+                closed: false,
+            }],
+        },
         // future MarkerSymbol variants land additively. fall back to a
         // zero-extent single-point path so the renderer's stroke arm still
         // runs but no marker shape is drawn.
@@ -329,12 +359,7 @@ mod tests {
                 b: 0,
                 a: 255,
             })),
-            stroke: None,
-            stroke_width: None,
-            stroke_dasharray: None,
-            stroke_linecap: None,
-            stroke_linejoin: None,
-            marker: None,
+            ..Default::default()
         })
     }
 
@@ -438,34 +463,34 @@ mod tests {
 
     #[test]
     fn marker_circle_is_closed_and_centred() {
-        let p = marker_path_at(MarkerSymbol::Circle { size: 10.0 }, (50.0, 50.0));
+        let p = marker_path_at(&MarkerSymbol::Circle { size: 10.0 }, (50.0, 50.0));
         assert_marker_centred(&p, (50.0, 50.0), 10.0, 0.5);
     }
 
     #[test]
     fn marker_square_has_four_vertices_and_is_centred() {
-        let p = marker_path_at(MarkerSymbol::Square { size: 8.0 }, (32.0, 16.0));
+        let p = marker_path_at(&MarkerSymbol::Square { size: 8.0 }, (32.0, 16.0));
         assert_marker_centred(&p, (32.0, 16.0), 8.0, 0.001);
         assert_eq!(p.subpaths[0].points.len(), 4);
     }
 
     #[test]
     fn marker_triangle_has_three_vertices() {
-        let p = marker_path_at(MarkerSymbol::Triangle { size: 12.0 }, (10.0, 10.0));
+        let p = marker_path_at(&MarkerSymbol::Triangle { size: 12.0 }, (10.0, 10.0));
         assert_eq!(p.subpaths[0].points.len(), 3);
         assert!(p.subpaths[0].closed);
     }
 
     #[test]
     fn marker_cross_has_twelve_vertices() {
-        let p = marker_path_at(MarkerSymbol::Cross { size: 12.0 }, (0.0, 0.0));
+        let p = marker_path_at(&MarkerSymbol::Cross { size: 12.0 }, (0.0, 0.0));
         assert_eq!(p.subpaths[0].points.len(), 12);
         assert_marker_centred(&p, (0.0, 0.0), 12.0, 0.001);
     }
 
     #[test]
     fn marker_x_has_twelve_vertices() {
-        let p = marker_path_at(MarkerSymbol::X { size: 12.0 }, (0.0, 0.0));
+        let p = marker_path_at(&MarkerSymbol::X { size: 12.0 }, (0.0, 0.0));
         assert_eq!(p.subpaths[0].points.len(), 12);
         // X is a 45-degree rotation of the cross; symmetric around centre.
         let (minx, miny, maxx, maxy) = bbox_of(&p);
@@ -476,9 +501,28 @@ mod tests {
     }
 
     #[test]
+    fn marker_vector_shape_uses_anchor_and_scale() {
+        // unit-frame upward triangle, anchor at the bottom centre.
+        let m = MarkerSymbol::VectorShape {
+            points: vec![(0.0, 1.0), (1.0, 1.0), (0.5, 0.0)],
+            anchor: (0.5, 1.0),
+            filled: true,
+            size: 10.0,
+        };
+        let p = marker_path_at(&m, (100.0, 200.0));
+        let sp = &p.subpaths[0];
+        assert!(sp.closed);
+        // anchor (0.5, 1.0) -> (100, 200). apex (0.5, 0.0) is 1 local-unit
+        // above the anchor, so 10 px above in pixel space.
+        let (apex_x, apex_y) = sp.points[2];
+        assert!((apex_x - 100.0).abs() < 0.001);
+        assert!((apex_y - 190.0).abs() < 0.001);
+    }
+
+    #[test]
     fn marker_pin_tip_is_at_anchor_bulb_above() {
         let pos = (10.0, 100.0);
-        let p = marker_path_at(MarkerSymbol::Pin { size: 8.0 }, pos);
+        let p = marker_path_at(&MarkerSymbol::Pin { size: 8.0 }, pos);
         assert!(p.subpaths[0].closed);
         let (_, miny, _, maxy) = bbox_of(&p);
         // tip at pos.1 = 100; bulb extends upward (smaller y in pixel space).

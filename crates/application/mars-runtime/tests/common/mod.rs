@@ -488,10 +488,7 @@ fn default_style() -> Style {
             a: 255,
         }),
         stroke_width: Some(1.0),
-        stroke_dasharray: None,
-        stroke_linecap: None,
-        stroke_linejoin: None,
-        marker: None,
+        ..Default::default()
     }
 }
 
@@ -830,12 +827,7 @@ fn build_multi_layer_stylesheet(n_layers: usize) -> Stylesheet {
                 b: 0,
                 a: 255,
             })),
-            stroke: None,
-            stroke_width: None,
-            stroke_dasharray: None,
-            stroke_linecap: None,
-            stroke_linejoin: None,
-            marker: None,
+            ..Default::default()
         };
         ss.geometry.insert(format!("layer_{i}__main"), Arc::new(style));
     }
