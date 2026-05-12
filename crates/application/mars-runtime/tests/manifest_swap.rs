@@ -77,6 +77,23 @@ async fn swap_to_5_feature_state(fix: &Fixture) {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn swap_publishes_manifest_version_gauge() {
+    let fix = build_fixture().await;
+    let baseline = fix.metrics.encode_text().unwrap();
+    assert!(
+        baseline.contains("mars_manifest_version 1"),
+        "expected version 1 after initial state, got:\n{baseline}"
+    );
+
+    swap_to_5_feature_state(&fix).await;
+    let after = fix.metrics.encode_text().unwrap();
+    assert!(
+        after.contains("mars_manifest_version 99"),
+        "expected version 99 after swap, got:\n{after}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn parallel_renders_complete_under_swap() {
     let fix = build_fixture().await;
     let plan = fix.render_plan();

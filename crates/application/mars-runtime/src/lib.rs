@@ -174,6 +174,9 @@ impl Runtime {
     /// Compose a runtime with a custom pixel budget.
     #[must_use]
     pub fn with_pixel_budget(deps: Deps, pixel_budget: u32, state: Option<Arc<RuntimeState>>) -> Self {
+        if let Some(s) = state.as_ref() {
+            deps.metrics.set_manifest_version(s.manifest.version);
+        }
         Self {
             state: state.map_or_else(ArcSwapOption::empty, |s| ArcSwapOption::from(Some(s))),
             deps,
@@ -203,6 +206,7 @@ impl Runtime {
 
     /// Atomically replace the active state snapshot.
     pub fn swap_state(&self, state: Arc<RuntimeState>) {
+        self.deps.metrics.set_manifest_version(state.manifest.version);
         self.state.store(Some(state));
         self.last_reject_reason.store(None);
     }

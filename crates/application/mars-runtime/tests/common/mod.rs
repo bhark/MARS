@@ -97,6 +97,7 @@ pub struct Fixture {
     pub manifest: Manifest,
     pub layer_id: LayerId,
     pub binding_id: BindingId,
+    pub metrics: mars_observability::Metrics,
 }
 
 impl Fixture {
@@ -342,7 +343,7 @@ pub async fn build_fixture_with(opts: FixtureOptions) -> Fixture {
         cache: cache.clone(),
         renderer,
         encoder,
-        metrics,
+        metrics: metrics.clone(),
         fonts,
     };
 
@@ -357,6 +358,7 @@ pub async fn build_fixture_with(opts: FixtureOptions) -> Fixture {
         manifest,
         layer_id,
         binding_id,
+        metrics,
     }
 }
 
