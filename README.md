@@ -119,13 +119,6 @@ The codebase is hexagonal: `domain <- ports <- {adapters, application, interface
 
 If you find yourself fighting these rules, that is the signal to step back: the right move is almost always to lift behaviour onto a port or move the call into a bin crate.
 
-### Code style
-
-- Clean, KISS, production-grade by default. Quick hacks are not accepted; if a hack is the only way forward, the design needs a rethink instead.
-- Comments earn their place. Use them for non-obvious *why*, hidden invariants, or short structural markers in long files. Don't restate what well-named code already says.
-- Each crate uses its own `thiserror` enum; there is no central error crate. Stub adapters return a typed `NotImplemented { what: "..." }` rather than panicking.
-- Respect existing conventions in the crate you are touching.
-
 ### Commits and PRs
 
 - Use semantic/conventional commits.
