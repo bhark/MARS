@@ -3,11 +3,12 @@
 use mars_render_port::{Path as PortPath, RenderError};
 use mars_style::{Colour, FillPaint, LabelStyle, Style};
 use mars_text::{Fonts, GlyphMask};
-use tiny_skia::{FillRule, LineCap, LineJoin, Mask, Paint, PathBuilder, Pixmap, Stroke, StrokeDash, Transform};
+use tiny_skia::{FillRule, LineCap, LineJoin, Mask, Paint, PathBuilder, Pixmap, Stroke, Transform};
 
-use crate::canvas::{colour_to_tsk, div255, map_cap, map_join, scaled_alpha, scaled_alpha_colour};
+use crate::canvas::{colour_to_tsk, div255, scaled_alpha, scaled_alpha_colour};
 use crate::path::{build_path, is_fillable};
 use crate::path_offset::offset_polyline;
+use crate::prepare;
 
 /// dispatch on the `FillPaint` variant. Solid paints with the colour; Hatch
 /// rasterises a clip mask from the polygon and stamps parallel-line strokes
@@ -144,14 +145,12 @@ pub(crate) fn draw_path(pm: &mut Pixmap, path: &PortPath, style: &Style) {
     let Some(tsk_path) = build_path(path) else {
         return;
     };
-    // style-wide opacity multiplies into fill/stroke alpha; missing or
-    // out-of-range values fall through as opaque.
-    let opacity = style.opacity.unwrap_or(1.0).clamp(0.0, 1.0);
+    let resolved = prepare::resolve(style);
 
-    if let Some(fill) = style.fill
+    if let Some(fill) = resolved.fill
         && is_fillable(&tsk_path)
     {
-        draw_fill(pm, &tsk_path, fill_with_opacity(fill, opacity));
+        draw_fill(pm, &tsk_path, fill_with_opacity(fill.paint, fill.alpha));
     }
 
     if style.stroke_gap.is_some() {
@@ -164,44 +163,26 @@ pub(crate) fn draw_path(pm: &mut Pixmap, path: &PortPath, style: &Style) {
         tracing::debug!("Style::marker glyph rendering is not yet implemented in the renderer");
     }
 
-    if let Some(stroke_col) = style.stroke {
-        // tiny-skia silently drops strokes thinner than ~0.75 px. AGG-based
-        // renderers (MapServer) emulate sub-pixel widths by drawing a 1px
-        // stroke at proportionally reduced alpha; mirror that here so a
-        // WIDTH 0.15 outline stays soft instead of going full intensity.
-        let requested = style.stroke_width.unwrap_or(1.0);
-        if requested > 0.0 {
-            let (width, alpha_scale) = if requested < 1.0 {
-                (1.0, requested)
-            } else {
-                (requested, 1.0)
-            };
-            let mut paint = Paint::default();
-            paint.set_color(scaled_alpha(stroke_col, alpha_scale * opacity));
-            paint.anti_alias = true;
+    if let Some(stroke) = resolved.stroke {
+        let mut paint = Paint::default();
+        paint.set_color(scaled_alpha(stroke.colour, stroke.alpha));
+        paint.anti_alias = true;
 
-            let mut stroke = Stroke {
-                width,
-                line_cap: style.stroke_linecap.map(map_cap).unwrap_or(LineCap::Butt),
-                line_join: style.stroke_linejoin.map(map_join).unwrap_or(LineJoin::Miter),
-                ..Stroke::default()
-            };
-            if let Some(dashes) = style.stroke_dasharray.as_ref()
-                && !dashes.is_empty()
-            {
-                stroke.dash = StrokeDash::new(dashes.clone(), 0.0);
-                if stroke.dash.is_none() {
-                    tracing::warn!(dashes = ?dashes, "invalid stroke dash array: odd length, rendering solid");
-                }
-            }
-            let stroke_path = match style.stroke_offset_px {
-                Some(d) if d.is_finite() && d.abs() > f32::EPSILON => offset_polyline(path, d)
-                    .and_then(|p| build_path(&p))
-                    .unwrap_or(tsk_path),
-                _ => tsk_path,
-            };
-            pm.stroke_path(&stroke_path, &paint, &stroke, Transform::identity(), None);
-        }
+        let tsk_stroke = Stroke {
+            width: stroke.width,
+            line_cap: stroke.cap,
+            line_join: stroke.join,
+            dash: stroke.dash,
+            ..Stroke::default()
+        };
+        let stroke_path = if stroke.offset_px != 0.0 {
+            offset_polyline(path, stroke.offset_px)
+                .and_then(|p| build_path(&p))
+                .unwrap_or(tsk_path)
+        } else {
+            tsk_path
+        };
+        pm.stroke_path(&stroke_path, &paint, &tsk_stroke, Transform::identity(), None);
     }
 }
 
