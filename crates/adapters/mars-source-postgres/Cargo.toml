@@ -17,9 +17,10 @@ default = []
 # Polling-mode fallback for sources where logical decoding cannot be enabled.
 # SPEC §8.2.2 - second-class but supported.
 polling = []
-# E2E tests that spin up a postgis container via testcontainers. Optional
-# because docker is not always available; default `cargo test` skips them.
-e2e = ["dep:testcontainers"]
+# Integration tests that spin up a postgis container via testcontainers.
+# Optional because docker is not always available; default `cargo test` skips
+# them.
+integration = ["dep:testcontainers"]
 
 [dependencies]
 mars-source   = { workspace = true }

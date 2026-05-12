@@ -2,7 +2,7 @@
 //! exactly one leader; dropping the guard releases the lock so a third call
 //! succeeds.
 
-#![cfg(feature = "e2e")]
+#![cfg(feature = "integration")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use mars_source::LeaderLock;

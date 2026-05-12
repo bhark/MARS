@@ -1,6 +1,6 @@
 //! e2e: `fetch_by_feature_ids` streams sparse primary-key lookups.
 
-#![cfg(feature = "e2e")]
+#![cfg(feature = "integration")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::collections::BTreeSet;

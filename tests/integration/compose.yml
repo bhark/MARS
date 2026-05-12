@@ -1,11 +1,11 @@
-name: mars-e2e
+name: mars-integration
 
-# e2e stack: postgis + fixture-loader + compiler + runtime. project-scoped
-# via `name:` so it never collides with the dev stack. runtime is exposed on
-# 18080 so `make up` (dev) on 8080 can coexist with the e2e harness.
+# integration stack: postgis + fixture-loader + compiler + runtime. project-
+# scoped via `name:` so it never collides with the dev stack. runtime is exposed
+# on 18080 so `make up` (dev) on 8080 can coexist with the integration harness.
 
 x-mars-image: &mars-image
-  image: localhost/mars:e2e
+  image: localhost/mars:integration
   build:
     context: ../..
     dockerfile: Dockerfile
@@ -13,7 +13,7 @@ x-mars-image: &mars-image
 services:
   postgis:
     image: docker.io/postgis/postgis:18-3.6
-    container_name: mars-e2e-postgis
+    container_name: mars-integration-postgis
     command:
       - postgres
       - -c
@@ -37,7 +37,7 @@ services:
 
   fixture-loader:
     image: docker.io/postgis/postgis:18-3.6
-    container_name: mars-e2e-fixture-loader
+    container_name: mars-integration-fixture-loader
     environment:
       PG_DSN: postgres://mars:mars@postgis/mars
     entrypoint: ["/bin/sh", "/loader/fixture-loader.sh"]
@@ -45,7 +45,7 @@ services:
       - ./fixture-loader.sh:/loader/fixture-loader.sh:ro
       - ./fixtures/local-map-subset/assert-fixture.sql:/sql/assert-fixture.sql:ro
       - ./fixtures/local-map-subset/create-replication.sql:/sql/create-replication.sql:ro
-      - ../../target/e2e-fixtures/local-map-subset.sql.gz:/fixture/dump.sql.gz:ro
+      - ../../target/integration-fixtures/local-map-subset.sql.gz:/fixture/dump.sql.gz:ro
     depends_on:
       postgis:
         condition: service_healthy
@@ -53,7 +53,7 @@ services:
 
   init-artifact-store:
     image: docker.io/busybox:stable
-    container_name: mars-e2e-init-artifact-store
+    container_name: mars-integration-init-artifact-store
     command: ["chown", "-R", "65532:65532", "/var/lib/mars/store"]
     volumes:
       - artifact-store:/var/lib/mars/store
@@ -61,7 +61,7 @@ services:
 
   compiler:
     <<: *mars-image
-    container_name: mars-e2e-compiler
+    container_name: mars-integration-compiler
     command: ["--mode", "compiler", "--config", "/etc/mars/mars.yaml"]
     environment:
       PG_DSN: postgres://mars:mars@postgis/mars
@@ -79,7 +79,7 @@ services:
 
   runtime:
     <<: *mars-image
-    container_name: mars-e2e-runtime
+    container_name: mars-integration-runtime
     command: ["--mode", "runtime", "--config", "/etc/mars/mars.yaml"]
     environment:
       PG_DSN: postgres://mars:mars@postgis/mars

@@ -2,7 +2,7 @@
 //! through the runtime and verify the PNG. gated behind the `e2e` feature so
 //! plain `cargo test` never pulls docker into the test set.
 
-#![cfg(feature = "e2e")]
+#![cfg(feature = "integration")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::sync::Arc;

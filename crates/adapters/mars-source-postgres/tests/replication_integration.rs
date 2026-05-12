@@ -9,7 +9,7 @@
 //!   - Ack semantics: an unacknowledged batch is replayed on reconnect; an
 //!     acknowledged batch is not.
 
-#![cfg(feature = "e2e")]
+#![cfg(feature = "integration")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::time::Duration;

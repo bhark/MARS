@@ -6,9 +6,9 @@
 //!
 //! Marked `#[ignore]` because the bootstrap alone takes longer than CI
 //! budgets. Operator-driven: invoke with
-//! `cargo test -p mars --features e2e --test e2e_partial_update_timing -- --nocapture --ignored`.
+//! `cargo test -p mars --features integration --test integration_partial_update_timing -- --nocapture --ignored`.
 
-#![cfg(feature = "e2e")]
+#![cfg(feature = "integration")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::sync::Arc;

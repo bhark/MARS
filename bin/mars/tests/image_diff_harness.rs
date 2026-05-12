@@ -9,7 +9,7 @@
 //! regenerate every golden by setting `MARS_GOLDEN_REGENERATE=1`. otherwise
 //! any case whose diff exceeds its budget fails the test.
 
-#![cfg(feature = "e2e")]
+#![cfg(feature = "integration")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::path::PathBuf;

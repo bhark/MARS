@@ -34,14 +34,14 @@ Releases are automated from these commit messages by `release-plz`; non-conformi
 # unit + integration
 cargo test --workspace --locked --all-targets
 
-# in-process e2e (testcontainers; requires docker)
-MARS_E2E=1 cargo test -p mars --features e2e -- --nocapture
+# in-process integration (testcontainers; requires docker)
+MARS_INTEGRATION=1 cargo test -p mars --features integration -- --nocapture
 
-# docker compose e2e (postgis + compiler + runtime against a fixture dump)
-./scripts/run-e2e.sh
+# docker compose integration (postgis + compiler + runtime against a fixture dump)
+./scripts/run-integration.sh
 ```
 
-CI runs the quick tier (`fmt`, `clippy`, `test`, `cargo-deny`, hex-arch) on every push and PR. The full e2e tier runs on PRs and on release tags.
+CI runs the quick tier (`fmt`, `clippy`, `test`, `cargo-deny`, hex-arch) on every push and PR. The integration tier runs on PRs and on release tags. The kind-based e2e suite lives under `tests/e2e/` and is gated separately.
 
 ## Releases
 

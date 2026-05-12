@@ -18,7 +18,7 @@ See CONTRIBUTING.md for the full rule set.
 - [ ] `cargo clippy --workspace --all-targets --locked -- -D warnings`
 - [ ] `cargo test --workspace --locked --all-targets`
 - [ ] `./scripts/check-hexagonal-architecture.sh`
-- [ ] e2e (`MARS_E2E=1 cargo test -p mars --features e2e` or `./scripts/run-e2e.sh`) where relevant
+- [ ] integration (`MARS_INTEGRATION=1 cargo test -p mars --features integration` or `./scripts/run-integration.sh`) where relevant
 
 ## Notes for reviewers
 

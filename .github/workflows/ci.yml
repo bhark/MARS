@@ -45,8 +45,8 @@ jobs:
           shared-key: workspace
       - run: cargo test --workspace --locked --all-targets
 
-  e2e-check:
-    name: cargo check (e2e gate)
+  integration-check:
+    name: cargo check (integration gate)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -54,7 +54,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: workspace
-      - run: cargo check --locked --features e2e -p mars-source-postgres --tests
+      - run: cargo check --locked --features integration -p mars-source-postgres --tests
 
   deps:
     name: dependency rule + cargo-deny

@@ -10,12 +10,12 @@
 //! production-class fixture, but the methodology
 //! is the methodology. operator-driven cluster captures land via
 //! `mars-diff-capture --load`; this harness keeps the host-side ratchet
-//! honest under e2e CI.
+//! honest under integration CI.
 //!
-//! invoke: `MARS_E2E=1 cargo test -p mars --features e2e --test perf_harness -- --nocapture`
+//! invoke: `MARS_INTEGRATION=1 cargo test -p mars --features integration --test perf_harness -- --nocapture`
 //! optional report path: `MARS_PERF_REPORT=/tmp/perf.md`.
 
-#![cfg(feature = "e2e")]
+#![cfg(feature = "integration")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::path::PathBuf;

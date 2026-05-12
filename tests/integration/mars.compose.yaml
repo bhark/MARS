@@ -1,7 +1,7 @@
 service:
-  name: mars-e2e
-  title: "MARS e2e"
-  abstract: "End-to-end harness over the local-map-subset fixture."
+  name: mars-integration
+  title: "MARS integration"
+  abstract: "Integration harness over the local-map-subset fixture."
   contact_email: ops@example.org
 
 source:

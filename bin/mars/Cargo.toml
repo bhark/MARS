@@ -18,9 +18,10 @@ workspace = true
 
 [features]
 default = []
-# end-to-end test that spins up a postgis container; gated because docker
-# is not always available. plain `cargo test` skips it.
-e2e = []
+# in-process integration tests that spin up a postgis container; gated
+# because docker is not always available. plain `cargo test` skips them.
+# (true e2e lives under tests/e2e/, a separate kind-based suite.)
+integration = []
 # host-side parity harness against an external MapServer bundle; off by default
 # because it requires a pre-captured fixture directory (MARS_DIFF_BUNDLE).
 mapserver-diff = []

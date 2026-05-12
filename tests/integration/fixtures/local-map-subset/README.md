@@ -1,8 +1,10 @@
 # local map subset fixture
 
-This fixture contract is the public e2e data boundary. The harness expects a
-gzip-compressed SQL dump at `target/e2e-fixtures/local-map-subset.sql.gz` unless
-`scripts/run-e2e.sh --fixture PATH` is used.
+This fixture contract is the public test data boundary - consumed by the
+docker-compose integration suite and the kind-based e2e suite. The integration
+harness expects a gzip-compressed SQL dump at
+`target/integration-fixtures/local-map-subset.sql.gz` unless
+`scripts/run-integration.sh --fixture PATH` is used.
 
 The dump must create the `e2e_source` schema and these tables:
 

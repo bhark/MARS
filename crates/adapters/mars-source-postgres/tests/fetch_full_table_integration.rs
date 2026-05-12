@@ -1,7 +1,7 @@
 //! e2e: `fetch_full_table_streaming` against a postgis container streams every
 //! row of a synthetic table without buffering, irrespective of physical order.
 
-#![cfg(feature = "e2e")]
+#![cfg(feature = "integration")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::collections::BTreeSet;

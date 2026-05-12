@@ -28,11 +28,11 @@ Current cases:
 
 ## Regenerating goldens
 
-The harness is gated on the `e2e` cargo feature (it spins up a postgis
+The harness is gated on the `integration` cargo feature (it spins up a postgis
 testcontainer). To regenerate every golden in one pass:
 
 ```sh
-MARS_GOLDEN_REGENERATE=1 cargo test -p mars --features e2e \
+MARS_GOLDEN_REGENERATE=1 cargo test -p mars --features integration \
     --test image_diff_harness -- --nocapture
 ```
 

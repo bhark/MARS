@@ -77,19 +77,20 @@ cargo test --workspace --locked --all-targets
 cargo deny check
 ```
 
-The end-to-end harness drives a docker compose stack (postgis + compiler +
+The integration harness drives a docker compose stack (postgis + compiler +
 runtime), loads the local-map-subset fixture into PostGIS, and exercises
-WMS GetCapabilities + GetMap:
+WMS GetCapabilities + GetMap. Fast smoke for the dev loop; the true e2e
+suite under `tests/e2e/` runs on kind.
 
 ```sh
-./scripts/run-e2e.sh
+./scripts/run-integration.sh
 ```
 
-A separate in-process e2e (`bin/mars/tests/e2e_render.rs`) uses
-`testcontainers` and needs Docker:
+A separate in-process integration suite (`bin/mars/tests/integration_render.rs`)
+uses `testcontainers` and needs Docker:
 
 ```sh
-MARS_E2E=1 cargo test -p mars --features e2e -- --nocapture
+MARS_INTEGRATION=1 cargo test -p mars --features integration -- --nocapture
 ```
 
 CI runs the same gates plus `cargo-deny`. A green local run is not a guarantee of a green CI run, but a red local run is a guaranteed red CI run.

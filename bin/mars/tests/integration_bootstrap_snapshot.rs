@@ -12,7 +12,7 @@
 //! to keep CI runtime under a minute. Larger soak-test loads are
 //! operator-driven, not CI-driven.
 
-#![cfg(feature = "e2e")]
+#![cfg(feature = "integration")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::sync::Arc;

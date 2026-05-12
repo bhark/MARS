@@ -10,7 +10,7 @@
 //!      page-membership sidecar reflects post-cycle state, and that
 //!      content hashes change only on dirty pages.
 
-#![cfg(feature = "e2e")]
+#![cfg(feature = "integration")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::collections::HashMap;
