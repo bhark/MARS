@@ -748,6 +748,43 @@ mod tests {
     }
 
     #[test]
+    fn stroke_offset_shifts_line_perpendicular() {
+        // a horizontal line at y=32 with stroke_offset_px=+8 (right-hand of
+        // direction of travel, y-down) should paint near y=40, not y=32.
+        let canvas = Canvas {
+            width: 64,
+            height: 64,
+            background: None,
+        };
+        let path = PortPath {
+            subpaths: vec![Subpath {
+                points: vec![(8.0, 32.0), (56.0, 32.0)],
+                closed: false,
+            }],
+        };
+        let ops = vec![DrawOp::Path {
+            path,
+            style: Arc::new(Style {
+                stroke: Some(red()),
+                stroke_width: Some(2.0),
+                stroke_offset_px: Some(8.0),
+                ..Default::default()
+            }),
+        }];
+        let png_bytes = render_png(canvas, &ops);
+        let (w, _, rgba) = decode(&png_bytes);
+        // row 40 should carry the stroke; row 32 should be empty.
+        let row_has_pixels = |y: usize| {
+            let off = y * w as usize * 4;
+            rgba[off..off + w as usize * 4]
+                .chunks_exact(4)
+                .any(|p| p[3] > 0 && p[0] > 150)
+        };
+        assert!(!row_has_pixels(32), "stroke wasn't displaced from y=32");
+        assert!(row_has_pixels(40), "stroke didn't land at y=40");
+    }
+
+    #[test]
     fn style_opacity_halves_fill_alpha() {
         // opaque red square at opacity 0.5 on a transparent canvas: every
         // covered pixel should land near alpha 128, not 255. proves
