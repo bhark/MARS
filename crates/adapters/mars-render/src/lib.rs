@@ -4,6 +4,7 @@
 
 mod canvas;
 mod encode;
+mod fill;
 mod path;
 mod path_offset;
 mod prepare;
@@ -272,29 +273,6 @@ mod tests {
     }
 
     #[test]
-    fn filled_polygon_red_pixels() {
-        let canvas = Canvas {
-            width: 64,
-            height: 64,
-            background: None,
-        };
-        let ops = vec![DrawOp::Path {
-            path: square(32.0, 32.0, 16.0),
-            style: Arc::new(Style {
-                fill: Some(FillPaint::Solid(red())),
-                ..Default::default()
-            }),
-        }];
-        let png_bytes = render_png(canvas, &ops);
-        let (_, _, rgba) = decode(&png_bytes);
-        let red_count = rgba
-            .chunks_exact(4)
-            .filter(|p| p[0] > 200 && p[1] < 40 && p[2] < 40 && p[3] == 255)
-            .count();
-        assert!(red_count > 800, "expected >800 red pixels, got {red_count}");
-    }
-
-    #[test]
     fn stroked_line_has_pixels() {
         let canvas = Canvas {
             width: 64,
@@ -353,37 +331,6 @@ mod tests {
         // bottom-right corner should remain transparent
         let br = ((w - 2) * 4) as usize + ((w * (canvas.height - 2)) * 4) as usize;
         assert_eq!(rgba[br + 3], 0, "open linestring must not close to bottom-right");
-    }
-
-    #[test]
-    fn collapsed_polygon_fill_is_silently_skipped() {
-        // a closed ring whose vertices all share the same y (typical of a tiny
-        // polygon collapsed onto a pixel row by world->pixel projection at
-        // coarse zoom). tiny-skia's fill_path would log::warn + no-op; we
-        // gate ahead of it so the call never happens. behavioural check: the
-        // canvas remains empty (no fill drawn) and the renderer doesn't error.
-        let canvas = Canvas {
-            width: 32,
-            height: 32,
-            background: None,
-        };
-        let path = PortPath {
-            subpaths: vec![Subpath {
-                points: vec![(4.0, 16.0), (16.0, 16.0), (28.0, 16.0)],
-                closed: true,
-            }],
-        };
-        let ops = vec![DrawOp::Path {
-            path,
-            style: Arc::new(Style {
-                fill: Some(FillPaint::Solid(red())),
-                ..Default::default()
-            }),
-        }];
-        let png_bytes = render_png(canvas, &ops);
-        let (_, _, rgba) = decode(&png_bytes);
-        let opaque_count = rgba.chunks_exact(4).filter(|p| p[3] != 0).count();
-        assert_eq!(opaque_count, 0, "degenerate-bbox fill must paint nothing");
     }
 
     #[test]
@@ -553,126 +500,6 @@ mod tests {
     }
 
     #[test]
-    fn hatch_fill_paints_lines_inside_polygon() {
-        // a centred 24x24 square on a 64x64 black canvas, hatch-filled with
-        // red lines at 4px spacing and 0deg (horizontal). expect:
-        //   - red-ish pixels inside the square's bbox.
-        //   - no red-ish pixels outside the square's bbox (clip mask works).
-        //   - roughly the right number of hatch lines (24 / 4 = ~6).
-        let canvas = Canvas {
-            width: 64,
-            height: 64,
-            background: None,
-        };
-        let ops = vec![DrawOp::Path {
-            path: square(32.0, 32.0, 12.0),
-            style: Arc::new(Style {
-                fill: Some(FillPaint::Hatch {
-                    spacing: 4.0,
-                    angle_deg: 0.0,
-                    line_width: 1.0,
-                    colour: Colour::rgba(220, 30, 30, 255),
-                }),
-                ..Default::default()
-            }),
-        }];
-        let (w, _, rgba) = decode(&render_png(canvas, &ops));
-        // strong-red pixels (anti-aliasing means we accept r > 150, g < 80).
-        let is_red = |p: &[u8]| p[0] > 150 && p[1] < 80 && p[2] < 80 && p[3] > 0;
-
-        // pixel ranges based on square(cx=32, cy=32, half=12) -> x in [20, 44).
-        let inside_red = rgba
-            .chunks_exact(4)
-            .enumerate()
-            .filter(|(i, p)| {
-                let x = (i % w as usize) as f32;
-                let y = (i / w as usize) as f32;
-                is_red(p) && (20.0..44.0).contains(&x) && (20.0..44.0).contains(&y)
-            })
-            .count();
-        assert!(
-            inside_red > 100,
-            "hatch produced too few inside-poly red pixels: {inside_red}"
-        );
-
-        let outside_red = rgba
-            .chunks_exact(4)
-            .enumerate()
-            .filter(|(i, p)| {
-                let x = (i % w as usize) as f32;
-                let y = (i / w as usize) as f32;
-                is_red(p) && !((20.0..44.0).contains(&x) && (20.0..44.0).contains(&y))
-            })
-            .count();
-        assert_eq!(
-            outside_red, 0,
-            "hatch leaked outside polygon clip mask: {outside_red} px"
-        );
-    }
-
-    #[test]
-    fn hatch_fill_at_45_degrees_paints_inside_polygon() {
-        // diagonal hatch should still produce red pixels inside the polygon.
-        let canvas = Canvas {
-            width: 64,
-            height: 64,
-            background: None,
-        };
-        let ops = vec![DrawOp::Path {
-            path: square(32.0, 32.0, 12.0),
-            style: Arc::new(Style {
-                fill: Some(FillPaint::Hatch {
-                    spacing: 4.0,
-                    angle_deg: 45.0,
-                    line_width: 1.0,
-                    colour: Colour::rgba(220, 30, 30, 255),
-                }),
-                ..Default::default()
-            }),
-        }];
-        let (_, _, rgba) = decode(&render_png(canvas, &ops));
-        let red_count = rgba
-            .chunks_exact(4)
-            .filter(|p| p[0] > 150 && p[1] < 80 && p[2] < 80 && p[3] > 0)
-            .count();
-        assert!(
-            red_count > 100,
-            "diagonal hatch produced too few red pixels: {red_count}"
-        );
-    }
-
-    #[test]
-    fn hatch_fill_outline_still_strokes() {
-        // hatch fill must not suppress the stroke arm; a polygon with both
-        // hatch fill and a stroke must show stroke pixels along its boundary.
-        let canvas = Canvas {
-            width: 64,
-            height: 64,
-            background: None,
-        };
-        let ops = vec![DrawOp::Path {
-            path: square(32.0, 32.0, 12.0),
-            style: Arc::new(Style {
-                fill: Some(FillPaint::Hatch {
-                    spacing: 6.0,
-                    angle_deg: 30.0,
-                    line_width: 1.0,
-                    colour: Colour::rgba(220, 30, 30, 255),
-                }),
-                stroke: Some(Colour::rgba(0, 200, 0, 255)),
-                stroke_width: Some(2.0),
-                ..Default::default()
-            }),
-        }];
-        let (_, _, rgba) = decode(&render_png(canvas, &ops));
-        let green_count = rgba
-            .chunks_exact(4)
-            .filter(|p| p[1] > 150 && p[0] < 80 && p[2] < 80 && p[3] > 0)
-            .count();
-        assert!(green_count > 50, "outline stroke missing: only {green_count} green px");
-    }
-
-    #[test]
     fn rotated_label_lands_in_rotated_bbox() {
         // 90-degree rotation: a horizontal label anchored at the centre
         // should produce painted pixels along a vertical strip, not a
@@ -773,60 +600,6 @@ mod tests {
         };
         assert!(!row_has_pixels(32), "stroke wasn't displaced from y=32");
         assert!(row_has_pixels(40), "stroke didn't land at y=40");
-    }
-
-    #[test]
-    fn style_opacity_halves_fill_alpha() {
-        // opaque red square at opacity 0.5 on a transparent canvas: every
-        // covered pixel should land near alpha 128, not 255. proves
-        // style.opacity multiplies through to fill alpha.
-        let canvas = Canvas {
-            width: 32,
-            height: 32,
-            background: None,
-        };
-        let ops = vec![DrawOp::Path {
-            path: square(16.0, 16.0, 8.0),
-            style: Arc::new(Style {
-                fill: Some(FillPaint::Solid(red())),
-                opacity: Some(0.5),
-                ..Default::default()
-            }),
-        }];
-        let png_bytes = render_png(canvas, &ops);
-        let (_, _, rgba) = decode(&png_bytes);
-        // count pixels with the expected half-alpha. tolerate +/- 4 LSB for
-        // edge anti-aliasing.
-        let half = rgba
-            .chunks_exact(4)
-            .filter(|p| p[3] > 100 && p[3] < 160 && p[0] > 100)
-            .count();
-        assert!(half > 100, "expected half-alpha pixels, got {half}");
-        // no fully-opaque red.
-        let full = rgba.chunks_exact(4).filter(|p| p[3] >= 250).count();
-        assert_eq!(full, 0, "opacity didn't gate fill alpha");
-    }
-
-    #[test]
-    fn style_opacity_zero_paints_nothing() {
-        let canvas = Canvas {
-            width: 16,
-            height: 16,
-            background: None,
-        };
-        let ops = vec![DrawOp::Path {
-            path: square(8.0, 8.0, 4.0),
-            style: Arc::new(Style {
-                fill: Some(FillPaint::Solid(red())),
-                stroke: Some(red()),
-                stroke_width: Some(1.0),
-                opacity: Some(0.0),
-                ..Default::default()
-            }),
-        }];
-        let (_, _, rgba) = decode(&render_png(canvas, &ops));
-        let painted = rgba.chunks_exact(4).filter(|p| p[3] > 0).count();
-        assert_eq!(painted, 0, "opacity=0 should produce a fully transparent result");
     }
 
     #[test]
