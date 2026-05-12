@@ -11,6 +11,91 @@ use tiny_skia::Pixmap;
 
 use crate::canvas::div255;
 
+/// axis-aligned mask stamp at `anchor + mask.origin + offset`. clips the dst
+/// rect to canvas bounds so the `AxisSampler` can skip its OOB check.
+pub(crate) fn stamp_axis(pm: &mut Pixmap, mask: &GlyphMask, anchor: (f32, f32), colour: Colour, offset: (f32, f32)) {
+    if mask.width == 0 || mask.height == 0 {
+        return;
+    }
+    let pm_w = pm.width() as i32;
+    let pm_h = pm.height() as i32;
+    let dst_x0 = (anchor.0 + mask.origin_x as f32 + offset.0).round() as i32;
+    let dst_y0 = (anchor.1 + mask.origin_y as f32 + offset.1).round() as i32;
+    let mw = mask.width as i32;
+    let mh = mask.height as i32;
+
+    let dst_x_lo = dst_x0.max(0);
+    let dst_x_hi = (dst_x0 + mw).min(pm_w);
+    let dst_y_lo = dst_y0.max(0);
+    let dst_y_hi = (dst_y0 + mh).min(pm_h);
+    if dst_x_lo >= dst_x_hi || dst_y_lo >= dst_y_hi {
+        return;
+    }
+
+    let sampler = AxisSampler { mask, dst_x0, dst_y0 };
+    composite(pm, (dst_x_lo, dst_y_lo, dst_x_hi, dst_y_hi), colour, &sampler);
+}
+
+/// rotated mask stamp: rotate the four mask corners around `anchor` to bound
+/// the dst rect, then run a `RotatedSampler` through the generic compositor.
+/// `offset` is applied in the mask's local (pre-rotation) frame so halo
+/// stamps rotate with the glyph rather than smearing outwards in canvas
+/// space.
+pub(crate) fn stamp_rotated(
+    pm: &mut Pixmap,
+    mask: &GlyphMask,
+    anchor: (f32, f32),
+    colour: Colour,
+    offset: (f32, f32),
+    angle_rad: f32,
+) {
+    if mask.width == 0 || mask.height == 0 {
+        return;
+    }
+    let (sin_a, cos_a) = angle_rad.sin_cos();
+    let pm_w = pm.width() as i32;
+    let pm_h = pm.height() as i32;
+    let mw = mask.width as f32;
+    let mh = mask.height as f32;
+    let ox = mask.origin_x as f32 + offset.0;
+    let oy = mask.origin_y as f32 + offset.1;
+
+    let corners = [(ox, oy), (ox + mw, oy), (ox, oy + mh), (ox + mw, oy + mh)];
+    let mut minx = f32::INFINITY;
+    let mut miny = f32::INFINITY;
+    let mut maxx = f32::NEG_INFINITY;
+    let mut maxy = f32::NEG_INFINITY;
+    for &(lx, ly) in &corners {
+        let rx = anchor.0 + cos_a * lx - sin_a * ly;
+        let ry = anchor.1 + sin_a * lx + cos_a * ly;
+        if rx < minx {
+            minx = rx;
+        }
+        if ry < miny {
+            miny = ry;
+        }
+        if rx > maxx {
+            maxx = rx;
+        }
+        if ry > maxy {
+            maxy = ry;
+        }
+    }
+    let dst_x_lo = (minx.floor() as i32 - 1).max(0);
+    let dst_x_hi = (maxx.ceil() as i32 + 1).min(pm_w);
+    let dst_y_lo = (miny.floor() as i32 - 1).max(0);
+    let dst_y_hi = (maxy.ceil() as i32 + 1).min(pm_h);
+
+    let sampler = RotatedSampler {
+        mask,
+        anchor,
+        origin: (ox, oy),
+        cos: cos_a,
+        sin: sin_a,
+    };
+    composite(pm, (dst_x_lo, dst_y_lo, dst_x_hi, dst_y_hi), colour, &sampler);
+}
+
 pub(crate) trait Sampler {
     /// returns coverage at canvas (dx, dy). `None` when the canvas pixel maps
     /// outside the mask, `Some(0)` for transparent mask pixels. callers
