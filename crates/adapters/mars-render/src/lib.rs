@@ -2,6 +2,7 @@
 
 #![forbid(unsafe_code)]
 
+mod canvas;
 mod encode;
 mod path;
 mod path_offset;
@@ -40,7 +41,7 @@ impl Renderer for TinySkiaRenderer {
             .ok_or_else(|| RenderError::Backend(format!("pixmap alloc {}x{}", canvas.width, canvas.height)))?;
 
         if let Some(bg) = canvas.background {
-            raster::fill_background(&mut pm, bg);
+            crate::canvas::fill_background(&mut pm, bg);
         }
 
         for op in ops {
@@ -382,28 +383,6 @@ mod tests {
         let (_, _, rgba) = decode(&png_bytes);
         let opaque_count = rgba.chunks_exact(4).filter(|p| p[3] != 0).count();
         assert_eq!(opaque_count, 0, "degenerate-bbox fill must paint nothing");
-    }
-
-    #[test]
-    fn transparent_vs_opaque_background() {
-        let c1 = Canvas {
-            width: 4,
-            height: 4,
-            background: None,
-        };
-        let png1 = render_png(c1, &[]);
-        let (_, _, rgba1) = decode(&png1);
-        assert_eq!(rgba1[3], 0, "transparent bg first pixel alpha 0");
-
-        let c2 = Canvas {
-            width: 4,
-            height: 4,
-            background: Some(white()),
-        };
-        let png2 = render_png(c2, &[]);
-        let (_, _, rgba2) = decode(&png2);
-        assert_eq!(rgba2[3], 255, "opaque bg first pixel alpha 255");
-        assert_eq!(&rgba2[0..3], &[255, 255, 255]);
     }
 
     #[test]

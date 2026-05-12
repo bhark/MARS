@@ -1,60 +1,13 @@
 //! tiny-skia rasterisation helpers.
 
 use mars_render_port::{Path as PortPath, RenderError};
-use mars_style::{Colour, FillPaint, LabelStyle, LineCap as SLineCap, LineJoin as SLineJoin, Style};
+use mars_style::{Colour, FillPaint, LabelStyle, Style};
 use mars_text::{Fonts, GlyphMask};
-use tiny_skia::{Color, FillRule, LineCap, LineJoin, Mask, Paint, PathBuilder, Pixmap, Stroke, StrokeDash, Transform};
+use tiny_skia::{FillRule, LineCap, LineJoin, Mask, Paint, PathBuilder, Pixmap, Stroke, StrokeDash, Transform};
 
+use crate::canvas::{colour_to_tsk, div255, map_cap, map_join, scaled_alpha, scaled_alpha_colour};
 use crate::path::{build_path, is_fillable};
 use crate::path_offset::offset_polyline;
-
-pub(crate) fn colour_to_tsk(c: Colour) -> Color {
-    Color::from_rgba8(c.r, c.g, c.b, c.a)
-}
-
-/// returns `c` with alpha multiplied by `scale` (clamped to [0,1]). used to
-/// emulate AGG sub-pixel stroke widths: a width of 0.15 renders as a 1px
-/// stroke at 15% alpha rather than a full-intensity 1px line.
-fn scaled_alpha(c: Colour, scale: f32) -> Color {
-    let s = scale.clamp(0.0, 1.0);
-    let a = ((c.a as f32) * s).round().clamp(0.0, 255.0) as u8;
-    Color::from_rgba8(c.r, c.g, c.b, a)
-}
-
-/// returns `c` with alpha multiplied by `scale` (clamped to [0,1]). same idea
-/// as `scaled_alpha` but yields a `Colour` so callers can re-thread the
-/// result through `FillPaint::Hatch::colour` or further-scaled paths.
-fn scaled_alpha_colour(c: Colour, scale: f32) -> Colour {
-    let s = scale.clamp(0.0, 1.0);
-    let a = ((c.a as f32) * s).round().clamp(0.0, 255.0) as u8;
-    Colour {
-        r: c.r,
-        g: c.g,
-        b: c.b,
-        a,
-    }
-}
-
-fn map_cap(c: SLineCap) -> LineCap {
-    match c {
-        SLineCap::Butt => LineCap::Butt,
-        SLineCap::Round => LineCap::Round,
-        SLineCap::Square => LineCap::Square,
-    }
-}
-
-fn map_join(j: SLineJoin) -> LineJoin {
-    match j {
-        SLineJoin::Miter => LineJoin::Miter,
-        SLineJoin::Round => LineJoin::Round,
-        SLineJoin::Bevel => LineJoin::Bevel,
-    }
-}
-
-/// fill the pixmap with a solid colour (used for canvas background).
-pub(crate) fn fill_background(pm: &mut Pixmap, c: Colour) {
-    pm.fill(colour_to_tsk(c));
-}
 
 /// dispatch on the `FillPaint` variant. Solid paints with the colour; Hatch
 /// rasterises a clip mask from the polygon and stamps parallel-line strokes
@@ -329,14 +282,6 @@ pub(crate) fn draw_label(
         composite_mask_rotated(pm, &mask, anchor, style.fill, (0.0, 0.0), angle_rad);
     }
     Ok(())
-}
-
-/// `(x * y + 127) / 255` approximated as `(x*y + 0x80 + ((x*y) >> 8)) >> 8`,
-/// the standard integer-/255 trick. error <= 1 LSB across the whole 0..=255
-/// range; well inside font AA tolerance.
-#[inline]
-fn div255(v: u32) -> u32 {
-    (v + 0x80 + (v >> 8)) >> 8
 }
 
 /// composite `mask` onto `pm` with a rotation by `angle_rad` around `anchor`.
