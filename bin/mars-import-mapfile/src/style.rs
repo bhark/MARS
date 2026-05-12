@@ -2,7 +2,7 @@
 
 use tracing::warn;
 
-use crate::emitter::{ClassSkeleton, LabelSkeleton, Skeleton, StyleDef, rgb_to_hex, slugify};
+use crate::emitter::{ClassSkeleton, EmitFill, EmitMarker, LabelSkeleton, Skeleton, StyleDef, SymbolDef, rgb_to_hex, slugify};
 use crate::scanner::{Token, block_range, is_block_opener};
 use crate::translate::{is_unsupported, normalize_n_plus_one};
 
@@ -13,6 +13,13 @@ struct StyleBlock {
     width: Option<f32>,
     outlinewidth: Option<f32>,
     pattern: Option<Vec<f32>>,
+    /// STYLE.SYMBOL "<name>" - resolved against Skeleton::symbols at emit
+    /// time to decide marker:/fill: { kind: hatch, ... } shape.
+    symbol: Option<String>,
+    /// STYLE.ANGLE - hatch angle override.
+    angle_deg: Option<f32>,
+    /// STYLE.SIZE - marker size or hatch spacing override.
+    size: Option<f32>,
 }
 
 pub(crate) fn parse_class(
@@ -95,43 +102,26 @@ pub(crate) fn parse_class(
     let style_prefix = if geom_kind == "polygon" { "poly" } else { geom_kind };
     let style_name = format!("{}_{}_{}", style_prefix, slugify(layer_name), class_name);
 
-    let (fill, stroke, stroke_width, dasharray) = collapse_styles(&styles, class_line);
+    let collapsed = collapse_styles(&styles, class_line, &skel.symbols);
 
-    // dedupe identical styles
-    let canonical = {
-        let mut tmp = String::new();
-        let _ = std::fmt::write(&mut tmp, format_args!("kind={geom_kind}"));
-        if let Some(ref v) = fill {
-            let _ = std::fmt::write(&mut tmp, format_args!(",fill={v}"));
-        }
-        if let Some(ref v) = stroke {
-            let _ = std::fmt::write(&mut tmp, format_args!(",stroke={v}"));
-        }
-        if let Some(v) = stroke_width {
-            let _ = std::fmt::write(&mut tmp, format_args!(",width={v}"));
-        }
-        if let Some(ref arr) = dasharray {
-            let _ = std::fmt::write(&mut tmp, format_args!(",dash={arr:?}"));
-        }
-        tmp
-    };
+    let canonical = canonical_signature(
+        geom_kind,
+        collapsed.fill.as_ref(),
+        collapsed.stroke.as_ref(),
+        collapsed.width,
+        collapsed.dasharray.as_ref(),
+        collapsed.marker.as_ref(),
+    );
 
     let existing = skel.styles.iter().find(|s| {
-        let mut tmp = String::new();
-        let _ = std::fmt::write(&mut tmp, format_args!("kind={}", s.style_type));
-        if let Some(ref v) = s.fill {
-            let _ = std::fmt::write(&mut tmp, format_args!(",fill={v}"));
-        }
-        if let Some(ref v) = s.stroke {
-            let _ = std::fmt::write(&mut tmp, format_args!(",stroke={v}"));
-        }
-        if let Some(v) = s.stroke_width {
-            let _ = std::fmt::write(&mut tmp, format_args!(",width={v}"));
-        }
-        if let Some(ref arr) = s.stroke_dasharray {
-            let _ = std::fmt::write(&mut tmp, format_args!(",dash={arr:?}"));
-        }
-        tmp == canonical
+        canonical_signature(
+            &s.style_type,
+            s.fill.as_ref(),
+            s.stroke.as_ref(),
+            s.stroke_width,
+            s.stroke_dasharray.as_ref(),
+            s.marker.as_ref(),
+        ) == canonical
     });
 
     let style_ref = if let Some(st) = existing {
@@ -140,10 +130,11 @@ pub(crate) fn parse_class(
         skel.styles.push(StyleDef {
             name: style_name.clone(),
             style_type: geom_kind.to_string(),
-            fill,
-            stroke,
-            stroke_width,
-            stroke_dasharray: dasharray,
+            fill: collapsed.fill,
+            stroke: collapsed.stroke,
+            stroke_width: collapsed.width,
+            stroke_dasharray: collapsed.dasharray,
+            marker: collapsed.marker,
             font_family: None,
             font_size: None,
             halo_color: None,
@@ -193,16 +184,48 @@ fn parse_style_block(body: &[Token]) -> StyleBlock {
                     st.pattern = Some(nums);
                 }
             }
+            "SYMBOL" => {
+                // STYLE.SYMBOL takes one arg: either a symbol name (string)
+                // or a numeric index (legacy). we only resolve named symbols.
+                if let Some(name) = t.args.first() {
+                    let s = name.trim_matches('"').to_string();
+                    if !s.is_empty() && s.parse::<f64>().is_err() {
+                        st.symbol = Some(s);
+                    }
+                }
+            }
+            "ANGLE" => {
+                if let Some(v) = t.args.first().and_then(|a| a.parse::<f32>().ok()) {
+                    st.angle_deg = Some(v);
+                }
+            }
+            "SIZE" => {
+                if let Some(v) = t.args.first().and_then(|a| a.parse::<f32>().ok()) {
+                    st.size = Some(v);
+                }
+            }
             _ => {}
         }
     }
     st
 }
 
+/// outputs of [`collapse_styles`]: a single resolved fill/stroke/width/dash/
+/// marker tuple that drives `StyleDef` construction in [`parse_class`].
+#[derive(Debug, Default)]
+struct CollapsedStyle {
+    fill: Option<EmitFill>,
+    stroke: Option<String>,
+    width: Option<f32>,
+    dasharray: Option<Vec<f32>>,
+    marker: Option<EmitMarker>,
+}
+
 fn collapse_styles(
     styles: &[StyleBlock],
     line: usize,
-) -> (Option<String>, Option<String>, Option<f32>, Option<Vec<f32>>) {
+    symbols: &std::collections::HashMap<String, SymbolDef>,
+) -> CollapsedStyle {
     if styles.len() > 1 {
         warn!(
             line = line,
@@ -210,18 +233,131 @@ fn collapse_styles(
             "STYLE: collapsed multi-pass stack to single fill+stroke"
         );
     }
-    let fill = styles
+    // resolve a symbol reference into either a marker or a hatch fill,
+    // overriding the plain solid fill. ANGLE/SIZE/WIDTH on STYLE take
+    // precedence over the symbol's own defaults.
+    let mut resolved_marker: Option<EmitMarker> = None;
+    let mut resolved_hatch: Option<EmitFill> = None;
+
+    for s in styles {
+        if let Some(sym_name) = &s.symbol {
+            match symbols.get(sym_name) {
+                Some(SymbolDef::Circle) => {
+                    resolved_marker = Some(EmitMarker {
+                        kind: "circle",
+                        size: s.size.unwrap_or(6.0),
+                    });
+                }
+                Some(SymbolDef::NamedShape(kind)) => {
+                    if let Some(k) = match kind.as_str() {
+                        "circle" => Some("circle"),
+                        "square" => Some("square"),
+                        "triangle" => Some("triangle"),
+                        "cross" => Some("cross"),
+                        "x" => Some("x"),
+                        "pin" => Some("pin"),
+                        _ => None,
+                    } {
+                        resolved_marker = Some(EmitMarker {
+                            kind: k,
+                            size: s.size.unwrap_or(6.0),
+                        });
+                    } else {
+                        warn!(
+                            line = line,
+                            symbol = sym_name.as_str(),
+                            shape = kind.as_str(),
+                            "STYLE.SYMBOL references unrecognised named shape; ignoring"
+                        );
+                    }
+                }
+                Some(SymbolDef::Hatch { angle_deg, size }) => {
+                    let spacing = s.size.or(*size).unwrap_or(6.0);
+                    let angle = s.angle_deg.or(*angle_deg).unwrap_or(0.0);
+                    let line_width = s.width.unwrap_or(1.0);
+                    let colour = s
+                        .color
+                        .map(|(r, g, b)| rgb_to_hex(r, g, b))
+                        .unwrap_or_else(|| "#000000".into());
+                    resolved_hatch = Some(EmitFill::Hatch {
+                        spacing,
+                        angle_deg: angle,
+                        line_width,
+                        colour,
+                    });
+                }
+                None => {
+                    warn!(
+                        line = line,
+                        symbol = sym_name.as_str(),
+                        "STYLE.SYMBOL references undefined symbol; ignoring"
+                    );
+                }
+            }
+        }
+    }
+
+    let solid_fill = styles
         .iter()
         .rev()
         .find_map(|s| s.color)
-        .map(|(r, g, b)| rgb_to_hex(r, g, b));
+        .map(|(r, g, b)| rgb_to_hex(r, g, b))
+        .map(EmitFill::Hex);
+    let fill = resolved_hatch.or(solid_fill);
     let stroke = styles
         .iter()
         .find_map(|s| s.outlinecolor)
         .map(|(r, g, b)| rgb_to_hex(r, g, b));
     let width = styles.iter().find_map(|s| s.width.or(s.outlinewidth));
     let dasharray = styles.iter().find_map(|s| s.pattern.clone());
-    (fill, stroke, width, dasharray)
+    CollapsedStyle {
+        fill,
+        stroke,
+        width,
+        dasharray,
+        marker: resolved_marker,
+    }
+}
+
+fn canonical_signature(
+    style_type: &str,
+    fill: Option<&EmitFill>,
+    stroke: Option<&String>,
+    width: Option<f32>,
+    dasharray: Option<&Vec<f32>>,
+    marker: Option<&EmitMarker>,
+) -> String {
+    use std::fmt::Write as _;
+    let mut s = String::new();
+    let _ = write!(s, "kind={style_type}");
+    if let Some(f) = fill {
+        match f {
+            EmitFill::Hex(h) => {
+                let _ = write!(s, ",fill={h}");
+            }
+            EmitFill::Hatch {
+                spacing,
+                angle_deg,
+                line_width,
+                colour,
+            } => {
+                let _ = write!(s, ",hatch=s{spacing},a{angle_deg},w{line_width},c{colour}");
+            }
+        }
+    }
+    if let Some(v) = stroke {
+        let _ = write!(s, ",stroke={v}");
+    }
+    if let Some(v) = width {
+        let _ = write!(s, ",width={v}");
+    }
+    if let Some(arr) = dasharray {
+        let _ = write!(s, ",dash={arr:?}");
+    }
+    if let Some(m) = marker {
+        let _ = write!(s, ",marker={}-{}", m.kind, m.size);
+    }
+    s
 }
 
 pub(crate) fn parse_label(
@@ -269,10 +405,11 @@ pub(crate) fn parse_label(
     skel.styles.push(StyleDef {
         name: style_name.clone(),
         style_type: "label".into(),
-        fill: Some(fill),
+        fill: Some(EmitFill::Hex(fill)),
         stroke: None,
         stroke_width: None,
         stroke_dasharray: None,
+        marker: None,
         font_family: font.or_else(|| Some("sans-serif".into())),
         font_size: size.or(Some(12.0)),
         halo_color: outlinecolor.map(|(r, g, b)| rgb_to_hex(r, g, b)),
@@ -318,10 +455,91 @@ mod tests {
             width: Some(1.0),
             outlinewidth: None,
             pattern: None,
+            symbol: None,
+            angle_deg: None,
+            size: None,
         }];
-        let (fill, stroke, width, _dash) = collapse_styles(&styles, 1);
-        assert_eq!(fill, Some("#ff0000".into()));
-        assert_eq!(stroke, Some("#000000".into()));
-        assert_eq!(width, Some(1.0));
+        let c = collapse_styles(&styles, 1, &Default::default());
+        assert_eq!(c.fill, Some(EmitFill::Hex("#ff0000".into())));
+        assert_eq!(c.stroke, Some("#000000".into()));
+        assert_eq!(c.width, Some(1.0));
+        assert!(c.marker.is_none());
+    }
+
+    #[test]
+    fn collapse_styles_resolves_named_circle_symbol_to_marker() {
+        let mut symbols = std::collections::HashMap::new();
+        symbols.insert("circle".into(), SymbolDef::Circle);
+        let styles = vec![StyleBlock {
+            color: Some((10, 20, 30)),
+            symbol: Some("circle".into()),
+            size: Some(8.0),
+            ..Default::default()
+        }];
+        let c = collapse_styles(&styles, 1, &symbols);
+        // STYLE.COLOR still emits a solid fill - it's the marker body.
+        assert_eq!(c.fill, Some(EmitFill::Hex("#0a141e".into())));
+        let m = c.marker.unwrap();
+        assert_eq!(m.kind, "circle");
+        assert!((m.size - 8.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn collapse_styles_resolves_hatch_symbol_to_fill_kind_hatch() {
+        let mut symbols = std::collections::HashMap::new();
+        symbols.insert(
+            "lines".into(),
+            SymbolDef::Hatch {
+                angle_deg: Some(45.0),
+                size: Some(4.0),
+            },
+        );
+        let styles = vec![StyleBlock {
+            color: Some((64, 64, 64)),
+            width: Some(0.5),
+            symbol: Some("lines".into()),
+            ..Default::default()
+        }];
+        let c = collapse_styles(&styles, 1, &symbols);
+        match c.fill {
+            Some(EmitFill::Hatch {
+                spacing,
+                angle_deg,
+                line_width,
+                colour,
+            }) => {
+                assert!((spacing - 4.0).abs() < f32::EPSILON);
+                assert!((angle_deg - 45.0).abs() < f32::EPSILON);
+                assert!((line_width - 0.5).abs() < f32::EPSILON);
+                assert_eq!(colour, "#404040");
+            }
+            other => panic!("expected hatch fill, got {other:?}"),
+        }
+        assert!(c.marker.is_none());
+    }
+
+    #[test]
+    fn style_block_extracts_symbol_angle_size() {
+        let toks = vec![
+            Token {
+                line: 1,
+                keyword: "SYMBOL".into(),
+                args: vec!["\"lines\"".into()],
+            },
+            Token {
+                line: 2,
+                keyword: "ANGLE".into(),
+                args: vec!["30".into()],
+            },
+            Token {
+                line: 3,
+                keyword: "SIZE".into(),
+                args: vec!["5".into()],
+            },
+        ];
+        let st = parse_style_block(&toks);
+        assert_eq!(st.symbol.as_deref(), Some("lines"));
+        assert_eq!(st.angle_deg, Some(30.0));
+        assert_eq!(st.size, Some(5.0));
     }
 }

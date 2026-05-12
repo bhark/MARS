@@ -4,7 +4,7 @@ use std::collections::{BTreeSet, HashSet};
 
 use tracing::warn;
 
-use crate::emitter::{ClassSkeleton, LabelSkeleton, LayerSkeleton, Skeleton, SourceSkeleton};
+use crate::emitter::{ClassSkeleton, LabelSkeleton, LayerSkeleton, Skeleton, SourceSkeleton, SymbolDef};
 #[cfg(test)]
 use crate::scanner::scan;
 use crate::scanner::{Token, block_range, is_block_opener};
@@ -13,7 +13,6 @@ use crate::style::{parse_class, parse_label};
 /// keywords whose presence we don't translate yet. some are block openers,
 /// some are scalar directives - `walk` handles both.
 const UNSUPPORTED: &[&str] = &[
-    "SYMBOL",
     "FONTSET",
     "LEGEND",
     "PROJECTION",
@@ -87,6 +86,20 @@ fn walk(tokens: &[Token], skel: &mut Skeleton, include_layers: Option<&HashSet<S
                 &[]
             };
             handle_layer(body, t.line, skel, include_layers);
+            i = range.end;
+            continue;
+        }
+
+        if kw == "SYMBOL" {
+            let range = block_range(tokens, i).unwrap_or(i..i + 1);
+            let body: &[Token] = if range.end > range.start + 1 {
+                &tokens[range.start + 1..range.end - 1]
+            } else {
+                &[]
+            };
+            if let Some((name, def)) = parse_symbol(body) {
+                skel.symbols.insert(name, def);
+            }
             i = range.end;
             continue;
         }
@@ -326,6 +339,37 @@ fn handle_layer(body: &[Token], layer_line: usize, skel: &mut Skeleton, include_
         classes,
         label,
     });
+}
+
+/// parse a mapfile SYMBOL definition body into a `SymbolDef`. recognises
+/// TYPE ELLIPSE -> Circle, TYPE HATCH -> Hatch (with ANGLE/SIZE defaults),
+/// and TYPE VECTOR -> NamedShape using the symbol's NAME as the shape hint
+/// (CIRCLE/SQUARE/TRIANGLE/CROSS/X/PIN). other TYPEs (PIXMAP, TRUETYPE)
+/// are ignored with a trace warn at use site.
+fn parse_symbol(body: &[Token]) -> Option<(String, SymbolDef)> {
+    let mut name: Option<String> = None;
+    let mut type_: Option<String> = None;
+    let mut angle_deg: Option<f32> = None;
+    let mut size: Option<f32> = None;
+    for t in body {
+        let kw = t.keyword.to_ascii_uppercase();
+        match kw.as_str() {
+            "NAME" if name.is_none() => name = t.args.first().cloned(),
+            "TYPE" if type_.is_none() => type_ = t.args.first().cloned(),
+            "ANGLE" => angle_deg = t.args.first().and_then(|a| a.parse().ok()),
+            "SIZE" => size = t.args.first().and_then(|a| a.parse().ok()),
+            _ => {}
+        }
+    }
+    let name = name?.trim_matches('"').to_string();
+    let type_up = type_.unwrap_or_default().to_ascii_uppercase();
+    let def = match type_up.as_str() {
+        "ELLIPSE" => SymbolDef::Circle,
+        "HATCH" => SymbolDef::Hatch { angle_deg, size },
+        "VECTOR" => SymbolDef::NamedShape(name.to_ascii_lowercase()),
+        _ => return None,
+    };
+    Some((name, def))
 }
 
 pub(crate) fn mapfile_type_to_geom(t: &str) -> Option<&str> {
@@ -660,6 +704,127 @@ END
         let skel = translate(src);
         let layer = &skel.layers[0];
         assert_eq!(layer.sources[0].max_denom_exclusive, Some(25_000));
+    }
+
+    #[test]
+    fn translate_symbol_circle_then_class_emits_marker() {
+        let src = r#"
+MAP
+  NAME "demo"
+  SYMBOL
+    NAME "circle"
+    TYPE ELLIPSE
+    POINTS 1 1 END
+    FILLED TRUE
+  END
+  LAYER
+    NAME "stops"
+    TYPE POINT
+    DATA "geom FROM stops"
+    CLASS
+      NAME "default"
+      STYLE
+        SYMBOL "circle"
+        SIZE 8
+        COLOR 30 30 30
+      END
+    END
+  END
+END
+"#;
+        let skel = translate(src);
+        assert!(skel.symbols.contains_key("circle"));
+        // the style emitted for `stops` class default should carry a marker.
+        let style = skel
+            .styles
+            .iter()
+            .find(|s| s.name.starts_with("point_stops_"))
+            .expect("point style emitted");
+        let m = style.marker.as_ref().expect("marker resolved from SYMBOL");
+        assert_eq!(m.kind, "circle");
+        assert!((m.size - 8.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn translate_symbol_hatch_then_class_emits_fill_kind_hatch() {
+        let src = r#"
+MAP
+  NAME "demo"
+  SYMBOL
+    NAME "lines"
+    TYPE HATCH
+    ANGLE 45
+    SIZE 4
+  END
+  LAYER
+    NAME "wetlands"
+    TYPE POLYGON
+    DATA "geom FROM wetlands"
+    CLASS
+      NAME "default"
+      STYLE
+        SYMBOL "lines"
+        WIDTH 0.5
+        COLOR 100 110 120
+      END
+    END
+  END
+END
+"#;
+        let skel = translate(src);
+        let def = skel.symbols.get("lines").expect("hatch symbol parsed");
+        assert!(matches!(def, crate::emitter::SymbolDef::Hatch { .. }));
+        let style = skel
+            .styles
+            .iter()
+            .find(|s| s.name.starts_with("poly_wetlands_"))
+            .expect("polygon style emitted");
+        match style.fill.as_ref() {
+            Some(crate::emitter::EmitFill::Hatch {
+                spacing,
+                angle_deg,
+                line_width,
+                colour,
+            }) => {
+                assert!((spacing - 4.0).abs() < f32::EPSILON);
+                assert!((angle_deg - 45.0).abs() < f32::EPSILON);
+                assert!((line_width - 0.5).abs() < f32::EPSILON);
+                assert_eq!(colour, "#646e78");
+            }
+            other => panic!("expected hatch fill, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn translate_unknown_symbol_reference_warns_and_no_marker_emitted() {
+        let src = r#"
+MAP
+  NAME "demo"
+  LAYER
+    NAME "x"
+    TYPE POINT
+    DATA "geom FROM t"
+    CLASS
+      NAME "default"
+      STYLE
+        SYMBOL "missing"
+        SIZE 6
+      END
+    END
+  END
+END
+"#;
+        let skel = translate(src);
+        let style = skel
+            .styles
+            .iter()
+            .find(|s| s.name.starts_with("point_x_"))
+            .expect("style emitted");
+        // unknown SYMBOL reference: marker stays None, fill stays None
+        // (the STYLE block had no COLOR). config-validation will accept
+        // this as a no-op style; operator can hand-edit.
+        assert!(style.marker.is_none());
+        assert!(style.fill.is_none());
     }
 
     #[test]

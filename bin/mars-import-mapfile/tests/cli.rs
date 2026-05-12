@@ -43,7 +43,7 @@ fn strict_exits_two_on_unsupported() {
     assert_eq!(
         out.status.code(),
         Some(2),
-        "expected exit 2 in strict mode (fixture has SYMBOL); got {:?} stderr={}",
+        "expected exit 2 in strict mode (fixture has COMPOSITE); got {:?} stderr={}",
         out.status.code(),
         String::from_utf8_lossy(&out.stderr),
     );

@@ -2,6 +2,7 @@
 //!
 //! intentionally string-based: the result is meant to be hand-edited.
 
+use std::collections::HashMap;
 use std::fmt::Write as _;
 
 use tracing::warn;
@@ -12,20 +13,59 @@ pub(crate) struct Skeleton {
     pub(crate) service_title: Option<String>,
     pub(crate) layers: Vec<LayerSkeleton>,
     pub(crate) styles: Vec<StyleDef>,
+    /// mapfile-level SYMBOL definitions keyed by name. consumed by STYLE
+    /// blocks via STYLE.SYMBOL "<name>"; not emitted into YAML directly -
+    /// each STYLE that uses a symbol carries the resolved marker/fill on
+    /// its `StyleDef`.
+    pub(crate) symbols: HashMap<String, SymbolDef>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum SymbolDef {
+    /// MapServer SYMBOL TYPE ELLIPSE / VECTOR with a circular point list.
+    Circle,
+    /// SYMBOL TYPE HATCH. ANGLE and SIZE are symbol-level defaults; STYLE
+    /// can override via ANGLE/SIZE/WIDTH/COLOR on the referencing STYLE.
+    Hatch {
+        angle_deg: Option<f32>,
+        size: Option<f32>,
+    },
+    /// VECTOR with a named heuristic (square/triangle/cross/x/pin).
+    NamedShape(String),
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct StyleDef {
     pub(crate) name: String,
     pub(crate) style_type: String,
-    pub(crate) fill: Option<String>,
+    pub(crate) fill: Option<EmitFill>,
     pub(crate) stroke: Option<String>,
     pub(crate) stroke_width: Option<f32>,
     pub(crate) stroke_dasharray: Option<Vec<f32>>,
+    pub(crate) marker: Option<EmitMarker>,
     pub(crate) font_family: Option<String>,
     pub(crate) font_size: Option<f32>,
     pub(crate) halo_color: Option<String>,
     pub(crate) halo_width: Option<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum EmitFill {
+    /// Bare hex string: emits as `fill: "#rrggbb"`.
+    Hex(String),
+    /// Tagged hatch map.
+    Hatch {
+        spacing: f32,
+        angle_deg: f32,
+        line_width: f32,
+        colour: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct EmitMarker {
+    pub(crate) kind: &'static str,
+    pub(crate) size: f32,
 }
 
 #[derive(Debug, Default)]
@@ -286,7 +326,7 @@ pub(crate) fn render(skel: &Skeleton, bands: &[(String, u64)]) -> String {
                 if let Some(v) = st.font_size {
                     let _ = writeln!(out, "    font_size: {v}");
                 }
-                if let Some(ref v) = st.fill {
+                if let Some(EmitFill::Hex(ref v)) = st.fill {
                     let _ = writeln!(out, "    fill: {}", yaml_quote(v));
                 }
                 if let Some(ref c) = st.halo_color {
@@ -294,8 +334,23 @@ pub(crate) fn render(skel: &Skeleton, bands: &[(String, u64)]) -> String {
                     let _ = writeln!(out, "    halo: {{ color: {}, width: {w} }}", yaml_quote(c));
                 }
             } else {
-                if let Some(v) = &st.fill {
-                    let _ = writeln!(out, "    fill: {}", yaml_quote(v));
+                match &st.fill {
+                    Some(EmitFill::Hex(v)) => {
+                        let _ = writeln!(out, "    fill: {}", yaml_quote(v));
+                    }
+                    Some(EmitFill::Hatch {
+                        spacing,
+                        angle_deg,
+                        line_width,
+                        colour,
+                    }) => {
+                        let _ = writeln!(
+                            out,
+                            "    fill: {{ kind: hatch, spacing: {spacing}, angle_deg: {angle_deg}, line_width: {line_width}, colour: {} }}",
+                            yaml_quote(colour)
+                        );
+                    }
+                    None => {}
                 }
                 if let Some(v) = &st.stroke {
                     let _ = writeln!(out, "    stroke: {}", yaml_quote(v));
@@ -309,6 +364,9 @@ pub(crate) fn render(skel: &Skeleton, bands: &[(String, u64)]) -> String {
                         "    stroke_dasharray: [{}]",
                         arr.iter().map(|f| f.to_string()).collect::<Vec<_>>().join(", ")
                     );
+                }
+                if let Some(ref m) = st.marker {
+                    let _ = writeln!(out, "    marker: {{ kind: {}, size: {} }}", m.kind, m.size);
                 }
             }
         }
