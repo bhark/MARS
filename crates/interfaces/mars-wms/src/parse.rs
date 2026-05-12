@@ -16,14 +16,18 @@ use percent_encoding::percent_decode_str;
 use mars_runtime::RenderPlan;
 use mars_types::{Bbox, CrsCode, ImageFormat, LayerId};
 
-use crate::{WmsConfig, WmsError, WmsRequest};
+use crate::{ExceptionsFormat, WmsConfig, WmsError, WmsRequest};
 
 /// Parse any WMS request, dispatching on the `request=` parameter.
 pub fn parse_request(query: &str, cfg: &WmsConfig) -> Result<WmsRequest, WmsError> {
     let kvp = parse_kvp(query);
     let request = require(&kvp, "request")?;
     match request.as_str() {
-        s if s.eq_ignore_ascii_case("GetMap") => Ok(WmsRequest::GetMap(parse_get_map_inner(&kvp, cfg)?)),
+        s if s.eq_ignore_ascii_case("GetMap") => {
+            let plan = parse_get_map_inner(&kvp, cfg)?;
+            let exceptions = parse_exceptions(&kvp)?;
+            Ok(WmsRequest::GetMap { plan, exceptions })
+        }
         s if s.eq_ignore_ascii_case("GetCapabilities") => Ok(WmsRequest::GetCapabilities),
         other => Err(WmsError::NotImplemented {
             what: format!("WMS request={other}"),
@@ -133,6 +137,32 @@ fn parse_get_map_inner(kvp: &Kvp, cfg: &WmsConfig) -> Result<RenderPlan, WmsErro
         format,
         scale_pixel_size_m,
     })
+}
+
+/// Parse `&EXCEPTIONS=` per OGC 1.3.0. Optional; defaults to XML when absent.
+/// Accepts the bare keyword forms most clients send (`XML`, `BLANK`,
+/// `application/vnd.ogc.se_xml`, `application/vnd.ogc.se_blank`). INIMAGE is
+/// recognised but rejected as `NotImplemented` so the wire error stays
+/// faithful to spec instead of silently coercing.
+fn parse_exceptions(kvp: &Kvp) -> Result<ExceptionsFormat, WmsError> {
+    let raw = match kvp.get("exceptions") {
+        Some(s) if !s.is_empty() => s.as_str(),
+        _ => return Ok(ExceptionsFormat::Xml),
+    };
+    if raw.eq_ignore_ascii_case("XML") || raw.eq_ignore_ascii_case("application/vnd.ogc.se_xml") {
+        Ok(ExceptionsFormat::Xml)
+    } else if raw.eq_ignore_ascii_case("BLANK") || raw.eq_ignore_ascii_case("application/vnd.ogc.se_blank") {
+        Ok(ExceptionsFormat::Blank)
+    } else if raw.eq_ignore_ascii_case("INIMAGE") || raw.eq_ignore_ascii_case("application/vnd.ogc.se_inimage") {
+        Err(WmsError::NotImplemented {
+            what: "EXCEPTIONS=INIMAGE".into(),
+        })
+    } else {
+        Err(WmsError::InvalidParam {
+            name: "exceptions",
+            reason: format!("unsupported value `{raw}`"),
+        })
+    }
 }
 
 fn parse_optional_dpi(kvp: &Kvp) -> Result<Option<f64>, WmsError> {
@@ -264,7 +294,7 @@ fn parse_bbox(raw: &str, crs: &str, max_coord: f64) -> Result<Bbox, WmsError> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
     use super::*;
 
@@ -352,6 +382,67 @@ mod tests {
         let q = "service=WMS&version=1.3.0&request=GetCapabilities";
         let req = parse_request(q, &cfg()).unwrap();
         assert!(matches!(req, WmsRequest::GetCapabilities));
+    }
+
+    #[test]
+    fn exceptions_default_is_xml() {
+        let q = "request=GetMap&version=1.3.0&layers=a&crs=EPSG:25832&\
+                 bbox=0,0,1,1&width=1&height=1&format=image/png";
+        let req = parse_request(q, &cfg()).unwrap();
+        match req {
+            WmsRequest::GetMap { exceptions, .. } => assert_eq!(exceptions, ExceptionsFormat::Xml),
+            _ => panic!("expected GetMap"),
+        }
+    }
+
+    #[test]
+    fn exceptions_blank_accepted() {
+        for kw in ["BLANK", "blank", "application/vnd.ogc.se_blank"] {
+            let q = format!(
+                "request=GetMap&version=1.3.0&layers=a&crs=EPSG:25832&\
+                 bbox=0,0,1,1&width=1&height=1&format=image/png&exceptions={kw}"
+            );
+            let req = parse_request(&q, &cfg()).unwrap();
+            match req {
+                WmsRequest::GetMap { exceptions, .. } => {
+                    assert_eq!(exceptions, ExceptionsFormat::Blank, "kw={kw}")
+                }
+                _ => panic!("expected GetMap"),
+            }
+        }
+    }
+
+    #[test]
+    fn exceptions_xml_keyword_accepted() {
+        for kw in ["XML", "xml", "application/vnd.ogc.se_xml"] {
+            let q = format!(
+                "request=GetMap&version=1.3.0&layers=a&crs=EPSG:25832&\
+                 bbox=0,0,1,1&width=1&height=1&format=image/png&exceptions={kw}"
+            );
+            let req = parse_request(&q, &cfg()).unwrap();
+            match req {
+                WmsRequest::GetMap { exceptions, .. } => {
+                    assert_eq!(exceptions, ExceptionsFormat::Xml, "kw={kw}")
+                }
+                _ => panic!("expected GetMap"),
+            }
+        }
+    }
+
+    #[test]
+    fn exceptions_inimage_rejected_as_not_implemented() {
+        let q = "request=GetMap&version=1.3.0&layers=a&crs=EPSG:25832&\
+                 bbox=0,0,1,1&width=1&height=1&format=image/png&exceptions=INIMAGE";
+        let err = parse_request(q, &cfg()).unwrap_err();
+        assert!(matches!(err, WmsError::NotImplemented { .. }));
+    }
+
+    #[test]
+    fn exceptions_unknown_rejected() {
+        let q = "request=GetMap&version=1.3.0&layers=a&crs=EPSG:25832&\
+                 bbox=0,0,1,1&width=1&height=1&format=image/png&exceptions=GARBAGE";
+        let err = parse_request(q, &cfg()).unwrap_err();
+        assert!(matches!(err, WmsError::InvalidParam { name: "exceptions", .. }));
     }
 
     #[test]

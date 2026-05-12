@@ -23,7 +23,7 @@ pub async fn handle_wms(State(state): State<AppState>, headers: HeaderMap, raw_q
 
         match parsed {
             WmsRequest::GetCapabilities => serve_capabilities(&state.wms_capabilities, &headers),
-            WmsRequest::GetMap(plan) => {
+            WmsRequest::GetMap { plan, exceptions } => {
                 let mime = plan.format.mime();
                 match state.runtime.render(&plan).await {
                     Ok(bytes) => {
@@ -31,7 +31,7 @@ pub async fn handle_wms(State(state): State<AppState>, headers: HeaderMap, raw_q
                         h.insert(header::CONTENT_TYPE, HeaderValue::from_static(mime));
                         (StatusCode::OK, h, bytes).into_response()
                     }
-                    Err(e) => runtime_error_response(e, &plan),
+                    Err(e) => runtime_error_response(e, &plan, exceptions, &state.runtime),
                 }
             }
         }

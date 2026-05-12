@@ -14,7 +14,7 @@ use std::time::Duration;
 use arc_swap::ArcSwapOption;
 use futures_util::StreamExt;
 use mars_observability::{Metrics, reject_reason};
-use mars_render_port::{Encoder, Renderer};
+use mars_render_port::{Encoder, Pixmap, Renderer};
 use mars_store::{LocalCache, ManifestStore, ObjectStore, StoreError};
 use mars_style::Stylesheet;
 pub use mars_text::Fonts;
@@ -221,6 +221,25 @@ impl Runtime {
     ) -> Result<Vec<LayerFeatureInfo>, RuntimeError> {
         let state = self.current_state().ok_or(RuntimeError::NotReady)?;
         gfi::get_feature_info(&state, &self.deps, plan, point_px).await
+    }
+
+    /// Encode a fully-transparent image of the plan's dimensions and format.
+    /// Used for WMS `EXCEPTIONS=BLANK`; bypasses state so it works even when
+    /// no manifest is loaded yet.
+    pub fn blank_image(&self, plan: &RenderPlan) -> Result<Vec<u8>, RuntimeError> {
+        let pixels = (plan.width as usize)
+            .checked_mul(plan.height as usize)
+            .and_then(|n| n.checked_mul(4))
+            .ok_or(RuntimeError::PixelBudgetExceeded {
+                requested: u64::from(plan.width).saturating_mul(u64::from(plan.height)),
+                budget: self.pixel_budget,
+            })?;
+        let pixmap = Pixmap {
+            width: plan.width,
+            height: plan.height,
+            premultiplied_rgba: vec![0u8; pixels],
+        };
+        Ok(self.deps.encoder.encode(&pixmap, plan.format)?)
     }
 
     /// Execute one render plan and return encoded image bytes.

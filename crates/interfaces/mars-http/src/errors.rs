@@ -1,7 +1,9 @@
+use std::sync::Arc;
+
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use mars_runtime::{RenderPlan, RuntimeError};
-use mars_wms::WmsError;
+use mars_runtime::{RenderPlan, Runtime, RuntimeError};
+use mars_wms::{ExceptionsFormat, WmsError};
 use mars_wmts::WmtsError;
 
 /// Service-agnostic exception payload. The same fields drive both the WMS
@@ -52,9 +54,27 @@ pub fn wms_error_response(e: WmsError) -> Response {
     wms_exception_response(exc)
 }
 
-pub fn runtime_error_response(e: RuntimeError, plan: &RenderPlan) -> Response {
+pub fn runtime_error_response(
+    e: RuntimeError,
+    plan: &RenderPlan,
+    exceptions: ExceptionsFormat,
+    runtime: &Arc<Runtime>,
+) -> Response {
     log_render_failure(&e, plan);
-    wms_exception_response(map_runtime_error(&e))
+    match exceptions {
+        ExceptionsFormat::Xml => wms_exception_response(map_runtime_error(&e)),
+        ExceptionsFormat::Blank => match runtime.blank_image(plan) {
+            Ok(bytes) => {
+                let mut h = axum::http::HeaderMap::new();
+                h.insert(header::CONTENT_TYPE, HeaderValue::from_static(plan.format.mime()));
+                (StatusCode::OK, h, bytes).into_response()
+            }
+            // last-resort fallback: if the encoder fails for some bizarre
+            // reason, surface as XML rather than a zero-byte image. the
+            // operator gets a proper signal.
+            Err(encode_err) => wms_exception_response(map_runtime_error(&encode_err)),
+        },
+    }
 }
 
 fn wmts_exception_response(exc: EdgeException) -> Response {
