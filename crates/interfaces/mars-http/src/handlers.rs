@@ -1,4 +1,4 @@
-use axum::extract::{RawQuery, State};
+use axum::extract::{Path, RawQuery, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use tracing::Instrument;
@@ -89,6 +89,48 @@ pub async fn handle_wmts(State(state): State<AppState>, headers: HeaderMap, raw_
                     Err(e) => wmts_runtime_error_response(e, &plan),
                 }
             }
+        }
+    }
+    .instrument(span)
+    .await
+}
+
+/// REST-style WMTS GetTile entry point.
+///
+/// URL template: `/wmts/{Layer}/{Style}/{TileMatrixSet}/{TileMatrix}/{TileRow}/{TileCol}.{ext}`.
+/// Extension lives on the final path segment and selects the output format.
+pub async fn handle_wmts_rest(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((layer, style, tms, z, y, x_ext)): Path<(String, String, String, String, String, String)>,
+) -> Response {
+    let req_id = request_id(&state, &headers);
+    let span = tracing::info_span!("wmts_rest", req_id = %req_id);
+
+    async move {
+        // split `x.ext` on the final `.` so layer-name dots stay untouched.
+        let (x, ext) = match x_ext.rsplit_once('.') {
+            Some((x, ext)) if !x.is_empty() && !ext.is_empty() => (x, ext),
+            _ => {
+                return wmts_error_response(mars_wmts::WmtsError::InvalidParam {
+                    name: "format",
+                    reason: format!("expected `<TileCol>.<ext>`, got `{x_ext}`"),
+                });
+            }
+        };
+
+        let plan = match mars_wmts::parse_rest_get_tile(&layer, &style, &tms, &z, &y, x, ext, &state.wmts_cfg) {
+            Ok(p) => p,
+            Err(e) => return wmts_error_response(e),
+        };
+        let mime = plan.format.mime();
+        match state.runtime.render(&plan).await {
+            Ok(bytes) => {
+                let mut h = HeaderMap::new();
+                h.insert(header::CONTENT_TYPE, HeaderValue::from_static(mime));
+                (StatusCode::OK, h, bytes).into_response()
+            }
+            Err(e) => wmts_runtime_error_response(e, &plan),
         }
     }
     .instrument(span)

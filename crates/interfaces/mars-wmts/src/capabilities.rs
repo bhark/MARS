@@ -166,8 +166,35 @@ fn write_layer<W: std::io::Write>(
             .map_err(xml_err)?;
     }
 
+    // advertise the rest tile template so clients that prefer the resource
+    // URL form discover it without out-of-band knowledge. relative path
+    // matches the operations-metadata convention: clients ground it against
+    // the request URL they reached the service on.
+    for fmt in formats {
+        let mut r = BytesStart::new("ResourceURL");
+        r.push_attribute(("format", fmt.mime()));
+        r.push_attribute(("resourceType", "tile"));
+        r.push_attribute((
+            "template",
+            format!(
+                "/wmts/{}/default/{{TileMatrixSet}}/{{TileMatrix}}/{{TileRow}}/{{TileCol}}.{}",
+                layer.name.as_str(),
+                rest_ext_for(*fmt)
+            )
+            .as_str(),
+        ));
+        w.write_event(Event::Empty(r)).map_err(xml_err)?;
+    }
+
     w.write_event(Event::End(BytesEnd::new("Layer"))).map_err(xml_err)?;
     Ok(())
+}
+
+fn rest_ext_for(fmt: ImageFormat) -> &'static str {
+    match fmt {
+        ImageFormat::Png => "png",
+        ImageFormat::Jpeg => "jpg",
+    }
 }
 
 fn write_tile_matrix_set<W: std::io::Write>(
@@ -398,6 +425,16 @@ layers:
         let xml = capabilities_xml(&cfg, &empty_manifest(&cfg)).unwrap();
         assert!(xml.contains("dk_25832"));
         assert!(!xml.contains("<ows:Identifier>extra</ows:Identifier>"));
+    }
+
+    #[test]
+    fn emits_rest_resource_url_template() {
+        let cfg = minimal_cfg();
+        let xml = capabilities_xml(&cfg, &empty_manifest(&cfg)).unwrap();
+        assert!(xml.contains("<ResourceURL"));
+        assert!(xml.contains(r#"resourceType="tile""#));
+        assert!(xml.contains(r#"format="image/png""#));
+        assert!(xml.contains("/wmts/a/default/{TileMatrixSet}/{TileMatrix}/{TileRow}/{TileCol}.png"));
     }
 
     #[test]

@@ -3,11 +3,12 @@
 //! Routes:
 //!
 //! ```text
-//! /wms        WMS 1.3.0
-//! /wmts       WMTS 1.0.0
-//! /healthz    liveness
-//! /readyz     readiness (gated on a usable manifest)
-//! /metrics    Prometheus scrape
+//! /wms                                                     WMS 1.3.0
+//! /wmts                                                    WMTS 1.0.0 KVP
+//! /wmts/{Layer}/{Style}/{TMS}/{z}/{y}/{x}.{ext}            WMTS 1.0.0 REST
+//! /healthz                                                 liveness
+//! /readyz                                                  readiness (gated on a usable manifest)
+//! /metrics                                                 Prometheus scrape
 //! ```
 
 #![forbid(unsafe_code)]
@@ -121,6 +122,7 @@ pub fn router(
     Router::new()
         .route("/wms", get(handle_wms))
         .route("/wmts", get(handle_wmts))
+        .route("/wmts/{layer}/{style}/{tms}/{z}/{y}/{x_ext}", get(handle_wmts_rest))
         .route("/healthz", get(|| async { (StatusCode::OK, "ok") }))
         .route("/readyz", get(handle_ready))
         .route("/metrics", get(handle_metrics))
@@ -387,6 +389,77 @@ mod tests {
         let body = body_str(resp).await;
         assert!(body.contains("ExceptionReport"));
         assert!(!body.contains("ServiceExceptionReport"));
+    }
+
+    #[tokio::test]
+    async fn wmts_rest_get_tile_503_without_manifest() {
+        // a syntactically valid REST GetTile parses cleanly; the runtime then
+        // responds 503 because no manifest is loaded.
+        let app = empty_router();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/wmts/a/default/dk_25832/0/0/0.png")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = body_str(resp).await;
+        assert!(body.contains("ExceptionReport"));
+    }
+
+    #[tokio::test]
+    async fn wmts_rest_invalid_ext_400() {
+        let app = empty_router();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/wmts/a/default/dk_25832/0/0/0.tiff")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = body_str(resp).await;
+        assert!(body.contains(r#"exceptionCode="InvalidParameterValue""#));
+        assert!(body.contains(r#"locator="format""#));
+    }
+
+    #[tokio::test]
+    async fn wmts_rest_missing_ext_400() {
+        // path captures a final segment without a `.`; the handler rejects
+        // before reaching the parser.
+        let app = empty_router();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/wmts/a/default/dk_25832/0/0/0")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn wmts_rest_unknown_tms_400_with_locator() {
+        let app = empty_router();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/wmts/a/default/nope/0/0/0.png")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = body_str(resp).await;
+        assert!(body.contains(r#"locator="tilematrixset""#));
     }
 
     #[tokio::test]

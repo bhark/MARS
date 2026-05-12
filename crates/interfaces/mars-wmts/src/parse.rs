@@ -1,7 +1,12 @@
-//! WMTS 1.0.0 KVP request parsing.
+//! WMTS 1.0.0 request parsing.
 //!
-//! v1 covers `GetTile` and `GetCapabilities`. Other request kinds
-//! (`GetFeatureInfo`) reject with `WmtsError::NotImplemented`.
+//! Covers both `GetTile` and `GetCapabilities` on the KVP path
+//! (`/wmts?...`) and `GetTile` on the REST resource path
+//! (`/wmts/{Layer}/{Style}/{TileMatrixSet}/{TileMatrix}/{TileRow}/{TileCol}.{ext}`).
+//! `GetFeatureInfo` rejects with `WmtsError::NotImplemented`.
+//!
+//! KVP and REST converge on `build_get_tile_plan` so bbox math and config
+//! validation never drift between transports.
 
 use std::collections::HashMap;
 
@@ -43,25 +48,84 @@ fn parse_get_tile_inner(kvp: &Kvp, cfg: &WmtsConfig) -> Result<RenderPlan, WmtsE
     }
 
     // wmts is single-layer per request (one tile, one layer); style is similarly single.
-    let layer_raw = require(kvp, "layer")?;
-    let layer = LayerId::new(layer_raw);
-
+    let layer = require(kvp, "layer")?;
     // STYLE is required by spec but may be empty (default style); keep loose.
-    let _style = kvp.get("style").cloned().unwrap_or_default();
-
+    let style = kvp.get("style").cloned().unwrap_or_default();
     let format_raw = require(kvp, "format")?;
+    let tms_name = require(kvp, "tilematrixset")?;
+    let tm_raw = require(kvp, "tilematrix")?;
+    let tile_col = parse_u32(kvp, "tilecol")?;
+    let tile_row = parse_u32(kvp, "tilerow")?;
     let format = parse_format(&format_raw)?;
+
+    build_get_tile_plan(&layer, &style, format, &tms_name, &tm_raw, tile_col, tile_row, cfg)
+}
+
+/// Parse a REST-form tile request. The router strips the path prefix and
+/// hands `layer/style/tms/z/y/x` plus the file extension; `ext` is the suffix
+/// after the final `.` (e.g. `png`, `jpg`, `jpeg`).
+///
+/// `version` cannot be carried in the REST path - WMTS 1.0.0 is implicit.
+/// `style` per spec may be the literal `default` to mean "no style filter";
+/// the empty-vs-`default` distinction is collapsed in the underlying plan.
+#[allow(clippy::too_many_arguments)]
+pub fn parse_rest_get_tile(
+    layer: &str,
+    style: &str,
+    tms: &str,
+    z: &str,
+    y: &str,
+    x: &str,
+    ext: &str,
+    cfg: &WmtsConfig,
+) -> Result<RenderPlan, WmtsError> {
+    let format = parse_format_ext(ext)?;
+    let tile_col: u32 = x
+        .parse()
+        .map_err(|e: std::num::ParseIntError| WmtsError::InvalidParam {
+            name: "tilecol",
+            reason: e.to_string(),
+        })?;
+    let tile_row: u32 = y
+        .parse()
+        .map_err(|e: std::num::ParseIntError| WmtsError::InvalidParam {
+            name: "tilerow",
+            reason: e.to_string(),
+        })?;
+    let style_norm = if style.eq_ignore_ascii_case("default") {
+        ""
+    } else {
+        style
+    };
+    build_get_tile_plan(layer, style_norm, format, tms, z, tile_col, tile_row, cfg)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_get_tile_plan(
+    layer: &str,
+    _style: &str,
+    format: ImageFormat,
+    tms_name: &str,
+    tilematrix: &str,
+    tile_col: u32,
+    tile_row: u32,
+    cfg: &WmtsConfig,
+) -> Result<RenderPlan, WmtsError> {
+    if layer.is_empty() {
+        return Err(WmtsError::MissingParam("layer"));
+    }
+    let layer_id = LayerId::new(layer.to_owned());
+
     if !cfg.formats.is_empty() && !cfg.formats.contains(&format) {
         return Err(WmtsError::InvalidParam {
             name: "format",
-            reason: format!("{format_raw} not enabled"),
+            reason: format!("{} not enabled", format.mime()),
         });
     }
 
-    let tms_name = require(kvp, "tilematrixset")?;
     let tms = cfg
         .tile_matrix_sets
-        .get(&tms_name)
+        .get(tms_name)
         .ok_or_else(|| WmtsError::InvalidParam {
             name: "tilematrixset",
             reason: format!("unknown tile matrix set `{tms_name}`"),
@@ -71,10 +135,9 @@ fn parse_get_tile_inner(kvp: &Kvp, cfg: &WmtsConfig) -> Result<RenderPlan, WmtsE
     // (matrix identifier); MARS config uses numeric `id`. Accept both forms:
     // a bare integer matches `level.id`, anything else must equal a future
     // string identifier (none today).
-    let tm_raw = require(kvp, "tilematrix")?;
-    let level_id: u32 = tm_raw.parse().map_err(|_| WmtsError::InvalidParam {
+    let level_id: u32 = tilematrix.parse().map_err(|_| WmtsError::InvalidParam {
         name: "tilematrix",
-        reason: format!("expected integer level id, got `{tm_raw}`"),
+        reason: format!("expected integer level id, got `{tilematrix}`"),
     })?;
     let level = tms
         .levels
@@ -84,9 +147,6 @@ fn parse_get_tile_inner(kvp: &Kvp, cfg: &WmtsConfig) -> Result<RenderPlan, WmtsE
             name: "tilematrix",
             reason: format!("level {level_id} not declared in `{tms_name}`"),
         })?;
-
-    let tile_col = parse_u32(kvp, "tilecol")?;
-    let tile_row = parse_u32(kvp, "tilerow")?;
 
     let bbox = tile_bbox(tms, level.scale_denominator, tile_col, tile_row, cfg.max_bbox_coord)?;
 
@@ -99,7 +159,7 @@ fn parse_get_tile_inner(kvp: &Kvp, cfg: &WmtsConfig) -> Result<RenderPlan, WmtsE
     }
 
     Ok(RenderPlan {
-        layers: vec![layer],
+        layers: vec![layer_id],
         bbox,
         width: w,
         height: h,
@@ -110,6 +170,18 @@ fn parse_get_tile_inner(kvp: &Kvp, cfg: &WmtsConfig) -> Result<RenderPlan, WmtsE
         // from the TileMatrixSet definition.
         scale_pixel_size_m: mars_runtime::OGC_STANDARDIZED_PIXEL_SIZE_M,
     })
+}
+
+/// Map a REST URL file extension to an [`ImageFormat`].
+fn parse_format_ext(ext: &str) -> Result<ImageFormat, WmtsError> {
+    match ext.to_ascii_lowercase().as_str() {
+        "png" => Ok(ImageFormat::Png),
+        "jpg" | "jpeg" => Ok(ImageFormat::Jpeg),
+        other => Err(WmtsError::InvalidParam {
+            name: "format",
+            reason: format!("unsupported extension `.{other}`"),
+        }),
+    }
 }
 
 /// Compute the bbox for `(tile_col, tile_row)` at the given scale denominator.
@@ -463,6 +535,44 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn rest_get_tile_matches_kvp_plan() {
+        // REST and KVP must produce identical RenderPlans for the same tile so
+        // shared cache keys / parity expectations hold.
+        let kvp = parse_get_tile(
+            "request=GetTile&layer=roads&style=&format=image/png&\
+             tilematrixset=dk_25832&tilematrix=0&tilecol=2&tilerow=3",
+            &cfg(),
+        )
+        .unwrap();
+        let rest = parse_rest_get_tile("roads", "default", "dk_25832", "0", "3", "2", "png", &cfg()).unwrap();
+        assert_eq!(kvp.layers, rest.layers);
+        assert_eq!(kvp.width, rest.width);
+        assert_eq!(kvp.height, rest.height);
+        assert_eq!(kvp.format, rest.format);
+        assert!((kvp.bbox.min_x - rest.bbox.min_x).abs() < 1e-9);
+        assert!((kvp.bbox.max_y - rest.bbox.max_y).abs() < 1e-9);
+    }
+
+    #[test]
+    fn rest_jpeg_extension_accepted() {
+        let mut c = cfg();
+        c.formats.push(ImageFormat::Jpeg);
+        let plan = parse_rest_get_tile("a", "default", "dk_25832", "0", "0", "0", "jpg", &c).unwrap();
+        assert_eq!(plan.format, ImageFormat::Jpeg);
+        let plan = parse_rest_get_tile("a", "default", "dk_25832", "0", "0", "0", "JPEG", &c).unwrap();
+        assert_eq!(plan.format, ImageFormat::Jpeg);
+    }
+
+    #[test]
+    fn rest_empty_style_equivalent_to_default() {
+        // empty and "default" must both work and produce the same plan
+        let empty = parse_rest_get_tile("a", "", "dk_25832", "0", "0", "0", "png", &cfg()).unwrap();
+        let default = parse_rest_get_tile("a", "default", "dk_25832", "0", "0", "0", "png", &cfg()).unwrap();
+        assert_eq!(empty.layers, default.layers);
+        assert_eq!(empty.bbox.min_x, default.bbox.min_x);
     }
 
     #[test]

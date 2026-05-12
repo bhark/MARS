@@ -15,7 +15,7 @@ use mars_config::{Config, TileMatrixSet};
 use mars_runtime::RenderPlan;
 use mars_types::ImageFormat;
 
-pub use parse::{parse_get_tile, parse_request};
+pub use parse::{parse_get_tile, parse_request, parse_rest_get_tile};
 
 #[derive(Debug, thiserror::Error)]
 pub enum WmtsError {
