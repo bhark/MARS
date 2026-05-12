@@ -20,7 +20,7 @@ use futures_util::StreamExt;
 use futures_util::stream::FuturesUnordered;
 use mars_config::{Layer, ScaleWindow};
 use mars_render_port::{Canvas, DrawOp, Renderer};
-use mars_style::LabelSurvival;
+use mars_style::{LabelSurvival, LayerGeomKind, Placement, default_placement};
 use mars_types::{BindingMetadata, LayerId, PageEntry};
 use tracing::{Instrument, info_span};
 
@@ -130,6 +130,7 @@ async fn render_one_layer(
         if pages.is_empty() {
             return Ok((idx, None));
         }
+        let placement = resolve_layer_placement(layer_cfg);
         let out = render_layer_pages(
             deps,
             state,
@@ -138,6 +139,7 @@ async fn render_one_layer(
             &pages,
             plan,
             layer_cfg.label_survival,
+            &placement,
             deps.renderer.as_ref(),
             page_fetch_concurrency,
             &class_active,
@@ -147,6 +149,19 @@ async fn render_one_layer(
     }
     .instrument(layer_span)
     .await
+}
+
+/// resolve a layer's label placement: explicit when set, otherwise the
+/// geometry-kind default. unknown geometry kinds fall through to
+/// `Placement::Point` so we never panic on misconfigured config.
+fn resolve_layer_placement(layer: &Layer) -> Placement {
+    if let Some(p) = layer.label.as_ref().and_then(|l| l.placement.clone()) {
+        return p;
+    }
+    match LayerGeomKind::parse(&layer.kind) {
+        Some(k) => default_placement(k),
+        None => Placement::Point,
+    }
 }
 
 /// per-class active mask at a given request denom. an entry is `true` when
@@ -192,6 +207,7 @@ async fn render_layer_pages(
     pages: &[&PageEntry],
     plan: &RenderPlan,
     label_survival: LabelSurvival,
+    placement: &Placement,
     renderer: &dyn Renderer,
     page_fetch_concurrency: usize,
     class_active: &[bool],
@@ -289,6 +305,7 @@ async fn render_layer_pages(
                 &state.stylesheet,
                 same_crs,
                 survival_filter,
+                placement,
                 renderer,
             )?;
             out.labels.append(&mut prepared);
