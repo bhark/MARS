@@ -565,6 +565,117 @@ mod tests {
     }
 
     #[test]
+    fn hatch_fill_paints_lines_inside_polygon() {
+        // a centred 24x24 square on a 64x64 black canvas, hatch-filled with
+        // red lines at 4px spacing and 0deg (horizontal). expect:
+        //   - red-ish pixels inside the square's bbox.
+        //   - no red-ish pixels outside the square's bbox (clip mask works).
+        //   - roughly the right number of hatch lines (24 / 4 = ~6).
+        let canvas = Canvas {
+            width: 64,
+            height: 64,
+            background: None,
+        };
+        let ops = vec![DrawOp::Path {
+            path: square(32.0, 32.0, 12.0),
+            style: Arc::new(Style {
+                fill: Some(FillPaint::Hatch {
+                    spacing: 4.0,
+                    angle_deg: 0.0,
+                    line_width: 1.0,
+                    colour: Colour::rgba(220, 30, 30, 255),
+                }),
+                ..Default::default()
+            }),
+        }];
+        let (w, _, rgba) = decode(&render_png(canvas, &ops));
+        // strong-red pixels (anti-aliasing means we accept r > 150, g < 80).
+        let is_red = |p: &[u8]| p[0] > 150 && p[1] < 80 && p[2] < 80 && p[3] > 0;
+
+        // pixel ranges based on square(cx=32, cy=32, half=12) -> x in [20, 44).
+        let inside_red = rgba
+            .chunks_exact(4)
+            .enumerate()
+            .filter(|(i, p)| {
+                let x = (i % w as usize) as f32;
+                let y = (i / w as usize) as f32;
+                is_red(p) && (20.0..44.0).contains(&x) && (20.0..44.0).contains(&y)
+            })
+            .count();
+        assert!(inside_red > 100, "hatch produced too few inside-poly red pixels: {inside_red}");
+
+        let outside_red = rgba
+            .chunks_exact(4)
+            .enumerate()
+            .filter(|(i, p)| {
+                let x = (i % w as usize) as f32;
+                let y = (i / w as usize) as f32;
+                is_red(p) && !((20.0..44.0).contains(&x) && (20.0..44.0).contains(&y))
+            })
+            .count();
+        assert_eq!(outside_red, 0, "hatch leaked outside polygon clip mask: {outside_red} px");
+    }
+
+    #[test]
+    fn hatch_fill_at_45_degrees_paints_inside_polygon() {
+        // diagonal hatch should still produce red pixels inside the polygon.
+        let canvas = Canvas {
+            width: 64,
+            height: 64,
+            background: None,
+        };
+        let ops = vec![DrawOp::Path {
+            path: square(32.0, 32.0, 12.0),
+            style: Arc::new(Style {
+                fill: Some(FillPaint::Hatch {
+                    spacing: 4.0,
+                    angle_deg: 45.0,
+                    line_width: 1.0,
+                    colour: Colour::rgba(220, 30, 30, 255),
+                }),
+                ..Default::default()
+            }),
+        }];
+        let (_, _, rgba) = decode(&render_png(canvas, &ops));
+        let red_count = rgba
+            .chunks_exact(4)
+            .filter(|p| p[0] > 150 && p[1] < 80 && p[2] < 80 && p[3] > 0)
+            .count();
+        assert!(red_count > 100, "diagonal hatch produced too few red pixels: {red_count}");
+    }
+
+    #[test]
+    fn hatch_fill_outline_still_strokes() {
+        // hatch fill must not suppress the stroke arm; a polygon with both
+        // hatch fill and a stroke must show stroke pixels along its boundary.
+        let canvas = Canvas {
+            width: 64,
+            height: 64,
+            background: None,
+        };
+        let ops = vec![DrawOp::Path {
+            path: square(32.0, 32.0, 12.0),
+            style: Arc::new(Style {
+                fill: Some(FillPaint::Hatch {
+                    spacing: 6.0,
+                    angle_deg: 30.0,
+                    line_width: 1.0,
+                    colour: Colour::rgba(220, 30, 30, 255),
+                }),
+                stroke: Some(Colour::rgba(0, 200, 0, 255)),
+                stroke_width: Some(2.0),
+                ..Default::default()
+            }),
+        }];
+        let (_, _, rgba) = decode(&render_png(canvas, &ops));
+        let green_count = rgba
+            .chunks_exact(4)
+            .filter(|p| p[1] > 150 && p[0] < 80 && p[2] < 80 && p[3] > 0)
+            .count();
+        assert!(green_count > 50, "outline stroke missing: only {green_count} green px");
+    }
+
+    #[test]
     fn golden_square_matches() {
         let canvas = Canvas {
             width: 64,

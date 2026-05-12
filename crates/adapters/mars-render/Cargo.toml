@@ -29,3 +29,7 @@ criterion        = { workspace = true }
 [[bench]]
 name    = "draw_encode"
 harness = false
+
+[[bench]]
+name    = "hatch"
+harness = false
