@@ -7,7 +7,10 @@ use mars_wms::WmsRequest;
 use mars_wmts::WmtsRequest;
 
 use crate::{AppState, CapabilitiesHandle};
-use crate::{request_id, runtime_error_response, wms_error_response, wmts_error_response, wmts_runtime_error_response};
+use crate::{
+    request_id, runtime_error_response, wms_error_response, wms_runtime_xml_response, wmts_error_response,
+    wmts_runtime_error_response,
+};
 
 pub async fn handle_wms(State(state): State<AppState>, headers: HeaderMap, raw_query: RawQuery) -> Response {
     let req_id = request_id(&state, &headers);
@@ -32,6 +35,27 @@ pub async fn handle_wms(State(state): State<AppState>, headers: HeaderMap, raw_q
                         (StatusCode::OK, h, bytes).into_response()
                     }
                     Err(e) => runtime_error_response(e, &plan, exceptions, &state.runtime),
+                }
+            }
+            WmsRequest::GetFeatureInfo(gfi) => {
+                let mime = gfi.info_format.mime();
+                match state.runtime.get_feature_info(&gfi.plan, (gfi.i, gfi.j)).await {
+                    Ok(hits) => {
+                        let count = gfi.feature_count as usize;
+                        let trimmed: Vec<_> = hits.into_iter().take(count).collect();
+                        let body = mars_wms::format_feature_info(&trimmed, gfi.info_format);
+                        let mut h = HeaderMap::new();
+                        // mime strings carry charset where applicable; the
+                        // gfi formatter contract pre-sets it for text/*.
+                        match HeaderValue::from_str(mime) {
+                            Ok(v) => {
+                                h.insert(header::CONTENT_TYPE, v);
+                            }
+                            Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "bad mime").into_response(),
+                        }
+                        (StatusCode::OK, h, body).into_response()
+                    }
+                    Err(e) => wms_runtime_xml_response(e, &gfi.plan),
                 }
             }
         }

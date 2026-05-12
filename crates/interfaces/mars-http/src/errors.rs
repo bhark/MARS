@@ -54,6 +54,14 @@ pub fn wms_error_response(e: WmsError) -> Response {
     wms_exception_response(exc)
 }
 
+/// XML-only WMS error response for paths that have no EXCEPTIONS= contract
+/// (GetFeatureInfo, GetLegendGraphic). Mirrors `runtime_error_response` but
+/// without the BLANK image branch.
+pub fn wms_runtime_xml_response(e: RuntimeError, plan: &RenderPlan) -> Response {
+    log_render_failure(&e, plan);
+    wms_exception_response(map_runtime_error(&e))
+}
+
 pub fn runtime_error_response(
     e: RuntimeError,
     plan: &RenderPlan,

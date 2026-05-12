@@ -29,6 +29,7 @@ mod state;
 
 pub use fetch::{fetch_page, fetch_sidecar};
 pub use gfi::LayerFeatureInfo;
+pub use mars_artifact::AttrValue;
 pub use plan::{pick_binding_and_level, reproject_viewport, resolve_pages};
 pub use state::{IndexError, PageIndex, RuntimeState};
 

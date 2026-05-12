@@ -1,21 +1,23 @@
 //! WMS 1.3.0 interface adapter.
 //!
-//! Covers `GetMap` and `GetCapabilities` only. SLD / SLD_BODY,
-//! GetFeatureInfo and GetLegendGraphic are deferred.
+//! Covers `GetMap`, `GetCapabilities`, and `GetFeatureInfo`. SLD / SLD_BODY
+//! and GetLegendGraphic land in follow-up commits.
 
 #![forbid(unsafe_code)]
 
 mod capabilities;
 mod exception;
+mod feature_info;
 mod parse;
 
 use mars_config::Config;
 use mars_runtime::RenderPlan;
-use mars_types::{CrsCode, ImageFormat};
+use mars_types::{CrsCode, ImageFormat, LayerId};
 
 pub use capabilities::capabilities_xml;
 pub use exception::service_exception_report;
-pub use parse::{parse_get_map, parse_request};
+pub use feature_info::format_feature_info;
+pub use parse::{parse_get_feature_info, parse_get_map, parse_request};
 
 #[derive(Debug, thiserror::Error)]
 pub enum WmsError {
@@ -117,6 +119,52 @@ pub enum ExceptionsFormat {
     Blank,
 }
 
+/// INFO_FORMAT= selection for GetFeatureInfo responses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InfoFormat {
+    /// `text/plain`. Newline-separated `layer | user_id | k=v ...` lines.
+    TextPlain,
+    /// `text/html`. Per-layer tables with one row per feature.
+    TextHtml,
+    /// `application/json`. `{ "features": [{ "layer", "id", "attrs" }] }`.
+    ApplicationJson,
+}
+
+impl InfoFormat {
+    /// MIME string for the response `Content-Type` header.
+    #[must_use]
+    pub fn mime(self) -> &'static str {
+        match self {
+            Self::TextPlain => "text/plain; charset=utf-8",
+            Self::TextHtml => "text/html; charset=utf-8",
+            Self::ApplicationJson => "application/json",
+        }
+    }
+}
+
+/// Parsed GetFeatureInfo request. Carries the underlying [`RenderPlan`] (used
+/// to resolve binding + level the same way GetMap would), plus the GFI-specific
+/// hit-test inputs.
+#[derive(Debug, Clone)]
+pub struct GfiPlan {
+    /// Render plan reconstructed from the GetMap params. `plan.layers` holds
+    /// `QUERY_LAYERS` (a subset of the original `LAYERS`), since the GFI hit
+    /// test runs only against query layers.
+    pub plan: RenderPlan,
+    /// Pixel-space x coordinate of the click (origin top-left).
+    pub i: u32,
+    /// Pixel-space y coordinate of the click (origin top-left).
+    pub j: u32,
+    /// Negotiated info-format. Falls back to `TextPlain` when omitted.
+    pub info_format: InfoFormat,
+    /// Maximum feature hits to return; spec default 1.
+    pub feature_count: u32,
+}
+
+/// Hard upper bound on `FEATURE_COUNT=` to prevent runaway responses on
+/// dense pages.
+pub const MAX_FEATURE_COUNT: u32 = 1000;
+
 /// Top-level WMS request taxonomy.
 #[derive(Debug)]
 pub enum WmsRequest {
@@ -128,6 +176,19 @@ pub enum WmsRequest {
         /// EXCEPTIONS= behaviour. Default `Xml` when the param is absent.
         exceptions: ExceptionsFormat,
     },
+    /// `request=GetFeatureInfo` with the parsed [`GfiPlan`].
+    GetFeatureInfo(GfiPlan),
     /// `request=GetCapabilities`.
     GetCapabilities,
+}
+
+/// Layer IDs the WMS interface considers queryable. Used by the dispatcher to
+/// reject `QUERY_LAYERS=` entries that name non-queryable layers per
+/// capabilities.
+pub fn queryable_layer_ids(cfg: &Config) -> Vec<LayerId> {
+    cfg.layers
+        .iter()
+        .filter(|l| l.enable_get_feature_info)
+        .map(|l| l.name.clone())
+        .collect()
 }

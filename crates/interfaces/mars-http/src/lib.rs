@@ -559,6 +559,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn wms_get_feature_info_503_without_manifest() {
+        // a syntactically valid GFI request parses cleanly and dispatches
+        // through the gfi path; with no manifest the runtime returns NotReady
+        // which the handler translates to a 503 XML exception.
+        let app = empty_router();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(
+                        "/wms?service=WMS&version=1.3.0&request=GetFeatureInfo&layers=a&styles=&\
+                         crs=EPSG:25832&bbox=0,0,10,10&width=16&height=16&format=image/png&\
+                         query_layers=a&info_format=text/plain&i=8&j=8",
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let ct = resp.headers().get(header::CONTENT_TYPE).cloned().unwrap();
+        assert!(ct.to_str().unwrap().starts_with("text/xml"));
+        let body = body_str(resp).await;
+        assert!(body.contains("ServiceExceptionReport"));
+    }
+
+    #[tokio::test]
+    async fn wms_get_feature_info_invalid_query_layers_400() {
+        let app = empty_router();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(
+                        "/wms?service=WMS&version=1.3.0&request=GetFeatureInfo&layers=a&styles=&\
+                         crs=EPSG:25832&bbox=0,0,10,10&width=16&height=16&format=image/png&\
+                         query_layers=z&info_format=text/plain&i=8&j=8",
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = body_str(resp).await;
+        assert!(body.contains(r#"code="InvalidParameterValue""#));
+    }
+
+    #[tokio::test]
     async fn wms_exceptions_blank_returns_200_image_on_runtime_error() {
         // exceptions=BLANK suppresses the XML error report; the runtime's
         // NotReady error must be converted into a 200 OK image of the

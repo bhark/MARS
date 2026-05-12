@@ -19,6 +19,7 @@ mars-types    = { workspace = true }
 quick-xml     = "0.39"
 thiserror     = { workspace = true }
 percent-encoding = "2"
+serde_json    = { workspace = true }
 
 [dev-dependencies]
 serde_yaml_ng = { workspace = true }

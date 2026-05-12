@@ -14,6 +14,11 @@ use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 
 use crate::WmsError;
 
+/// INFO_FORMAT MIME strings advertised in the GetFeatureInfo capability block.
+/// Mirrors the set [`crate::feature_info::info_format_mime`] accepts on the
+/// request path so capabilities and runtime stay in agreement.
+const INFO_FORMATS: &[&str] = &["text/plain", "text/html", "application/json"];
+
 /// Render the capabilities XML. Per-layer bboxes are taken from the union of
 /// materialised artifact cells in the manifest, falling back to the layer's
 /// configured `bbox` when no artifacts exist yet. Per-layer scale ranges are
@@ -64,6 +69,17 @@ pub fn capabilities_xml(cfg: &Config, manifest: &Manifest) -> Result<String, Wms
         }
         w.write_event(Event::End(BytesEnd::new(op))).map_err(xml_err)?;
     }
+    // gfi advertised when at least one layer opts in; emitting it
+    // unconditionally would invite identify clicks that always come back empty.
+    if cfg.layers.iter().any(|l| l.enable_get_feature_info) {
+        w.write_event(Event::Start(BytesStart::new("GetFeatureInfo")))
+            .map_err(xml_err)?;
+        for mime in INFO_FORMATS {
+            text_element(&mut w, "Format", mime)?;
+        }
+        w.write_event(Event::End(BytesEnd::new("GetFeatureInfo")))
+            .map_err(xml_err)?;
+    }
     w.write_event(Event::End(BytesEnd::new("Request"))).map_err(xml_err)?;
 
     // root layer
@@ -82,7 +98,11 @@ pub fn capabilities_xml(cfg: &Config, manifest: &Manifest) -> Result<String, Wms
 
     // child layers
     for layer in &cfg.layers {
-        w.write_event(Event::Start(BytesStart::new("Layer"))).map_err(xml_err)?;
+        let mut layer_tag = BytesStart::new("Layer");
+        if layer.enable_get_feature_info {
+            layer_tag.push_attribute(("queryable", "1"));
+        }
+        w.write_event(Event::Start(layer_tag)).map_err(xml_err)?;
         text_element(&mut w, "Name", layer.name.as_str())?;
         text_element(&mut w, "Title", &layer.title)?;
         if !layer.abstract_.is_empty() {
@@ -280,6 +300,27 @@ layers:
             buf.clear();
         }
         assert_eq!(depth, 0);
+    }
+
+    #[test]
+    fn queryable_layer_emits_queryable_attribute() {
+        let mut cfg = minimal_cfg();
+        cfg.layers[0].enable_get_feature_info = true;
+        let m = Manifest::empty(1, cfg.service.name.clone());
+        let xml = capabilities_xml(&cfg, &m).unwrap();
+        assert!(xml.contains(r#"<Layer queryable="1">"#));
+        assert!(xml.contains("<GetFeatureInfo>"));
+        assert!(xml.contains("text/plain"));
+        assert!(xml.contains("application/json"));
+    }
+
+    #[test]
+    fn no_queryable_layers_skips_get_feature_info() {
+        let cfg = minimal_cfg();
+        let m = Manifest::empty(1, cfg.service.name.clone());
+        let xml = capabilities_xml(&cfg, &m).unwrap();
+        assert!(!xml.contains("<GetFeatureInfo>"));
+        assert!(!xml.contains(r#"queryable="1""#));
     }
 
     #[test]
