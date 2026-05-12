@@ -13,7 +13,7 @@ use crate::canvas::div255;
 
 /// axis-aligned mask stamp at `anchor + mask.origin + offset`. clips the dst
 /// rect to canvas bounds so the `AxisSampler` can skip its OOB check.
-pub(crate) fn stamp_axis(pm: &mut Pixmap, mask: &GlyphMask, anchor: (f32, f32), colour: Colour, offset: (f32, f32)) {
+pub(super) fn stamp_axis(pm: &mut Pixmap, mask: &GlyphMask, anchor: (f32, f32), colour: Colour, offset: (f32, f32)) {
     if mask.width == 0 || mask.height == 0 {
         return;
     }
@@ -41,7 +41,7 @@ pub(crate) fn stamp_axis(pm: &mut Pixmap, mask: &GlyphMask, anchor: (f32, f32), 
 /// `offset` is applied in the mask's local (pre-rotation) frame so halo
 /// stamps rotate with the glyph rather than smearing outwards in canvas
 /// space.
-pub(crate) fn stamp_rotated(
+pub(super) fn stamp_rotated(
     pm: &mut Pixmap,
     mask: &GlyphMask,
     anchor: (f32, f32),
@@ -96,7 +96,7 @@ pub(crate) fn stamp_rotated(
     composite(pm, (dst_x_lo, dst_y_lo, dst_x_hi, dst_y_hi), colour, &sampler);
 }
 
-pub(crate) trait Sampler {
+pub(super) trait Sampler {
     /// returns coverage at canvas (dx, dy). `None` when the canvas pixel maps
     /// outside the mask, `Some(0)` for transparent mask pixels. callers
     /// short-circuit on either.
@@ -106,7 +106,7 @@ pub(crate) trait Sampler {
 /// composite `colour` modulated by `sampler` coverage over the canvas
 /// rectangle `(x_lo, y_lo, x_hi, y_hi)`. the rectangle must already be
 /// clipped to the canvas bounds.
-pub(crate) fn composite<S: Sampler>(pm: &mut Pixmap, dst: (i32, i32, i32, i32), colour: Colour, sampler: &S) {
+pub(super) fn composite<S: Sampler>(pm: &mut Pixmap, dst: (i32, i32, i32, i32), colour: Colour, sampler: &S) {
     let (x_lo, y_lo, x_hi, y_hi) = dst;
     if x_lo >= x_hi || y_lo >= y_hi {
         return;
@@ -144,7 +144,7 @@ pub(crate) fn composite<S: Sampler>(pm: &mut Pixmap, dst: (i32, i32, i32, i32), 
 
 /// axis-aligned sampler: a direct (dx-dst_x0, dy-dst_y0) lookup. assumes the
 /// caller has clipped the dst rect to lie inside the mask rect.
-pub(crate) struct AxisSampler<'a> {
+pub(super) struct AxisSampler<'a> {
     pub mask: &'a GlyphMask,
     pub dst_x0: i32,
     pub dst_y0: i32,
@@ -163,7 +163,7 @@ impl Sampler for AxisSampler<'_> {
 /// rotated sampler: inverse-rotate around `anchor` and look up in mask-local
 /// (origin-relative) coords. nearest-neighbour sampling; aliasing is
 /// acceptable at the small font sizes that drive line labels.
-pub(crate) struct RotatedSampler<'a> {
+pub(super) struct RotatedSampler<'a> {
     pub mask: &'a GlyphMask,
     pub anchor: (f32, f32),
     /// mask.origin + offset, in canvas-pixel units.

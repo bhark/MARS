@@ -27,7 +27,7 @@ pub(crate) fn draw(pm: &mut Pixmap, path: &PortPath, style: &Style) {
         tracing::debug!("Style::marker glyph rendering is not yet implemented in the renderer");
     }
 
-    if let Some(stroke_resolved) = &resolved.stroke {
+    if let Some(stroke_resolved) = resolved.stroke {
         stroke::draw(pm, path, &tsk_path, stroke_resolved);
     }
 }

@@ -15,7 +15,7 @@ use crate::path::build_path;
 use crate::path_offset::offset_polyline;
 use crate::prepare::ResolvedStroke;
 
-pub(crate) fn draw(pm: &mut Pixmap, port_path: &PortPath, tsk_path: &tiny_skia::Path, stroke: &ResolvedStroke) {
+pub(crate) fn draw(pm: &mut Pixmap, port_path: &PortPath, tsk_path: &tiny_skia::Path, stroke: ResolvedStroke) {
     if stroke.gap.is_some() {
         // stamped-marker-along-line is on the parity backlog. fire once per
         // style so the warning shows up in tests without spamming hot tile
@@ -27,17 +27,17 @@ pub(crate) fn draw(pm: &mut Pixmap, port_path: &PortPath, tsk_path: &tiny_skia::
     paint.set_color(scaled_alpha(stroke.colour, stroke.alpha));
     paint.anti_alias = true;
 
-    let tsk_stroke = Stroke {
-        width: stroke.width,
-        line_cap: stroke.cap,
-        line_join: stroke.join,
-        dash: stroke.dash.clone(),
-        ..Stroke::default()
-    };
     let offset_path = if stroke.offset_px != 0.0 {
         offset_polyline(port_path, stroke.offset_px).and_then(|p| build_path(&p))
     } else {
         None
+    };
+    let tsk_stroke = Stroke {
+        width: stroke.width,
+        line_cap: stroke.cap,
+        line_join: stroke.join,
+        dash: stroke.dash,
+        ..Stroke::default()
     };
     let path = offset_path.as_ref().unwrap_or(tsk_path);
     pm.stroke_path(path, &paint, &tsk_stroke, Transform::identity(), None);
