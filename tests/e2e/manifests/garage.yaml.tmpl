@@ -57,9 +57,8 @@ spec:
     spec:
       containers:
         - name: garage
-          image: dxflrs/garage:v1.3.1
-          command: ["/garage"]
-          args: ["server"]
+          image: dxflrs/garage:v2.3.0
+          command: ["/garage", "server"]
           env:
             - name: GARAGE_RPC_SECRET
               valueFrom:

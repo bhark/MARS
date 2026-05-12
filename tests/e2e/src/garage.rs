@@ -22,9 +22,18 @@ const KEY_NAME: &str = "mars-e2e-key";
 const CRED_SECRET: &str = "mars-s3-credentials";
 
 #[derive(Deserialize)]
-struct Status {
-    #[serde(rename = "node")]
-    node_id: String,
+struct NodeEntry {
+    id: String,
+}
+
+#[derive(Deserialize)]
+struct ClusterStatus {
+    nodes: Vec<NodeEntry>,
+}
+
+#[derive(Deserialize)]
+struct BucketInfo {
+    id: String,
 }
 
 #[derive(Deserialize)]
@@ -38,41 +47,54 @@ struct KeyCreated {
 pub async fn bootstrap(client: Arc<Client>, ns: &str) -> Result<()> {
     await_admin(&client, ns).await?;
 
-    let status: Status = admin_get(&client, ns, "/v1/status").await?;
-    info!(node = %status.node_id, "garage admin reachable");
+    let status: ClusterStatus = admin_get(&client, ns, "/v2/GetClusterStatus").await?;
+    let node_id = status
+        .nodes
+        .into_iter()
+        .next()
+        .map(|n| n.id)
+        .ok_or_else(|| anyhow!("garage GetClusterStatus returned empty nodes"))?;
+    info!(node = %node_id, "garage admin reachable");
 
     if !layout_ready(&client, ns).await? {
-        let assign = json!([{
-            "id": status.node_id,
-            "zone": "dc1",
-            "capacity": 1_073_741_824u64,
-            "tags": [],
-        }]);
-        let _ = admin_post(&client, ns, "/v1/layout", &assign).await?;
+        let update = json!({
+            "roles": [{
+                "id": node_id,
+                "zone": "dc1",
+                "capacity": 1_073_741_824u64,
+                "tags": [],
+            }],
+            "parameters": null,
+        });
+        let _ = admin_post(&client, ns, "/v2/UpdateClusterLayout", &update).await?;
         let apply = json!({ "version": 1 });
-        let _ = admin_post(&client, ns, "/v1/layout/apply", &apply).await?;
+        let _ = admin_post(&client, ns, "/v2/ApplyClusterLayout", &apply).await?;
         info!("garage layout applied");
     }
 
-    // idempotent bucket: 409 means already exists.
+    // create bucket; on 409 (already exists) fall back to GetBucketInfo to recover the id.
     let bucket_body = json!({ "globalAlias": BUCKET });
-    let _ = admin_post(&client, ns, "/v1/bucket", &bucket_body).await;
-
-    // idempotent key: try create, fall back to list-then-import-flavour if 409.
-    let key_body = json!({ "name": KEY_NAME });
-    let created: KeyCreated = match admin_post_json(&client, ns, "/v1/key", &key_body).await {
-        Ok(c) => c,
-        Err(e) => return Err(anyhow!("garage create key: {e}")),
+    let bucket_id = match admin_post_json::<BucketInfo>(&client, ns, "/v2/CreateBucket", &bucket_body).await {
+        Ok(b) => b.id,
+        Err(_) => {
+            let info: BucketInfo = admin_get(&client, ns, &format!("/v2/GetBucketInfo?globalAlias={BUCKET}"))
+                .await
+                .context("garage GetBucketInfo fallback after CreateBucket failed")?;
+            info.id
+        }
     };
 
-    // grant the key read+write on the bucket
+    let key_body = json!({ "name": KEY_NAME });
+    let created: KeyCreated = admin_post_json(&client, ns, "/v2/CreateKey", &key_body)
+        .await
+        .context("garage create key")?;
+
     let allow = json!({
-        "bucketId": null,
-        "globalAlias": BUCKET,
+        "bucketId": bucket_id,
         "accessKeyId": created.access_key_id,
         "permissions": { "read": true, "write": true, "owner": true },
     });
-    let _ = admin_post(&client, ns, "/v1/bucket/allow", &allow).await;
+    let _ = admin_post(&client, ns, "/v2/AllowBucketKey", &allow).await;
 
     write_credentials_secret(&client, ns, &created.access_key_id, &created.secret_access_key).await?;
     info!("garage bootstrap complete; credentials in Secret/{CRED_SECRET}");
@@ -80,23 +102,43 @@ pub async fn bootstrap(client: Arc<Client>, ns: &str) -> Result<()> {
 }
 
 async fn await_admin(client: &Arc<Client>, ns: &str) -> Result<()> {
-    crate::wait::until("garage admin /v1/status", Duration::from_secs(120), || async {
-        match crate::http::get_with_bearer(client.clone(), ns, "garage", ADMIN_PORT, "/v1/status", ADMIN_TOKEN).await {
-            Ok(r) if r.status == 200 => Ok(Some(())),
-            Ok(r) => {
-                tracing::debug!(status = r.status, "admin not ready");
-                Ok(None)
+    crate::wait::until(
+        "garage admin /v2/GetClusterStatus",
+        Duration::from_secs(120),
+        || async {
+            match crate::http::get_with_bearer(
+                client.clone(),
+                ns,
+                "garage",
+                ADMIN_PORT,
+                "/v2/GetClusterStatus",
+                ADMIN_TOKEN,
+            )
+            .await
+            {
+                Ok(r) if r.status == 200 => Ok(Some(())),
+                Ok(r) => {
+                    tracing::debug!(status = r.status, "admin not ready");
+                    Ok(None)
+                }
+                Err(_) => Ok(None),
             }
-            Err(_) => Ok(None),
-        }
-    })
+        },
+    )
     .await
 }
 
 async fn layout_ready(client: &Arc<Client>, ns: &str) -> Result<bool> {
-    // GET /v1/layout returns { version: N, ... }; treat version > 0 as ready.
-    let resp =
-        crate::http::get_with_bearer(client.clone(), ns, "garage", ADMIN_PORT, "/v1/layout", ADMIN_TOKEN).await?;
+    // treat version > 0 as already applied.
+    let resp = crate::http::get_with_bearer(
+        client.clone(),
+        ns,
+        "garage",
+        ADMIN_PORT,
+        "/v2/GetClusterLayout",
+        ADMIN_TOKEN,
+    )
+    .await?;
     if resp.status != 200 {
         return Ok(false);
     }
