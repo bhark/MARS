@@ -32,7 +32,12 @@ pub(crate) struct Cli {
     pub(crate) health_addr: SocketAddr,
 
     /// Enable leader election. Required when running >1 replica.
-    #[arg(long, env = "MARS_OPERATOR_LEADER_ELECT", default_value_t = true)]
+    #[arg(
+        long,
+        env = "MARS_OPERATOR_LEADER_ELECT",
+        default_value_t = true,
+        action = clap::ArgAction::Set,
+    )]
     pub(crate) leader_elect: bool,
 
     /// Namespace to coordinate leader-election Lease in.
