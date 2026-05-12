@@ -202,39 +202,6 @@ impl<'de> Deserialize<'de> for FillPaint {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-enum FillPaintTagged {
-    Solid {
-        colour: Colour,
-    },
-    Hatch {
-        spacing: f32,
-        angle_deg: f32,
-        line_width: f32,
-        colour: Colour,
-    },
-}
-
-impl From<FillPaintTagged> for FillPaint {
-    fn from(t: FillPaintTagged) -> Self {
-        match t {
-            FillPaintTagged::Solid { colour } => Self::Solid(colour),
-            FillPaintTagged::Hatch {
-                spacing,
-                angle_deg,
-                line_width,
-                colour,
-            } => Self::Hatch {
-                spacing,
-                angle_deg,
-                line_width,
-                colour,
-            },
-        }
-    }
-}
-
 struct FillPaintVisitor;
 
 impl<'de> serde::de::Visitor<'de> for FillPaintVisitor {
@@ -253,8 +220,37 @@ impl<'de> serde::de::Visitor<'de> for FillPaintVisitor {
     }
 
     fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
-        let tagged = FillPaintTagged::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
-        Ok(tagged.into())
+        // tagged shim: serde derives Deserialize over the field-set, we map
+        // its variants onto FillPaint inline so no module-level helper type
+        // leaks.
+        #[derive(Deserialize)]
+        #[serde(tag = "kind", rename_all = "snake_case")]
+        enum Tagged {
+            Solid {
+                colour: Colour,
+            },
+            Hatch {
+                spacing: f32,
+                angle_deg: f32,
+                line_width: f32,
+                colour: Colour,
+            },
+        }
+        let tagged = Tagged::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
+        Ok(match tagged {
+            Tagged::Solid { colour } => FillPaint::Solid(colour),
+            Tagged::Hatch {
+                spacing,
+                angle_deg,
+                line_width,
+                colour,
+            } => FillPaint::Hatch {
+                spacing,
+                angle_deg,
+                line_width,
+                colour,
+            },
+        })
     }
 }
 
@@ -467,8 +463,7 @@ mod tests {
 
     #[test]
     fn polygon_style_from_spec_example_round_trips() {
-        // mirrors: a typical filled polygon style. bare-hex fill survives the
-        // FillPaint migration.
+        // bare-hex fill must deserialise as Solid (wire-format symmetry).
         let yaml = "fill: '#fafafa'\nstroke: '#b4b4b4'\nstroke_width: 0.6\n";
         let s: Style = serde_yaml_ng::from_str(yaml).unwrap();
         assert!(matches!(s.fill, Some(FillPaint::Solid(c)) if c == Colour::rgba(0xfa, 0xfa, 0xfa, 0xff)));
