@@ -42,6 +42,7 @@ mars-store         = { workspace = true, features = ["test-utils"] }
 tokio              = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tracing-subscriber = { workspace = true }
 criterion          = { workspace = true }
+serde_yaml_ng      = { workspace = true }
 
 [[bench]]
 name    = "feature_prep"

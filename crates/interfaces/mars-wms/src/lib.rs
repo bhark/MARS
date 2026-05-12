@@ -1,7 +1,7 @@
 //! WMS 1.3.0 interface adapter.
 //!
-//! Covers `GetMap`, `GetCapabilities`, and `GetFeatureInfo`. SLD / SLD_BODY
-//! and GetLegendGraphic land in follow-up commits.
+//! Covers `GetMap`, `GetCapabilities`, `GetFeatureInfo`, and
+//! `GetLegendGraphic`. SLD / SLD_BODY remain deferred.
 
 #![forbid(unsafe_code)]
 
@@ -17,7 +17,7 @@ use mars_types::{CrsCode, ImageFormat, LayerId};
 pub use capabilities::capabilities_xml;
 pub use exception::service_exception_report;
 pub use feature_info::format_feature_info;
-pub use parse::{parse_get_feature_info, parse_get_map, parse_request};
+pub use parse::{parse_get_feature_info, parse_get_legend_graphic, parse_get_map, parse_request};
 
 #[derive(Debug, thiserror::Error)]
 pub enum WmsError {
@@ -178,6 +178,8 @@ pub enum WmsRequest {
     },
     /// `request=GetFeatureInfo` with the parsed [`GfiPlan`].
     GetFeatureInfo(GfiPlan),
+    /// `request=GetLegendGraphic` with the parsed legend plan.
+    GetLegendGraphic(mars_runtime::LegendPlan),
     /// `request=GetCapabilities`.
     GetCapabilities,
 }

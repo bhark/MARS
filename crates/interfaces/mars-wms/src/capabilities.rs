@@ -80,6 +80,15 @@ pub fn capabilities_xml(cfg: &Config, manifest: &Manifest) -> Result<String, Wms
         w.write_event(Event::End(BytesEnd::new("GetFeatureInfo")))
             .map_err(xml_err)?;
     }
+    // legend graphic is always available; the runtime can compose a default
+    // swatch even for class-less layers.
+    w.write_event(Event::Start(BytesStart::new("GetLegendGraphic")))
+        .map_err(xml_err)?;
+    for fmt in &advertised_formats {
+        text_element(&mut w, "Format", fmt.mime())?;
+    }
+    w.write_event(Event::End(BytesEnd::new("GetLegendGraphic")))
+        .map_err(xml_err)?;
     w.write_event(Event::End(BytesEnd::new("Request"))).map_err(xml_err)?;
 
     // root layer
@@ -120,6 +129,7 @@ pub fn capabilities_xml(cfg: &Config, manifest: &Manifest) -> Result<String, Wms
                 text_element(&mut w, "MaxScaleDenominator", &max.to_string())?;
             }
         }
+        write_default_style_with_legend_url(&mut w, layer, &advertised_formats)?;
         w.write_event(Event::End(BytesEnd::new("Layer"))).map_err(xml_err)?;
     }
 
@@ -179,6 +189,43 @@ fn configured_formats(cfg: &Config) -> Vec<ImageFormat> {
     } else {
         configured
     }
+}
+
+/// Emit a single default `<Style>` block per layer including a relative
+/// LegendURL. Path matches the runtime route; clients ground it on the
+/// request URL they reached the service on.
+fn write_default_style_with_legend_url<W: std::io::Write>(
+    w: &mut Writer<W>,
+    layer: &mars_config::Layer,
+    formats: &[ImageFormat],
+) -> Result<(), WmsError> {
+    w.write_event(Event::Start(BytesStart::new("Style"))).map_err(xml_err)?;
+    text_element(w, "Name", "default")?;
+    text_element(w, "Title", "Default style")?;
+    // one LegendURL per format we advertise; ~20 px default mirrors MapServer.
+    for fmt in formats {
+        let mut legend = BytesStart::new("LegendURL");
+        legend.push_attribute(("width", "20"));
+        legend.push_attribute(("height", "20"));
+        w.write_event(Event::Start(legend)).map_err(xml_err)?;
+        text_element(w, "Format", fmt.mime())?;
+        let mut online = BytesStart::new("OnlineResource");
+        online.push_attribute(("xmlns:xlink", "http://www.w3.org/1999/xlink"));
+        online.push_attribute(("xlink:type", "simple"));
+        online.push_attribute((
+            "xlink:href",
+            format!(
+                "?service=WMS&version=1.3.0&request=GetLegendGraphic&layer={}&format={}",
+                layer.name.as_str(),
+                fmt.mime()
+            )
+            .as_str(),
+        ));
+        w.write_event(Event::Empty(online)).map_err(xml_err)?;
+        w.write_event(Event::End(BytesEnd::new("LegendURL"))).map_err(xml_err)?;
+    }
+    w.write_event(Event::End(BytesEnd::new("Style"))).map_err(xml_err)?;
+    Ok(())
 }
 
 fn write_bbox<W: std::io::Write>(w: &mut Writer<W>, crs: &str, bbox: Bbox) -> Result<(), WmsError> {
@@ -312,6 +359,17 @@ layers:
         assert!(xml.contains("<GetFeatureInfo>"));
         assert!(xml.contains("text/plain"));
         assert!(xml.contains("application/json"));
+    }
+
+    #[test]
+    fn legend_advertised_in_request_block_and_per_layer() {
+        let cfg = minimal_cfg();
+        let m = Manifest::empty(1, cfg.service.name.clone());
+        let xml = capabilities_xml(&cfg, &m).unwrap();
+        assert!(xml.contains("<GetLegendGraphic>"));
+        assert!(xml.contains("<LegendURL"));
+        assert!(xml.contains("request=GetLegendGraphic"));
+        assert!(xml.contains("layer=a"));
     }
 
     #[test]

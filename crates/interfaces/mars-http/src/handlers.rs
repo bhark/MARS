@@ -8,8 +8,8 @@ use mars_wmts::WmtsRequest;
 
 use crate::{AppState, CapabilitiesHandle};
 use crate::{
-    request_id, runtime_error_response, wms_error_response, wms_runtime_xml_response, wmts_error_response,
-    wmts_runtime_error_response,
+    request_id, runtime_error_response, wms_error_response, wms_runtime_xml_response, wms_runtime_xml_response_plain,
+    wmts_error_response, wmts_runtime_error_response,
 };
 
 pub async fn handle_wms(State(state): State<AppState>, headers: HeaderMap, raw_query: RawQuery) -> Response {
@@ -35,6 +35,17 @@ pub async fn handle_wms(State(state): State<AppState>, headers: HeaderMap, raw_q
                         (StatusCode::OK, h, bytes).into_response()
                     }
                     Err(e) => runtime_error_response(e, &plan, exceptions, &state.runtime),
+                }
+            }
+            WmsRequest::GetLegendGraphic(plan) => {
+                let mime = plan.format.mime();
+                match state.runtime.render_legend(&plan) {
+                    Ok(bytes) => {
+                        let mut h = HeaderMap::new();
+                        h.insert(header::CONTENT_TYPE, HeaderValue::from_static(mime));
+                        (StatusCode::OK, h, bytes).into_response()
+                    }
+                    Err(e) => wms_runtime_xml_response_plain(e, "GetLegendGraphic"),
                 }
             }
             WmsRequest::GetFeatureInfo(gfi) => {

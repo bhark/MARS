@@ -2700,6 +2700,7 @@ dependencies = [
  "parking_lot",
  "rayon",
  "rstar",
+ "serde_yaml_ng",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",

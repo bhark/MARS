@@ -23,12 +23,14 @@ use tokio::sync::Semaphore;
 
 mod fetch;
 mod gfi;
+mod legend;
 mod plan;
 mod render;
 mod state;
 
 pub use fetch::{fetch_page, fetch_sidecar};
 pub use gfi::LayerFeatureInfo;
+pub use legend::{LegendPlan, render_legend};
 pub use mars_artifact::AttrValue;
 pub use plan::{pick_binding_and_level, reproject_viewport, resolve_pages};
 pub use state::{IndexError, PageIndex, RuntimeState};
@@ -222,6 +224,15 @@ impl Runtime {
     ) -> Result<Vec<LayerFeatureInfo>, RuntimeError> {
         let state = self.current_state().ok_or(RuntimeError::NotReady)?;
         gfi::get_feature_info(&state, &self.deps, plan, point_px).await
+    }
+
+    /// Render a WMS GetLegendGraphic image. Resolves the layer's classes
+    /// against the active manifest's stylesheet so `ClassStyle::Ref` entries
+    /// pick up the live style map. Requires the runtime to be ready.
+    pub fn render_legend(&self, plan: &LegendPlan) -> Result<Vec<u8>, RuntimeError> {
+        let state = self.current_state().ok_or(RuntimeError::NotReady)?;
+        let cfg = state.config_or_err()?;
+        legend::render_legend(plan, cfg, &state.stylesheet, &self.deps)
     }
 
     /// Encode a fully-transparent image of the plan's dimensions and format.

@@ -632,6 +632,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn wms_get_legend_graphic_503_without_manifest() {
+        // legend rendering needs config from the active state; without a
+        // manifest the runtime returns NotReady and the handler maps it to a
+        // 503 XML response.
+        let app = empty_router();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/wms?service=WMS&version=1.3.0&request=GetLegendGraphic&layer=a&format=image/png")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = body_str(resp).await;
+        assert!(body.contains("ServiceExceptionReport"));
+    }
+
+    #[tokio::test]
+    async fn wms_get_legend_graphic_missing_layer_400() {
+        let app = empty_router();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/wms?service=WMS&version=1.3.0&request=GetLegendGraphic&format=image/png")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
     async fn wms_get_feature_info_503_without_manifest() {
         // a syntactically valid GFI request parses cleanly and dispatches
         // through the gfi path; with no manifest the runtime returns NotReady

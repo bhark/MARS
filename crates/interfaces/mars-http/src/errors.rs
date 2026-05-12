@@ -62,6 +62,16 @@ pub fn wms_runtime_xml_response(e: RuntimeError, plan: &RenderPlan) -> Response 
     wms_exception_response(map_runtime_error(&e))
 }
 
+/// Plan-less XML error response. Used by GetLegendGraphic, which has no
+/// RenderPlan; logs the op name instead of layer/bbox.
+pub fn wms_runtime_xml_response_plain(e: RuntimeError, op: &'static str) -> Response {
+    match &e {
+        RuntimeError::NotReady => tracing::warn!(error = %e, op, "wms op failed"),
+        _ => tracing::error!(error = %e, op, "wms op failed"),
+    }
+    wms_exception_response(map_runtime_error(&e))
+}
+
 pub fn runtime_error_response(
     e: RuntimeError,
     plan: &RenderPlan,
