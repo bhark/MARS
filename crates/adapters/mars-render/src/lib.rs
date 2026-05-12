@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 mod encode;
+mod path;
 mod raster;
 
 use std::sync::Arc;
