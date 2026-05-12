@@ -85,6 +85,7 @@ pub fn render_legend(
                 anchor: (layout.label_x as f32, (row_top + layout.label_baseline_offset()) as f32),
                 text: entry.title.clone(),
                 style: label_style.clone(),
+                angle_rad: 0.0,
             });
         }
     }

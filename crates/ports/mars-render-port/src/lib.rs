@@ -75,6 +75,9 @@ pub enum DrawOp {
         text: String,
         /// Compiled label style.
         style: Arc<LabelStyle>,
+        /// Counter-clockwise rotation in radians. `0.0` for axis-aligned
+        /// labels (the common case); line labels carry a tangent angle.
+        angle_rad: f32,
     },
 }
 

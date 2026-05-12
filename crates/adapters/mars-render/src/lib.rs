@@ -44,8 +44,13 @@ impl Renderer for TinySkiaRenderer {
         for op in ops {
             match op {
                 DrawOp::Path { path, style } => raster::draw_path(&mut pm, path, style),
-                DrawOp::Label { anchor, text, style } => {
-                    raster::draw_label(&mut pm, *anchor, text, style, &self.fonts)?;
+                DrawOp::Label {
+                    anchor,
+                    text,
+                    style,
+                    angle_rad,
+                } => {
+                    raster::draw_label(&mut pm, *anchor, text, style, *angle_rad, &self.fonts)?;
                 }
             }
         }
@@ -417,6 +422,7 @@ mod tests {
                 priority: 0,
                 min_distance: 0.0,
             }),
+            angle_rad: 0.0,
         }];
         let pm = TinySkiaRenderer::new(std::sync::Arc::new(mars_text::Fonts::with_default())).render(canvas, &ops);
         assert!(pm.is_ok(), "label op should be skipped, not error: {pm:?}");
@@ -673,6 +679,72 @@ mod tests {
             .filter(|p| p[1] > 150 && p[0] < 80 && p[2] < 80 && p[3] > 0)
             .count();
         assert!(green_count > 50, "outline stroke missing: only {green_count} green px");
+    }
+
+    #[test]
+    fn rotated_label_lands_in_rotated_bbox() {
+        // 90-degree rotation: a horizontal label anchored at the centre
+        // should produce painted pixels along a vertical strip, not a
+        // horizontal one. proves the rotation actually rotates the mask.
+        let canvas = Canvas {
+            width: 64,
+            height: 64,
+            background: None,
+        };
+        let label_style = Arc::new(mars_style::LabelStyle {
+            font_family: "DejaVu Sans".into(),
+            font_size: 16.0,
+            fill: mars_style::Colour::rgba(0, 0, 0, 255),
+            halo: None,
+            priority: 0,
+            min_distance: 0.0,
+        });
+        let upright = vec![DrawOp::Label {
+            anchor: (32.0, 32.0),
+            text: "ABC".into(),
+            style: label_style.clone(),
+            angle_rad: 0.0,
+        }];
+        let rotated = vec![DrawOp::Label {
+            anchor: (32.0, 32.0),
+            text: "ABC".into(),
+            style: label_style,
+            angle_rad: std::f32::consts::FRAC_PI_2,
+        }];
+        let (w, _, up_rgba) = decode(&render_png(canvas, &upright));
+        let (_, _, rot_rgba) = decode(&render_png(canvas, &rotated));
+
+        let painted_extents = |rgba: &[u8]| {
+            let mut minx = i32::MAX;
+            let mut maxx = i32::MIN;
+            let mut miny = i32::MAX;
+            let mut maxy = i32::MIN;
+            for (i, p) in rgba.chunks_exact(4).enumerate() {
+                if p[3] == 0 {
+                    continue;
+                }
+                let x = (i % w as usize) as i32;
+                let y = (i / w as usize) as i32;
+                if x < minx {
+                    minx = x;
+                }
+                if x > maxx {
+                    maxx = x;
+                }
+                if y < miny {
+                    miny = y;
+                }
+                if y > maxy {
+                    maxy = y;
+                }
+            }
+            (maxx - minx, maxy - miny)
+        };
+        let (uw, uh) = painted_extents(&up_rgba);
+        let (rw, rh) = painted_extents(&rot_rgba);
+        // upright run is wide and short; rotated run is tall and narrow.
+        assert!(uw > uh, "upright label not horizontally extended: {uw}x{uh}");
+        assert!(rh > rw, "rotated label not vertically extended: {rw}x{rh}");
     }
 
     #[test]

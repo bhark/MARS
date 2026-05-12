@@ -29,6 +29,9 @@ pub(super) struct PreparedLabel {
     style: Arc<LabelStyle>,
     priority: u16,
     bbox_px: (f32, f32, f32, f32),
+    /// counter-clockwise rotation in radians; non-zero for line labels
+    /// sampled along a polyline.
+    angle_rad: f32,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -94,6 +97,7 @@ pub(super) fn prepare_labels(
             style,
             priority: c.priority,
             bbox_px,
+            angle_rad: 0.0,
         });
     }
     Ok(out)
@@ -158,6 +162,7 @@ pub(super) fn collide_and_emit_labels(mut labels: Vec<PreparedLabel>, _w: u32, _
             anchor: label.anchor_px,
             text: label.text,
             style: label.style,
+            angle_rad: label.angle_rad,
         });
     }
     ops
