@@ -1,7 +1,9 @@
-# one-shot fixture loader. assumes the sql.gz dump has been pre-loaded into a
-# ConfigMap (binaryData) by the test driver; the loader uncompresses + pipes
-# into psql. drops the schema first for idempotent reloads, then applies
-# assert-fixture + create-replication so the change-feed slot is in place.
+# one-shot fixture loader. reads the gzipped dump from a kind hostPath mount
+# (target/e2e-fixtures on the host -> /var/lib/mars-e2e-fixtures on the node)
+# and pipes it into psql. drops the schema first for idempotent reloads, then
+# applies assert-fixture + create-replication so the change-feed slot is in
+# place. the assert + replication SQL files live in a `fixture-sql` ConfigMap
+# applied by the test driver (see src/fixtures.rs).
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -18,7 +20,7 @@ data:
       -c "SELECT pg_drop_replication_slot('mars_e2e_slot') \
           WHERE EXISTS (SELECT 1 FROM pg_replication_slots WHERE slot_name = 'mars_e2e_slot')"
     echo "[loader] restoring fixture dump"
-    gunzip -c /fixture/dump.sql.gz | psql "$PG_DSN" -v ON_ERROR_STOP=1
+    gunzip -c "/fixture/{{FIXTURE_FILENAME}}" | psql "$PG_DSN" -v ON_ERROR_STOP=1
     echo "[loader] asserting fixture shape"
     psql "$PG_DSN" -v ON_ERROR_STOP=1 -f /sql/assert-fixture.sql
     echo "[loader] creating replication pub + slot"
@@ -55,7 +57,10 @@ spec:
           configMap:
             name: fixture-sql
         - name: fixture
-          # populated out-of-band: hostPath provisioned by the kind node, OR
-          # an emptyDir + initContainer that pulls the dump from a configmap
-          # binaryData entry. the test driver chooses which based on dump size.
-          emptyDir: {}
+          # the kind cluster mounts target/e2e-fixtures into the control-plane
+          # node at /var/lib/mars-e2e-fixtures (see tests/e2e/kind.yaml); the
+          # loader reads the dump directly from there. avoids the 1MiB configmap
+          # binaryData ceiling and keeps the pod spec dump-size-agnostic.
+          hostPath:
+            path: /var/lib/mars-e2e-fixtures
+            type: Directory

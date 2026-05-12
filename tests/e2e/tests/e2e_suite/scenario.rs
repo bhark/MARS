@@ -60,16 +60,22 @@ impl Scenario {
         .context("apply postgis manifest")?;
         wait::deployment_ready(client.clone(), &ns.name, "postgis", Duration::from_secs(120)).await?;
 
-        // fixture loader. requires the dump on the host at the path returned
-        // by `host_fixture_path()`; staging it into the pod is handled by the
-        // kind extra-mount declared in tests/e2e/kind.yaml.
-        let _dump = fixtures::host_fixture_path()?;
+        // fixture loader. the dump lives on the host at the path returned by
+        // `host_fixture_path()` and is exposed to the node via the kind extra-
+        // mount in tests/e2e/kind.yaml.tmpl; the loader Job consumes it through a
+        // hostPath. the assert + replication SQL come from a driver-built
+        // ConfigMap so the template stays free of multi-line interpolation.
+        let dump = fixtures::host_fixture_path()?;
+        let dump_filename = fixtures::fixture_filename(&dump)?;
+        fixtures::apply_sql_configmap(client.clone(), &ns.name).await?;
+        let mut loader_vars = HashMap::new();
+        loader_vars.insert("FIXTURE_FILENAME", dump_filename.as_str());
         deploy::apply_template(
             client.clone(),
             &disc,
             &ns.name,
             mtmpl.join("fixture-loader.yaml.tmpl"),
-            &HashMap::new(),
+            &loader_vars,
         )
         .await
         .context("apply fixture-loader manifest")?;
