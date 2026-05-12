@@ -10,9 +10,7 @@
 //! the planner does NOT walk source rows or talk to postgres -- it only
 //! decides what set of (binding, level) slices the snapshot has to emit.
 
-use mars_config::{
-    Config, DEFAULT_PAGE_SIZE_TARGET_BYTES, DecimationLevelConfig, LabelStyleAttach, Layer as CfgLayer, SimplifierKind,
-};
+use mars_config::{Config, DecimationLevelConfig, LabelStyleAttach, Layer as CfgLayer, SimplifierKind};
 use mars_expr::{Expr, Template, parse, parse_template};
 use mars_style::{LabelStyle, LabelSurvival, Placement, default_placement};
 use mars_types::{BindingId, BindingIdError, CrsCode, DecimationLevel, LayerId};
@@ -456,15 +454,13 @@ fn ensure_layer_consistent(existing: &LayerPlan, candidate: &LayerPlan) -> Resul
     Ok(())
 }
 
-#[allow(dead_code)]
-const _DEFAULT_PAGE_SIZE_USED: u64 = DEFAULT_PAGE_SIZE_TARGET_BYTES;
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
     use mars_config::{
-        Artifacts, Band, Cells, ClassStyle, Config, Interfaces, Scales, ServiceMeta, Source, SourceBinding,
+        Artifacts, Band, Cells, ClassStyle, Config, DEFAULT_PAGE_SIZE_TARGET_BYTES, Interfaces, Scales, ServiceMeta,
+        Source, SourceBinding,
     };
     use mars_types::{Bbox, CrsCode, LayerId};
     use std::collections::BTreeMap;

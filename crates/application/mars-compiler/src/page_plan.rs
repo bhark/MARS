@@ -302,7 +302,6 @@ impl BboxAcc {
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use bytes::Bytes;
     use futures_core::stream::BoxStream;
     use futures_util::stream;
     use mars_config::SimplifierKind;
@@ -376,10 +375,6 @@ mod tests {
             row_key: SourceRowKey::from_bytes(k),
         }
     }
-
-    // assert_eq! drives `Bytes` import; suppress unused warning when not used.
-    #[allow(dead_code)]
-    fn _bytes_marker(_b: Bytes) {}
 
     #[tokio::test]
     async fn empty_source_yields_empty_plan() {

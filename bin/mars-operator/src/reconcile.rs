@@ -14,7 +14,7 @@ use kube::runtime::controller::Action;
 use serde_json::json;
 use tracing::{error, info, warn};
 
-use crate::children::labels::{COMPONENT_COMPILER, COMPONENT_RUNTIME, artifact_store_pvc_name};
+use crate::children::labels::artifact_store_pvc_name;
 use crate::children::pvc::{self, PvcSpec};
 use crate::children::{compiler, configmap, runtime, service};
 use crate::crd::{ArtifactStoreSpec, MarsService};
@@ -282,10 +282,4 @@ async fn patch_status(ctx: &Ctx, name: &str, ns: &str, status_body: crate::crd::
 pub(crate) fn error_policy(_cr: Arc<MarsService>, error: &OperatorError, _ctx: Arc<Ctx>) -> Action {
     error!(error = %error, "reconcile error_policy fired");
     Action::requeue(Duration::from_secs(15))
-}
-
-// Silence unused import noise from cross-module re-exports.
-#[allow(dead_code)]
-fn _force_use() {
-    let _ = (COMPONENT_COMPILER, COMPONENT_RUNTIME);
 }

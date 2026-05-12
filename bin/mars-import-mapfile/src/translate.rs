@@ -5,7 +5,9 @@ use std::collections::{BTreeSet, HashSet};
 use tracing::warn;
 
 use crate::emitter::{ClassSkeleton, LabelSkeleton, LayerSkeleton, Skeleton, SourceSkeleton};
-use crate::scanner::{Token, block_range, is_block_opener, scan};
+#[cfg(test)]
+use crate::scanner::scan;
+use crate::scanner::{Token, block_range, is_block_opener};
 use crate::style::{parse_class, parse_label};
 
 /// keywords whose presence we don't translate yet. some are block openers,
@@ -31,9 +33,11 @@ pub(crate) fn is_unsupported(kw: &str) -> bool {
 }
 
 /// translate a mapfile source into a YAML skeleton, warning on unsupported
-/// constructs as a side-effect via `tracing::warn!`.
-#[allow(dead_code)]
-pub(crate) fn translate(src: &str) -> Skeleton {
+/// constructs as a side-effect via `tracing::warn!`. test-only helper; the
+/// binary entry point in `main.rs` drives `translate_tokens` directly so it
+/// can filter layers.
+#[cfg(test)]
+fn translate(src: &str) -> Skeleton {
     let tokens = scan(src);
     translate_tokens(&tokens, None)
 }
