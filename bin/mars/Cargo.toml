@@ -54,6 +54,7 @@ futures-util = { workspace = true }
 reqwest      = { workspace = true, default-features = true, features = ["blocking"] }
 
 [dev-dependencies]
+mars-test-support = { workspace = true }
 testcontainers = { workspace = true }
 tokio-postgres = { workspace = true }
 png = { workspace = true }

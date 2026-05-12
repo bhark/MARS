@@ -2441,6 +2441,7 @@ dependencies = [
  "mars-source-postgres",
  "mars-store",
  "mars-store-fs",
+ "mars-test-support",
  "mars-types",
  "mars-wms",
  "mars-wmts",
@@ -2811,6 +2812,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "mars-test-support"
+version = "0.0.1"
+dependencies = [
+ "png",
+ "zune-jpeg",
+]
+
+[[package]]
 name = "mars-text"
 version = "0.0.1"
 dependencies = [
@@ -2840,6 +2849,7 @@ dependencies = [
  "mars-types",
  "percent-encoding",
  "quick-xml",
+ "serde_json",
  "serde_yaml_ng",
  "thiserror 2.0.18",
 ]

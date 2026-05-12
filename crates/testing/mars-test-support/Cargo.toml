@@ -1,0 +1,17 @@
+[package]
+name        = "mars-test-support"
+version.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+authors.workspace      = true
+publish.workspace      = true
+rust-version.workspace = true
+description = "Test support utilities for MARS: image-diff helpers for golden-PNG comparisons across the integration and Kind e2e suites."
+
+[lints]
+workspace = true
+
+[dependencies]
+png       = { workspace = true }
+zune-jpeg = { workspace = true }

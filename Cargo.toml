@@ -22,6 +22,7 @@ members = [
     "crates/support/mars-observability",
     "crates/support/mars-proj",
     "crates/support/mars-text",
+    "crates/testing/mars-test-support",
     "bin/mars",
     "bin/mars-import-mapfile",
     "bin/mars-compile",
@@ -75,6 +76,8 @@ mars-config         = { path = "crates/support/mars-config" }
 mars-observability  = { path = "crates/support/mars-observability" }
 mars-proj           = { path = "crates/support/mars-proj" }
 mars-text           = { path = "crates/support/mars-text" }
+# testing
+mars-test-support   = { path = "crates/testing/mars-test-support" }
 # bin-only shared composition wiring (see bin/mars-bin-shared)
 mars-bin-shared     = { path = "bin/mars-bin-shared" }
 
