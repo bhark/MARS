@@ -16,6 +16,8 @@ use mars_expr::{AttributeAccess, Expr, Literal, Segment, Template, eval};
 use mars_source::AttrValue;
 use mars_style::{LabelSurvival, Placement, PolygonStrategy};
 
+use crate::polylabel;
+
 /// adapter over a row's attribute slice. `mars-source::AttrValue` maps 1:1 to
 /// `mars-expr::Literal`; missing names return `None` (becomes
 /// `ExprError::UnknownIdent` only if the expression actually reads the name).
@@ -161,16 +163,18 @@ fn label_shape_from_geom(feature: &FeatureGeom, placement: &Placement) -> Option
                 y: mid.1 as f32,
             })
         }
-        (GeomKind::Polygon(_) | GeomKind::MultiPolygon(_), Placement::Polygon { strategy }) => {
-            // bbox-centroid is the cheap, conservative anchor;
-            // reserves the inner-skeleton strategy for v1.1 so both fall back
-            // to centroid until that lands.
-            let _ = strategy;
-            let cx = (f64::from(feature.bbox[0]) + f64::from(feature.bbox[2])) / 2.0;
-            let cy = (f64::from(feature.bbox[1]) + f64::from(feature.bbox[3])) / 2.0;
+        (g @ (GeomKind::Polygon(_) | GeomKind::MultiPolygon(_)), Placement::Polygon { strategy }) => {
+            let poly = polylabel::pick_largest_polygon(g)?;
+            let (x, y) = match strategy {
+                PolygonStrategy::Polylabel => {
+                    let prec = polylabel::default_precision(poly);
+                    polylabel::pole_of_inaccessibility(poly, prec)
+                }
+                PolygonStrategy::Centroid => polylabel::centroid(poly),
+            };
             Some(LabelShape::PolygonAnchor {
-                x: cx as f32,
-                y: cy as f32,
+                x: x as f32,
+                y: y as f32,
             })
         }
         // placement / geometry mismatch: drop. catches e.g. polygon placement
@@ -179,11 +183,6 @@ fn label_shape_from_geom(feature: &FeatureGeom, placement: &Placement) -> Option
         _ => None,
     }
 }
-
-/// quiet unused `PolygonStrategy` import warning when only one variant is
-/// referenced inside a function body; clippy doesn't see the use through
-/// pattern destructure.
-const _STRATEGY_USED: PolygonStrategy = PolygonStrategy::Centroid;
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]

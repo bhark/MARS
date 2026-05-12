@@ -17,6 +17,7 @@ pub mod incremental;
 pub mod memory_governor;
 pub mod page_plan;
 pub mod plan;
+pub mod polylabel;
 pub mod rebalance;
 pub mod reconcile;
 pub mod render;
