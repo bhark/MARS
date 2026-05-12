@@ -5,6 +5,7 @@
 mod canvas;
 mod encode;
 mod fill;
+mod label;
 mod path;
 mod path_offset;
 mod prepare;
