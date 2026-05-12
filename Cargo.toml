@@ -34,9 +34,12 @@ members = [
 # linker flags. Run via `cargo +nightly fuzz run <target>`; see fuzz/README.md.
 # mars-diff-capture is a local-only mapserver-parity harness (gitignored);
 # it carries its own [workspace] table and is built standalone.
+# tests/e2e is the kind-based e2e suite; pulls in kube + k8s-openapi which we
+# don't want in default `cargo test --workspace`. invoked via scripts/run-e2e.sh.
 exclude = [
     "fuzz",
     "bin/mars-diff-capture",
+    "tests/e2e",
 ]
 
 [workspace.package]

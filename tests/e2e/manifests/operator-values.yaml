@@ -1,0 +1,24 @@
+# Helm values for the mars-operator chart in kind. images are loaded via
+# `kind load docker-image`, hence pullPolicy: Never. single replica, no
+# leader election needed for a single-tenant test cluster.
+image:
+  repository: localhost/mars-operator
+  tag: e2e
+  pullPolicy: Never
+
+replicaCount: 1
+
+leaderElection:
+  enabled: false
+
+resources:
+  requests: { cpu: 50m,  memory: 64Mi }
+  limits:   { cpu: 500m, memory: 256Mi }
+
+metrics:
+  enabled: true
+  port: 9090
+
+log:
+  level: info
+  format: json

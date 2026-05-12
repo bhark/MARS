@@ -1,0 +1,108 @@
+# single-node garage cluster for s3-compatible artifact storage. ephemeral
+# emptyDir; tests don't outlive the namespace. matches the dev pattern in
+# kds-dagster: garage + garage-init sidecar that assigns layout + creates
+# bucket + access key.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: garage-config
+type: Opaque
+stringData:
+  # rpc_secret + admin_token; values are scoped to this single-namespace test
+  # cluster and intentionally weak.
+  rpc_secret: "0000000000000000000000000000000000000000000000000000000000000000"
+  admin_token: "devdevdevdevdevdevdevdevdevdevdev"
+  metrics_token: "devdevdevdevdevdevdevdevdevdevdev"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: garage-toml
+data:
+  garage.toml: |
+    metadata_dir       = "/var/lib/garage/meta"
+    data_dir           = "/var/lib/garage/data"
+    db_engine          = "lmdb"
+    replication_factor = 1
+
+    rpc_bind_addr   = "[::]:3901"
+    rpc_public_addr = "garage:3901"
+
+    [s3_api]
+    api_bind_addr = "[::]:3900"
+    s3_region     = "garage"
+    root_domain   = ".s3.garage.localhost"
+
+    [admin]
+    api_bind_addr = "[::]:3903"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: garage
+  labels:
+    app: garage
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: garage
+  template:
+    metadata:
+      labels:
+        app: garage
+    spec:
+      containers:
+        - name: garage
+          image: dxflrs/garage:v2.3.0
+          args: ["server"]
+          env:
+            - name: GARAGE_RPC_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: garage-config
+                  key: rpc_secret
+            - name: GARAGE_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: garage-config
+                  key: admin_token
+            - name: GARAGE_METRICS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: garage-config
+                  key: metrics_token
+          ports:
+            - { name: s3,    containerPort: 3900 }
+            - { name: rpc,   containerPort: 3901 }
+            - { name: admin, containerPort: 3903 }
+          readinessProbe:
+            tcpSocket: { port: 3900 }
+            initialDelaySeconds: 2
+            periodSeconds: 2
+          volumeMounts:
+            - { name: config, mountPath: /etc/garage.toml, subPath: garage.toml }
+            - { name: meta,   mountPath: /var/lib/garage/meta }
+            - { name: data,   mountPath: /var/lib/garage/data }
+      volumes:
+        - name: config
+          configMap:
+            name: garage-toml
+        - name: meta
+          emptyDir: {}
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: garage
+spec:
+  selector:
+    app: garage
+  ports:
+    - { name: s3,    port: 3900, targetPort: 3900 }
+    - { name: admin, port: 3903, targetPort: 3903 }

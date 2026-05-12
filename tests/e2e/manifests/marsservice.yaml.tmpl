@@ -1,0 +1,99 @@
+# MarsService CR pointing at the in-namespace garage + postgis. the operator
+# (cluster-scoped, single install) reconciles this into ConfigMap + PVCs +
+# compiler/runtime Deployments + Service.
+apiVersion: mars.forn.dk/v1alpha1
+kind: MarsService
+metadata:
+  name: mars-e2e
+spec:
+  image:
+    repository: {{IMAGE_REPOSITORY}}
+    tag: {{IMAGE_TAG}}
+    pullPolicy: Never
+  compiler:
+    resources:
+      requests: { cpu: "100m", memory: "256Mi" }
+      limits:   { cpu: "1",    memory: "1Gi" }
+    storage:
+      cacheSize: 512Mi
+      workSize: 1Gi
+      storageClass: ""
+    env:
+      - { name: AWS_REGION, value: garage }
+      - { name: PG_DSN, value: "postgres://mars:mars@postgis:5432/mars" }
+    envFrom:
+      - secretRef:
+          name: mars-s3-credentials
+  runtime:
+    replicas: 1
+    resources:
+      requests: { cpu: "100m", memory: "256Mi" }
+      limits:   { cpu: "1",    memory: "1Gi" }
+    cache:
+      sizeLimit: 256Mi
+      storageClass: ""
+    service:
+      serviceType: ClusterIP
+      port: 8080
+    env:
+      - { name: AWS_REGION, value: garage }
+      - { name: PG_DSN, value: "postgres://mars:mars@postgis:5432/mars" }
+    envFrom:
+      - secretRef:
+          name: mars-s3-credentials
+  config:
+    service:
+      name: mars-e2e
+      title: "MARS kind e2e"
+      abstract: "Kind end-to-end test service."
+      contact_email: ops@example.org
+    source:
+      type: postgis
+      dsn: "${PG_DSN}"
+      native_crs: EPSG:25832
+      change_feed:
+        type: pgoutput
+        publication: mars_e2e_pub
+        slot: mars_e2e_slot
+      pool:
+        max_size: 4
+        statement_timeout_ms: 300000
+        batch_send_timeout_secs: 30
+    artifacts:
+      store:
+        type: s3
+        endpoint: "http://garage:3900"
+        region: garage
+        bucket: mars-artifacts
+        prefix: e2e
+        allow_http: true
+        conditional_put: disabled
+        allow_non_atomic_publish: true
+      cache:
+        path: /cache
+        max_size: 256MiB
+        eviction: lru
+    compiler:
+      compile_binding_parallelism: 2
+      compile_in_flight_pages_budget_bytes: 256MiB
+      compile_spill_dir: /work/spill
+    scales:
+      bands:
+        - { name: detail, max_denom_exclusive: 12500 }
+        - { name: hi,     max_denom_exclusive: 25000 }
+        - { name: mid,    max_denom_exclusive: 250000 }
+        - { name: lo,     max_denom_exclusive: 10000000 }
+    cells:
+      grid: regular
+      origin: [0, 0]
+      size_per_band:
+        detail: 512m
+        hi: 1024m
+        mid: 4096m
+        lo: 32768m
+    interfaces:
+      wms:  { enabled: true }
+      wmts: { enabled: true }
+    observability:
+      log_level: info
+      log_format: json

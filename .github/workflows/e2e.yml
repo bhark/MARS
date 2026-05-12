@@ -5,6 +5,10 @@ on:
     branches: [main]
   push:
     tags: ['v*']
+  schedule:
+    # 04:17 UTC nightly. an off-the-hour time keeps us out of GitHub's
+    # crowded zero-minute scheduling queue.
+    - cron: '17 4 * * *'
 
 concurrency:
   group: e2e-${{ github.ref }}
@@ -34,7 +38,38 @@ jobs:
           MARS_INTEGRATION: "1"
         run: cargo test -p mars --features integration --locked -- --nocapture
 
-  # scripts/run-integration.sh runs the docker-compose smoke; wiring a job
-  # for it on github-hosted runners is tracked as a follow-up. the in-process
-  # testcontainers job above covers the same code paths. the kind-based e2e
-  # suite (tests/e2e/, scripts/run-e2e.sh) lands as a separate job.
+  e2e-k8s:
+    name: kind e2e (operator + chart + S3 + render)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # gated: only runs on PRs with the `e2e-k8s` label and on the nightly
+    # cron. mandatory-on-every-PR is reconsidered after the suite has been
+    # green for >=30 consecutive nightly runs.
+    if: |
+      github.event_name == 'schedule' ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'e2e-k8s'))
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: e2e-k8s
+      - name: install kind + helm
+        uses: helm/kind-action@v1
+        with:
+          install_only: true
+      - name: install proj build deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq build-essential clang cmake pkg-config libsqlite3-dev sqlite3
+      - name: run e2e
+        env:
+          MARS_E2E_FIXTURE_URL: ${{ secrets.MARS_E2E_FIXTURE_URL }}
+        run: scripts/run-e2e.sh
+      - name: upload diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-output-${{ github.run_id }}
+          path: target/e2e-output/
+          retention-days: 7

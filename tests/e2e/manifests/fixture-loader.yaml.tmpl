@@ -1,0 +1,61 @@
+# one-shot fixture loader. assumes the sql.gz dump has been pre-loaded into a
+# ConfigMap (binaryData) by the test driver; the loader uncompresses + pipes
+# into psql. drops the schema first for idempotent reloads, then applies
+# assert-fixture + create-replication so the change-feed slot is in place.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fixture-loader
+data:
+  loader.sh: |
+    #!/bin/sh
+    set -eu
+    echo "[loader] dropping any prior e2e_source schema + pub/slot"
+    psql "$PG_DSN" -v ON_ERROR_STOP=1 -c "DROP SCHEMA IF EXISTS e2e_source CASCADE"
+    psql "$PG_DSN" -v ON_ERROR_STOP=1 -c "DROP PUBLICATION IF EXISTS mars_e2e_pub"
+    psql "$PG_DSN" -v ON_ERROR_STOP=1 \
+      -c "SELECT pg_drop_replication_slot('mars_e2e_slot') \
+          WHERE EXISTS (SELECT 1 FROM pg_replication_slots WHERE slot_name = 'mars_e2e_slot')"
+    echo "[loader] restoring fixture dump"
+    gunzip -c /fixture/dump.sql.gz | psql "$PG_DSN" -v ON_ERROR_STOP=1
+    echo "[loader] asserting fixture shape"
+    psql "$PG_DSN" -v ON_ERROR_STOP=1 -f /sql/assert-fixture.sql
+    echo "[loader] creating replication pub + slot"
+    psql "$PG_DSN" -v ON_ERROR_STOP=1 -f /sql/create-replication.sql
+    echo "[loader] done"
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: fixture-loader
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: loader
+          image: postgis/postgis:18-3.6
+          env:
+            - name: PG_DSN
+              value: "postgres://mars:mars@postgis:5432/mars"
+          command: ["/bin/sh", "/loader/loader.sh"]
+          volumeMounts:
+            - { name: loader,  mountPath: /loader }
+            - { name: sql,     mountPath: /sql }
+            - { name: fixture, mountPath: /fixture }
+      volumes:
+        - name: loader
+          configMap:
+            name: fixture-loader
+            defaultMode: 0o755
+        - name: sql
+          configMap:
+            name: fixture-sql
+        - name: fixture
+          # populated out-of-band: hostPath provisioned by the kind node, OR
+          # an emptyDir + initContainer that pulls the dump from a configmap
+          # binaryData entry. the test driver chooses which based on dump size.
+          emptyDir: {}

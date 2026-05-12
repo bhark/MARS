@@ -79,8 +79,7 @@ cargo deny check
 
 The integration harness drives a docker compose stack (postgis + compiler +
 runtime), loads the local-map-subset fixture into PostGIS, and exercises
-WMS GetCapabilities + GetMap. Fast smoke for the dev loop; the true e2e
-suite under `tests/e2e/` runs on kind.
+WMS GetCapabilities + GetMap. Fast smoke for the dev loop:
 
 ```sh
 ./scripts/run-integration.sh
@@ -92,6 +91,20 @@ uses `testcontainers` and needs Docker:
 ```sh
 MARS_INTEGRATION=1 cargo test -p mars --features integration -- --nocapture
 ```
+
+The true end-to-end suite lives under `tests/e2e/`. It builds the `mars` and
+`mars-operator` images locally, spins up a [kind](https://kind.sigs.k8s.io/)
+cluster, helm-installs the operator chart, applies a `MarsService` pointing
+at an in-cluster Garage (S3-compatible) and PostGIS, then asserts production-
+equivalent behaviour through real Kubernetes objects:
+
+```sh
+./scripts/run-e2e.sh
+```
+
+See `tests/e2e/README.md` for the dataset requirement, prerequisites
+(docker + kind + helm + kubectl), and CI gating (`e2e-k8s` label + nightly
+cron).
 
 CI runs the same gates plus `cargo-deny`. A green local run is not a guarantee of a green CI run, but a red local run is a guaranteed red CI run.
 

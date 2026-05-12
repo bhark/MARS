@@ -1,0 +1,10 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: mars-e2e
+nodes:
+  - role: control-plane
+    # extra mount so the test driver can stage the fixture dump into the
+    # cluster without going through a ConfigMap (sql.gz easily exceeds 1MiB).
+    extraMounts:
+      - hostPath: ../../target/e2e-fixtures
+        containerPath: /var/lib/mars-e2e-fixtures

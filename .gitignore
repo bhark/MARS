@@ -46,6 +46,13 @@ harness/topology-simplifier/target
 harness/topology-simplifier/out
 harness/topology-simplifier/**/*.tsv
 
+# kind-based e2e suite has its own [workspace] and target/ dir; the public
+# test dataset gets fetched into target/e2e-fixtures/ at run time
+tests/e2e/target
+tests/e2e/fixtures
+target/e2e-fixtures
+target/e2e-output
+
 # OS junk
 .DS_Store
 Thumbs.db
