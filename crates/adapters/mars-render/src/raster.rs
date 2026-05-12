@@ -223,6 +223,16 @@ pub(crate) fn draw_path(pm: &mut Pixmap, path: &PortPath, style: &Style) {
         draw_fill(pm, &tsk_path, fill_with_opacity(fill, opacity));
     }
 
+    if style.stroke_gap.is_some() {
+        // stamped-marker-along-line is on the parity backlog. fire once per
+        // style so the warning shows up in tests without spamming hot tile
+        // paths; downgrade to debug once stroke_gap stamping lands.
+        tracing::debug!("Style::stroke_gap set but stamped-along-line marker rendering is not yet implemented");
+    }
+    if matches!(style.marker, Some(mars_style::MarkerSymbol::Glyph { .. })) {
+        tracing::debug!("Style::marker glyph rendering is not yet implemented in the renderer");
+    }
+
     if let Some(stroke_col) = style.stroke {
         // tiny-skia silently drops strokes thinner than ~0.75 px. AGG-based
         // renderers (MapServer) emulate sub-pixel widths by drawing a 1px
