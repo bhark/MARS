@@ -4,7 +4,9 @@ use std::collections::{BTreeSet, HashSet};
 
 use tracing::warn;
 
-use crate::emitter::{ClassSkeleton, LabelSkeleton, LayerSkeleton, MarkerKind, Skeleton, SourceSkeleton, SymbolDef};
+use crate::emitter::{
+    BindingSource, ClassSkeleton, LabelSkeleton, LayerSkeleton, MarkerKind, Skeleton, SourceSkeleton, SymbolDef,
+};
 #[cfg(test)]
 use crate::scanner::scan;
 use crate::scanner::{Token, block_range, is_block_opener};
@@ -128,6 +130,12 @@ fn handle_layer(body: &[Token], layer_line: usize, skel: &mut Skeleton, include_
     let mut processing_items: Option<String> = None;
     let mut classes: Vec<ClassSkeleton> = Vec::new();
     let mut label: Option<LabelSkeleton> = None;
+    // CLASSITEM names a column whose value drives the implicit per-class
+    // `<col> = '<NAME>'` expression when a CLASS has no EXPRESSION.
+    let mut class_item: Option<String> = None;
+    // LABELITEM names a column whose value is the label text when LABEL
+    // has no TEXT.
+    let mut label_item: Option<String> = None;
 
     // peek name first for filtering
     for t in body {
@@ -168,6 +176,16 @@ fn handle_layer(body: &[Token], layer_line: usize, skel: &mut Skeleton, include_
             }
             "DATA" if data.is_none() => {
                 data = Some(t.args.join(" "));
+                i += 1;
+                continue;
+            }
+            "CLASSITEM" if class_item.is_none() => {
+                class_item = t.args.first().map(|s| s.trim_matches('"').to_string());
+                i += 1;
+                continue;
+            }
+            "LABELITEM" if label_item.is_none() => {
+                label_item = t.args.first().map(|s| s.trim_matches('"').to_string());
                 i += 1;
                 continue;
             }
@@ -259,6 +277,26 @@ fn handle_layer(body: &[Token], layer_line: usize, skel: &mut Skeleton, include_
         i += 1;
     }
 
+    // CLASSITEM expansion: a CLASS with NAME but no EXPRESSION inherits an
+    // implicit `<classitem> = '<NAME>'` predicate. mirrors mapserver's
+    // attribute-keyed class semantics.
+    if let Some(item) = class_item.as_deref() {
+        for cls in &mut classes {
+            if cls.when.is_none()
+                && let Some(value) = cls.title.as_deref()
+            {
+                cls.when = Some(format!("{item} = '{}'", value.replace('\'', "''")));
+            }
+        }
+    }
+    // LABELITEM: if the LABEL block had no TEXT, the layer's labelitem
+    // becomes a `{<col>}` template referencing the column.
+    if let (Some(item), Some(lbl)) = (label_item.as_deref(), label.as_mut())
+        && lbl.text.is_empty()
+    {
+        lbl.text = format!("{{{item}}}");
+    }
+
     let resolved_name = name.unwrap_or_else(|| format!("unnamed_layer_l{layer_line}"));
 
     if let Some(ref t) = layer_type {
@@ -286,10 +324,10 @@ fn handle_layer(body: &[Token], layer_line: usize, skel: &mut Skeleton, include_
             } else {
                 max_scale_denom
             };
-            let (real_table, filter) = lift_inline_subquery(table);
+            let (source, filter) = lifted_to_source(lift_inline_subquery(table));
             sources.push(SourceSkeleton {
                 max_denom_exclusive: max_denom,
-                from: real_table,
+                source,
                 filter,
                 geometry_column: gc.clone(),
                 id_column: id_col.clone(),
@@ -297,10 +335,10 @@ fn handle_layer(body: &[Token], layer_line: usize, skel: &mut Skeleton, include_
             });
         }
     } else if let Some(table) = from_table {
-        let (real_table, filter) = lift_inline_subquery(&table);
+        let (source, filter) = lifted_to_source(lift_inline_subquery(&table));
         sources.push(SourceSkeleton {
             max_denom_exclusive: max_scale_denom,
-            from: real_table,
+            source,
             filter,
             geometry_column: geometry_column.unwrap_or_else(|| "geometri".into()),
             id_column: processing_items.as_deref().and_then(guess_id_column),
@@ -341,35 +379,113 @@ fn handle_layer(body: &[Token], layer_line: usize, skel: &mut Skeleton, include_
     });
 }
 
-/// parse a mapfile SYMBOL definition body into a `SymbolDef`. recognises
-/// TYPE ELLIPSE -> Circle, TYPE HATCH -> Hatch (with ANGLE/SIZE defaults),
-/// and TYPE VECTOR -> NamedShape using the symbol's NAME as the shape hint
-/// (CIRCLE/SQUARE/TRIANGLE/CROSS/X/PIN). other TYPEs (PIXMAP, TRUETYPE)
-/// are ignored with a trace warn at use site.
+/// parse a mapfile SYMBOL definition body into a `SymbolDef`. recognises:
+///
+/// - TYPE ELLIPSE -> Circle
+/// - TYPE HATCH -> Hatch (with ANGLE/SIZE defaults)
+/// - TYPE VECTOR with POINTS body -> VectorShape (filled / anchored)
+/// - TYPE VECTOR without POINTS but with a known shape NAME -> NamedShape
+/// - TYPE TRUETYPE -> Glyph (FONT + CHARACTER)
+///
+/// other TYPEs (PIXMAP) are dropped with a warn at use site.
 fn parse_symbol(body: &[Token]) -> Option<(String, SymbolDef)> {
     let mut name: Option<String> = None;
     let mut type_: Option<String> = None;
     let mut angle_deg: Option<f32> = None;
     let mut size: Option<f32> = None;
-    for t in body {
+    let mut points: Vec<(f32, f32)> = Vec::new();
+    let mut filled = false;
+    let mut anchor: Option<(f32, f32)> = None;
+    let mut font: Option<String> = None;
+    let mut character: Option<String> = None;
+    let mut i = 0;
+    while i < body.len() {
+        let t = &body[i];
         let kw = t.keyword.to_ascii_uppercase();
         match kw.as_str() {
             "NAME" if name.is_none() => name = t.args.first().cloned(),
             "TYPE" if type_.is_none() => type_ = t.args.first().cloned(),
             "ANGLE" => angle_deg = t.args.first().and_then(|a| a.parse().ok()),
             "SIZE" => size = t.args.first().and_then(|a| a.parse().ok()),
+            "FILLED" => {
+                if let Some(arg) = t.args.first() {
+                    filled = matches!(arg.to_ascii_uppercase().as_str(), "TRUE" | "ON" | "YES" | "1");
+                }
+            }
+            "POINTS" => {
+                // POINTS is a block; coords land on the inner tokens. each
+                // inner token has the first coord as `keyword` and the rest
+                // as `args`. flatten all numerics and group into (x, y) pairs.
+                if let Some(r) = block_range(body, i) {
+                    let mut coords: Vec<f32> = Vec::new();
+                    for inner in &body[r.start + 1..r.end - 1] {
+                        if let Ok(v) = inner.keyword.parse::<f32>() {
+                            coords.push(v);
+                        }
+                        coords.extend(inner.args.iter().filter_map(|a| a.parse::<f32>().ok()));
+                    }
+                    for pair in coords.chunks_exact(2) {
+                        points.push((pair[0], pair[1]));
+                    }
+                    i = r.end;
+                    continue;
+                }
+                // POINTS without an END: read the (possibly inline) coord
+                // list off the current token's args.
+                let coords: Vec<f32> = t.args.iter().filter_map(|a| a.parse().ok()).collect();
+                for pair in coords.chunks_exact(2) {
+                    points.push((pair[0], pair[1]));
+                }
+            }
+            "ANCHORPOINT" => {
+                let coords: Vec<f32> = t.args.iter().filter_map(|a| a.parse().ok()).collect();
+                if coords.len() >= 2 {
+                    anchor = Some((coords[0], coords[1]));
+                }
+            }
+            "FONT" => font = t.args.first().map(|s| s.trim_matches('"').to_string()),
+            "CHARACTER" => character = t.args.first().map(|s| s.trim_matches('"').to_string()),
             _ => {}
         }
+        i += 1;
     }
     let name = name?.trim_matches('"').to_string();
     let type_up = type_.unwrap_or_default().to_ascii_uppercase();
     let def = match type_up.as_str() {
         "ELLIPSE" => SymbolDef::Circle,
         "HATCH" => SymbolDef::Hatch { angle_deg, size },
-        "VECTOR" => SymbolDef::NamedShape(MarkerKind::from_lowercase(&name.to_ascii_lowercase())?),
+        "VECTOR" => {
+            if !points.is_empty() {
+                SymbolDef::VectorShape { points, anchor, filled }
+            } else {
+                SymbolDef::NamedShape(MarkerKind::from_lowercase(&name.to_ascii_lowercase())?)
+            }
+        }
+        "TRUETYPE" => SymbolDef::Glyph {
+            font_family: font.unwrap_or_else(|| "sans-serif".to_string()),
+            character: character?,
+        },
         _ => return None,
     };
     Some((name, def))
+}
+
+/// translate a `LiftedBinding` into the `BindingSource` shape the emitter
+/// consumes plus the optional filter expression. `Sql` bindings carry no
+/// filter through this path - the operator already inlined any WHERE clause
+/// into the SELECT.
+fn lifted_to_source(lifted: LiftedBinding) -> (BindingSource, Option<String>) {
+    match lifted {
+        LiftedBinding::Table { table, filter } => (BindingSource::Table(table), filter),
+        LiftedBinding::Sql { sql } => {
+            tracing::warn!(
+                "DATA could not be lifted to a single-table binding; emitting as sql: \
+                 (snapshot compile is not yet wired for sql bindings - operator must \
+                 either review or wait for follow-up)"
+            );
+            (BindingSource::Sql(sql), None)
+        }
+    }
 }
 
 pub(crate) fn mapfile_type_to_geom(t: &str) -> Option<&str> {
@@ -391,53 +507,79 @@ fn strip_using(s: &str) -> &str {
     }
 }
 
-/// Detect a mapfile inline DATA subquery of the shape
-/// `( SELECT ... FROM <table> WHERE <expr> ) [AS alias]` and split it into the
-/// real table and the WHERE clause. Anything that doesn't fit this exact
-/// shape (joins, sub-selects, bare table refs) falls through with the input
-/// returned as-is and no filter. Heuristic-only - operators are expected to
-/// hand-edit the YAML for anything more elaborate.
-pub(crate) fn lift_inline_subquery(raw: &str) -> (String, Option<String>) {
+/// Outcome of lifting a mapfile DATA / SCALETOKEN binding into MARS shape.
+/// The simple table+filter case is preferred; anything beyond that lands as
+/// a raw `sql:` binding for the operator to review.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum LiftedBinding {
+    Table { table: String, filter: Option<String> },
+    Sql { sql: String },
+}
+
+/// Lift a mapfile inline DATA value into either a clean table binding or a
+/// raw-SQL one. Recognised shapes:
+///
+/// - `table` or `schema.table` -> `LiftedBinding::Table` with no filter.
+/// - `(SELECT ... FROM <table> WHERE <expr>) [AS alias]` -> `Table` with
+///   the WHERE clause as the filter.
+/// - anything else (joins, derived columns, multi-segment SELECTs) ->
+///   `Sql`, preserving the raw text so the operator can hand-edit.
+pub(crate) fn lift_inline_subquery(raw: &str) -> LiftedBinding {
     let trimmed = raw.trim();
     let inner = match trimmed.strip_prefix('(') {
         Some(rest) => match rest.rsplit_once(')') {
-            // tolerate trailing ` AS alias` after the closing paren.
             Some((body, _tail)) => body.trim(),
-            None => return (raw.to_string(), None),
+            None => return LiftedBinding::Sql { sql: raw.to_string() },
         },
-        None => return (raw.to_string(), None),
+        None => {
+            return LiftedBinding::Table {
+                table: raw.to_string(),
+                filter: None,
+            };
+        }
     };
     let upper = inner.to_ascii_uppercase();
     if !upper.trim_start().starts_with("SELECT") {
-        return (raw.to_string(), None);
+        return LiftedBinding::Sql { sql: raw.to_string() };
     }
     let from_pos = match upper.find(" FROM ") {
         Some(p) => p + " FROM ".len(),
-        None => return (raw.to_string(), None),
+        None => return LiftedBinding::Sql { sql: raw.to_string() },
     };
-    let where_pos = match upper[from_pos..].find(" WHERE ") {
-        Some(p) => from_pos + p,
-        None => return (raw.to_string(), None),
+    let where_pos = upper[from_pos..].find(" WHERE ").map(|p| from_pos + p);
+
+    let table_section = match where_pos {
+        Some(wp) => &inner[from_pos..wp],
+        None => &inner[from_pos..],
     };
-    let table = inner[from_pos..where_pos].trim().to_string();
-    // accept simple `schema.table` / `table` / `"table"`; bail on anything with
-    // joins, commas, or sub-selects so we don't fabricate a fragile from:.
+    let table = table_section.trim().to_string();
+    // accept simple `schema.table` / `table` / `"table"`; anything more
+    // elaborate becomes a sql: binding so the operator sees a clean error
+    // rather than a fabricated from: that the postgres adapter would reject.
     if table.contains(',') || table.contains(' ') || table.contains('(') {
-        return (raw.to_string(), None);
+        return LiftedBinding::Sql { sql: raw.to_string() };
     }
-    let where_clause = inner[where_pos + " WHERE ".len()..].trim();
     let cleaned_table = table.trim_matches('"').to_string();
+    let where_clause = match where_pos {
+        Some(wp) => inner[wp + " WHERE ".len()..].trim(),
+        None => "",
+    };
     if where_clause.is_empty() {
-        return (cleaned_table, None);
+        return LiftedBinding::Table {
+            table: cleaned_table,
+            filter: None,
+        };
     }
     // round-trip through the mars-expr parser when feasible to normalise
-    // quoting/spacing. mapfile WHERE is SQL; round-trip failure means the
-    // expression is outside the DSL, so emit the raw text and let config
-    // validation reject it loudly rather than silently dropping.
+    // quoting/spacing. round-trip failure means the expression is outside
+    // the DSL; preserve the raw text so config-validation reports it.
     let normalised = mars_expr::parse(where_clause)
         .map(|e| e.to_string())
         .unwrap_or_else(|_| where_clause.to_string());
-    (cleaned_table, Some(normalised))
+    LiftedBinding::Table {
+        table: cleaned_table,
+        filter: Some(normalised),
+    }
 }
 
 fn parse_data(data: Option<&str>) -> (Option<String>, Option<String>) {
@@ -556,7 +698,7 @@ END
         assert_eq!(layer.name, "roads");
         assert_eq!(layer.geom_kind.as_deref(), Some("line"));
         assert_eq!(layer.sources.len(), 1);
-        assert_eq!(layer.sources[0].from, "roads_table");
+        assert_eq!(layer.sources[0].source_table(), "roads_table");
         assert_eq!(layer.sources[0].geometry_column, "geometri");
         assert_eq!(layer.classes.len(), 1);
         assert_eq!(layer.classes[0].name, "main");
@@ -596,9 +738,9 @@ END
         assert_eq!(skel.layers.len(), 1);
         let layer = &skel.layers[0];
         assert_eq!(layer.sources.len(), 2);
-        assert_eq!(layer.sources[0].from, "buildings_0");
+        assert_eq!(layer.sources[0].source_table(), "buildings_0");
         assert_eq!(layer.sources[0].max_denom_exclusive, Some(1000));
-        assert_eq!(layer.sources[1].from, "buildings_1");
+        assert_eq!(layer.sources[1].source_table(), "buildings_1");
         assert_eq!(layer.sources[1].max_denom_exclusive, None);
     }
 
@@ -646,27 +788,44 @@ END
 
     #[test]
     fn lift_inline_subquery_extracts_table_and_where() {
-        let (t, f) = lift_inline_subquery("(SELECT * FROM simplified.streams WHERE midtebredde IN ('12-', '2.5-12'))");
-        assert_eq!(t, "simplified.streams");
-        let f = f.expect("filter lifted");
-        assert!(f.contains("midtebredde"));
-        assert!(f.contains("12-"));
+        match lift_inline_subquery("(SELECT * FROM simplified.streams WHERE midtebredde IN ('12-', '2.5-12'))") {
+            LiftedBinding::Table { table, filter } => {
+                assert_eq!(table, "simplified.streams");
+                let f = filter.expect("filter lifted");
+                assert!(f.contains("midtebredde"));
+                assert!(f.contains("12-"));
+            }
+            other => panic!("expected table binding, got {other:?}"),
+        }
     }
 
     #[test]
     fn lift_inline_subquery_passes_through_bare_table() {
-        let (t, f) = lift_inline_subquery("simplified.streams");
-        assert_eq!(t, "simplified.streams");
-        assert!(f.is_none());
+        match lift_inline_subquery("simplified.streams") {
+            LiftedBinding::Table { table, filter } => {
+                assert_eq!(table, "simplified.streams");
+                assert!(filter.is_none());
+            }
+            other => panic!("expected table binding, got {other:?}"),
+        }
     }
 
     #[test]
-    fn lift_inline_subquery_skips_joins_and_complex_from() {
+    fn lift_inline_subquery_emits_sql_for_join() {
         let raw = "(SELECT * FROM a JOIN b ON a.id = b.id WHERE x = 1)";
-        let (t, f) = lift_inline_subquery(raw);
-        // join means we keep the raw text and emit no filter.
-        assert_eq!(t, raw);
-        assert!(f.is_none());
+        match lift_inline_subquery(raw) {
+            LiftedBinding::Sql { sql } => assert_eq!(sql, raw),
+            other => panic!("expected sql binding, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn lift_inline_subquery_emits_sql_for_subselect_in_from() {
+        let raw = "(SELECT a.id, a.geom FROM (SELECT id, geom FROM t WHERE z > 0) AS a WHERE a.id > 0)";
+        match lift_inline_subquery(raw) {
+            LiftedBinding::Sql { sql } => assert_eq!(sql, raw),
+            other => panic!("expected sql binding, got {other:?}"),
+        }
     }
 
     #[test]
@@ -741,8 +900,13 @@ END
             .find(|s| s.name.starts_with("point_stops_"))
             .expect("point style emitted");
         let m = style.marker.as_ref().expect("marker resolved from SYMBOL");
-        assert_eq!(m.kind, MarkerKind::Circle);
-        assert!((m.size - 8.0).abs() < f32::EPSILON);
+        match m {
+            crate::emitter::EmitMarker::Builtin { kind, size } => {
+                assert_eq!(*kind, MarkerKind::Circle);
+                assert!((size - 8.0).abs() < f32::EPSILON);
+            }
+            other => panic!("expected builtin marker, got {other:?}"),
+        }
     }
 
     #[test]
@@ -825,6 +989,205 @@ END
         // this as a no-op style; operator can hand-edit.
         assert!(style.marker.is_none());
         assert!(style.fill.is_none());
+    }
+
+    #[test]
+    fn classitem_expands_named_classes_into_implicit_predicates() {
+        let src = r#"
+MAP
+  NAME "demo"
+  LAYER
+    NAME "roads"
+    TYPE LINE
+    DATA "geom FROM r"
+    CLASSITEM "type"
+    CLASS
+      NAME "main"
+      STYLE
+        COLOR 0 0 0
+      END
+    END
+    CLASS
+      NAME "side"
+      STYLE
+        COLOR 200 200 200
+      END
+    END
+  END
+END
+"#;
+        let skel = translate(src);
+        let layer = &skel.layers[0];
+        assert_eq!(layer.classes[0].when.as_deref(), Some("type = 'main'"));
+        assert_eq!(layer.classes[1].when.as_deref(), Some("type = 'side'"));
+    }
+
+    #[test]
+    fn labelitem_fills_text_when_label_has_no_text() {
+        let src = r#"
+MAP
+  NAME "demo"
+  LAYER
+    NAME "places"
+    TYPE POINT
+    DATA "geom FROM p"
+    LABELITEM "name"
+    LABEL
+      FONT "Sans"
+      SIZE 10
+      COLOR 0 0 0
+    END
+  END
+END
+"#;
+        let skel = translate(src);
+        let layer = &skel.layers[0];
+        let lbl = layer.label.as_ref().expect("label emitted");
+        assert_eq!(lbl.text, "{name}");
+    }
+
+    #[test]
+    fn label_angle_follow_sets_line_placement() {
+        let src = r#"
+MAP
+  NAME "demo"
+  LAYER
+    NAME "roads"
+    TYPE LINE
+    DATA "geom FROM r"
+    LABEL
+      TEXT "{name}"
+      ANGLE FOLLOW
+      REPEATDISTANCE 250
+    END
+  END
+END
+"#;
+        let skel = translate(src);
+        let lbl = skel.layers[0].label.as_ref().expect("label emitted");
+        let p = lbl.placement_line.expect("line placement");
+        assert!((p.repeat_m.unwrap() - 250.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn symbol_truetype_resolves_to_glyph_marker() {
+        let src = r#"
+MAP
+  NAME "demo"
+  SYMBOL
+    NAME "letter_t"
+    TYPE TRUETYPE
+    FONT "sans"
+    CHARACTER "T"
+  END
+  LAYER
+    NAME "stations"
+    TYPE POINT
+    DATA "geom FROM s"
+    CLASS
+      NAME "default"
+      STYLE
+        SYMBOL "letter_t"
+        SIZE 14
+      END
+    END
+  END
+END
+"#;
+        let skel = translate(src);
+        let style = skel
+            .styles
+            .iter()
+            .find(|s| s.name.starts_with("point_stations_"))
+            .expect("point style emitted");
+        let m = style.marker.as_ref().expect("glyph marker");
+        match m {
+            crate::emitter::EmitMarker::Glyph {
+                font_family,
+                character,
+                size,
+            } => {
+                assert_eq!(font_family, "sans");
+                assert_eq!(character, "T");
+                assert!((size - 14.0).abs() < f32::EPSILON);
+            }
+            other => panic!("expected glyph marker, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn symbol_vector_with_points_resolves_to_vector_shape() {
+        let src = r#"
+MAP
+  NAME "demo"
+  SYMBOL
+    NAME "trekant"
+    TYPE VECTOR
+    FILLED TRUE
+    POINTS
+      0 0
+      1 0
+      0.5 1
+    END
+  END
+  LAYER
+    NAME "x"
+    TYPE POINT
+    DATA "geom FROM t"
+    CLASS
+      NAME "default"
+      STYLE
+        SYMBOL "trekant"
+        SIZE 8
+      END
+    END
+  END
+END
+"#;
+        let skel = translate(src);
+        let style = skel
+            .styles
+            .iter()
+            .find(|s| s.name.starts_with("point_x_"))
+            .expect("point style emitted");
+        let m = style.marker.as_ref().expect("vector marker");
+        match m {
+            crate::emitter::EmitMarker::Vector {
+                points, filled, size, ..
+            } => {
+                assert_eq!(points.len(), 3);
+                assert!(*filled);
+                assert!((size - 8.0).abs() < f32::EPSILON);
+            }
+            other => panic!("expected vector marker, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn complex_data_inline_select_falls_back_to_sql_binding() {
+        let src = r#"
+MAP
+  NAME "demo"
+  LAYER
+    NAME "joined"
+    TYPE LINE
+    DATA "geom FROM (SELECT a.geom FROM a JOIN b USING (id) WHERE x = 1) AS r"
+    CLASS
+      NAME "default"
+      STYLE
+        COLOR 0 0 0
+      END
+    END
+  END
+END
+"#;
+        let skel = translate(src);
+        let layer = &skel.layers[0];
+        assert_eq!(layer.sources.len(), 1);
+        match &layer.sources[0].source {
+            crate::emitter::BindingSource::Sql(_) => {}
+            other => panic!("expected sql binding, got {other:?}"),
+        }
     }
 
     #[test]

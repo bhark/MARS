@@ -66,13 +66,20 @@ pub(crate) enum SymbolDef {
     Circle,
     /// SYMBOL TYPE HATCH. ANGLE and SIZE are symbol-level defaults; STYLE
     /// can override via ANGLE/SIZE/WIDTH/COLOR on the referencing STYLE.
-    Hatch {
-        angle_deg: Option<f32>,
-        size: Option<f32>,
-    },
+    Hatch { angle_deg: Option<f32>, size: Option<f32> },
     /// VECTOR with a recognised shape name. Unknown shape names are dropped
     /// at SYMBOL parse time so consumers don't have to re-validate strings.
     NamedShape(MarkerKind),
+    /// SYMBOL TYPE VECTOR with explicit POINTS x1 y1 x2 y2 ... and optional
+    /// FILLED. Maps to `mars_style::MarkerSymbol::VectorShape` at emit time.
+    VectorShape {
+        points: Vec<(f32, f32)>,
+        anchor: Option<(f32, f32)>,
+        filled: bool,
+    },
+    /// SYMBOL TYPE TRUETYPE plus FONT + CHARACTER. Maps to
+    /// `mars_style::MarkerSymbol::Glyph` at emit time.
+    Glyph { font_family: String, character: String },
 }
 
 #[derive(Debug, Clone)]
@@ -83,11 +90,21 @@ pub(crate) struct StyleDef {
     pub(crate) stroke: Option<Colour>,
     pub(crate) stroke_width: Option<f32>,
     pub(crate) stroke_dasharray: Option<Vec<f32>>,
+    pub(crate) stroke_linejoin: Option<&'static str>,
     pub(crate) marker: Option<EmitMarker>,
+    pub(crate) opacity: Option<f32>,
+    pub(crate) stroke_offset_px: Option<f32>,
+    pub(crate) stroke_gap: Option<EmitStrokeGap>,
     pub(crate) font_family: Option<String>,
     pub(crate) font_size: Option<f32>,
     pub(crate) halo_color: Option<Colour>,
     pub(crate) halo_width: Option<f32>,
+    /// Label-style priority lifted from mapserver LABEL PRIORITY 1..10. The
+    /// MARS LabelStyle uses `u16` but config validation accepts the same
+    /// range; the emitter renders as an integer.
+    pub(crate) priority: Option<u16>,
+    /// Label-style minimum collision distance, mirroring LABEL MINDISTANCE.
+    pub(crate) min_distance: Option<f32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -103,10 +120,29 @@ pub(crate) enum EmitFill {
     },
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum EmitMarker {
+    /// Built-in marker shape with a pixel size.
+    Builtin { kind: MarkerKind, size: f32 },
+    /// `mars_style::MarkerSymbol::VectorShape`: explicit point list.
+    Vector {
+        points: Vec<(f32, f32)>,
+        anchor: Option<(f32, f32)>,
+        filled: bool,
+        size: f32,
+    },
+    /// `mars_style::MarkerSymbol::Glyph`: TrueType character.
+    Glyph {
+        font_family: String,
+        character: String,
+        size: f32,
+    },
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct EmitMarker {
-    pub(crate) kind: MarkerKind,
-    pub(crate) size: f32,
+pub(crate) struct EmitStrokeGap {
+    pub(crate) interval_px: f32,
+    pub(crate) initial_px: f32,
 }
 
 #[derive(Debug, Default)]
@@ -122,11 +158,34 @@ pub(crate) struct LayerSkeleton {
 #[derive(Debug, Clone)]
 pub(crate) struct SourceSkeleton {
     pub(crate) max_denom_exclusive: Option<u64>,
-    pub(crate) from: String,
+    /// Either a table reference (`from:`) or an inline SELECT (`sql:`).
+    pub(crate) source: BindingSource,
     pub(crate) filter: Option<String>,
     pub(crate) geometry_column: String,
     pub(crate) id_column: Option<String>,
     pub(crate) attributes: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum BindingSource {
+    /// `from: <table>` form.
+    Table(String),
+    /// `sql: <SELECT ...>` form for inline subqueries the mapfile DATA block
+    /// could not be lifted to a plain table reference. Snapshot-only.
+    Sql(String),
+}
+
+impl SourceSkeleton {
+    /// Diagnostic descriptor for the binding's table reference. Used by
+    /// tests that inspect the produced source layout. SQL bindings collapse
+    /// to a sentinel so existing assertions read straight through.
+    #[cfg(test)]
+    pub(crate) fn source_table(&self) -> &str {
+        match &self.source {
+            BindingSource::Table(t) => t.as_str(),
+            BindingSource::Sql(_) => "<sql>",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -143,6 +202,14 @@ pub(crate) struct ClassSkeleton {
 pub(crate) struct LabelSkeleton {
     pub(crate) text: String,
     pub(crate) style_ref: String,
+    /// `ANGLE FOLLOW` (mapserver) -> `placement: { kind: line, ... }`.
+    pub(crate) placement_line: Option<EmitLinePlacement>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct EmitLinePlacement {
+    pub(crate) repeat_m: Option<f64>,
+    pub(crate) max_angle_delta_deg: Option<f32>,
 }
 
 /// slugify a name for YAML identifiers: lowercase, non-alnum → '_'.
@@ -171,6 +238,49 @@ fn yaml_quote(s: &str) -> String {
 /// quote a `Colour` as a YAML string (`"#rrggbb"` or `"#rrggbbaa"`).
 fn quote_colour(c: Colour) -> String {
     yaml_quote(&c.to_string())
+}
+
+/// render a marker into the style block under `    marker:`. flow-mapping
+/// for built-ins and glyph (compact), block-mapping for vector shapes since
+/// the point list is open-ended.
+fn write_marker(out: &mut String, m: &EmitMarker) {
+    match m {
+        EmitMarker::Builtin { kind, size } => {
+            let _ = writeln!(out, "    marker: {{ kind: {}, size: {size} }}", kind.as_wire());
+        }
+        EmitMarker::Glyph {
+            font_family,
+            character,
+            size,
+        } => {
+            let _ = writeln!(
+                out,
+                "    marker: {{ kind: glyph, font_family: {}, character: {}, size: {size} }}",
+                yaml_quote(font_family),
+                yaml_quote(character)
+            );
+        }
+        EmitMarker::Vector {
+            points,
+            anchor,
+            filled,
+            size,
+        } => {
+            let _ = writeln!(out, "    marker:");
+            let _ = writeln!(out, "      kind: vector_shape");
+            let pts = points
+                .iter()
+                .map(|(x, y)| format!("[{x}, {y}]"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let _ = writeln!(out, "      points: [{pts}]");
+            if let Some((ax, ay)) = anchor {
+                let _ = writeln!(out, "      anchor: [{ax}, {ay}]");
+            }
+            let _ = writeln!(out, "      filled: {filled}");
+            let _ = writeln!(out, "      size: {size}");
+        }
+    }
 }
 
 /// default scale-band ladder used when `--bands` is not supplied.
@@ -374,6 +484,12 @@ pub(crate) fn render(skel: &Skeleton, bands: &[(String, u64)]) -> String {
                     let w = st.halo_width.unwrap_or(1.0);
                     let _ = writeln!(out, "    halo: {{ color: {}, width: {w} }}", quote_colour(c));
                 }
+                if let Some(p) = st.priority {
+                    let _ = writeln!(out, "    priority: {p}");
+                }
+                if let Some(d) = st.min_distance {
+                    let _ = writeln!(out, "    min_distance: {d}");
+                }
             } else {
                 match st.fill {
                     Some(EmitFill::Hex(c)) => {
@@ -406,8 +522,24 @@ pub(crate) fn render(skel: &Skeleton, bands: &[(String, u64)]) -> String {
                         arr.iter().map(|f| f.to_string()).collect::<Vec<_>>().join(", ")
                     );
                 }
-                if let Some(m) = st.marker {
-                    let _ = writeln!(out, "    marker: {{ kind: {}, size: {} }}", m.kind.as_wire(), m.size);
+                if let Some(lj) = st.stroke_linejoin {
+                    let _ = writeln!(out, "    stroke_linejoin: {lj}");
+                }
+                if let Some(o) = st.opacity {
+                    let _ = writeln!(out, "    opacity: {o}");
+                }
+                if let Some(off) = st.stroke_offset_px {
+                    let _ = writeln!(out, "    stroke_offset_px: {off}");
+                }
+                if let Some(g) = st.stroke_gap {
+                    let _ = writeln!(
+                        out,
+                        "    stroke_gap: {{ interval_px: {}, initial_px: {} }}",
+                        g.interval_px, g.initial_px
+                    );
+                }
+                if let Some(m) = st.marker.as_ref() {
+                    write_marker(&mut out, m);
                 }
             }
         }
@@ -435,9 +567,13 @@ pub(crate) fn render(skel: &Skeleton, bands: &[(String, u64)]) -> String {
                 for (band_name, tiers) in &band_tiers {
                     for tier in tiers {
                         let src = tier.src;
+                        let source_part = match &src.source {
+                            BindingSource::Table(t) => format!("from: {}", yaml_quote(t)),
+                            BindingSource::Sql(s) => format!("sql: {}", yaml_quote(s)),
+                        };
                         let mut parts = vec![
                             format!("band: {band_name}"),
-                            format!("from: {}", yaml_quote(&src.from)),
+                            source_part,
                             format!("geometry_column: {}", yaml_quote(&src.geometry_column)),
                         ];
                         if let Some(ref id) = src.id_column {
@@ -496,6 +632,16 @@ pub(crate) fn render(skel: &Skeleton, bands: &[(String, u64)]) -> String {
                     "      style: {{ type: ref, name: {} }}",
                     yaml_quote(&lbl.style_ref)
                 );
+                if let Some(p) = lbl.placement_line {
+                    let mut parts = vec!["kind: line".to_string()];
+                    if let Some(r) = p.repeat_m {
+                        parts.push(format!("repeat_m: {r}"));
+                    }
+                    if let Some(a) = p.max_angle_delta_deg {
+                        parts.push(format!("max_angle_delta_deg: {a}"));
+                    }
+                    let _ = writeln!(out, "      placement: {{ {} }}", parts.join(", "));
+                }
             }
         }
     }
@@ -516,7 +662,7 @@ mod tests {
     fn src(max: Option<u64>, from: &str) -> SourceSkeleton {
         SourceSkeleton {
             max_denom_exclusive: max,
-            from: from.into(),
+            source: BindingSource::Table(from.into()),
             filter: None,
             geometry_column: "g".into(),
             id_column: None,
@@ -565,16 +711,16 @@ mod tests {
         let detail = out.iter().find(|(n, _)| *n == "detail").expect("detail band");
         assert_eq!(detail.1.len(), 2);
         assert_eq!(detail.1[0].max_denom, Some(1_000));
-        assert_eq!(detail.1[0].src.from, "t0");
+        assert_eq!(detail.1[0].src.source_table(), "t0");
         assert!(detail.1[1].max_denom.is_none());
-        assert_eq!(detail.1[1].src.from, "t1");
+        assert_eq!(detail.1[1].src.source_table(), "t1");
         // every other band has only t1, single-tier, no max.
         for (name, tiers) in &out {
             if *name == "detail" {
                 continue;
             }
             assert_eq!(tiers.len(), 1);
-            assert_eq!(tiers[0].src.from, "t1");
+            assert_eq!(tiers[0].src.source_table(), "t1");
             assert!(tiers[0].max_denom.is_none());
         }
     }
