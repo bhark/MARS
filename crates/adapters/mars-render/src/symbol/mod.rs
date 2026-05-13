@@ -45,9 +45,24 @@ pub(crate) fn dispatch(
         MarkerSymbol::Cross { size } => render(pm, cross::build_path(*size), anchor, rotation_rad, style),
         MarkerSymbol::X { size } => render(pm, x::build_path(*size), anchor, rotation_rad, style),
         MarkerSymbol::Pin { size } => render(pm, pin::build_path(*size), anchor, rotation_rad, style),
-        MarkerSymbol::VectorShape { .. } => Err(RenderError::NotImplemented {
-            what: "MarkerSymbol::VectorShape",
-        }),
+        MarkerSymbol::VectorShape {
+            points,
+            anchor: local_anchor,
+            filled,
+            size,
+        } => {
+            let path = vector_shape::build_path(points, *local_anchor, *filled, *size);
+            if *filled {
+                render(pm, path, anchor, rotation_rad, style)
+            } else {
+                // open polyline: clear fill so the polygon pipeline is bypassed.
+                // a fill paint on an open path would be auto-closed by
+                // tiny-skia, which is the wrong semantics.
+                let mut s = style.clone();
+                s.fill = None;
+                render(pm, path, anchor, rotation_rad, &s)
+            }
+        }
         // `#[non_exhaustive]` forward-compat: future variants land here
         // until they grow a sibling module + dispatch arm above.
         _ => Err(RenderError::NotImplemented {
@@ -220,6 +235,22 @@ mod tests {
         assert!(
             n > 120 && n < 200,
             "expected ~160 fully-red pixels for a 12px pin, got {n}"
+        );
+    }
+
+    #[test]
+    fn vector_shape_filled_paints_polygon_interior() {
+        let png = render_marker(MarkerSymbol::VectorShape {
+            points: vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)],
+            anchor: (0.5, 0.5),
+            filled: true,
+            size: 10.0,
+        });
+        // unit-square scaled to 10px = ~100 fully-red pixels.
+        let n = red_pixel_count(&png);
+        assert!(
+            n > 80 && n < 110,
+            "expected ~100 fully-red pixels for a 10px vector-shape square, got {n}"
         );
     }
 }
