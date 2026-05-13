@@ -57,7 +57,11 @@ pub struct Path {
     pub subpaths: Vec<Subpath>,
 }
 
-/// One draw operation. Intentionally narrow - adding shapes goes through this enum.
+/// One draw operation. Intentionally narrow - adding shapes goes through this
+/// enum. Variants the adapter has not yet wired return
+/// [`RenderError::NotImplemented`] from the dispatch hub; the runtime is free
+/// to emit them so the type system carries the contract instead of a debug
+/// log.
 #[derive(Debug, Clone)]
 pub enum DrawOp {
     /// Fill or stroke a path with the given style.
@@ -78,6 +82,30 @@ pub enum DrawOp {
         /// Counter-clockwise rotation in radians. `0.0` for axis-aligned
         /// labels (the common case); line labels carry a tangent angle.
         angle_rad: f32,
+    },
+    /// Place a point-anchored marker symbol. Stub today: dispatch returns
+    /// [`RenderError::NotImplemented`]. Use this from the runtime when a
+    /// symbol cannot be tessellated to a [`DrawOp::Path`] (text glyphs,
+    /// future svg / raster markers); for shapes the runtime still
+    /// tessellates (circle, square, vector polygon), keep emitting `Path`.
+    Symbol {
+        /// Anchor in pixel space.
+        anchor: (f32, f32),
+        /// Counter-clockwise rotation in radians.
+        rotation_rad: f32,
+        /// Style. The `marker` field carries the symbol kind; fill / stroke
+        /// fields apply to the rasterised symbol.
+        style: Arc<Style>,
+    },
+    /// Fill a path with a non-procedural pattern (image, svg, future
+    /// gradient). Stub today: dispatch returns
+    /// [`RenderError::NotImplemented`]. Procedural fills (solid, hatch)
+    /// continue to flow through [`DrawOp::Path`].
+    Pattern {
+        /// Geometry to fill.
+        path: Path,
+        /// Style. The `fill` paint variant carries the pattern descriptor.
+        style: Arc<Style>,
     },
 }
 
