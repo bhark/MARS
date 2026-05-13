@@ -26,7 +26,7 @@ use crate::scanner::scan;
 use crate::scanner::{Token, block_range, is_block_opener};
 
 use self::layer::handle_layer;
-use self::symbol::parse_symbol;
+use self::symbol::{emit_symbol, parse_symbol};
 
 /// keywords whose presence we don't translate yet. some are block openers,
 /// some are scalar directives - `walk` handles both.
@@ -108,7 +108,7 @@ fn walk(tokens: &[Token], skel: &mut Skeleton, include_layers: Option<&HashSet<S
                 } else {
                     &[]
                 };
-                if let Some((name, def)) = parse_symbol(body) {
+                if let Some((name, def)) = emit_symbol(parse_symbol(body)) {
                     skel.symbols.insert(name, def);
                 }
                 i = range.end;

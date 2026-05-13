@@ -1,6 +1,14 @@
-//! LAYER block parser. Walks a layer body, dispatches CLASS / LABEL /
-//! SCALETOKEN sub-blocks, and emits a [`LayerSkeleton`] into the
-//! [`Skeleton`]. Owns the mapfile DATA -> binding lifting helpers.
+//! LAYER block parser. Splits into:
+//!
+//! - [`parse_layer`] - walk tokens, accumulate a [`ParsedLayer`] bag of
+//!   `Option` fields plus nested [`ParsedClass`] / [`ParsedLabel`]. No
+//!   defaulting, no emit, no `Skeleton` mutation.
+//! - [`emit_layer`] - take a [`ParsedLayer`] plus the layer's source line,
+//!   run the default-unwrap + dedup + source-binding pipeline, and push the
+//!   resulting [`LayerSkeleton`] onto the [`Skeleton`].
+//!
+//! Owns the mapfile DATA -> binding lifting helpers, since those are pure
+//! string transforms with no other home.
 
 use std::collections::{BTreeSet, HashSet};
 
@@ -12,8 +20,24 @@ use crate::parsing;
 use crate::scanner::{Token, block_range, is_block_opener};
 use crate::translate::{is_unsupported, normalize_n_plus_one};
 
-use super::class::parse_class;
-use super::label::parse_label;
+use super::class::{ParsedClass, emit_class, parse_class};
+use super::label::{ParsedLabel, emit_label, parse_label};
+
+#[derive(Debug, Default)]
+pub(crate) struct ParsedLayer {
+    pub name: Option<String>,
+    pub title: Option<String>,
+    pub layer_type: Option<String>,
+    pub data: Option<String>,
+    pub class_item: Option<String>,
+    pub label_item: Option<String>,
+    pub min_scale_denom: Option<u64>,
+    pub max_scale_denom: Option<u64>,
+    pub processing_items: Option<String>,
+    pub scale_token_values: Vec<(u64, String)>,
+    pub classes: Vec<ParsedClass>,
+    pub label: Option<ParsedLabel>,
+}
 
 pub(crate) fn handle_layer(
     body: &[Token],
@@ -21,65 +45,54 @@ pub(crate) fn handle_layer(
     skel: &mut Skeleton,
     include_layers: Option<&HashSet<String>>,
 ) {
-    let mut name: Option<String> = None;
-    let mut title: Option<String> = None;
-    let mut layer_type: Option<String> = None;
-    let mut data: Option<String> = None;
-    let mut _min_scale_denom: Option<u64> = None;
-    let mut max_scale_denom: Option<u64> = None;
-    let mut scale_token_values: Vec<(u64, String)> = Vec::new();
-    let mut processing_items: Option<String> = None;
-    let mut classes: Vec<ClassSkeleton> = Vec::new();
-    let mut label: Option<LabelSkeleton> = None;
-    // CLASSITEM names a column whose value drives the implicit per-class
-    // `<col> = '<NAME>'` expression when a CLASS has no EXPRESSION.
-    let mut class_item: Option<String> = None;
-    // LABELITEM names a column whose value is the label text when LABEL
-    // has no TEXT.
-    let mut label_item: Option<String> = None;
-
-    // peek name first for filtering
-    for t in body {
-        if t.keyword.eq_ignore_ascii_case("NAME") {
-            if let Some(n) = t.args.first() {
-                name = Some(n.clone());
-            }
-            break;
-        }
-    }
-
+    // peek name first for filtering - skip the whole parse if the layer is
+    // excluded by the operator's --layers list.
     if let Some(set) = include_layers {
-        let keep = name.as_ref().is_some_and(|n| set.contains(&n.to_lowercase()));
+        let peeked = body.iter().find_map(|t| {
+            if t.keyword.eq_ignore_ascii_case("NAME") {
+                t.args.first().cloned()
+            } else {
+                None
+            }
+        });
+        let keep = peeked.as_ref().is_some_and(|n| set.contains(&n.to_lowercase()));
         if !keep {
             return;
         }
     }
 
+    let parsed = parse_layer(body);
+    emit_layer(parsed, layer_line, skel);
+}
+
+pub(crate) fn parse_layer(body: &[Token]) -> ParsedLayer {
+    let mut p = ParsedLayer::default();
+
     let mut i = 0;
     while i < body.len() {
         let t = &body[i];
         match LayerDirective::from_token(t, is_unsupported) {
-            LayerDirective::Name(t) if name.is_none() => name = t.args.first().cloned(),
-            LayerDirective::Title(t) if title.is_none() => title = t.args.first().cloned(),
-            LayerDirective::Type(t) if layer_type.is_none() => layer_type = t.args.first().cloned(),
-            LayerDirective::Data(t) if data.is_none() => data = Some(t.args.join(" ")),
-            LayerDirective::ClassItem(t) if class_item.is_none() => class_item = parsing::first_unquoted(t),
-            LayerDirective::LabelItem(t) if label_item.is_none() => label_item = parsing::first_unquoted(t),
+            LayerDirective::Name(t) if p.name.is_none() => p.name = t.args.first().cloned(),
+            LayerDirective::Title(t) if p.title.is_none() => p.title = t.args.first().cloned(),
+            LayerDirective::Type(t) if p.layer_type.is_none() => p.layer_type = t.args.first().cloned(),
+            LayerDirective::Data(t) if p.data.is_none() => p.data = Some(t.args.join(" ")),
+            LayerDirective::ClassItem(t) if p.class_item.is_none() => p.class_item = parsing::first_unquoted(t),
+            LayerDirective::LabelItem(t) if p.label_item.is_none() => p.label_item = parsing::first_unquoted(t),
             LayerDirective::MinScaleDenom(t) => {
                 if let Some(n) = parse_scale_denom_arg(t) {
-                    _min_scale_denom = Some(n);
+                    p.min_scale_denom = Some(n);
                 }
             }
             LayerDirective::MaxScaleDenom(t) => {
                 if let Some(n) = parse_scale_denom_arg(t) {
-                    max_scale_denom = Some(n);
+                    p.max_scale_denom = Some(n);
                 }
             }
             LayerDirective::Processing(t) => {
                 if let Some(arg) = t.args.first() {
                     let up = arg.to_ascii_uppercase();
                     if let Some(rest) = up.strip_prefix("ITEMS=") {
-                        processing_items = Some(rest.to_string());
+                        p.processing_items = Some(rest.to_string());
                     }
                 }
             }
@@ -92,7 +105,7 @@ pub(crate) fn handle_layer(
                         if st_t.keyword.eq_ignore_ascii_case("VALUES")
                             && let Some(vr) = block_range(st_body, j)
                         {
-                            scale_token_values = parse_scale_token(&st_body[vr.start + 1..vr.end - 1]);
+                            p.scale_token_values = parse_scale_token(&st_body[vr.start + 1..vr.end - 1]);
                             j = vr.end;
                             continue;
                         }
@@ -104,27 +117,14 @@ pub(crate) fn handle_layer(
             }
             LayerDirective::Class(t) => {
                 if let Some(r) = block_range(body, i) {
-                    let resolved_name = name.clone().unwrap_or_else(|| format!("unnamed_layer_l{layer_line}"));
-                    let geom = layer_type.as_deref().and_then(mapfile_type_to_geom);
-                    if let Some(cls) = parse_class(
-                        &body[r.start + 1..r.end - 1],
-                        t.line,
-                        &resolved_name,
-                        geom.unwrap_or("polygon"),
-                        skel,
-                    ) {
-                        classes.push(cls);
-                    }
+                    p.classes.push(parse_class(&body[r.start + 1..r.end - 1], t.line));
                     i = r.end;
                     continue;
                 }
             }
-            LayerDirective::Label(t) => {
+            LayerDirective::Label(_t) => {
                 if let Some(r) = block_range(body, i) {
-                    let resolved_name = name.clone().unwrap_or_else(|| format!("unnamed_layer_l{layer_line}"));
-                    if let Some(lbl) = parse_label(&body[r.start + 1..r.end - 1], t.line, &resolved_name, skel) {
-                        label = Some(lbl);
-                    }
+                    p.label = Some(parse_label(&body[r.start + 1..r.end - 1]));
                     i = r.end;
                     continue;
                 }
@@ -152,10 +152,34 @@ pub(crate) fn handle_layer(
         i += 1;
     }
 
+    p
+}
+
+fn emit_layer(p: ParsedLayer, layer_line: usize, skel: &mut Skeleton) {
+    let resolved_name = p.name.clone().unwrap_or_else(|| format!("unnamed_layer_l{layer_line}"));
+
+    if let Some(ref t) = p.layer_type {
+        let up = t.to_ascii_uppercase();
+        if up == "RASTER" || up == "QUERY" {
+            warn!(line = layer_line, layer = %resolved_name, "skipping RASTER/QUERY layer");
+            return;
+        }
+    }
+
+    let geom_kind_str = p.layer_type.as_deref().and_then(mapfile_type_to_geom);
+    let geom_for_classes = geom_kind_str.unwrap_or("polygon");
+
+    let mut classes: Vec<ClassSkeleton> = p
+        .classes
+        .into_iter()
+        .map(|pc| emit_class(pc, &resolved_name, geom_for_classes, skel))
+        .collect();
+    let mut label: Option<LabelSkeleton> = p.label.map(|pl| emit_label(pl, &resolved_name, skel));
+
     // CLASSITEM expansion: a CLASS with NAME but no EXPRESSION inherits an
     // implicit `<classitem> = '<NAME>'` predicate. mirrors mapserver's
     // attribute-keyed class semantics.
-    if let Some(item) = class_item.as_deref() {
+    if let Some(item) = p.class_item.as_deref() {
         for cls in &mut classes {
             if cls.when.is_none()
                 && let Some(value) = cls.title.as_deref()
@@ -166,38 +190,26 @@ pub(crate) fn handle_layer(
     }
     // LABELITEM: if the LABEL block had no TEXT, the layer's labelitem
     // becomes a `{<col>}` template referencing the column.
-    if let (Some(item), Some(lbl)) = (label_item.as_deref(), label.as_mut())
+    if let (Some(item), Some(lbl)) = (p.label_item.as_deref(), label.as_mut())
         && lbl.text.is_empty()
     {
         lbl.text = format!("{{{item}}}");
     }
 
-    let resolved_name = name.unwrap_or_else(|| format!("unnamed_layer_l{layer_line}"));
+    let geom_kind = geom_kind_str.map(|s| s.to_string());
 
-    if let Some(ref t) = layer_type {
-        let up = t.to_ascii_uppercase();
-        if up == "RASTER" || up == "QUERY" {
-            warn!(line = layer_line, layer = %resolved_name, "skipping RASTER/QUERY layer");
-            return;
-        }
-    }
-
-    let geom_kind = layer_type
-        .as_ref()
-        .and_then(|t| mapfile_type_to_geom(t).map(|s| s.to_string()));
-
-    let (geometry_column, from_table) = parse_data(data.as_deref());
+    let (geometry_column, from_table) = parse_data(p.data.as_deref());
 
     let mut sources = Vec::new();
-    if !scale_token_values.is_empty() {
+    if !p.scale_token_values.is_empty() {
         let gc = geometry_column.clone().unwrap_or_else(|| "geometri".into());
-        let id_col = processing_items.as_deref().and_then(guess_id_column);
-        let n = scale_token_values.len();
-        for (idx, (_min_denom, table)) in scale_token_values.iter().enumerate() {
+        let id_col = p.processing_items.as_deref().and_then(guess_id_column);
+        let n = p.scale_token_values.len();
+        for (idx, (_min_denom, table)) in p.scale_token_values.iter().enumerate() {
             let max_denom = if idx + 1 < n {
-                Some(scale_token_values[idx + 1].0)
+                Some(p.scale_token_values[idx + 1].0)
             } else {
-                max_scale_denom
+                p.max_scale_denom
             };
             let (source, filter) = lifted_to_source(lift_inline_subquery(table));
             sources.push(SourceSkeleton {
@@ -212,11 +224,11 @@ pub(crate) fn handle_layer(
     } else if let Some(table) = from_table {
         let (source, filter) = lifted_to_source(lift_inline_subquery(&table));
         sources.push(SourceSkeleton {
-            max_denom_exclusive: max_scale_denom,
+            max_denom_exclusive: p.max_scale_denom,
             source,
             filter,
             geometry_column: geometry_column.unwrap_or_else(|| "geometri".into()),
-            id_column: processing_items.as_deref().and_then(guess_id_column),
+            id_column: p.processing_items.as_deref().and_then(guess_id_column),
             attributes: Vec::new(),
         });
     }
@@ -246,7 +258,7 @@ pub(crate) fn handle_layer(
 
     skel.layers.push(LayerSkeleton {
         name: resolved_name,
-        title,
+        title: p.title,
         geom_kind,
         sources,
         classes,
