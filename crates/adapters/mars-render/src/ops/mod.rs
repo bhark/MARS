@@ -10,6 +10,7 @@ use mars_text::Fonts;
 use tiny_skia::Pixmap;
 
 use crate::prepare::UnimplementedFeatures;
+use crate::symbol;
 
 pub(crate) fn dispatch(pm: &mut Pixmap, op: &DrawOp, fonts: &Fonts) -> Result<UnimplementedFeatures, RenderError> {
     match op {
@@ -20,10 +21,13 @@ pub(crate) fn dispatch(pm: &mut Pixmap, op: &DrawOp, fonts: &Fonts) -> Result<Un
             style,
             angle_rad,
         } => label::draw(pm, *anchor, text, style, *angle_rad, fonts),
-        // staged variants: runtime may emit them, adapter has not wired the
-        // pipeline yet. typed error keeps the contract honest instead of a
-        // silent debug log.
-        DrawOp::Symbol { .. } => Err(RenderError::NotImplemented { what: "DrawOp::Symbol" }),
+        DrawOp::Symbol {
+            anchor,
+            rotation_rad,
+            style,
+        } => symbol::dispatch(pm, *anchor, *rotation_rad, style),
+        // pattern fills still stub at the DrawOp level; the slice-2
+        // commit wires this through pattern::dispatch.
         DrawOp::Pattern { .. } => Err(RenderError::NotImplemented {
             what: "DrawOp::Pattern",
         }),
@@ -54,14 +58,21 @@ mod tests {
     }
 
     #[test]
-    fn symbol_variant_returns_not_implemented() {
+    fn symbol_circle_returns_typed_not_implemented_until_implemented() {
+        // scaffold-only assertion: the circle marker variant has not yet
+        // been wired to a build_path implementation; the typed error names
+        // the specific MarkerSymbol variant so the next commit can flip
+        // this to a positive render assertion at one named site.
         let op = DrawOp::Symbol {
             anchor: (8.0, 8.0),
             rotation_rad: 0.0,
-            style: Arc::new(Style::default()),
+            style: Arc::new(Style {
+                marker: Some(MarkerSymbol::Circle { size: 6.0 }),
+                ..Default::default()
+            }),
         };
         let err = renderer().render(canvas(), &[op]).expect_err("must error");
-        assert!(matches!(err, RenderError::NotImplemented { what } if what == "DrawOp::Symbol"));
+        assert!(matches!(err, RenderError::NotImplemented { what } if what == "MarkerSymbol::Circle"));
     }
 
     #[test]

@@ -11,6 +11,7 @@ mod path;
 mod path_offset;
 mod prepare;
 mod stroke;
+mod symbol;
 
 use std::sync::Arc;
 
