@@ -11,13 +11,16 @@
 //! [`viewport`].
 
 pub(crate) mod get_feature_info;
+pub(crate) mod get_legend;
 pub(crate) mod get_map;
 pub(crate) mod viewport;
 
 pub use get_feature_info::ResolvedGetFeatureInfo;
+pub use get_legend::ResolvedGetLegend;
 pub use get_map::ResolvedGetMap;
 
 pub(crate) use get_feature_info::resolve_get_feature_info;
+pub(crate) use get_legend::resolve_get_legend;
 pub(crate) use get_map::resolve_get_map;
 
 use mars_types::LayerId;
@@ -41,4 +44,15 @@ pub(crate) struct ParsedGetFeatureInfo {
     pub j: Option<u32>,
     pub info_format: Option<String>,
     pub feature_count: Option<u32>,
+}
+
+/// Option-heavy GetLegendGraphic shape produced by
+/// [`crate::parse::get_legend`].
+#[derive(Debug, Default, Clone)]
+pub(crate) struct ParsedGetLegend {
+    pub layer: Option<String>,
+    pub format: Option<String>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub rule: Option<String>,
 }

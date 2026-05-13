@@ -18,7 +18,7 @@ pub use capabilities::capabilities_xml;
 pub use exception::service_exception_report;
 pub use feature_info::format_feature_info;
 pub use parse::{parse_get_feature_info, parse_get_legend_graphic, parse_get_map, parse_request};
-pub use prepare::{ResolvedGetFeatureInfo, ResolvedGetMap};
+pub use prepare::{ResolvedGetFeatureInfo, ResolvedGetLegend, ResolvedGetMap};
 
 #[derive(Debug, thiserror::Error)]
 pub enum WmsError {
@@ -155,8 +155,8 @@ pub enum WmsRequest {
     GetMap(ResolvedGetMap),
     /// `request=GetFeatureInfo` with the fully-resolved hit-test inputs.
     GetFeatureInfo(ResolvedGetFeatureInfo),
-    /// `request=GetLegendGraphic` with the parsed legend plan.
-    GetLegendGraphic(mars_runtime::LegendPlan),
+    /// `request=GetLegendGraphic` with the fully-resolved legend plan.
+    GetLegendGraphic(ResolvedGetLegend),
     /// `request=GetCapabilities`.
     GetCapabilities,
 }

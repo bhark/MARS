@@ -37,7 +37,7 @@ pub async fn handle_wms(State(state): State<AppState>, headers: HeaderMap, raw_q
                     Err(e) => runtime_error_response(e, &plan, exceptions, &state.runtime),
                 }
             }
-            WmsRequest::GetLegendGraphic(plan) => {
+            WmsRequest::GetLegendGraphic(mars_wms::ResolvedGetLegend { plan }) => {
                 let mime = plan.format.mime();
                 match state.runtime.render_legend(&plan) {
                     Ok(bytes) => {

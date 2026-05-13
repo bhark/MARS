@@ -9,8 +9,6 @@ use std::collections::HashMap;
 
 use percent_encoding::percent_decode_str;
 
-use mars_types::ImageFormat;
-
 use crate::WmsError;
 
 pub(super) type Kvp = HashMap<String, String>;
@@ -64,17 +62,6 @@ pub(super) fn parse_optional_u32(kvp: &Kvp, name: &'static str) -> Result<Option
             reason: e.to_string(),
         })?;
     Ok(Some(n))
-}
-
-pub(super) fn parse_format(raw: &str) -> Result<ImageFormat, WmsError> {
-    match raw {
-        "image/png" => Ok(ImageFormat::Png),
-        "image/jpeg" | "image/jpg" => Ok(ImageFormat::Jpeg),
-        other => Err(WmsError::InvalidParam {
-            name: "format",
-            reason: format!("unsupported {other}"),
-        }),
-    }
 }
 
 #[cfg(test)]
