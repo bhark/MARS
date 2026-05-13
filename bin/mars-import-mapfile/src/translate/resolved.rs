@@ -67,6 +67,7 @@ pub(crate) struct ResolvedLabel {
     pub priority: Option<u16>,
     pub min_distance: Option<f32>,
     pub placement_line: Option<EmitLinePlacement>,
+    pub unimplemented: Vec<&'static str>,
 }
 
 #[derive(Debug)]
@@ -129,12 +130,19 @@ pub(crate) fn resolve_layer(
         }
     }
 
-    // aggregate dropped-directive signals from classes into a layer-level
-    // bag. emit-time fires a single warn summarising what was lost; mirrors
-    // mars-render's `Resolved::unimplemented` pattern.
+    // aggregate dropped-directive signals from classes and label into a
+    // layer-level bag. emit-time fires a single warn summarising what was
+    // lost; mirrors mars-render's `Resolved::unimplemented` pattern.
     let mut unimplemented: Vec<&'static str> = Vec::new();
     for c in &classes {
         for u in &c.unimplemented {
+            if !unimplemented.contains(u) {
+                unimplemented.push(*u);
+            }
+        }
+    }
+    if let Some(ref l) = label {
+        for u in &l.unimplemented {
             if !unimplemented.contains(u) {
                 unimplemented.push(*u);
             }
@@ -267,6 +275,7 @@ fn resolve_label(p: ParsedLabel, layer_name: &str, label_item: Option<&str>) -> 
         priority: p.priority,
         min_distance: p.min_distance,
         placement_line: p.placement_line,
+        unimplemented: p.unimplemented,
     }
 }
 

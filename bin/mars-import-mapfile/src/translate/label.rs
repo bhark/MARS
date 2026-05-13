@@ -3,7 +3,6 @@
 //! [`super::resolved`]; emit lives in [`super::emit`].
 
 use mars_style::Colour;
-use tracing::warn;
 
 use crate::directive::LabelDirective;
 use crate::emitter::EmitLinePlacement;
@@ -21,6 +20,16 @@ pub(crate) struct ParsedLabel {
     pub priority: Option<u16>,
     pub min_distance: Option<f32>,
     pub placement_line: Option<EmitLinePlacement>,
+    /// Recognised-but-not-implemented LABEL directive names. Aggregated at
+    /// resolve time into the layer-level bag; `emit_layer` fires one warn
+    /// summarising what was dropped.
+    pub unimplemented: Vec<&'static str>,
+}
+
+fn push_unique(bag: &mut Vec<&'static str>, name: &'static str) {
+    if !bag.contains(&name) {
+        bag.push(name);
+    }
 }
 
 pub(crate) fn parse_label(body: &[Token]) -> ParsedLabel {
@@ -73,27 +82,23 @@ pub(crate) fn parse_label(body: &[Token]) -> ParsedLabel {
                             // in when repeat is unset.
                             ensure_line(&mut p.placement_line);
                         }
-                        "AUTO" => warn!(line = t.line, "LABEL ANGLE AUTO is not yet implemented; dropping"),
-                        other => {
-                            warn!(line = t.line, value = %other, "LABEL ANGLE numeric values are not yet implemented; dropping")
-                        }
+                        "AUTO" => push_unique(&mut p.unimplemented, "LABEL.ANGLE AUTO"),
+                        _ => push_unique(&mut p.unimplemented, "LABEL.ANGLE (numeric)"),
                     }
                 }
             }
             LabelDirective::NotImplemented(t) => {
-                let kw = t.keyword.to_ascii_uppercase();
-                if kw == "TYPE" {
-                    if let Some(arg) = t.args.first()
-                        && arg.eq_ignore_ascii_case("BITMAP")
-                    {
-                        warn!(
-                            line = t.line,
-                            "LABEL TYPE BITMAP is not yet implemented; falling back to TrueType"
-                        );
-                    }
-                } else {
-                    warn!(line = t.line, "LABEL {kw} is not yet implemented; dropping");
-                }
+                let name: &'static str = match t.keyword.to_ascii_uppercase().as_str() {
+                    "POSITION" => "LABEL.POSITION",
+                    "PARTIALS" => "LABEL.PARTIALS",
+                    "OFFSET" => "LABEL.OFFSET",
+                    "TYPE" => match t.args.first() {
+                        Some(arg) if arg.eq_ignore_ascii_case("BITMAP") => "LABEL.TYPE BITMAP",
+                        _ => "LABEL.TYPE (unimplemented)",
+                    },
+                    _ => "LABEL directive (unimplemented)",
+                };
+                push_unique(&mut p.unimplemented, name);
             }
             // re-occurrence of TEXT / FONT after the first is ignored; same
             // for any keyword we don't understand inside a LABEL block.
@@ -102,4 +107,62 @@ pub(crate) fn parse_label(body: &[Token]) -> ParsedLabel {
     }
 
     p
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use super::*;
+
+    fn tok(keyword: &str, args: &[&str]) -> Token {
+        Token {
+            line: 1,
+            keyword: keyword.into(),
+            args: args.iter().map(|s| (*s).into()).collect(),
+        }
+    }
+
+    #[test]
+    fn parse_label_flags_angle_auto() {
+        let p = parse_label(&[tok("ANGLE", &["AUTO"])]);
+        assert_eq!(p.unimplemented, vec!["LABEL.ANGLE AUTO"]);
+    }
+
+    #[test]
+    fn parse_label_flags_angle_numeric() {
+        let p = parse_label(&[tok("ANGLE", &["45"])]);
+        assert_eq!(p.unimplemented, vec!["LABEL.ANGLE (numeric)"]);
+    }
+
+    #[test]
+    fn parse_label_angle_follow_does_not_flag() {
+        let p = parse_label(&[tok("ANGLE", &["FOLLOW"])]);
+        assert!(p.unimplemented.is_empty());
+        assert!(p.placement_line.is_some());
+    }
+
+    #[test]
+    fn parse_label_flags_position_partials_offset() {
+        let p = parse_label(&[
+            tok("POSITION", &["UC"]),
+            tok("PARTIALS", &["TRUE"]),
+            tok("OFFSET", &["2", "3"]),
+        ]);
+        assert_eq!(
+            p.unimplemented,
+            vec!["LABEL.POSITION", "LABEL.PARTIALS", "LABEL.OFFSET"]
+        );
+    }
+
+    #[test]
+    fn parse_label_flags_type_bitmap() {
+        let p = parse_label(&[tok("TYPE", &["BITMAP"])]);
+        assert_eq!(p.unimplemented, vec!["LABEL.TYPE BITMAP"]);
+    }
+
+    #[test]
+    fn parse_label_dedups_repeat_directives() {
+        let p = parse_label(&[tok("POSITION", &["UC"]), tok("POSITION", &["UL"])]);
+        assert_eq!(p.unimplemented, vec!["LABEL.POSITION"]);
+    }
 }
