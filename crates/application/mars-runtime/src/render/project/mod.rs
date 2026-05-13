@@ -1,0 +1,149 @@
+//! coord transforms and pixel mapping used by the render path.
+//!
+//! pure functions only: bbox reprojection, per-feature reprojection, and
+//! world->pixel mapping with the `feature_to_drawop` adapter that turns a
+//! decoded `GeomKind` into a `DrawOp::Path`.
+//!
+//! `GeomKind` is the canonical vocabulary at this seam. each variant has
+//! its own module under `project/`; this hub holds the dispatches and
+//! the helpers that all variants share (`world_to_pixel`, `project_ring`,
+//! `ring_to_subpath`). adding a `GeomKind` variant breaks the build at
+//! the two match arms below and forces a new file alongside.
+
+mod linestring;
+mod multilinestring;
+mod multipoint;
+mod multipolygon;
+mod point;
+mod polygon;
+
+use std::sync::Arc;
+
+use mars_artifact::{FeatureGeom, GeomKind};
+use mars_render_port::{DrawOp, Path, Subpath};
+use mars_style::Style;
+use mars_types::Bbox;
+
+use crate::RuntimeError;
+use crate::plan as planning;
+use crate::render::map_proj_err;
+
+pub(super) fn bbox_native(
+    viewport: Bbox,
+    from: &mars_types::CrsCode,
+    to: &mars_types::CrsCode,
+) -> Result<Bbox, RuntimeError> {
+    planning::reproject_viewport(viewport, from, to)
+}
+
+pub(super) fn bbox_to_f32(b: Bbox) -> [f32; 4] {
+    [b.min_x as f32, b.min_y as f32, b.max_x as f32, b.max_y as f32]
+}
+
+pub(super) fn project_paired_features(
+    features: Vec<(u32, FeatureGeom)>,
+    from: &mars_types::CrsCode,
+    to: &mars_types::CrsCode,
+) -> Result<Vec<(u32, FeatureGeom)>, RuntimeError> {
+    let xform = mars_proj::cached_transformer(from, to).map_err(map_proj_err)?;
+    let mut out = Vec::with_capacity(features.len());
+    for (slot, f) in features {
+        let geom = project_geom(&f.geom, &xform)?;
+        out.push((
+            slot,
+            FeatureGeom {
+                user_id: f.user_id,
+                bbox: f.bbox,
+                geom,
+            },
+        ));
+    }
+    Ok(out)
+}
+
+fn project_geom(g: &GeomKind, xform: &mars_proj::Transformer) -> Result<GeomKind, RuntimeError> {
+    let mapped = match g {
+        GeomKind::Point(c) => GeomKind::Point(point::project(*c, xform)?),
+        GeomKind::LineString(coords) => GeomKind::LineString(linestring::project(coords, xform)?),
+        GeomKind::Polygon(rings) => GeomKind::Polygon(polygon::project(rings, xform)?),
+        GeomKind::MultiPoint(coords) => GeomKind::MultiPoint(multipoint::project(coords, xform)?),
+        GeomKind::MultiLineString(parts) => GeomKind::MultiLineString(multilinestring::project(parts, xform)?),
+        GeomKind::MultiPolygon(parts) => GeomKind::MultiPolygon(multipolygon::project(parts, xform)?),
+    };
+    Ok(mapped)
+}
+
+pub(super) fn feature_to_drawop(g: &GeomKind, viewport: Bbox, w: u32, h: u32, style: Arc<Style>) -> Option<DrawOp> {
+    let subpaths: Vec<Subpath> = match g {
+        GeomKind::Point(c) => point::subpaths(*c, viewport, w, h, style.marker.as_ref()),
+        GeomKind::LineString(coords) => linestring::subpaths(coords, viewport, w, h),
+        GeomKind::Polygon(rings) => polygon::subpaths(rings, viewport, w, h),
+        GeomKind::MultiPoint(coords) => multipoint::subpaths(coords, viewport, w, h, style.marker.as_ref()),
+        GeomKind::MultiLineString(parts) => multilinestring::subpaths(parts, viewport, w, h),
+        GeomKind::MultiPolygon(parts) => multipolygon::subpaths(parts, viewport, w, h),
+    };
+    if subpaths.is_empty() {
+        return None;
+    }
+    Some(DrawOp::Path {
+        path: Path { subpaths },
+        style,
+    })
+}
+
+fn project_ring(coords: &[(f64, f64)], xform: &mars_proj::Transformer) -> Result<Vec<(f64, f64)>, RuntimeError> {
+    if coords.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut buf: Vec<[f64; 2]> = coords.iter().map(|&(x, y)| [x, y]).collect();
+    xform.transform_points(&mut buf).map_err(map_proj_err)?;
+    Ok(buf.into_iter().map(|p| (p[0], p[1])).collect())
+}
+
+fn ring_to_subpath(coords: &[(f64, f64)], viewport: Bbox, w: u32, h: u32, closed: bool) -> Subpath {
+    Subpath {
+        points: coords.iter().map(|&c| world_to_pixel(c, viewport, w, h)).collect(),
+        closed,
+    }
+}
+
+pub(super) fn world_to_pixel(c: (f64, f64), viewport: Bbox, w: u32, h: u32) -> (f32, f32) {
+    let dx = viewport.width();
+    let dy = viewport.height();
+    if !dx.is_finite() || !dy.is_finite() || dx <= 0.0 || dy <= 0.0 {
+        return (0.0, 0.0);
+    }
+    let nx = (c.0 - viewport.min_x) / dx;
+    let ny = (c.1 - viewport.min_y) / dy;
+    let px = nx * f64::from(w);
+    let py = (1.0 - ny) * f64::from(h);
+    (px as f32, py as f32)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn world_to_pixel_origin_top_left() {
+        let v = Bbox::new(0.0, 0.0, 10.0, 10.0);
+        let (px, py) = world_to_pixel((0.0, 10.0), v, 100, 100);
+        assert!(px.abs() < 0.001);
+        assert!(py.abs() < 0.001);
+    }
+
+    #[test]
+    fn world_to_pixel_far_corner_bottom_right() {
+        let v = Bbox::new(0.0, 0.0, 10.0, 10.0);
+        let (px, py) = world_to_pixel((10.0, 0.0), v, 100, 100);
+        assert!((px - 100.0).abs() < 0.001);
+        assert!((py - 100.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn world_to_pixel_clamps_degenerate_viewport() {
+        let v = Bbox::new(0.0, 0.0, 0.0, 0.0);
+        assert_eq!(world_to_pixel((1.0, 1.0), v, 10, 10), (0.0, 0.0));
+    }
+}

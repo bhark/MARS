@@ -14,6 +14,7 @@
 
 mod decode;
 mod labels;
+mod marker;
 mod project;
 
 use futures_util::StreamExt;
