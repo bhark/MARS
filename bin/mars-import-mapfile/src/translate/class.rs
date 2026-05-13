@@ -1,19 +1,14 @@
-//! CLASS block parser. Splits into:
-//!
-//! - [`parse_class`] - walk tokens, accumulate a [`ParsedClass`] bag of
-//!   `Option` fields and per-class [`StyleBlock`]s. No defaulting, no emit.
-//! - [`emit_class`] - take a [`ParsedClass`] plus layer context, run the
-//!   collapse + dedup pipeline, push the resolved [`StyleDef`] onto the
-//!   [`Skeleton`], and return a [`ClassSkeleton`].
+//! CLASS block parser. Walk tokens, accumulate a [`ParsedClass`] bag of
+//! `Option` fields and per-class [`StyleBlock`]s. No defaulting, no emit -
+//! defaults live in [`super::resolved`]; emit lives in [`super::emit`].
 
 use tracing::warn;
 
 use crate::directive::ClassDirective;
-use crate::emitter::{ClassSkeleton, Skeleton, StyleDef, slugify};
 use crate::scanner::{Token, block_range, is_block_opener};
 
 use super::is_unsupported;
-use super::style_block::{StyleBlock, canonical_signature, collapse_styles, parse_style_block};
+use super::style_block::{StyleBlock, parse_style_block};
 
 #[derive(Debug, Default)]
 pub(crate) struct ParsedClass {
@@ -82,77 +77,6 @@ pub(crate) fn parse_class(body: &[Token], class_line: usize) -> ParsedClass {
     }
 
     p
-}
-
-pub(crate) fn emit_class(p: ParsedClass, layer_name: &str, geom_kind: &str, skel: &mut Skeleton) -> ClassSkeleton {
-    let title = p.name.clone();
-    let class_name = slugify(&p.name.unwrap_or_else(|| format!("class_l{}", p.class_line)));
-    let style_prefix = if geom_kind == "polygon" { "poly" } else { geom_kind };
-    let style_name = format!("{}_{}_{}", style_prefix, slugify(layer_name), class_name);
-
-    let collapsed = collapse_styles(&p.styles, p.class_line, &skel.symbols);
-
-    let canonical = canonical_signature(
-        geom_kind,
-        collapsed.fill.as_ref(),
-        collapsed.stroke.as_ref(),
-        collapsed.width,
-        collapsed.dasharray.as_ref(),
-        collapsed.marker.as_ref(),
-        collapsed.opacity,
-        collapsed.stroke_offset_px,
-        collapsed.stroke_gap.as_ref(),
-        collapsed.stroke_linejoin,
-    );
-
-    let existing = skel.styles.iter().find(|s| {
-        canonical_signature(
-            &s.style_type,
-            s.fill.as_ref(),
-            s.stroke.as_ref(),
-            s.stroke_width,
-            s.stroke_dasharray.as_ref(),
-            s.marker.as_ref(),
-            s.opacity,
-            s.stroke_offset_px,
-            s.stroke_gap.as_ref(),
-            s.stroke_linejoin,
-        ) == canonical
-    });
-
-    let style_ref = if let Some(st) = existing {
-        st.name.clone()
-    } else {
-        skel.styles.push(StyleDef {
-            name: style_name.clone(),
-            style_type: geom_kind.to_string(),
-            fill: collapsed.fill,
-            stroke: collapsed.stroke,
-            stroke_width: collapsed.width,
-            stroke_dasharray: collapsed.dasharray,
-            stroke_linejoin: collapsed.stroke_linejoin,
-            marker: collapsed.marker,
-            opacity: collapsed.opacity,
-            stroke_offset_px: collapsed.stroke_offset_px,
-            stroke_gap: collapsed.stroke_gap,
-            font_family: None,
-            font_size: None,
-            halo_color: None,
-            halo_width: None,
-            priority: None,
-            min_distance: None,
-        });
-        style_name
-    };
-
-    ClassSkeleton {
-        name: class_name,
-        title,
-        when: p.expression,
-        min_scale_denom: p.min_scale_denom,
-        max_scale_denom: p.max_scale_denom,
-        style_ref,
-    }
 }
 
 fn parse_class_scale_denom(t: &Token) -> Option<u64> {

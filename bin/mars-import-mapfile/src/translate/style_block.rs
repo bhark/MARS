@@ -41,6 +41,10 @@ pub(crate) struct StyleBlock {
     pub(crate) initial_gap_px: Option<f32>,
     /// STYLE.LINEJOIN -> mars stroke_linejoin wire value.
     pub(crate) linejoin: Option<&'static str>,
+    /// Directive names recognised but not yet implemented (MINWIDTH, MAXWIDTH).
+    /// Aggregated at resolve time so the parser stays a pure data sink;
+    /// `emit_layer` fires one warn per layer summarising what was dropped.
+    pub(crate) unimplemented: Vec<&'static str>,
 }
 
 pub(crate) fn parse_style_block(body: &[Token]) -> StyleBlock {
@@ -102,7 +106,16 @@ pub(crate) fn parse_style_block(body: &[Token]) -> StyleBlock {
                 }
             }
             StyleDirective::NotImplementedAttenuation(t) => {
-                warn!(line = t.line, keyword = %t.keyword, "STYLE {} not yet implemented; dropping", t.keyword);
+                // record the dropped directive as a typed signal; the
+                // layer-level warn fires once at emit time.
+                let name: &'static str = match t.keyword.to_ascii_uppercase().as_str() {
+                    "MINWIDTH" => "MINWIDTH",
+                    "MAXWIDTH" => "MAXWIDTH",
+                    _ => "STYLE attenuation",
+                };
+                if !st.unimplemented.contains(&name) {
+                    st.unimplemented.push(name);
+                }
             }
             StyleDirective::Unknown => {}
         }

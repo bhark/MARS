@@ -10,8 +10,10 @@
 //! - `symbol.rs` owns SYMBOL parsing.
 
 mod class;
+mod emit;
 mod label;
 mod layer;
+mod resolved;
 mod style_block;
 mod symbol;
 
@@ -25,8 +27,10 @@ use crate::emitter::Skeleton;
 use crate::scanner::scan;
 use crate::scanner::{Token, block_range, is_block_opener};
 
+use self::emit::emit_symbol;
 use self::layer::handle_layer;
-use self::symbol::{emit_symbol, parse_symbol};
+use self::resolved::resolve_symbol;
+use self::symbol::parse_symbol;
 
 /// keywords whose presence we don't translate yet. some are block openers,
 /// some are scalar directives - `walk` handles both.
@@ -108,8 +112,8 @@ fn walk(tokens: &[Token], skel: &mut Skeleton, include_layers: Option<&HashSet<S
                 } else {
                     &[]
                 };
-                if let Some((name, def)) = emit_symbol(parse_symbol(body)) {
-                    skel.symbols.insert(name, def);
+                if let Some(resolved) = resolve_symbol(parse_symbol(body)) {
+                    emit_symbol(resolved, skel);
                 }
                 i = range.end;
                 continue;

@@ -1,16 +1,12 @@
-//! LABEL block parser. Splits into:
-//!
-//! - [`parse_label`] - walk tokens, accumulate a [`ParsedLabel`] bag of
-//!   `Option` fields. No defaulting, no emit.
-//! - [`emit_label`] - take a [`ParsedLabel`] plus layer context, push the
-//!   `label_*` [`StyleDef`] onto the [`Skeleton`], and return a
-//!   [`LabelSkeleton`].
+//! LABEL block parser. Walk tokens, accumulate a [`ParsedLabel`] bag of
+//! `Option` fields. No defaulting, no emit - defaults live in
+//! [`super::resolved`]; emit lives in [`super::emit`].
 
 use mars_style::Colour;
 use tracing::warn;
 
 use crate::directive::LabelDirective;
-use crate::emitter::{EmitFill, EmitLinePlacement, LabelSkeleton, Skeleton, StyleDef, slugify};
+use crate::emitter::EmitLinePlacement;
 use crate::parsing;
 use crate::scanner::Token;
 
@@ -106,40 +102,4 @@ pub(crate) fn parse_label(body: &[Token]) -> ParsedLabel {
     }
 
     p
-}
-
-pub(crate) fn emit_label(p: ParsedLabel, layer_name: &str, skel: &mut Skeleton) -> LabelSkeleton {
-    // empty text is kept so handle_layer can fill it in from LABELITEM. when
-    // neither TEXT nor LABELITEM is set we still emit the LabelSkeleton so
-    // style/placement state isn't lost; the operator gets a clean empty
-    // `text:` slot to fill in.
-    let text = p.text.unwrap_or_default();
-    let style_name = format!("label_{}", slugify(layer_name));
-    let fill = p.color.unwrap_or(Colour::rgb(0, 0, 0));
-    // label styles are not deduped against geometry styles
-    skel.styles.push(StyleDef {
-        name: style_name.clone(),
-        style_type: "label".into(),
-        fill: Some(EmitFill::Hex(fill)),
-        stroke: None,
-        stroke_width: None,
-        stroke_dasharray: None,
-        stroke_linejoin: None,
-        marker: None,
-        opacity: None,
-        stroke_offset_px: None,
-        stroke_gap: None,
-        font_family: p.font.or_else(|| Some("sans-serif".into())),
-        font_size: p.size.or(Some(12.0)),
-        halo_color: p.outlinecolor,
-        halo_width: p.outlinewidth,
-        priority: p.priority,
-        min_distance: p.min_distance,
-    });
-
-    LabelSkeleton {
-        text,
-        style_ref: style_name,
-        placement_line: p.placement_line,
-    }
 }

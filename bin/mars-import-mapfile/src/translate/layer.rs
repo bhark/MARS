@@ -1,27 +1,27 @@
-//! LAYER block parser. Splits into:
+//! LAYER block parser. Walk tokens, accumulate a [`ParsedLayer`] bag of
+//! `Option` fields plus nested [`ParsedClass`] / [`ParsedLabel`]. No
+//! defaulting, no emit, no `Skeleton` mutation.
 //!
-//! - [`parse_layer`] - walk tokens, accumulate a [`ParsedLayer`] bag of
-//!   `Option` fields plus nested [`ParsedClass`] / [`ParsedLabel`]. No
-//!   defaulting, no emit, no `Skeleton` mutation.
-//! - [`emit_layer`] - take a [`ParsedLayer`] plus the layer's source line,
-//!   run the default-unwrap + dedup + source-binding pipeline, and push the
-//!   resulting [`LayerSkeleton`] onto the [`Skeleton`].
-//!
-//! Owns the mapfile DATA -> binding lifting helpers, since those are pure
-//! string transforms with no other home.
+//! [`handle_layer`] is the orchestrator the top-level walk calls: peek the
+//! layer NAME for `--include-layer` filtering, parse, resolve, emit. The
+//! `DATA` -> binding lifting helpers (LiftedBinding, lift_inline_subquery,
+//! parse_data, ...) live here too as the natural home for layer-scoped
+//! pre-resolve string transforms.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::HashSet;
 
 use tracing::warn;
 
 use crate::directive::LayerDirective;
-use crate::emitter::{BindingSource, ClassSkeleton, LabelSkeleton, LayerSkeleton, Skeleton, SourceSkeleton};
+use crate::emitter::{BindingSource, Skeleton};
 use crate::parsing;
 use crate::scanner::{Token, block_range, is_block_opener};
 use crate::translate::{is_unsupported, normalize_n_plus_one};
 
-use super::class::{ParsedClass, emit_class, parse_class};
-use super::label::{ParsedLabel, emit_label, parse_label};
+use super::class::{ParsedClass, parse_class};
+use super::emit::emit_layer;
+use super::label::{ParsedLabel, parse_label};
+use super::resolved::resolve_layer;
 
 #[derive(Debug, Default)]
 pub(crate) struct ParsedLayer {
@@ -62,7 +62,9 @@ pub(crate) fn handle_layer(
     }
 
     let parsed = parse_layer(body);
-    emit_layer(parsed, layer_line, skel);
+    if let Some(resolved) = resolve_layer(parsed, layer_line, &skel.symbols) {
+        emit_layer(resolved, skel);
+    }
 }
 
 pub(crate) fn parse_layer(body: &[Token]) -> ParsedLayer {
@@ -155,122 +157,11 @@ pub(crate) fn parse_layer(body: &[Token]) -> ParsedLayer {
     p
 }
 
-fn emit_layer(p: ParsedLayer, layer_line: usize, skel: &mut Skeleton) {
-    let resolved_name = p.name.clone().unwrap_or_else(|| format!("unnamed_layer_l{layer_line}"));
-
-    if let Some(ref t) = p.layer_type {
-        let up = t.to_ascii_uppercase();
-        if up == "RASTER" || up == "QUERY" {
-            warn!(line = layer_line, layer = %resolved_name, "skipping RASTER/QUERY layer");
-            return;
-        }
-    }
-
-    let geom_kind_str = p.layer_type.as_deref().and_then(mapfile_type_to_geom);
-    let geom_for_classes = geom_kind_str.unwrap_or("polygon");
-
-    let mut classes: Vec<ClassSkeleton> = p
-        .classes
-        .into_iter()
-        .map(|pc| emit_class(pc, &resolved_name, geom_for_classes, skel))
-        .collect();
-    let mut label: Option<LabelSkeleton> = p.label.map(|pl| emit_label(pl, &resolved_name, skel));
-
-    // CLASSITEM expansion: a CLASS with NAME but no EXPRESSION inherits an
-    // implicit `<classitem> = '<NAME>'` predicate. mirrors mapserver's
-    // attribute-keyed class semantics.
-    if let Some(item) = p.class_item.as_deref() {
-        for cls in &mut classes {
-            if cls.when.is_none()
-                && let Some(value) = cls.title.as_deref()
-            {
-                cls.when = Some(format!("{item} = '{}'", value.replace('\'', "''")));
-            }
-        }
-    }
-    // LABELITEM: if the LABEL block had no TEXT, the layer's labelitem
-    // becomes a `{<col>}` template referencing the column.
-    if let (Some(item), Some(lbl)) = (p.label_item.as_deref(), label.as_mut())
-        && lbl.text.is_empty()
-    {
-        lbl.text = format!("{{{item}}}");
-    }
-
-    let geom_kind = geom_kind_str.map(|s| s.to_string());
-
-    let (geometry_column, from_table) = parse_data(p.data.as_deref());
-
-    let mut sources = Vec::new();
-    if !p.scale_token_values.is_empty() {
-        let gc = geometry_column.clone().unwrap_or_else(|| "geometri".into());
-        let id_col = p.processing_items.as_deref().and_then(guess_id_column);
-        let n = p.scale_token_values.len();
-        for (idx, (_min_denom, table)) in p.scale_token_values.iter().enumerate() {
-            let max_denom = if idx + 1 < n {
-                Some(p.scale_token_values[idx + 1].0)
-            } else {
-                p.max_scale_denom
-            };
-            let (source, filter) = lifted_to_source(lift_inline_subquery(table));
-            sources.push(SourceSkeleton {
-                max_denom_exclusive: max_denom,
-                source,
-                filter,
-                geometry_column: gc.clone(),
-                id_column: id_col.clone(),
-                attributes: Vec::new(),
-            });
-        }
-    } else if let Some(table) = from_table {
-        let (source, filter) = lifted_to_source(lift_inline_subquery(&table));
-        sources.push(SourceSkeleton {
-            max_denom_exclusive: p.max_scale_denom,
-            source,
-            filter,
-            geometry_column: geometry_column.unwrap_or_else(|| "geometri".into()),
-            id_column: p.processing_items.as_deref().and_then(guess_id_column),
-            attributes: Vec::new(),
-        });
-    }
-
-    // collect attributes from class expressions and any per-tier filter idents
-    // (config validation requires every filter ident to be declared on the
-    // binding's attributes ∪ id_column).
-    let mut all_attrs = BTreeSet::new();
-    for cls in &classes {
-        if let Some(ref when) = cls.when
-            && let Ok(expr) = mars_expr::parse(when)
-        {
-            mars_expr::collect_idents(&expr, &mut all_attrs);
-        }
-    }
-    for src in &sources {
-        if let Some(ref f) = src.filter
-            && let Ok(expr) = mars_expr::parse(f)
-        {
-            mars_expr::collect_idents(&expr, &mut all_attrs);
-        }
-    }
-    let attrs_vec: Vec<String> = all_attrs.into_iter().collect();
-    for src in &mut sources {
-        src.attributes = attrs_vec.clone();
-    }
-
-    skel.layers.push(LayerSkeleton {
-        name: resolved_name,
-        title: p.title,
-        geom_kind,
-        sources,
-        classes,
-        label,
-    });
-}
-
 /// translate a `LiftedBinding` into the `BindingSource` shape the emitter
 /// consumes plus the optional filter expression. `Sql` bindings carry no
 /// filter through this path - the operator already inlined any WHERE clause
 /// into the SELECT.
-fn lifted_to_source(lifted: LiftedBinding) -> (BindingSource, Option<String>) {
+pub(crate) fn lifted_to_source(lifted: LiftedBinding) -> (BindingSource, Option<String>) {
     match lifted {
         LiftedBinding::Table { table, filter } => (BindingSource::Table(table), filter),
         LiftedBinding::Sql { sql } => {
@@ -378,7 +269,7 @@ pub(crate) fn lift_inline_subquery(raw: &str) -> LiftedBinding {
     }
 }
 
-fn parse_data(data: Option<&str>) -> (Option<String>, Option<String>) {
+pub(crate) fn parse_data(data: Option<&str>) -> (Option<String>, Option<String>) {
     let Some(d) = data else { return (None, None) };
     let cleaned = strip_using(d);
     let cleaned = cleaned.trim().trim_matches('"');
@@ -392,7 +283,7 @@ fn parse_data(data: Option<&str>) -> (Option<String>, Option<String>) {
     }
 }
 
-fn guess_id_column(items: &str) -> Option<String> {
+pub(crate) fn guess_id_column(items: &str) -> Option<String> {
     let parts: Vec<&str> = items.split(',').map(|s| s.trim()).collect();
     parts
         .iter()

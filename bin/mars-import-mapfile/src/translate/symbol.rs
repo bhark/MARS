@@ -1,12 +1,8 @@
-//! SYMBOL block parser. Splits into:
-//!
-//! - [`parse_symbol`] - walk tokens, accumulate a [`ParsedSymbol`] bag of
-//!   `Option` fields. No defaulting, no TYPE -> SymbolDef resolution.
-//! - [`emit_symbol`] - take a [`ParsedSymbol`] and resolve the mapfile TYPE
-//!   into the [`SymbolDef`] vocabulary the emitter reads.
+//! SYMBOL block parser. Walk tokens, accumulate a [`ParsedSymbol`] bag of
+//! `Option` fields. No defaulting, no TYPE -> [`crate::emitter::SymbolDef`]
+//! resolution - that lives in [`super::resolved::resolve_symbol`].
 
 use crate::directive::SymbolDirective;
-use crate::emitter::{MarkerKind, SymbolDef};
 use crate::parsing;
 use crate::scanner::{Token, block_range};
 
@@ -77,43 +73,4 @@ pub(crate) fn parse_symbol(body: &[Token]) -> ParsedSymbol {
         i += 1;
     }
     p
-}
-
-/// resolves a parsed SYMBOL block into the typed [`SymbolDef`] vocabulary:
-///
-/// - TYPE ELLIPSE -> Circle
-/// - TYPE HATCH -> Hatch (with ANGLE/SIZE defaults)
-/// - TYPE VECTOR with POINTS body -> VectorShape (filled / anchored)
-/// - TYPE VECTOR without POINTS but with a known shape NAME -> NamedShape
-/// - TYPE TRUETYPE -> Glyph (FONT + CHARACTER)
-/// - other recognised TYPEs (PIXMAP) -> NotImplemented, warned at use site.
-pub(crate) fn emit_symbol(p: ParsedSymbol) -> Option<(String, SymbolDef)> {
-    let name = p.name?.trim_matches('"').to_string();
-    let type_up = p.type_.unwrap_or_default().to_ascii_uppercase();
-    let def = match type_up.as_str() {
-        "ELLIPSE" => SymbolDef::Circle,
-        "HATCH" => SymbolDef::Hatch {
-            angle_deg: p.angle_deg,
-            size: p.size,
-        },
-        "VECTOR" => {
-            if !p.points.is_empty() {
-                SymbolDef::VectorShape {
-                    points: p.points,
-                    anchor: p.anchor,
-                    filled: p.filled,
-                }
-            } else {
-                SymbolDef::NamedShape(MarkerKind::from_lowercase(&name.to_ascii_lowercase())?)
-            }
-        }
-        "TRUETYPE" => SymbolDef::Glyph {
-            font_family: p.font.unwrap_or_else(|| "sans-serif".to_string()),
-            character: p.character?,
-        },
-        other => SymbolDef::NotImplemented {
-            raw_type: other.to_string(),
-        },
-    };
-    Some((name, def))
 }
