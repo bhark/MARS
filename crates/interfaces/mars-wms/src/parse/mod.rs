@@ -8,15 +8,15 @@
 //! Per-operation parsing lives in [`get_map`], [`get_feature_info`], and
 //! [`get_legend`]; shared KVP helpers live in [`common`].
 
-mod common;
+pub(crate) mod common;
 mod get_feature_info;
 mod get_legend;
-mod get_map;
+pub(crate) mod get_map;
 
 use common::{parse_kvp, require};
 use get_feature_info::parse_get_feature_info_inner;
 use get_legend::parse_get_legend_graphic_inner;
-use get_map::{parse_exceptions, parse_get_map_inner};
+use get_map::resolve_get_map_from_kvp;
 
 pub use get_feature_info::parse_get_feature_info;
 pub use get_legend::parse_get_legend_graphic;
@@ -29,11 +29,7 @@ pub fn parse_request(query: &str, cfg: &WmsConfig) -> Result<WmsRequest, WmsErro
     let kvp = parse_kvp(query);
     let request = require(&kvp, "request")?;
     match request.as_str() {
-        s if s.eq_ignore_ascii_case("GetMap") => {
-            let plan = parse_get_map_inner(&kvp, cfg)?;
-            let exceptions = parse_exceptions(&kvp)?;
-            Ok(WmsRequest::GetMap { plan, exceptions })
-        }
+        s if s.eq_ignore_ascii_case("GetMap") => Ok(WmsRequest::GetMap(resolve_get_map_from_kvp(&kvp, cfg)?)),
         s if s.eq_ignore_ascii_case("GetCapabilities") => Ok(WmsRequest::GetCapabilities),
         s if s.eq_ignore_ascii_case("GetFeatureInfo") => {
             Ok(WmsRequest::GetFeatureInfo(parse_get_feature_info_inner(&kvp, cfg)?))

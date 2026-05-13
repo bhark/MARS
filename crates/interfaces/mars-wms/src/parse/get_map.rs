@@ -1,140 +1,66 @@
-//! `GetMap` KVP parsing plus the `EXCEPTIONS=` and `DPI=` extensions that
-//! only apply to GetMap.
+//! `GetMap` KVP extraction. Produces an Option-heavy [`ParsedGetMap`]
+//! consumed by [`crate::prepare::resolve_get_map`]; this layer only does
+//! tokenisation and shape parsing (u32, f64) - all semantic validation
+//! (allowlists, bounds, axis-aware bbox, defaults) lives in prepare.
 
-use mars_runtime::RenderPlan;
-use mars_types::{CrsCode, LayerId};
+use mars_types::LayerId;
 
-use super::common::{Kvp, parse_bbox, parse_format, parse_kvp, parse_u32, require};
-use crate::{ExceptionsFormat, WmsConfig, WmsError};
+use super::common::{Kvp, parse_kvp, parse_optional_u32};
+use crate::prepare::viewport::ParsedViewport;
+use crate::prepare::{resolve_get_map, ParsedGetMap, ResolvedGetMap};
+use crate::{WmsConfig, WmsError};
 
-/// Parse a `GetMap` query-string into a [`RenderPlan`]. Also accepts the
-/// `request=GetMap` parameter but does not require it; the dispatcher in
-/// [`super::parse_request`] checks that.
-pub fn parse_get_map(query: &str, cfg: &WmsConfig) -> Result<RenderPlan, WmsError> {
+/// Parse a `GetMap` query-string and resolve it. Public facade used by the
+/// dispatcher; tests; bins. Returns the runtime `RenderPlan` directly for
+/// callers that don't care about EXCEPTIONS.
+pub fn parse_get_map(query: &str, cfg: &WmsConfig) -> Result<mars_runtime::RenderPlan, WmsError> {
     let kvp = parse_kvp(query);
-    parse_get_map_inner(&kvp, cfg)
+    let parsed = parse_get_map_kvp(&kvp)?;
+    Ok(resolve_get_map(parsed, cfg)?.plan)
 }
 
-pub(super) fn parse_get_map_inner(kvp: &Kvp, cfg: &WmsConfig) -> Result<RenderPlan, WmsError> {
-    // version is checked loosely; commits to 1.3.0 only.
-    if let Some(v) = kvp.get("version")
-        && v != "1.3.0"
-    {
-        return Err(WmsError::InvalidParam {
-            name: "version",
-            reason: format!("only 1.3.0 supported, got {v}"),
-        });
-    }
+/// Parse + resolve in one step; used by the dispatcher when it needs both
+/// the plan and EXCEPTIONS.
+pub(super) fn resolve_get_map_from_kvp(kvp: &Kvp, cfg: &WmsConfig) -> Result<ResolvedGetMap, WmsError> {
+    let parsed = parse_get_map_kvp(kvp)?;
+    resolve_get_map(parsed, cfg)
+}
 
-    let layers_raw = require(kvp, "layers")?;
-    let layers: Vec<LayerId> = layers_raw
-        .split(',')
-        .filter(|s| !s.is_empty())
-        .map(LayerId::new)
-        .collect();
-    if layers.is_empty() {
-        return Err(WmsError::InvalidParam {
-            name: "layers",
-            reason: "no layer names".into(),
-        });
-    }
-    if layers.len() > cfg.max_layers {
-        return Err(WmsError::InvalidParam {
-            name: "layers",
-            reason: format!("{} exceeds max {}", layers.len(), cfg.max_layers),
-        });
-    }
+/// transitional shim used by `parse::get_feature_info` until that op
+/// migrates to its own prepare layer (phase 3). emits the same `RenderPlan`
+/// the old direct-validation path produced.
+pub(super) fn parse_get_map_inner(kvp: &Kvp, cfg: &WmsConfig) -> Result<mars_runtime::RenderPlan, WmsError> {
+    Ok(resolve_get_map_from_kvp(kvp, cfg)?.plan)
+}
 
-    let crs_raw = require(kvp, "crs")?;
-    let crs = CrsCode::new(crs_raw.as_str());
-    if !cfg.allowlist_crs.is_empty() && !cfg.allowlist_crs.iter().any(|c| c.as_str() == crs_raw) {
-        return Err(WmsError::InvalidParam {
-            name: "crs",
-            reason: format!("{crs_raw} not in reprojection allowlist"),
-        });
-    }
-
-    let bbox_raw = require(kvp, "bbox")?;
-    let bbox = parse_bbox(&bbox_raw, &crs_raw, cfg.max_bbox_coord)?;
-
-    let width = parse_u32(kvp, "width")?;
-    let height = parse_u32(kvp, "height")?;
-    if width == 0 || height == 0 {
-        return Err(WmsError::InvalidParam {
-            name: "width|height",
-            reason: "must be > 0".into(),
-        });
-    }
-    if width > cfg.max_image_dimension || height > cfg.max_image_dimension {
-        return Err(WmsError::InvalidParam {
-            name: "width|height",
-            reason: format!("max dimension is {}, got {}x{}", cfg.max_image_dimension, width, height),
-        });
-    }
-    let pixels = u64::from(width) * u64::from(height);
-    if pixels > cfg.max_pixels {
-        return Err(WmsError::InvalidParam {
-            name: "width|height",
-            reason: format!(
-                "max pixels per request is {}, got {} ({}x{})",
-                cfg.max_pixels, pixels, width, height
-            ),
-        });
-    }
-
-    let format_raw = require(kvp, "format")?;
-    let format = parse_format(&format_raw)?;
-    if !cfg.formats.is_empty() && !cfg.formats.contains(&format) {
-        return Err(WmsError::InvalidParam {
-            name: "format",
-            reason: format!("{format_raw} not enabled"),
-        });
-    }
-
-    // optional `&DPI=` (or `&MAP_RESOLUTION=`, MapServer's name) overrides
-    // the service-default scale dpi for this one request. lets clients pin
-    // their own display dpi when computing scale-window routing without
-    // touching service config.
-    let scale_pixel_size_m = match parse_optional_dpi(kvp)? {
-        Some(dpi) => 0.0254 / dpi,
-        None => cfg.scale_pixel_size_m,
-    };
-
-    Ok(RenderPlan {
-        layers,
-        bbox,
-        width,
-        height,
-        crs,
-        format,
-        scale_pixel_size_m,
+/// KVP -> [`ParsedGetMap`]. Only fails on shape errors (e.g. `width=abc`
+/// not a u32). Required-field and allowlist checks happen in prepare.
+fn parse_get_map_kvp(kvp: &Kvp) -> Result<ParsedGetMap, WmsError> {
+    Ok(ParsedGetMap {
+        viewport: parse_viewport(kvp)?,
+        exceptions: nonempty(kvp, "exceptions"),
     })
 }
 
-/// Parse `&EXCEPTIONS=` per OGC 1.3.0. Optional; defaults to XML when absent.
-/// Accepts the bare keyword forms most clients send (`XML`, `BLANK`,
-/// `application/vnd.ogc.se_xml`, `application/vnd.ogc.se_blank`). INIMAGE is
-/// recognised but rejected as `NotImplemented` so the wire error stays
-/// faithful to spec instead of silently coercing.
-pub(super) fn parse_exceptions(kvp: &Kvp) -> Result<ExceptionsFormat, WmsError> {
-    let raw = match kvp.get("exceptions") {
-        Some(s) if !s.is_empty() => s.as_str(),
-        _ => return Ok(ExceptionsFormat::Xml),
-    };
-    if raw.eq_ignore_ascii_case("XML") || raw.eq_ignore_ascii_case("application/vnd.ogc.se_xml") {
-        Ok(ExceptionsFormat::Xml)
-    } else if raw.eq_ignore_ascii_case("BLANK") || raw.eq_ignore_ascii_case("application/vnd.ogc.se_blank") {
-        Ok(ExceptionsFormat::Blank)
-    } else if raw.eq_ignore_ascii_case("INIMAGE") || raw.eq_ignore_ascii_case("application/vnd.ogc.se_inimage") {
-        Err(WmsError::NotImplemented {
-            what: "EXCEPTIONS=INIMAGE".into(),
-        })
-    } else {
-        Err(WmsError::InvalidParam {
-            name: "exceptions",
-            reason: format!("unsupported value `{raw}`"),
-        })
-    }
+/// Shared viewport-KVP extractor used by GetMap (here) and reused by the
+/// other ops once they migrate to prepare. Currently `pub(crate)` so the
+/// per-op parsers can compose it.
+pub(crate) fn parse_viewport(kvp: &Kvp) -> Result<ParsedViewport, WmsError> {
+    Ok(ParsedViewport {
+        version: nonempty(kvp, "version"),
+        layers: parse_layers(kvp),
+        crs: nonempty(kvp, "crs"),
+        bbox: nonempty(kvp, "bbox"),
+        width: parse_optional_u32(kvp, "width")?,
+        height: parse_optional_u32(kvp, "height")?,
+        format: nonempty(kvp, "format"),
+        dpi: parse_optional_dpi(kvp)?,
+    })
+}
+
+fn parse_layers(kvp: &Kvp) -> Option<Vec<LayerId>> {
+    let raw = kvp.get("layers").filter(|s| !s.is_empty())?;
+    Some(raw.split(',').filter(|s| !s.is_empty()).map(LayerId::new).collect())
 }
 
 fn parse_optional_dpi(kvp: &Kvp) -> Result<Option<f64>, WmsError> {
@@ -148,22 +74,21 @@ fn parse_optional_dpi(kvp: &Kvp) -> Result<Option<f64>, WmsError> {
             name: "dpi",
             reason: e.to_string(),
         })?;
-    if !dpi.is_finite() || dpi <= 0.0 {
-        return Err(WmsError::InvalidParam {
-            name: "dpi",
-            reason: "must be a positive, finite number".into(),
-        });
-    }
     Ok(Some(dpi))
+}
+
+fn nonempty(kvp: &Kvp, name: &str) -> Option<String> {
+    kvp.get(name).filter(|s| !s.is_empty()).cloned()
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
-    use mars_types::ImageFormat;
+    use mars_types::{CrsCode, ImageFormat};
 
     use super::super::parse_request;
     use super::*;
+    use crate::ExceptionsFormat;
 
     fn cfg() -> WmsConfig {
         WmsConfig {
@@ -189,7 +114,6 @@ mod tests {
         assert_eq!(plan.bbox.max_y, 400.0);
         assert_eq!(plan.crs.as_str(), "EPSG:25832");
         assert_eq!(plan.format, ImageFormat::Png);
-        // no &DPI=, expect cfg default (96).
         assert!((plan.scale_pixel_size_m - 0.0254 / 96.0).abs() < 1e-12);
     }
 
@@ -234,7 +158,6 @@ mod tests {
 
     #[test]
     fn axis_swap_4326() {
-        // wire: minLat=10, minLon=20, maxLat=11, maxLon=22
         let q = "request=GetMap&version=1.3.0&layers=a&crs=EPSG:4326&\
                  bbox=10,20,11,22&width=1&height=1&format=image/png";
         let plan = parse_get_map(q, &cfg()).unwrap();
@@ -250,7 +173,7 @@ mod tests {
                  bbox=0,0,1,1&width=1&height=1&format=image/png";
         let req = parse_request(q, &cfg()).unwrap();
         match req {
-            crate::WmsRequest::GetMap { exceptions, .. } => assert_eq!(exceptions, ExceptionsFormat::Xml),
+            crate::WmsRequest::GetMap(r) => assert_eq!(r.exceptions, ExceptionsFormat::Xml),
             _ => panic!("expected GetMap"),
         }
     }
@@ -264,8 +187,8 @@ mod tests {
             );
             let req = parse_request(&q, &cfg()).unwrap();
             match req {
-                crate::WmsRequest::GetMap { exceptions, .. } => {
-                    assert_eq!(exceptions, ExceptionsFormat::Blank, "kw={kw}")
+                crate::WmsRequest::GetMap(r) => {
+                    assert_eq!(r.exceptions, ExceptionsFormat::Blank, "kw={kw}")
                 }
                 _ => panic!("expected GetMap"),
             }
@@ -281,8 +204,8 @@ mod tests {
             );
             let req = parse_request(&q, &cfg()).unwrap();
             match req {
-                crate::WmsRequest::GetMap { exceptions, .. } => {
-                    assert_eq!(exceptions, ExceptionsFormat::Xml, "kw={kw}")
+                crate::WmsRequest::GetMap(r) => {
+                    assert_eq!(r.exceptions, ExceptionsFormat::Xml, "kw={kw}")
                 }
                 _ => panic!("expected GetMap"),
             }

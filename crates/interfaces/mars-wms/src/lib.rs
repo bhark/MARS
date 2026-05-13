@@ -9,6 +9,7 @@ mod capabilities;
 mod exception;
 mod feature_info;
 mod parse;
+mod prepare;
 
 use mars_config::Config;
 use mars_runtime::RenderPlan;
@@ -18,6 +19,7 @@ pub use capabilities::capabilities_xml;
 pub use exception::service_exception_report;
 pub use feature_info::format_feature_info;
 pub use parse::{parse_get_feature_info, parse_get_legend_graphic, parse_get_map, parse_request};
+pub use prepare::ResolvedGetMap;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WmsError {
@@ -168,14 +170,9 @@ pub const MAX_FEATURE_COUNT: u32 = 1000;
 /// Top-level WMS request taxonomy.
 #[derive(Debug)]
 pub enum WmsRequest {
-    /// `request=GetMap` with a parsed [`RenderPlan`] and the EXCEPTIONS=
-    /// selection captured at parse time.
-    GetMap {
-        /// Parsed render plan.
-        plan: RenderPlan,
-        /// EXCEPTIONS= behaviour. Default `Xml` when the param is absent.
-        exceptions: ExceptionsFormat,
-    },
+    /// `request=GetMap` with a fully-resolved request (render plan plus
+    /// EXCEPTIONS= selection).
+    GetMap(ResolvedGetMap),
     /// `request=GetFeatureInfo` with the parsed [`GfiPlan`].
     GetFeatureInfo(GfiPlan),
     /// `request=GetLegendGraphic` with the parsed legend plan.

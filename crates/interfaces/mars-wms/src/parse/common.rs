@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 use percent_encoding::percent_decode_str;
 
-use mars_types::{Bbox, ImageFormat};
+use mars_types::ImageFormat;
 
 use crate::WmsError;
 
@@ -52,6 +52,23 @@ pub(super) fn parse_u32(kvp: &Kvp, name: &'static str) -> Result<u32, WmsError> 
         })
 }
 
+/// like `parse_u32` but returns `Ok(None)` when the key is missing / empty,
+/// and only errors on shape failures. used by the parse layer to extract
+/// fields that prepare may later reject as `MissingParam`.
+pub(super) fn parse_optional_u32(kvp: &Kvp, name: &'static str) -> Result<Option<u32>, WmsError> {
+    let raw = match kvp.get(name) {
+        Some(s) if !s.is_empty() => s,
+        _ => return Ok(None),
+    };
+    let n = raw
+        .parse()
+        .map_err(|e: std::num::ParseIntError| WmsError::InvalidParam {
+            name,
+            reason: e.to_string(),
+        })?;
+    Ok(Some(n))
+}
+
 pub(super) fn parse_format(raw: &str) -> Result<ImageFormat, WmsError> {
     match raw {
         "image/png" => Ok(ImageFormat::Png),
@@ -61,62 +78,6 @@ pub(super) fn parse_format(raw: &str) -> Result<ImageFormat, WmsError> {
             reason: format!("unsupported {other}"),
         }),
     }
-}
-
-/// WMS 1.3.0 axis-order rule: for CRSes with declared lat/lon (north/east) axis
-/// order, BBOX is `miny,minx,maxy,maxx` (lat,lon ordering). For CRSes with
-/// east/north axis order it is the natural `minx,miny,maxx,maxy`.
-///
-/// Ships a small CRS allowlist; EPSG:4326 is the canonical lat/lon case.
-/// EPSG:25832 and EPSG:3857 are east/north. Adding more is a one-line edit;
-/// upstream PROJ axis introspection lands with reprojection in a future release.
-fn is_lat_lon_order(crs: &str) -> bool {
-    matches!(crs, "EPSG:4326" | "urn:ogc:def:crs:EPSG::4326")
-}
-
-pub(super) fn parse_bbox(raw: &str, crs: &str, max_coord: f64) -> Result<Bbox, WmsError> {
-    let parts: Vec<&str> = raw.split(',').collect();
-    if parts.len() != 4 {
-        return Err(WmsError::InvalidParam {
-            name: "bbox",
-            reason: "expected 4 comma-separated floats".into(),
-        });
-    }
-    let nums: Vec<f64> = parts
-        .iter()
-        .map(|s| s.trim().parse::<f64>())
-        .collect::<Result<_, _>>()
-        .map_err(|e| WmsError::InvalidParam {
-            name: "bbox",
-            reason: e.to_string(),
-        })?;
-    let (min_x, min_y, max_x, max_y) = if is_lat_lon_order(crs) {
-        // wire order: minLat,minLon,maxLat,maxLon -> internal (x=lon, y=lat)
-        (nums[1], nums[0], nums[3], nums[2])
-    } else {
-        (nums[0], nums[1], nums[2], nums[3])
-    };
-    for v in [min_x, min_y, max_x, max_y] {
-        if !v.is_finite() {
-            return Err(WmsError::InvalidParam {
-                name: "bbox",
-                reason: "coordinates must be finite".into(),
-            });
-        }
-        if v.abs() > max_coord {
-            return Err(WmsError::InvalidParam {
-                name: "bbox",
-                reason: format!("coordinate magnitude exceeds {max_coord}"),
-            });
-        }
-    }
-    if !(max_x > min_x && max_y > min_y) {
-        return Err(WmsError::InvalidParam {
-            name: "bbox",
-            reason: "max must exceed min on both axes".into(),
-        });
-    }
-    Ok(Bbox::new(min_x, min_y, max_x, max_y))
 }
 
 #[cfg(test)]
