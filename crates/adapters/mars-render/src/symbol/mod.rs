@@ -40,12 +40,8 @@ pub(crate) fn dispatch(
             ..Default::default()
         }),
         MarkerSymbol::Circle { size } => render(pm, circle::build_path(*size), anchor, rotation_rad, style),
-        MarkerSymbol::Square { .. } => Err(RenderError::NotImplemented {
-            what: "MarkerSymbol::Square",
-        }),
-        MarkerSymbol::Triangle { .. } => Err(RenderError::NotImplemented {
-            what: "MarkerSymbol::Triangle",
-        }),
+        MarkerSymbol::Square { size } => render(pm, square::build_path(*size), anchor, rotation_rad, style),
+        MarkerSymbol::Triangle { size } => render(pm, triangle::build_path(*size), anchor, rotation_rad, style),
         MarkerSymbol::Cross { .. } => Err(RenderError::NotImplemented {
             what: "MarkerSymbol::Cross",
         }),
@@ -171,6 +167,30 @@ mod tests {
         assert!(
             n > 90 && n < 140,
             "expected ~113 fully-red pixels for a 12px circle, got {n}"
+        );
+    }
+
+    #[test]
+    fn square_marker_paints_red_pixels() {
+        let png = render_marker(MarkerSymbol::Square { size: 10.0 });
+        // 10x10 square = 100 fully covered pixels; antialiased edges round
+        // slightly under, so allow some slack.
+        let n = red_pixel_count(&png);
+        assert!(
+            n > 80 && n < 110,
+            "expected ~100 fully-red pixels for a 10px square, got {n}"
+        );
+    }
+
+    #[test]
+    fn triangle_marker_paints_red_pixels() {
+        let png = render_marker(MarkerSymbol::Triangle { size: 12.0 });
+        // equilateral triangle with base 12 has area ~= 12^2 * sqrt(3)/4
+        // ≈ 62; allow generous slack for antialiased apex/edge softening.
+        let n = red_pixel_count(&png);
+        assert!(
+            n > 40 && n < 85,
+            "expected ~62 fully-red pixels for a 12px triangle, got {n}"
         );
     }
 }
