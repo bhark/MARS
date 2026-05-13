@@ -3,6 +3,7 @@
 use mars_style::Colour;
 use tracing::warn;
 
+use crate::directive::{LabelDirective, StyleDirective};
 use crate::emitter::{
     ClassSkeleton, EmitFill, EmitLinePlacement, EmitMarker, EmitStrokeGap, LabelSkeleton, MarkerKind, Skeleton,
     StyleDef, SymbolDef, slugify,
@@ -186,19 +187,18 @@ pub(crate) fn parse_class(
 fn parse_style_block(body: &[Token]) -> StyleBlock {
     let mut st = StyleBlock::default();
     for t in body {
-        let kw = t.keyword.to_ascii_uppercase();
-        match kw.as_str() {
-            "COLOR" => st.color = parsing::rgb_triple(t).or(st.color),
-            "OUTLINECOLOR" => st.outlinecolor = parsing::rgb_triple(t).or(st.outlinecolor),
-            "WIDTH" => st.width = parsing::first_parsed(t).or(st.width),
-            "OUTLINEWIDTH" => st.outlinewidth = parsing::first_parsed(t).or(st.outlinewidth),
-            "PATTERN" => {
+        match StyleDirective::from_token(t) {
+            StyleDirective::Color(t) => st.color = parsing::rgb_triple(t).or(st.color),
+            StyleDirective::OutlineColor(t) => st.outlinecolor = parsing::rgb_triple(t).or(st.outlinecolor),
+            StyleDirective::Width(t) => st.width = parsing::first_parsed(t).or(st.width),
+            StyleDirective::OutlineWidth(t) => st.outlinewidth = parsing::first_parsed(t).or(st.outlinewidth),
+            StyleDirective::Pattern(t) => {
                 let nums = parsing::nums(t);
                 if !nums.is_empty() {
                     st.pattern = Some(nums);
                 }
             }
-            "SYMBOL" => {
+            StyleDirective::Symbol(t) => {
                 // STYLE.SYMBOL takes one arg: either a symbol name (string)
                 // or a numeric index (legacy). we only resolve named symbols.
                 if let Some(s) = parsing::first_unquoted(t)
@@ -208,22 +208,22 @@ fn parse_style_block(body: &[Token]) -> StyleBlock {
                     st.symbol = Some(s);
                 }
             }
-            "ANGLE" => st.angle_deg = parsing::first_parsed(t).or(st.angle_deg),
-            "SIZE" => st.size = parsing::first_parsed(t).or(st.size),
-            "OPACITY" => {
+            StyleDirective::Angle(t) => st.angle_deg = parsing::first_parsed(t).or(st.angle_deg),
+            StyleDirective::Size(t) => st.size = parsing::first_parsed(t).or(st.size),
+            StyleDirective::Opacity(t) => {
                 // mapserver OPACITY is 0..100; mars wants 0.0..1.0.
                 if let Some(v) = parsing::first_parsed::<f32>(t) {
                     st.opacity = Some((v / 100.0).clamp(0.0, 1.0));
                 }
             }
-            "OFFSET" => {
+            StyleDirective::Offset(t) => {
                 // OFFSET <dx> <dy>: dx is the perpendicular distance; dy is
                 // either a real y offset or -99 (mapserver's "parallel
                 // double stroke" marker). we honour dx and drop the second
                 // arg.
                 st.offset_px = parsing::first_parsed(t).or(st.offset_px);
             }
-            "GAP" => {
+            StyleDirective::Gap(t) => {
                 // mapserver: negative gap means "stamp marker along line"
                 // with stride |gap|; positive gap is a different sentinel
                 // mode. interval_px is unsigned here.
@@ -231,8 +231,8 @@ fn parse_style_block(body: &[Token]) -> StyleBlock {
                     st.gap_px = Some(v.abs());
                 }
             }
-            "INITIALGAP" => st.initial_gap_px = parsing::first_parsed(t).or(st.initial_gap_px),
-            "LINEJOIN" => {
+            StyleDirective::InitialGap(t) => st.initial_gap_px = parsing::first_parsed(t).or(st.initial_gap_px),
+            StyleDirective::LineJoin(t) => {
                 if let Some(arg) = t.args.first() {
                     match arg.to_ascii_lowercase().as_str() {
                         "miter" => st.linejoin = Some("miter"),
@@ -242,10 +242,10 @@ fn parse_style_block(body: &[Token]) -> StyleBlock {
                     }
                 }
             }
-            "MINWIDTH" | "MAXWIDTH" => {
-                warn!(line = t.line, keyword = %kw, "STYLE {kw} not yet implemented; dropping");
+            StyleDirective::NotImplementedAttenuation(t) => {
+                warn!(line = t.line, keyword = %t.keyword, "STYLE {} not yet implemented; dropping", t.keyword);
             }
-            _ => {}
+            StyleDirective::Unknown => {}
         }
     }
     st
@@ -467,37 +467,36 @@ pub(crate) fn parse_label(
     }
 
     for t in body {
-        let kw = t.keyword.to_ascii_uppercase();
-        match kw.as_str() {
-            "TEXT" if text.is_none() => text = t.args.first().cloned(),
-            "FONT" if font.is_none() => font = t.args.first().cloned(),
-            "SIZE" => size = parsing::first_parsed(t),
-            "COLOR" => color = parsing::rgb_triple(t).or(color),
-            "OUTLINECOLOR" => outlinecolor = parsing::rgb_triple(t).or(outlinecolor),
-            "OUTLINEWIDTH" => outlinewidth = parsing::first_parsed(t),
-            "PRIORITY" => {
+        match LabelDirective::from_token(t) {
+            LabelDirective::Text(t) if text.is_none() => text = t.args.first().cloned(),
+            LabelDirective::Font(t) if font.is_none() => font = t.args.first().cloned(),
+            LabelDirective::Size(t) => size = parsing::first_parsed(t),
+            LabelDirective::Color(t) => color = parsing::rgb_triple(t).or(color),
+            LabelDirective::OutlineColor(t) => outlinecolor = parsing::rgb_triple(t).or(outlinecolor),
+            LabelDirective::OutlineWidth(t) => outlinewidth = parsing::first_parsed(t),
+            LabelDirective::Priority(t) => {
                 // mapserver PRIORITY is 1..=10 by convention; mars allows any
                 // u16. clamp to a sane range.
                 if let Some(v) = parsing::first_parsed::<i64>(t) {
                     priority = Some(v.clamp(0, u16::MAX as i64) as u16);
                 }
             }
-            "MINDISTANCE" => {
+            LabelDirective::MinDistance(t) => {
                 if let Some(v) = parsing::first_parsed::<f32>(t) {
                     min_distance = Some(v);
                 }
             }
-            "REPEATDISTANCE" => {
+            LabelDirective::RepeatDistance(t) => {
                 if let Some(v) = parsing::first_parsed::<f64>(t) {
                     ensure_line(&mut placement_line).repeat_m = Some(v);
                 }
             }
-            "MAXOVERLAPANGLE" => {
+            LabelDirective::MaxOverlapAngle(t) => {
                 if let Some(v) = parsing::first_parsed::<f32>(t) {
                     ensure_line(&mut placement_line).max_angle_delta_deg = Some(v);
                 }
             }
-            "ANGLE" => {
+            LabelDirective::Angle(t) => {
                 if let Some(arg) = t.args.first() {
                     match arg.to_ascii_uppercase().as_str() {
                         "FOLLOW" => {
@@ -512,21 +511,24 @@ pub(crate) fn parse_label(
                     }
                 }
             }
-            "POSITION" => warn!(line = t.line, "LABEL POSITION is not yet implemented; dropping"),
-            "PARTIALS" => warn!(line = t.line, "LABEL PARTIALS is not yet implemented; dropping"),
-            "OFFSET" => warn!(line = t.line, "LABEL OFFSET is not yet implemented; dropping"),
-            "TYPE" => {
-                if let Some(arg) = t.args.first() {
-                    let up = arg.to_ascii_uppercase();
-                    if up == "BITMAP" {
+            LabelDirective::NotImplemented(t) => {
+                let kw = t.keyword.to_ascii_uppercase();
+                if kw == "TYPE" {
+                    if let Some(arg) = t.args.first()
+                        && arg.eq_ignore_ascii_case("BITMAP")
+                    {
                         warn!(
                             line = t.line,
                             "LABEL TYPE BITMAP is not yet implemented; falling back to TrueType"
                         );
                     }
+                } else {
+                    warn!(line = t.line, "LABEL {kw} is not yet implemented; dropping");
                 }
             }
-            _ => {}
+            // re-occurrence of TEXT / FONT after the first is ignored; same
+            // for any keyword we don't understand inside a LABEL block.
+            LabelDirective::Text(_) | LabelDirective::Font(_) | LabelDirective::Unknown => {}
         }
     }
 

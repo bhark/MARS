@@ -3,6 +3,7 @@
 //! coverage is the subset exercised by the parity harness.
 //! Synchronous; no tokio.
 
+mod directive;
 mod emitter;
 mod expression;
 mod parsing;

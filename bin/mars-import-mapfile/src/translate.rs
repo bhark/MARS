@@ -4,6 +4,7 @@ use std::collections::{BTreeSet, HashSet};
 
 use tracing::warn;
 
+use crate::directive::SymbolDirective;
 use crate::emitter::{
     BindingSource, ClassSkeleton, LabelSkeleton, LayerSkeleton, MarkerKind, Skeleton, SourceSkeleton, SymbolDef,
 };
@@ -402,18 +403,17 @@ fn parse_symbol(body: &[Token]) -> Option<(String, SymbolDef)> {
     let mut i = 0;
     while i < body.len() {
         let t = &body[i];
-        let kw = t.keyword.to_ascii_uppercase();
-        match kw.as_str() {
-            "NAME" if name.is_none() => name = t.args.first().cloned(),
-            "TYPE" if type_.is_none() => type_ = t.args.first().cloned(),
-            "ANGLE" => angle_deg = parsing::first_parsed(t),
-            "SIZE" => size = parsing::first_parsed(t),
-            "FILLED" => {
+        match SymbolDirective::from_token(t) {
+            SymbolDirective::Name(t) if name.is_none() => name = t.args.first().cloned(),
+            SymbolDirective::Type(t) if type_.is_none() => type_ = t.args.first().cloned(),
+            SymbolDirective::Angle(t) => angle_deg = parsing::first_parsed(t),
+            SymbolDirective::Size(t) => size = parsing::first_parsed(t),
+            SymbolDirective::Filled(t) => {
                 if let Some(arg) = t.args.first() {
                     filled = matches!(arg.to_ascii_uppercase().as_str(), "TRUE" | "ON" | "YES" | "1");
                 }
             }
-            "POINTS" => {
+            SymbolDirective::Points(t) => {
                 // POINTS is a block; coords land on the inner tokens. each
                 // inner token has the first coord as `keyword` and the rest
                 // as `args`. flatten all numerics and group into (x, y) pairs.
@@ -437,15 +437,17 @@ fn parse_symbol(body: &[Token]) -> Option<(String, SymbolDef)> {
                     points.push((pair[0], pair[1]));
                 }
             }
-            "ANCHORPOINT" => {
+            SymbolDirective::AnchorPoint(t) => {
                 let coords = parsing::nums(t);
                 if coords.len() >= 2 {
                     anchor = Some((coords[0], coords[1]));
                 }
             }
-            "FONT" => font = parsing::first_unquoted(t),
-            "CHARACTER" => character = parsing::first_unquoted(t),
-            _ => {}
+            SymbolDirective::Font(t) => font = parsing::first_unquoted(t),
+            SymbolDirective::Character(t) => character = parsing::first_unquoted(t),
+            // re-occurrence of NAME / TYPE after the first is ignored; same
+            // for any keyword we don't understand inside a SYMBOL block.
+            SymbolDirective::Name(_) | SymbolDirective::Type(_) | SymbolDirective::Unknown => {}
         }
         i += 1;
     }
