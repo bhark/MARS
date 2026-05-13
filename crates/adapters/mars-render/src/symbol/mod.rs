@@ -44,9 +44,7 @@ pub(crate) fn dispatch(
         MarkerSymbol::Triangle { size } => render(pm, triangle::build_path(*size), anchor, rotation_rad, style),
         MarkerSymbol::Cross { size } => render(pm, cross::build_path(*size), anchor, rotation_rad, style),
         MarkerSymbol::X { size } => render(pm, x::build_path(*size), anchor, rotation_rad, style),
-        MarkerSymbol::Pin { .. } => Err(RenderError::NotImplemented {
-            what: "MarkerSymbol::Pin",
-        }),
+        MarkerSymbol::Pin { size } => render(pm, pin::build_path(*size), anchor, rotation_rad, style),
         MarkerSymbol::VectorShape { .. } => Err(RenderError::NotImplemented {
             what: "MarkerSymbol::VectorShape",
         }),
@@ -210,6 +208,18 @@ mod tests {
         assert!(
             n > 60 && n < 100,
             "expected ~80 fully-red pixels for a 12px x, got {n}"
+        );
+    }
+
+    #[test]
+    fn pin_marker_paints_red_pixels() {
+        let png = render_marker(MarkerSymbol::Pin { size: 12.0 });
+        // bulb area = pi*36 ≈ 113 + tail triangle from tangents to apex
+        // ≈ 47, minus overlap; allow generous slack for arc + apex AA.
+        let n = red_pixel_count(&png);
+        assert!(
+            n > 120 && n < 200,
+            "expected ~160 fully-red pixels for a 12px pin, got {n}"
         );
     }
 }
