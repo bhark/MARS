@@ -36,7 +36,7 @@ use mars_config::Config;
 use mars_observability::{Metrics, rebalance_outcome};
 use mars_source::{ChangeBatch, ChangeFeed, ChangeSubscription, LeaderLock, LeaderLockGuard, Source};
 use mars_store::{ManifestStore, ObjectStore, StoreError};
-use mars_types::{BindingId, LevelMetadata, Manifest};
+use mars_types::{BindingId, Manifest};
 use tokio_util::sync::CancellationToken;
 
 use crate::stages::shared::governors;
@@ -313,29 +313,12 @@ impl Compiler {
 
         let reconcile_events = stages::cycle::reconcile_cadence::run(self, &plan, &sidecars).await?;
 
-        // build an incremental cycle, ingest every event.
-        let level_meta: HashMap<BindingId, Vec<LevelMetadata>> = prior
-            .bindings
-            .iter()
-            .map(|b| (b.binding_id.clone(), b.levels.clone()))
-            .collect();
-        let mut cycle = incremental::IncrementalCycle::new(&plan, &sidecars, &level_meta);
-        let mut last_source_version: Option<String> = prior.source_version.clone();
-        let mut event_count: u64 = 0;
-        for event in reconcile_events {
-            cycle.ingest(event)?;
-            event_count += 1;
-        }
-        for batch in batches {
-            for event in batch.events {
-                cycle.ingest(event)?;
-                event_count += 1;
-            }
-            if let Some(v) = batch.source_version {
-                last_source_version = Some(v);
-            }
-        }
-        let dirty = cycle.finish();
+        let ingest = stages::cycle::ingest::run(&plan, &sidecars, &prior, reconcile_events, batches)?;
+        let stages::cycle::ingest::IngestOutcome {
+            dirty,
+            last_source_version,
+            event_count,
+        } = ingest;
         for w in &dirty.warnings {
             tracing::warn!(?w, "incremental cycle warning");
         }

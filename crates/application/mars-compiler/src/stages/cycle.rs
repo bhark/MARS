@@ -5,4 +5,5 @@
 //! commit. for now, `apply_cycle` in `lib.rs` still drives the sequence
 //! inline and calls each extracted stage one by one.
 
+pub(crate) mod ingest;
 pub(crate) mod reconcile_cadence;
