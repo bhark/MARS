@@ -43,18 +43,15 @@ pub(super) fn require(kvp: &Kvp, name: &'static str) -> Result<String, WmsError>
         .ok_or(WmsError::MissingParam(name))
 }
 
-pub(super) fn parse_u32(kvp: &Kvp, name: &'static str) -> Result<u32, WmsError> {
-    let raw = require(kvp, name)?;
-    raw.parse()
-        .map_err(|e: std::num::ParseIntError| WmsError::InvalidParam {
-            name,
-            reason: e.to_string(),
-        })
+/// extract a non-empty KVP value as an owned String. parse-layer counterpart
+/// to `require` that does not error on absence - prepare reports MissingParam.
+pub(super) fn nonempty(kvp: &Kvp, name: &str) -> Option<String> {
+    kvp.get(name).filter(|s| !s.is_empty()).cloned()
 }
 
-/// like `parse_u32` but returns `Ok(None)` when the key is missing / empty,
-/// and only errors on shape failures. used by the parse layer to extract
-/// fields that prepare may later reject as `MissingParam`.
+/// extract `Option<u32>` from a KVP value: missing/empty -> `Ok(None)`;
+/// present but malformed -> `WmsError::InvalidParam`. semantic `required`
+/// vs `optional` distinction lives in prepare, not parse.
 pub(super) fn parse_optional_u32(kvp: &Kvp, name: &'static str) -> Result<Option<u32>, WmsError> {
     let raw = match kvp.get(name) {
         Some(s) if !s.is_empty() => s,

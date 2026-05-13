@@ -14,7 +14,7 @@ mod get_legend;
 pub(crate) mod get_map;
 
 use common::{parse_kvp, require};
-use get_feature_info::parse_get_feature_info_inner;
+use get_feature_info::resolve_get_feature_info_from_kvp;
 use get_legend::parse_get_legend_graphic_inner;
 use get_map::resolve_get_map_from_kvp;
 
@@ -32,7 +32,7 @@ pub fn parse_request(query: &str, cfg: &WmsConfig) -> Result<WmsRequest, WmsErro
         s if s.eq_ignore_ascii_case("GetMap") => Ok(WmsRequest::GetMap(resolve_get_map_from_kvp(&kvp, cfg)?)),
         s if s.eq_ignore_ascii_case("GetCapabilities") => Ok(WmsRequest::GetCapabilities),
         s if s.eq_ignore_ascii_case("GetFeatureInfo") => {
-            Ok(WmsRequest::GetFeatureInfo(parse_get_feature_info_inner(&kvp, cfg)?))
+            Ok(WmsRequest::GetFeatureInfo(resolve_get_feature_info_from_kvp(&kvp, cfg)?))
         }
         s if s.eq_ignore_ascii_case("GetLegendGraphic") => {
             Ok(WmsRequest::GetLegendGraphic(parse_get_legend_graphic_inner(&kvp, cfg)?))

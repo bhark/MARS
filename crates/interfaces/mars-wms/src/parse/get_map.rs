@@ -5,7 +5,7 @@
 
 use mars_types::LayerId;
 
-use super::common::{Kvp, parse_kvp, parse_optional_u32};
+use super::common::{nonempty, parse_kvp, parse_optional_u32, Kvp};
 use crate::prepare::viewport::ParsedViewport;
 use crate::prepare::{resolve_get_map, ParsedGetMap, ResolvedGetMap};
 use crate::{WmsConfig, WmsError};
@@ -24,13 +24,6 @@ pub fn parse_get_map(query: &str, cfg: &WmsConfig) -> Result<mars_runtime::Rende
 pub(super) fn resolve_get_map_from_kvp(kvp: &Kvp, cfg: &WmsConfig) -> Result<ResolvedGetMap, WmsError> {
     let parsed = parse_get_map_kvp(kvp)?;
     resolve_get_map(parsed, cfg)
-}
-
-/// transitional shim used by `parse::get_feature_info` until that op
-/// migrates to its own prepare layer (phase 3). emits the same `RenderPlan`
-/// the old direct-validation path produced.
-pub(super) fn parse_get_map_inner(kvp: &Kvp, cfg: &WmsConfig) -> Result<mars_runtime::RenderPlan, WmsError> {
-    Ok(resolve_get_map_from_kvp(kvp, cfg)?.plan)
 }
 
 /// KVP -> [`ParsedGetMap`]. Only fails on shape errors (e.g. `width=abc`
@@ -75,10 +68,6 @@ fn parse_optional_dpi(kvp: &Kvp) -> Result<Option<f64>, WmsError> {
             reason: e.to_string(),
         })?;
     Ok(Some(dpi))
-}
-
-fn nonempty(kvp: &Kvp, name: &str) -> Option<String> {
-    kvp.get(name).filter(|s| !s.is_empty()).cloned()
 }
 
 #[cfg(test)]

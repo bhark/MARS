@@ -10,12 +10,17 @@
 //! normalisation (LAYERS/CRS/BBOX/WIDTH/HEIGHT/FORMAT/DPI) lives in
 //! [`viewport`].
 
+pub(crate) mod get_feature_info;
 pub(crate) mod get_map;
 pub(crate) mod viewport;
 
+pub use get_feature_info::ResolvedGetFeatureInfo;
 pub use get_map::ResolvedGetMap;
 
+pub(crate) use get_feature_info::resolve_get_feature_info;
 pub(crate) use get_map::resolve_get_map;
+
+use mars_types::LayerId;
 
 use viewport::ParsedViewport;
 
@@ -24,4 +29,16 @@ use viewport::ParsedViewport;
 pub(crate) struct ParsedGetMap {
     pub viewport: ParsedViewport,
     pub exceptions: Option<String>,
+}
+
+/// Option-heavy GetFeatureInfo shape produced by
+/// [`crate::parse::get_feature_info`].
+#[derive(Debug, Default, Clone)]
+pub(crate) struct ParsedGetFeatureInfo {
+    pub viewport: ParsedViewport,
+    pub query_layers: Option<Vec<LayerId>>,
+    pub i: Option<u32>,
+    pub j: Option<u32>,
+    pub info_format: Option<String>,
+    pub feature_count: Option<u32>,
 }

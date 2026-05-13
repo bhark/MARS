@@ -12,14 +12,13 @@ mod parse;
 mod prepare;
 
 use mars_config::Config;
-use mars_runtime::RenderPlan;
 use mars_types::{CrsCode, ImageFormat, LayerId};
 
 pub use capabilities::capabilities_xml;
 pub use exception::service_exception_report;
 pub use feature_info::format_feature_info;
 pub use parse::{parse_get_feature_info, parse_get_legend_graphic, parse_get_map, parse_request};
-pub use prepare::ResolvedGetMap;
+pub use prepare::{ResolvedGetFeatureInfo, ResolvedGetMap};
 
 #[derive(Debug, thiserror::Error)]
 pub enum WmsError {
@@ -144,25 +143,6 @@ impl InfoFormat {
     }
 }
 
-/// Parsed GetFeatureInfo request. Carries the underlying [`RenderPlan`] (used
-/// to resolve binding + level the same way GetMap would), plus the GFI-specific
-/// hit-test inputs.
-#[derive(Debug, Clone)]
-pub struct GfiPlan {
-    /// Render plan reconstructed from the GetMap params. `plan.layers` holds
-    /// `QUERY_LAYERS` (a subset of the original `LAYERS`), since the GFI hit
-    /// test runs only against query layers.
-    pub plan: RenderPlan,
-    /// Pixel-space x coordinate of the click (origin top-left).
-    pub i: u32,
-    /// Pixel-space y coordinate of the click (origin top-left).
-    pub j: u32,
-    /// Negotiated info-format. Falls back to `TextPlain` when omitted.
-    pub info_format: InfoFormat,
-    /// Maximum feature hits to return; spec default 1.
-    pub feature_count: u32,
-}
-
 /// Hard upper bound on `FEATURE_COUNT=` to prevent runaway responses on
 /// dense pages.
 pub const MAX_FEATURE_COUNT: u32 = 1000;
@@ -173,8 +153,8 @@ pub enum WmsRequest {
     /// `request=GetMap` with a fully-resolved request (render plan plus
     /// EXCEPTIONS= selection).
     GetMap(ResolvedGetMap),
-    /// `request=GetFeatureInfo` with the parsed [`GfiPlan`].
-    GetFeatureInfo(GfiPlan),
+    /// `request=GetFeatureInfo` with the fully-resolved hit-test inputs.
+    GetFeatureInfo(ResolvedGetFeatureInfo),
     /// `request=GetLegendGraphic` with the parsed legend plan.
     GetLegendGraphic(mars_runtime::LegendPlan),
     /// `request=GetCapabilities`.
