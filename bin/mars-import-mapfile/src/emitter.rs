@@ -80,6 +80,11 @@ pub(crate) enum SymbolDef {
     /// SYMBOL TYPE TRUETYPE plus FONT + CHARACTER. Maps to
     /// `mars_style::MarkerSymbol::Glyph` at emit time.
     Glyph { font_family: String, character: String },
+    /// SYMBOL TYPE we recognise as a real mapfile directive but have not yet
+    /// implemented (PIXMAP, CARTOLINE, future TYPE additions). Held as a
+    /// typed signal so the use-site warn carries the actual TYPE string;
+    /// follows principle 5 of `docs/EXTENDING.md`.
+    NotImplemented { raw_type: String },
 }
 
 #[derive(Debug, Clone)]

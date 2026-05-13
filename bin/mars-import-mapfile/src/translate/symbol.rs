@@ -92,7 +92,9 @@ pub(crate) fn parse_symbol(body: &[Token]) -> Option<(String, SymbolDef)> {
             font_family: font.unwrap_or_else(|| "sans-serif".to_string()),
             character: character?,
         },
-        _ => return None,
+        other => SymbolDef::NotImplemented {
+            raw_type: other.to_string(),
+        },
     };
     Some((name, def))
 }

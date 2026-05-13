@@ -185,6 +185,17 @@ pub(crate) fn collapse_styles(
                         size: s.size.unwrap_or(12.0),
                     });
                 }
+                Some(SymbolDef::NotImplemented { raw_type }) => {
+                    // typed signal from parse_symbol: a recognised SYMBOL
+                    // block whose TYPE we don't translate yet. warn with the
+                    // actual TYPE string so the operator can hand-edit.
+                    warn!(
+                        line = line,
+                        symbol = sym_name.as_str(),
+                        raw_type = raw_type.as_str(),
+                        "STYLE.SYMBOL TYPE not yet implemented; dropping marker"
+                    );
+                }
                 None => {
                     warn!(
                         line = line,

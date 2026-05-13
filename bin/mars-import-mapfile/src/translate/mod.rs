@@ -575,6 +575,48 @@ END
     }
 
     #[test]
+    fn symbol_unknown_type_lands_as_typed_not_implemented() {
+        let src = r#"
+MAP
+  NAME "demo"
+  SYMBOL
+    NAME "raster_marker"
+    TYPE PIXMAP
+  END
+  LAYER
+    NAME "stations"
+    TYPE POINT
+    DATA "geom FROM s"
+    CLASS
+      NAME "default"
+      STYLE
+        SYMBOL "raster_marker"
+        SIZE 8
+      END
+    END
+  END
+END
+"#;
+        let skel = translate(src);
+        // typed signal is preserved in skel.symbols rather than the symbol
+        // being silently dropped.
+        match skel.symbols.get("raster_marker") {
+            Some(crate::emitter::SymbolDef::NotImplemented { raw_type }) => {
+                assert_eq!(raw_type, "PIXMAP");
+            }
+            other => panic!("expected NotImplemented variant, got {other:?}"),
+        }
+        // STYLE.SYMBOL reference resolves and warns once at use site; the
+        // resulting style has no marker (the directive was dropped).
+        let style = skel
+            .styles
+            .iter()
+            .find(|s| s.name.starts_with("point_stations_"))
+            .expect("point style emitted");
+        assert!(style.marker.is_none());
+    }
+
+    #[test]
     fn symbol_truetype_resolves_to_glyph_marker() {
         let src = r#"
 MAP
