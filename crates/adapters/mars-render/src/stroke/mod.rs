@@ -3,7 +3,8 @@
 //! takes a `ResolvedStroke` (already opacity-folded and sub-pixel-clamped)
 //! and emits a single tiny-skia stroke pass. supports parallel-offset via
 //! `path_offset` when `offset_px != 0`. `stroke_gap` (stamped marker along
-//! line) is a parity stub - logged at debug, no rendering yet.
+//! line) is a parity stub - the dispatch hub warns once via
+//! `Resolved::unimplemented`, this module ignores it.
 
 pub(crate) mod dash;
 
@@ -16,13 +17,6 @@ use crate::path_offset::offset_polyline;
 use crate::prepare::ResolvedStroke;
 
 pub(crate) fn draw(pm: &mut Pixmap, port_path: &PortPath, tsk_path: &tiny_skia::Path, stroke: ResolvedStroke) {
-    if stroke.gap.is_some() {
-        // stamped-marker-along-line is on the parity backlog. fire once per
-        // style so the warning shows up in tests without spamming hot tile
-        // paths.
-        tracing::debug!("Style::stroke_gap set but stamped-along-line marker rendering is not yet implemented");
-    }
-
     let mut paint = Paint::default();
     paint.set_color(scaled_alpha(stroke.colour, stroke.alpha));
     paint.anti_alias = true;

@@ -4,7 +4,7 @@
 //! adding a new `Style` field touches `resolve` in one place; downstream code
 //! reads from `Resolved*` instead of re-doing the Option dance per call site.
 
-use mars_style::{FillPaint, StrokeGap, Style};
+use mars_style::{FillPaint, MarkerSymbol, Style};
 use tiny_skia::{LineCap, LineJoin, StrokeDash};
 
 use crate::canvas::{map_cap, map_join};
@@ -14,6 +14,32 @@ use crate::stroke;
 pub(crate) struct Resolved {
     pub fill: Option<ResolvedFill>,
     pub stroke: Option<ResolvedStroke>,
+    /// style fields the renderer accepts in the wire form but does not yet
+    /// honour. populated by `resolve`; the dispatch hub warns once per render
+    /// so partial-render silent-drops are visible without aborting. when a
+    /// strict-mode hook lands, this is the single chokepoint.
+    pub unimplemented: UnimplementedFeatures,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct UnimplementedFeatures {
+    pub glyph_marker: bool,
+    pub stroke_gap: bool,
+}
+
+impl UnimplementedFeatures {
+    pub(crate) fn any(self) -> bool {
+        self.glyph_marker || self.stroke_gap
+    }
+
+    pub(crate) fn names(self) -> impl Iterator<Item = &'static str> {
+        [
+            self.glyph_marker.then_some("Style::marker (Glyph)"),
+            self.stroke_gap.then_some("Style::stroke_gap"),
+        ]
+        .into_iter()
+        .flatten()
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -41,13 +67,15 @@ pub(crate) struct ResolvedStroke {
     /// 0 if unset; positive = right of direction of travel in y-down pixel
     /// space.
     pub offset_px: f32,
-    /// stamped-marker-along-line. parity stub today; the stroke pipeline
-    /// logs at debug when present.
-    pub gap: Option<StrokeGap>,
 }
 
 pub(crate) fn resolve(style: &Style) -> Resolved {
     let opacity = style.opacity.unwrap_or(1.0).clamp(0.0, 1.0);
+
+    let unimplemented = UnimplementedFeatures {
+        glyph_marker: matches!(style.marker, Some(MarkerSymbol::Glyph { .. })),
+        stroke_gap: style.stroke_gap.is_some(),
+    };
 
     let fill = style.fill.map(|paint| ResolvedFill { paint, alpha: opacity });
 
@@ -74,11 +102,14 @@ pub(crate) fn resolve(style: &Style) -> Resolved {
             join: style.stroke_linejoin.map(map_join).unwrap_or(LineJoin::Miter),
             dash,
             offset_px,
-            gap: style.stroke_gap,
         })
     });
 
-    Resolved { fill, stroke }
+    Resolved {
+        fill,
+        stroke,
+        unimplemented,
+    }
 }
 
 #[cfg(test)]
@@ -114,7 +145,6 @@ mod tests {
         assert!((st.width - 2.0).abs() < 1e-6);
         assert!(st.dash.is_none());
         assert_eq!(st.offset_px, 0.0);
-        assert!(st.gap.is_none());
     }
 
     #[test]
@@ -177,6 +207,51 @@ mod tests {
         let st = resolve(&s).stroke.expect("stroke");
         assert!(matches!(st.cap, LineCap::Round));
         assert!(matches!(st.join, LineJoin::Bevel));
+    }
+
+    #[test]
+    fn unimplemented_flags_glyph_marker() {
+        let s = Style {
+            marker: Some(MarkerSymbol::Glyph {
+                font_family: "x".into(),
+                ch: "a".into(),
+                size: 6.0,
+            }),
+            ..Default::default()
+        };
+        let r = resolve(&s);
+        assert!(r.unimplemented.glyph_marker);
+        assert!(!r.unimplemented.stroke_gap);
+        let names: Vec<_> = r.unimplemented.names().collect();
+        assert_eq!(names, vec!["Style::marker (Glyph)"]);
+    }
+
+    #[test]
+    fn unimplemented_flags_stroke_gap() {
+        let s = Style {
+            stroke: Some(Colour::rgba(0, 0, 0, 255)),
+            stroke_width: Some(1.0),
+            stroke_gap: Some(mars_style::StrokeGap {
+                interval_px: 12.0,
+                initial_px: 0.0,
+            }),
+            ..Default::default()
+        };
+        let r = resolve(&s);
+        assert!(r.unimplemented.stroke_gap);
+        assert!(!r.unimplemented.glyph_marker);
+        assert!(r.unimplemented.any());
+    }
+
+    #[test]
+    fn unimplemented_empty_when_no_unsupported_fields() {
+        let s = Style {
+            fill: Some(FillPaint::Solid(Colour::rgba(0, 0, 0, 255))),
+            ..Default::default()
+        };
+        let r = resolve(&s);
+        assert!(!r.unimplemented.any());
+        assert_eq!(r.unimplemented.names().count(), 0);
     }
 
     #[test]

@@ -19,12 +19,14 @@ pub(crate) fn draw(pm: &mut Pixmap, path: &PortPath, style: &Style) {
     };
     let resolved = prepare::resolve(style);
 
-    if let Some(fill_resolved) = &resolved.fill {
-        fill::draw(pm, &tsk_path, fill_resolved);
+    if resolved.unimplemented.any() {
+        for what in resolved.unimplemented.names() {
+            tracing::warn!(feature = what, "render feature not yet implemented");
+        }
     }
 
-    if matches!(style.marker, Some(mars_style::MarkerSymbol::Glyph { .. })) {
-        tracing::debug!("Style::marker glyph rendering is not yet implemented in the renderer");
+    if let Some(fill_resolved) = &resolved.fill {
+        fill::draw(pm, &tsk_path, fill_resolved);
     }
 
     if let Some(stroke_resolved) = resolved.stroke {
