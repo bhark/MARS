@@ -39,6 +39,7 @@ use mars_store::{ManifestStore, ObjectStore, StoreError};
 use mars_types::{BindingId, LevelMetadata, Manifest, PageEntry};
 use tokio_util::sync::CancellationToken;
 
+use crate::stages::shared::governors;
 use crate::stages::shared::sidecars::OwnedSidecars;
 
 /// Capped exponential backoff schedule for retrying a transient publish.
@@ -288,8 +289,8 @@ impl Compiler {
         let binding_parallelism = self.config.compiler.compile_binding_parallelism;
         let spill_dir = self.config.compiler.compile_spill_dir_path();
         let spill_open_file_limit = self.config.compiler.compile_spill_open_file_limit;
-        let governor = memory_governor::MemoryGovernor::new(resolve_governor_cap(&self.config.compiler)?);
-        let disk_governor = disk_governor::DiskGovernor::new(resolve_disk_governor_cap(&self.config.compiler)?);
+        let governor = governors::build_memory_governor(&self.config.compiler)?;
+        let disk_governor = governors::build_disk_governor(&self.config.compiler)?;
         let manifest = run_snapshot_from_plan(
             &self.deps,
             &plan,
@@ -304,8 +305,8 @@ impl Compiler {
             &governor,
         )
         .await?;
-        log_governor_observations("compile.snapshot.governor", &governor);
-        log_disk_governor_observations("compile.snapshot.disk_governor", &disk_governor);
+        governors::log_memory_observations("compile.snapshot.governor", &governor);
+        governors::log_disk_observations("compile.snapshot.disk_governor", &disk_governor);
         let v = publish_with_retry(self.deps.manifest.as_ref(), &manifest, &self.deps.metrics, shutdown).await?;
         tracing::info!(
             version = v,
@@ -431,8 +432,8 @@ impl Compiler {
         let in_flight_budget_bytes = self.config.compiler.compile_in_flight_pages_budget()?;
         let spill_dir = self.config.compiler.compile_spill_dir_path();
         let spill_open_file_limit = self.config.compiler.compile_spill_open_file_limit;
-        let governor = memory_governor::MemoryGovernor::new(resolve_governor_cap(&self.config.compiler)?);
-        let disk_governor = disk_governor::DiskGovernor::new(resolve_disk_governor_cap(&self.config.compiler)?);
+        let governor = governors::build_memory_governor(&self.config.compiler)?;
+        let disk_governor = governors::build_disk_governor(&self.config.compiler)?;
         let started = std::time::Instant::now();
         let outcome = render::rebuild_pages(
             &self.deps,
@@ -449,8 +450,8 @@ impl Compiler {
         )
         .await?;
         self.deps.metrics.observe_compiler_rebuild_duration(started.elapsed());
-        log_governor_observations("compile.cycle.governor", &governor);
-        log_disk_governor_observations("compile.cycle.disk_governor", &disk_governor);
+        governors::log_memory_observations("compile.cycle.governor", &governor);
+        governors::log_disk_observations("compile.cycle.disk_governor", &disk_governor);
         let _ = disk_governor;
 
         // merge outcome into prior to produce the new manifest.
@@ -976,87 +977,4 @@ async fn publish_with_retry(
             _ = tokio::time::sleep(*d) => {}
         }
     }
-}
-
-/// Resolve the disk-governor cap for a compile run. Resolution order:
-/// explicit `compile_disk_budget_bytes` > 64 GiB fallback. (Filesystem
-/// free-space introspection is operator-controlled; piping `nix::statvfs`
-/// in here would add an unsafe-code carve-out the compiler crate avoids.)
-fn resolve_disk_governor_cap(cfg: &mars_config::Compiler) -> Result<u64, CompilerError> {
-    const FALLBACK_BYTES: u64 = 64 * 1024 * 1024 * 1024;
-    if let Some(explicit) = cfg.compile_disk_budget()? {
-        tracing::info!(
-            target: "mars_compiler::compile",
-            cap_resolved = explicit,
-            source = "config",
-            "compile.disk_governor: cap resolved"
-        );
-        return Ok(explicit);
-    }
-    tracing::info!(
-        target: "mars_compiler::compile",
-        cap_resolved = FALLBACK_BYTES,
-        source = "default",
-        "compile.disk_governor: cap resolved"
-    );
-    Ok(FALLBACK_BYTES)
-}
-
-/// Resolve the memory-governor cap for a compile run. Resolution order:
-/// explicit `compile_memory_budget_bytes` > 70% of detected cgroup limit
-/// minus 512 MiB OS reservation > 2 GiB fallback.
-fn resolve_governor_cap(cfg: &mars_config::Compiler) -> Result<u64, CompilerError> {
-    const RESERVATION_BYTES: u64 = 512 * 1024 * 1024;
-    const FALLBACK_BYTES: u64 = 2 * 1024 * 1024 * 1024;
-    const MIN_CAP_BYTES: u64 = 64 * 1024 * 1024;
-
-    if let Some(explicit) = cfg.compile_memory_budget()? {
-        tracing::info!(
-            target: "mars_compiler::compile",
-            cap_resolved = explicit,
-            source = "config",
-            "compile.memory_governor: cap resolved"
-        );
-        return Ok(explicit);
-    }
-    if let Some(limit) = mars_config::cgroup::detect_memory_limit() {
-        let after_reservation = limit.saturating_sub(RESERVATION_BYTES);
-        let scaled = (after_reservation as u128 * 7 / 10) as u64;
-        let cap = scaled.max(MIN_CAP_BYTES);
-        tracing::info!(
-            target: "mars_compiler::compile",
-            cap_resolved = cap,
-            cgroup_limit = limit,
-            source = "cgroup",
-            "compile.memory_governor: cap resolved"
-        );
-        return Ok(cap);
-    }
-    tracing::info!(
-        target: "mars_compiler::compile",
-        cap_resolved = FALLBACK_BYTES,
-        source = "default",
-        "compile.memory_governor: cap resolved"
-    );
-    Ok(FALLBACK_BYTES)
-}
-
-fn log_disk_governor_observations(event: &'static str, governor: &disk_governor::DiskGovernor) {
-    tracing::info!(
-        target: "mars_compiler::compile",
-        cap_bytes = governor.cap_bytes(),
-        peak_bytes = governor.peak_bytes(),
-        acquire_wait_us = governor.acquire_wait_us(),
-        "{event}",
-    );
-}
-
-fn log_governor_observations(event: &'static str, governor: &memory_governor::MemoryGovernor) {
-    tracing::info!(
-        target: "mars_compiler::compile",
-        cap_bytes = governor.cap_bytes(),
-        peak_bytes = governor.peak_bytes(),
-        acquire_wait_us = governor.acquire_wait_us(),
-        "{event}",
-    );
 }
