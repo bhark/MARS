@@ -199,11 +199,26 @@ that applies most directly.
   for hidden coupling that returns via local-variable mutation in the
   orchestrators - that is principle 3 missing.
 
-- **Symbol and raster rendering.** New `DrawOp` variants are reserved
-  (`Symbol`, `Pattern` already stubbed). Implementation lands per
-  principle 4: one sibling module under `mars-render/src/`, one dispatch
-  arm. Raster rendering may need a dedicated adapter (principle 6: keep
-  PROJ-style FFI in support, port stays clean).
+- **Symbol and raster rendering.** Symbol dispatch lives under
+  `mars-render/src/symbol/`: `mod.rs` is the exhaustive `MarkerSymbol`
+  match (rotates + translates the local-frame polygon, delegates to
+  `ops::path::draw` for fill+stroke), and the seven geometric variants
+  (`circle, square, triangle, cross, x, pin, vector_shape.rs`) each
+  carry their own `build_path`. `Glyph` continues to surface through
+  `UnimplementedFeatures::glyph_marker`; implementing it is a one-commit
+  follow-up that routes through `label/compose::stamp_axis` /
+  `stamp_rotated` with a single-char text run. Pattern fills follow the
+  same shape under `pattern/`: `DrawOp::Pattern` routes through
+  `ops::pattern::draw` and `pattern::draw` dispatches on the
+  `FillPaint` variant (today: `Image { name }`, sampling stubbed via
+  typed `NotImplemented`; routing-contract errors for procedural
+  variants). New non-procedural fills land as a new
+  `FillPaint::<Variant>` in `mars-style` + a sibling
+  `pattern/<variant>.rs` + one dispatch arm. Raster rendering is a
+  larger arc - zero scaffold today, no DrawOp variant, no source
+  adapter, no port surface, no importer translation - and may need a
+  dedicated adapter (principle 6: keep PROJ-style FFI in support, port
+  stays clean) when it lands.
 
 ---
 
