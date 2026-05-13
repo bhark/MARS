@@ -303,7 +303,7 @@ pub(super) fn marker_path_at(m: &MarkerSymbol, pos: (f32, f32)) -> Path {
                 }],
             }
         }
-        // glyph markers paint via the font path in raster::draw_path; emit a
+        // glyph markers paint via the label pipeline (mars-render::ops::label); emit a
         // single-anchor subpath so the renderer can stamp at the point.
         MarkerSymbol::Glyph { .. } => Path {
             subpaths: vec![Subpath {
