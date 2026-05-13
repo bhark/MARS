@@ -100,12 +100,11 @@ pub enum LineJoin {
     Bevel,
 }
 
-/// Point marker symbol set. Extensible via `#[non_exhaustive]` and the tagged
-/// `kind:` discriminator - future variants (e.g. `Path { svg }`, `Pixmap { uri }`)
-/// land additively without breaking existing wire form.
+/// Point marker symbol set. The tagged `kind:` discriminator gives forward-
+/// readable wire form; dispatch is exhaustive on purpose so a new variant
+/// breaks the build at every match site (see `docs/EXTENDING.md` principle 2).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-#[non_exhaustive]
 pub enum MarkerSymbol {
     Circle {
         #[serde(default = "MarkerSymbol::default_size")]
@@ -208,8 +207,9 @@ pub struct StrokeGap {
 }
 
 /// Polygon fill paint. `Solid` is a bare hex string on the wire; `Hatch`
-/// and `Image` are tagged maps. `#[non_exhaustive]` so future variants
-/// (gradient, svg, dots) land additively.
+/// and `Image` are tagged maps. Dispatch is exhaustive on purpose so a new
+/// variant breaks the build at every match site (see `docs/EXTENDING.md`
+/// principle 2).
 ///
 /// Procedural variants (`Solid`, `Hatch`) reach the renderer through
 /// `DrawOp::Path` and the `fill/` dispatcher. Non-procedural variants
@@ -217,7 +217,6 @@ pub struct StrokeGap {
 /// and the `pattern/` dispatcher; the runtime is responsible for picking
 /// the right DrawOp variant per fill paint.
 #[derive(Debug, Clone, PartialEq)]
-#[non_exhaustive]
 pub enum FillPaint {
     Solid(Colour),
     Hatch {

@@ -63,11 +63,6 @@ pub(crate) fn dispatch(
                 render(pm, path, anchor, rotation_rad, &s)
             }
         }
-        // `#[non_exhaustive]` forward-compat: future variants land here
-        // until they grow a sibling module + dispatch arm above.
-        _ => Err(RenderError::NotImplemented {
-            what: "unknown MarkerSymbol variant",
-        }),
     }
 }
 

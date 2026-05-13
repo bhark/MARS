@@ -38,10 +38,6 @@ pub(crate) fn draw(pm: &mut Pixmap, path: &tiny_skia::Path, fill: &ResolvedFill)
         FillPaint::Image { .. } => Err(RenderError::Backend(
             "image fill paint emitted as DrawOp::Path; runtime must emit DrawOp::Pattern".into(),
         )),
-        // `#[non_exhaustive]` forward-compat gap; not a routing miss.
-        _ => Err(RenderError::NotImplemented {
-            what: "unknown FillPaint variant",
-        }),
     }
 }
 

@@ -23,12 +23,6 @@ pub(crate) fn draw(pm: &mut Pixmap, path: &tiny_skia::Path, fill: &ResolvedFill)
         FillPaint::Solid(_) | FillPaint::Hatch { .. } => Err(RenderError::Backend(
             "procedural fill paint emitted as DrawOp::Pattern; runtime must emit DrawOp::Path".into(),
         )),
-        // `#[non_exhaustive]` forward-compat: future non-procedural
-        // variants land here until they grow a sibling module + dispatch
-        // arm above.
-        _ => Err(RenderError::NotImplemented {
-            what: "unknown FillPaint variant",
-        }),
     }
 }
 

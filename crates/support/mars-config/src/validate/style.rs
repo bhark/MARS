@@ -24,7 +24,7 @@ pub(super) fn validate_styles(styles: &BTreeMap<String, StyleEntry>) -> Result<(
 }
 
 fn validate_fill_paint(style_name: &str, fp: &FillPaint) -> Result<(), ConfigError> {
-    match *fp {
+    match fp {
         FillPaint::Solid(_) => Ok(()),
         FillPaint::Hatch {
             spacing,
@@ -32,12 +32,12 @@ fn validate_fill_paint(style_name: &str, fp: &FillPaint) -> Result<(), ConfigErr
             line_width,
             colour: _,
         } => {
-            if !(spacing.is_finite() && spacing > 0.0) {
+            if !(spacing.is_finite() && *spacing > 0.0) {
                 return Err(ConfigError::Invalid(format!(
                     "style {style_name:?} hatch.spacing must be a finite positive number, got {spacing}"
                 )));
             }
-            if !(line_width.is_finite() && line_width > 0.0) {
+            if !(line_width.is_finite() && *line_width > 0.0) {
                 return Err(ConfigError::Invalid(format!(
                     "style {style_name:?} hatch.line_width must be a finite positive number, got {line_width}"
                 )));
@@ -49,9 +49,9 @@ fn validate_fill_paint(style_name: &str, fp: &FillPaint) -> Result<(), ConfigErr
             }
             Ok(())
         }
-        // future FillPaint variants land additively. fail-open until their
-        // validators are wired up.
-        _ => Ok(()),
+        // image `name` is an unconstrained string today; the renderer-side
+        // registry is the lookup gate. no numeric bounds to enforce here.
+        FillPaint::Image { .. } => Ok(()),
     }
 }
 

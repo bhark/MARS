@@ -1,11 +1,10 @@
 //! point marker tessellation. dispatch hub on `MarkerSymbol` variant.
 //!
 //! adding a marker variant: one new file under `marker/`, one mod line
-//! here, one match arm. `MarkerSymbol` is `#[non_exhaustive]` for serde
-//! evolution, so the dispatch keeps a debug-asserting catch-all with a
-//! degenerate single-point fallback for release builds. shapes are drawn
-//! outline-and-fill-friendly (closed subpaths) so the renderer's
-//! `draw_path` fills and strokes per the enclosing `Style`.
+//! here, one match arm. dispatch is exhaustive (no `_` arm) so a new
+//! variant breaks the build here, per `docs/EXTENDING.md` principle 2.
+//! shapes are drawn outline-and-fill-friendly (closed subpaths) so the
+//! renderer's `draw_path` fills and strokes per the enclosing `Style`.
 
 mod circle;
 mod cross;
@@ -16,7 +15,7 @@ mod triangle;
 mod vector_shape;
 mod x;
 
-use mars_render_port::{Path, Subpath};
+use mars_render_port::Path;
 use mars_style::MarkerSymbol;
 
 pub(super) fn path_at(m: &MarkerSymbol, pos: (f32, f32)) -> Path {
@@ -34,23 +33,6 @@ pub(super) fn path_at(m: &MarkerSymbol, pos: (f32, f32)) -> Path {
             size,
         } => vector_shape::path(points, *anchor, *filled, *size, pos),
         MarkerSymbol::Glyph { .. } => glyph::path(pos),
-        // future variants land additively; fail loud in dev/CI so a new
-        // variant cannot ship as an invisible marker, but keep a degenerate
-        // single-point fallback so release builds still stroke at the
-        // anchor.
-        other => {
-            debug_assert!(false, "unhandled MarkerSymbol variant: {other:?}");
-            degenerate(pos)
-        }
-    }
-}
-
-fn degenerate((cx, cy): (f32, f32)) -> Path {
-    Path {
-        subpaths: vec![Subpath {
-            points: vec![(cx, cy)],
-            closed: false,
-        }],
     }
 }
 
