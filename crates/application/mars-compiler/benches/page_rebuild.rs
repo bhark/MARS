@@ -182,6 +182,7 @@ async fn build_fixture(n_features: usize, page_size: u64) -> Fixture {
         &std::env::temp_dir(),
         256,
         &mars_compiler::memory_governor::MemoryGovernor::new(u64::MAX),
+        &mars_compiler::disk_governor::DiskGovernor::new(u64::MAX),
     )
     .await
     .unwrap();
@@ -267,6 +268,7 @@ fn bench_page_rebuild(c: &mut Criterion) {
                         &std::env::temp_dir(),
                         256,
                         &mars_compiler::memory_governor::MemoryGovernor::new(u64::MAX),
+                        &mars_compiler::disk_governor::DiskGovernor::new(u64::MAX),
                     )
                     .await
                     .unwrap();

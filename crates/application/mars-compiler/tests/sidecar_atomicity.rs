@@ -389,6 +389,7 @@ async fn rebuild_cycle_is_atomic_under_put_fault_injection() {
             &std::env::temp_dir(),
             256,
             &mars_compiler::memory_governor::MemoryGovernor::new(u64::MAX),
+            &mars_compiler::disk_governor::DiskGovernor::new(u64::MAX),
         )
         .await
         .unwrap();
@@ -428,6 +429,7 @@ async fn rebuild_cycle_is_atomic_under_put_fault_injection() {
             &std::env::temp_dir(),
             256,
             &mars_compiler::memory_governor::MemoryGovernor::new(u64::MAX),
+            &mars_compiler::disk_governor::DiskGovernor::new(u64::MAX),
         )
         .await
         .unwrap();
@@ -514,6 +516,7 @@ async fn run_one_rebuild_cycle(
         &std::env::temp_dir(),
         256,
         &mars_compiler::memory_governor::MemoryGovernor::new(u64::MAX),
+        &mars_compiler::disk_governor::DiskGovernor::new(u64::MAX),
     )
     .await?;
     Ok(merge(prior, &outcome, prior.version + 1))

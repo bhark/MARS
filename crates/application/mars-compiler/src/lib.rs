@@ -189,6 +189,15 @@ pub enum CompilerError {
         #[source]
         source: std::io::Error,
     },
+    /// Disk admission semaphore closed mid-compile. The compiler holds
+    /// the only governor for the duration of a cycle, so closure means
+    /// the process is unwinding; surface it as a typed error rather than
+    /// silently dropping the spill write.
+    #[error("disk governor acquire failed: {source}")]
+    DiskGovernor {
+        #[source]
+        source: tokio::sync::AcquireError,
+    },
     /// Pass-1 page planning observed more rows than the in-memory plan
     /// budget allows. Trips before the planner allocates beyond its
     /// configured ceiling so the operator gets a clean ceiling rather than
@@ -429,6 +438,7 @@ pub async fn run_snapshot_from_plan(
     spill_dir: &std::path::Path,
     spill_open_file_limit: usize,
     governor: &memory_governor::MemoryGovernor,
+    disk_governor: &disk_governor::DiskGovernor,
 ) -> Result<Manifest, CompilerError> {
     use futures_util::StreamExt;
     use mars_source::{SourceBinding as PortBinding, SourceCollectionId};
@@ -448,6 +458,7 @@ pub async fn run_snapshot_from_plan(
         spill_dir: &std::path::Path,
         spill_open_file_limit: usize,
         governor: &memory_governor::MemoryGovernor,
+        disk_governor: &disk_governor::DiskGovernor,
     ) -> Result<BindingOutput, CompilerError> {
         let port_binding = PortBinding::new(
             SourceCollectionId::new(binding_plan.binding_id.as_str()),
@@ -479,6 +490,7 @@ pub async fn run_snapshot_from_plan(
                 spill_dir,
                 spill_open_file_limit,
                 governor,
+                disk_governor,
             )
             .await
         }
@@ -532,6 +544,7 @@ pub async fn run_snapshot_from_plan(
                 spill_dir,
                 spill_open_file_limit,
                 governor,
+                disk_governor,
             ));
         }
         match pending.next().await {

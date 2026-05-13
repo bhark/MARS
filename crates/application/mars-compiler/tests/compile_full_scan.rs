@@ -217,6 +217,7 @@ async fn duplicate_feature_id_routes_distinct_rows() {
         &std::env::temp_dir(),
         256,
         &mars_compiler::memory_governor::MemoryGovernor::new(u64::MAX),
+        &mars_compiler::disk_governor::DiskGovernor::new(u64::MAX),
     )
     .await
     .unwrap();
@@ -255,6 +256,7 @@ async fn unrelated_rows_in_stream_are_skipped() {
         &std::env::temp_dir(),
         256,
         &mars_compiler::memory_governor::MemoryGovernor::new(u64::MAX),
+        &mars_compiler::disk_governor::DiskGovernor::new(u64::MAX),
     )
     .await
     .unwrap();
@@ -291,6 +293,7 @@ async fn short_stream_trips_invariant_violation() {
         &std::env::temp_dir(),
         256,
         &mars_compiler::memory_governor::MemoryGovernor::new(u64::MAX),
+        &mars_compiler::disk_governor::DiskGovernor::new(u64::MAX),
     )
     .await
     .unwrap_err();
@@ -329,6 +332,7 @@ async fn budget_overrun_spills_and_completes() {
         &std::env::temp_dir(),
         256,
         &mars_compiler::memory_governor::MemoryGovernor::new(u64::MAX),
+        &mars_compiler::disk_governor::DiskGovernor::new(u64::MAX),
     )
     .await
     .unwrap();
@@ -367,6 +371,7 @@ async fn spilled_path_emits_identical_artifacts_to_in_memory() {
         &std::env::temp_dir(),
         256,
         &mars_compiler::memory_governor::MemoryGovernor::new(u64::MAX),
+        &mars_compiler::disk_governor::DiskGovernor::new(u64::MAX),
     )
     .await
     .unwrap();
@@ -385,6 +390,7 @@ async fn spilled_path_emits_identical_artifacts_to_in_memory() {
         &std::env::temp_dir(),
         256,
         &mars_compiler::memory_governor::MemoryGovernor::new(u64::MAX),
+        &mars_compiler::disk_governor::DiskGovernor::new(u64::MAX),
     )
     .await
     .unwrap();

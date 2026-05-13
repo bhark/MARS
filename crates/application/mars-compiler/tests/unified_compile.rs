@@ -184,6 +184,7 @@ async fn unified_compile_is_deterministic_across_runs() {
         &std::env::temp_dir(),
         256,
         &mars_compiler::memory_governor::MemoryGovernor::new(u64::MAX),
+        &mars_compiler::disk_governor::DiskGovernor::new(u64::MAX),
     )
     .await
     .unwrap();
@@ -199,6 +200,7 @@ async fn unified_compile_is_deterministic_across_runs() {
         &std::env::temp_dir(),
         256,
         &mars_compiler::memory_governor::MemoryGovernor::new(u64::MAX),
+        &mars_compiler::disk_governor::DiskGovernor::new(u64::MAX),
     )
     .await
     .unwrap();
@@ -259,6 +261,7 @@ async fn rows_with_identical_geometry_but_different_attrs_are_slot_equivalent() 
         &std::env::temp_dir(),
         256,
         &mars_compiler::memory_governor::MemoryGovernor::new(u64::MAX),
+        &mars_compiler::disk_governor::DiskGovernor::new(u64::MAX),
     )
     .await
     .unwrap();
@@ -285,6 +288,7 @@ async fn unified_compile_against_empty_source_yields_zero_pages() {
         &std::env::temp_dir(),
         256,
         &mars_compiler::memory_governor::MemoryGovernor::new(u64::MAX),
+        &mars_compiler::disk_governor::DiskGovernor::new(u64::MAX),
     )
     .await
     .unwrap();

@@ -51,6 +51,7 @@ use mars_types::{
     LayerSidecarEntry, LevelMetadata, Manifest, PageEntry, PageId,
 };
 
+use crate::disk_governor::DiskGovernor;
 use crate::incremental::{BindingDirty, DirtyPages};
 use crate::memory_governor::MemoryGovernor;
 use crate::page_plan::compute_page_plan;
@@ -220,6 +221,7 @@ pub async fn rebuild_pages(
     spill_dir: &std::path::Path,
     spill_open_file_limit: usize,
     governor: &MemoryGovernor,
+    disk_governor: &DiskGovernor,
 ) -> Result<RebuildOutcome, CompilerError> {
     let mut outcome = RebuildOutcome::default();
     for (binding_id, binding_dirty) in dirty.per_binding {
@@ -235,6 +237,7 @@ pub async fn rebuild_pages(
                 spill_dir,
                 spill_open_file_limit,
                 governor,
+                disk_governor,
                 &mut outcome,
             )
             .await?;
@@ -278,6 +281,7 @@ async fn rebuild_binding_truncate(
     spill_dir: &std::path::Path,
     spill_open_file_limit: usize,
     governor: &MemoryGovernor,
+    disk_governor: &DiskGovernor,
     outcome: &mut RebuildOutcome,
 ) -> Result<(), CompilerError> {
     let binding_plan =
@@ -334,6 +338,7 @@ async fn rebuild_binding_truncate(
             spill_dir,
             spill_open_file_limit,
             governor,
+            disk_governor,
         )
         .await
     }

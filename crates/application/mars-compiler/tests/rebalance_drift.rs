@@ -186,6 +186,7 @@ async fn rebalance_candidates_flags_oversize_page() {
         &std::env::temp_dir(),
         256,
         &mars_compiler::memory_governor::MemoryGovernor::new(u64::MAX),
+        &mars_compiler::disk_governor::DiskGovernor::new(u64::MAX),
     )
     .await
     .unwrap();
@@ -237,6 +238,7 @@ async fn execute_rebalance_split_preserves_feature_ids_and_balances_sizes() {
         &std::env::temp_dir(),
         256,
         &mars_compiler::memory_governor::MemoryGovernor::new(u64::MAX),
+        &mars_compiler::disk_governor::DiskGovernor::new(u64::MAX),
     )
     .await
     .unwrap();

@@ -17,6 +17,7 @@ use std::collections::HashMap;
 use mars_types::PageId;
 
 use crate::CompilerError;
+use crate::disk_governor::DiskGovernor;
 use crate::memory_governor::{MemoryGovernor, MemoryReservation};
 use crate::spill::SpillManager;
 
@@ -107,9 +108,17 @@ impl PageAccumulator {
 
     /// Evict every in-memory partial / pruned buffer to per-page spill
     /// files and drop all governor reservations - the soft trigger when
-    /// `in_flight_bytes` crosses its budget.
-    pub(super) fn evict_to_spill(&mut self, spill: &mut SpillManager) -> Result<(), CompilerError> {
-        let evicted = spill.flush_all_partials(&mut self.partial, &mut self.pruned, &mut self.page_bytes)?;
+    /// `in_flight_bytes` crosses its budget. Spill writes are admitted
+    /// against `disk_governor`; the reservations carry on the spill
+    /// manager until per-page drain.
+    pub(super) async fn evict_to_spill(
+        &mut self,
+        spill: &mut SpillManager,
+        disk_governor: &DiskGovernor,
+    ) -> Result<(), CompilerError> {
+        let evicted = spill
+            .flush_all_partials(&mut self.partial, &mut self.pruned, &mut self.page_bytes, disk_governor)
+            .await?;
         self.in_flight_bytes = self.in_flight_bytes.saturating_sub(evicted);
         self.page_reservations.clear();
         Ok(())

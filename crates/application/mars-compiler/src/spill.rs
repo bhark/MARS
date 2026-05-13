@@ -14,6 +14,7 @@
 //! encoding. The format is process-local and ephemeral; no checksum, no
 //! cross-version stability.
 
+use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
@@ -26,6 +27,7 @@ use mars_types::{HilbertKey, PageId};
 use tempfile::TempDir;
 
 use crate::CompilerError;
+use crate::disk_governor::{DiskGovernor, DiskReservation};
 use crate::render::KeyedRow;
 
 const MAGIC: &[u8; 4] = b"MSPL";
@@ -80,6 +82,10 @@ pub(crate) struct SpillManager {
     dir: TempDir,
     open_files: LinkedHashMap<(usize, PageId), BufWriter<File>>,
     spilled: std::collections::HashSet<(usize, PageId)>,
+    // disk-governor reservations indexed by page; drained on `drain` and
+    // cleared on drop so every byte the spill file holds is admitted and
+    // released through the shared governor.
+    reservations: HashMap<(usize, PageId), Vec<DiskReservation>>,
     file_limit: usize,
     bytes_written: u64,
     bytes_read: u64,
@@ -107,6 +113,7 @@ impl SpillManager {
             dir,
             open_files: LinkedHashMap::new(),
             spilled: std::collections::HashSet::new(),
+            reservations: HashMap::new(),
             file_limit: limit,
             bytes_written: 0,
             bytes_read: 0,
@@ -131,22 +138,48 @@ impl SpillManager {
     /// Append one row to the spill file for `(lvl, page_id)`. Marks the
     /// page as spilled. Opens (and may evict from the LRU) on miss.
     /// Returns the encoded byte length written.
-    pub(crate) fn append(
+    ///
+    /// Admission: the encoded row's byte length is acquired against
+    /// `disk_governor` before the write hits the BufWriter. Header bytes
+    /// for newly-opened files are admitted inside `ensure_open`. Both
+    /// reservations are attached to the per-page entry in `reservations`
+    /// and released when `drain` removes the file or when the manager is
+    /// dropped at end-of-binding.
+    pub(crate) async fn append(
         &mut self,
         lvl: usize,
         page_id: PageId,
         kind: SpillKind,
         row: &KeyedRow,
+        disk_governor: &DiskGovernor,
     ) -> Result<u64, CompilerError> {
         let mut buf: Vec<u8> = Vec::with_capacity(128);
         encode_row(&mut buf, kind, row);
         let n = buf.len() as u64;
-        let writer = self.ensure_open(lvl, page_id)?;
+        // header bytes (if a new file) are admitted inside ensure_open
+        // before the row reservation, so a tight budget that can hold one
+        // row but not row+header cannot deadlock by holding row bytes
+        // while waiting on header bytes.
+        self.ensure_open(lvl, page_id, disk_governor).await?;
+        let row_reservation = disk_governor
+            .acquire(n)
+            .await
+            .map_err(|source| CompilerError::DiskGovernor { source })?;
+        let writer = self
+            .open_files
+            .get_mut(&(lvl, page_id))
+            .ok_or(CompilerError::InvariantViolation {
+                what: "spill: writer vanished after ensure_open",
+            })?;
         writer.write_all(&buf).map_err(|source| CompilerError::Spill {
             what: "append row",
             source,
         })?;
         self.bytes_written = self.bytes_written.saturating_add(n);
+        self.reservations
+            .entry((lvl, page_id))
+            .or_default()
+            .push(row_reservation);
         Ok(n)
     }
 
@@ -154,11 +187,12 @@ impl SpillManager {
     /// Returns the total in-memory byte estimate that was evicted, summed
     /// from `page_bytes` so the caller can keep its `in_flight_bytes`
     /// running total accurate.
-    pub(crate) fn flush_all_partials(
+    pub(crate) async fn flush_all_partials(
         &mut self,
-        partial: &mut std::collections::HashMap<(usize, PageId), Vec<KeyedRow>>,
-        pruned: &mut std::collections::HashMap<(usize, PageId), Vec<KeyedRow>>,
-        page_bytes: &mut std::collections::HashMap<(usize, PageId), u64>,
+        partial: &mut HashMap<(usize, PageId), Vec<KeyedRow>>,
+        pruned: &mut HashMap<(usize, PageId), Vec<KeyedRow>>,
+        page_bytes: &mut HashMap<(usize, PageId), u64>,
+        disk_governor: &DiskGovernor,
     ) -> Result<u64, CompilerError> {
         self.triggered = true;
         let mut evicted: u64 = 0;
@@ -172,12 +206,12 @@ impl SpillManager {
         for k in keys {
             if let Some(rows) = partial.remove(&k) {
                 for r in &rows {
-                    self.append(k.0, k.1, SpillKind::Kept, r)?;
+                    self.append(k.0, k.1, SpillKind::Kept, r, disk_governor).await?;
                 }
             }
             if let Some(rows) = pruned.remove(&k) {
                 for r in &rows {
-                    self.append(k.0, k.1, SpillKind::Pruned, r)?;
+                    self.append(k.0, k.1, SpillKind::Pruned, r, disk_governor).await?;
                 }
             }
             if let Some(b) = page_bytes.remove(&k) {
@@ -225,17 +259,26 @@ impl SpillManager {
             source,
         })?;
         self.spilled.remove(&(lvl, page_id));
+        // release the page's disk-governor reservations: the file is gone,
+        // so the bytes it admitted are no longer in flight.
+        self.reservations.remove(&(lvl, page_id));
         self.bytes_read = self.bytes_read.saturating_add(total_read);
         Ok((kept, pruned))
     }
 
-    fn ensure_open(&mut self, lvl: usize, page_id: PageId) -> Result<&mut BufWriter<File>, CompilerError> {
+    async fn ensure_open(
+        &mut self,
+        lvl: usize,
+        page_id: PageId,
+        disk_governor: &DiskGovernor,
+    ) -> Result<(), CompilerError> {
         let key = (lvl, page_id);
         if self.open_files.contains_key(&key) {
             // refresh LRU position.
-            return self.open_files.to_back(&key).ok_or(CompilerError::InvariantViolation {
+            let _ = self.open_files.to_back(&key).ok_or(CompilerError::InvariantViolation {
                 what: "spill: get_refresh after contains_key",
-            });
+            })?;
+            return Ok(());
         }
         while self.open_files.len() >= self.file_limit {
             if let Some((_, mut w)) = self.open_files.pop_front() {
@@ -259,18 +302,23 @@ impl SpillManager {
             })?;
         let mut w = BufWriter::with_capacity(64 * 1024, f);
         if is_new {
+            // admit header bytes before they hit disk. acquired here (no
+            // row reservation held yet) so a tight budget can not deadlock
+            // on a row+header sequence.
+            let header_reservation = disk_governor
+                .acquire(u64::from(header_len()))
+                .await
+                .map_err(|source| CompilerError::DiskGovernor { source })?;
             write_header(&mut w)?;
             self.bytes_written = self.bytes_written.saturating_add(u64::from(header_len()));
             self.spilled.insert(key);
+            self.reservations.entry(key).or_default().push(header_reservation);
         }
         self.open_files.insert(key, w);
         if self.open_files.len() > self.files_active_peak {
             self.files_active_peak = self.open_files.len();
         }
-        // safe: we just inserted.
-        self.open_files.to_back(&key).ok_or(CompilerError::InvariantViolation {
-            what: "spill: get_refresh after insert",
-        })
+        Ok(())
     }
 
     fn path_for(&self, lvl: usize, page_id: PageId) -> PathBuf {
@@ -672,16 +720,30 @@ mod tests {
             && a.attrs.as_slice() == b.attrs.as_slice()
     }
 
-    #[test]
-    fn roundtrip_kept_and_pruned() {
+    fn unbounded_governor() -> DiskGovernor {
+        DiskGovernor::new(u64::MAX)
+    }
+
+    #[tokio::test]
+    async fn roundtrip_kept_and_pruned() {
         let parent = TempDir::new().unwrap();
         let mut spill = SpillManager::new(parent.path(), 32).unwrap();
+        let dg = unbounded_governor();
         let r1 = sample_row(1);
         let r2 = sample_row(2);
         let r3 = sample_row(3);
-        spill.append(0, PageId::new(7), SpillKind::Kept, &r1).unwrap();
-        spill.append(0, PageId::new(7), SpillKind::Pruned, &r2).unwrap();
-        spill.append(0, PageId::new(7), SpillKind::Kept, &r3).unwrap();
+        spill
+            .append(0, PageId::new(7), SpillKind::Kept, &r1, &dg)
+            .await
+            .unwrap();
+        spill
+            .append(0, PageId::new(7), SpillKind::Pruned, &r2, &dg)
+            .await
+            .unwrap();
+        spill
+            .append(0, PageId::new(7), SpillKind::Kept, &r3, &dg)
+            .await
+            .unwrap();
         assert!(spill.is_spilled(0, PageId::new(7)));
         let (kept, pruned) = spill.drain(0, PageId::new(7)).unwrap();
         assert_eq!(kept.len(), 2);
@@ -690,26 +752,33 @@ mod tests {
         assert!(rows_eq(&kept[1], &r3));
         assert!(rows_eq(&pruned[0], &r2));
         assert!(!spill.is_spilled(0, PageId::new(7)));
+        // every reservation released back to the governor after drain.
+        assert_eq!(dg.in_flight_bytes(), 0);
     }
 
-    #[test]
-    fn lru_eviction_reopens_in_append_mode() {
+    #[tokio::test]
+    async fn lru_eviction_reopens_in_append_mode() {
         let parent = TempDir::new().unwrap();
         let mut spill = SpillManager::new(parent.path(), 2).unwrap();
+        let dg = unbounded_governor();
         // populate three pages; LRU = 2 forces an eviction.
         spill
-            .append(0, PageId::new(1), SpillKind::Kept, &sample_row(10))
+            .append(0, PageId::new(1), SpillKind::Kept, &sample_row(10), &dg)
+            .await
             .unwrap();
         spill
-            .append(0, PageId::new(2), SpillKind::Kept, &sample_row(20))
+            .append(0, PageId::new(2), SpillKind::Kept, &sample_row(20), &dg)
+            .await
             .unwrap();
         spill
-            .append(0, PageId::new(3), SpillKind::Kept, &sample_row(30))
+            .append(0, PageId::new(3), SpillKind::Kept, &sample_row(30), &dg)
+            .await
             .unwrap();
         // touch page 1 again; it was evicted, must reopen and append without
         // overwriting the header.
         spill
-            .append(0, PageId::new(1), SpillKind::Kept, &sample_row(11))
+            .append(0, PageId::new(1), SpillKind::Kept, &sample_row(11), &dg)
+            .await
             .unwrap();
         let (kept, _) = spill.drain(0, PageId::new(1)).unwrap();
         assert_eq!(kept.len(), 2);
@@ -717,23 +786,28 @@ mod tests {
         assert!(rows_eq(&kept[1], &sample_row(11)));
     }
 
-    #[test]
-    fn drop_removes_dir() {
+    #[tokio::test]
+    async fn drop_removes_dir() {
         let parent = TempDir::new().unwrap();
+        let dg = unbounded_governor();
         let dir_path = {
             let mut spill = SpillManager::new(parent.path(), 4).unwrap();
             spill
-                .append(0, PageId::new(0), SpillKind::Kept, &sample_row(1))
+                .append(0, PageId::new(0), SpillKind::Kept, &sample_row(1), &dg)
+                .await
                 .unwrap();
             spill.dir.path().to_path_buf()
         };
         assert!(!dir_path.exists(), "binding tempdir should be removed on drop");
+        // dropping the spill manager releases every still-held reservation.
+        assert_eq!(dg.in_flight_bytes(), 0);
     }
 
-    #[test]
-    fn flush_all_partials_evicts_and_clears_maps() {
+    #[tokio::test]
+    async fn flush_all_partials_evicts_and_clears_maps() {
         let parent = TempDir::new().unwrap();
         let mut spill = SpillManager::new(parent.path(), 16).unwrap();
+        let dg = unbounded_governor();
         let mut partial: HashMap<(usize, PageId), Vec<KeyedRow>> = HashMap::new();
         let mut pruned: HashMap<(usize, PageId), Vec<KeyedRow>> = HashMap::new();
         let mut page_bytes: HashMap<(usize, PageId), u64> = HashMap::new();
@@ -743,7 +817,8 @@ mod tests {
         page_bytes.insert((0, PageId::new(0)), 1000);
         page_bytes.insert((0, PageId::new(1)), 500);
         let evicted = spill
-            .flush_all_partials(&mut partial, &mut pruned, &mut page_bytes)
+            .flush_all_partials(&mut partial, &mut pruned, &mut page_bytes, &dg)
+            .await
             .unwrap();
         assert_eq!(evicted, 1500);
         assert!(partial.is_empty());
@@ -756,5 +831,48 @@ mod tests {
         let (kept1, pruned1) = spill.drain(0, PageId::new(1)).unwrap();
         assert_eq!(kept1.len(), 1);
         assert!(pruned1.is_empty());
+        assert_eq!(dg.in_flight_bytes(), 0);
+    }
+
+    #[tokio::test]
+    async fn admission_under_tight_budget_records_peak_and_wait() {
+        // a tight cap forces the second append to block until the first
+        // page drains; peak must reach the budget, and acquire_wait_us
+        // must be non-zero.
+        let parent = TempDir::new().unwrap();
+        let mut spill = SpillManager::new(parent.path(), 8).unwrap();
+        // budget is small enough that two simultaneous pages can't fit but
+        // one row + its header fits comfortably.
+        let dg = DiskGovernor::new(512);
+        spill
+            .append(0, PageId::new(1), SpillKind::Kept, &sample_row(1), &dg)
+            .await
+            .unwrap();
+        assert!(dg.in_flight_bytes() > 0);
+        let peak_after_first = dg.peak_bytes();
+        assert!(peak_after_first > 0);
+
+        // hold a reservation that exhausts the rest of the budget, then
+        // spawn a waiter that tries to append more bytes. the waiter must
+        // not complete until the held reservation drops.
+        let hold = dg.acquire(dg.cap_bytes() - dg.in_flight_bytes()).await.unwrap();
+
+        let dg_clone = dg.clone();
+        let parent_path = parent.path().to_path_buf();
+        let waiter = tokio::spawn(async move {
+            let mut spill2 = SpillManager::new(&parent_path, 4).unwrap();
+            spill2
+                .append(0, PageId::new(2), SpillKind::Kept, &sample_row(2), &dg_clone)
+                .await
+                .unwrap();
+            spill2.drain(0, PageId::new(2)).unwrap();
+        });
+
+        // small grace so the waiter parks on the semaphore.
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        assert!(!waiter.is_finished(), "waiter must block while budget is exhausted");
+        drop(hold);
+        waiter.await.unwrap();
+        assert!(dg.acquire_wait_us() > 0, "tight budget should accumulate wait time");
     }
 }

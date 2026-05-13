@@ -12,6 +12,7 @@ use mars_source::RowBytes;
 use mars_types::{ArtifactEntry, BindingMetadata, LayerSidecarEntry, LevelMetadata, PageEntry, PageId};
 
 use crate::decimate::{passes_min_size, simplify};
+use crate::disk_governor::DiskGovernor;
 use crate::memory_governor::MemoryGovernor;
 use crate::page_plan::PagePlan;
 use crate::plan::{BindingPlan, BootstrapPlan, LayerPlan};
@@ -103,6 +104,7 @@ pub async fn rebuild_binding_from_plan<'a>(
     spill_dir: &std::path::Path,
     spill_open_file_limit: usize,
     governor: &MemoryGovernor,
+    disk_governor: &DiskGovernor,
 ) -> Result<BindingOutput, CompilerError> {
     if page_plan.feature_count_total == 0 {
         return Ok(BindingOutput {
@@ -230,10 +232,14 @@ pub async fn rebuild_binding_from_plan<'a>(
             if spill.is_spilled(lvl_idx, page_id) {
                 // page already on disk: append directly, no in-flight bookkeeping.
                 if let Some(r) = &kept_row {
-                    spill.append(lvl_idx, page_id, crate::spill::SpillKind::Kept, r)?;
+                    spill
+                        .append(lvl_idx, page_id, crate::spill::SpillKind::Kept, r, disk_governor)
+                        .await?;
                 }
                 if let Some(r) = &pruned_row {
-                    spill.append(lvl_idx, page_id, crate::spill::SpillKind::Pruned, r)?;
+                    spill
+                        .append(lvl_idx, page_id, crate::spill::SpillKind::Pruned, r, disk_governor)
+                        .await?;
                 }
             } else {
                 acc.push(lvl_idx, page_id, kept_row, pruned_row, kr_bytes, governor);
@@ -270,7 +276,7 @@ pub async fn rebuild_binding_from_plan<'a>(
         // budget, evict everything to per-page spill files. subsequent rows
         // for those pages append directly to disk.
         if acc.in_flight_bytes() > in_flight_budget_bytes {
-            acc.evict_to_spill(&mut spill)?;
+            acc.evict_to_spill(&mut spill, disk_governor).await?;
         }
     }
 

@@ -23,6 +23,7 @@ pub(crate) async fn run(deps: &Deps, ctx: &SnapshotCtx) -> Result<Manifest, Comp
         &ctx.knobs.spill_dir,
         ctx.knobs.spill_open_file_limit,
         &ctx.mem_governor,
+        &ctx.disk_governor,
     )
     .await?;
     governors::log_memory_observations("compile.snapshot.governor", &ctx.mem_governor);

@@ -216,6 +216,7 @@ async fn surgical_invalidation_rebuilds_only_dirty_pages() {
         &std::env::temp_dir(),
         256,
         &mars_compiler::memory_governor::MemoryGovernor::new(u64::MAX),
+        &mars_compiler::disk_governor::DiskGovernor::new(u64::MAX),
     )
     .await
     .unwrap();
@@ -377,6 +378,7 @@ async fn surgical_invalidation_rebuilds_only_dirty_pages() {
         &std::env::temp_dir(),
         256,
         &mars_compiler::memory_governor::MemoryGovernor::new(u64::MAX),
+        &mars_compiler::disk_governor::DiskGovernor::new(u64::MAX),
     )
     .await
     .unwrap();

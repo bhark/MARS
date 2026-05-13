@@ -266,6 +266,7 @@ async fn boundary_key_row_appears_in_exactly_one_dirty_page() {
         &std::env::temp_dir(),
         256,
         &mars_compiler::memory_governor::MemoryGovernor::new(u64::MAX),
+        &mars_compiler::disk_governor::DiskGovernor::new(u64::MAX),
     )
     .await
     .unwrap();
