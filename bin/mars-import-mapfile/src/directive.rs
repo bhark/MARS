@@ -76,6 +76,32 @@ impl<'a> LayerDirective<'a> {
     }
 }
 
+/// Directives valid inside a CLASS block.
+#[derive(Debug)]
+pub(crate) enum ClassDirective<'a> {
+    Name(&'a Token),
+    MinScaleDenom(&'a Token),
+    MaxScaleDenom(&'a Token),
+    Expression(&'a Token),
+    Style,
+    Unsupported(&'a Token),
+    Unknown,
+}
+
+impl<'a> ClassDirective<'a> {
+    pub(crate) fn from_token(t: &'a Token, is_unsupported: impl FnOnce(&str) -> bool) -> Self {
+        match t.keyword.to_ascii_uppercase().as_str() {
+            "NAME" => Self::Name(t),
+            "MINSCALEDENOM" => Self::MinScaleDenom(t),
+            "MAXSCALEDENOM" => Self::MaxScaleDenom(t),
+            "EXPRESSION" => Self::Expression(t),
+            "STYLE" => Self::Style,
+            other if is_unsupported(other) => Self::Unsupported(t),
+            _ => Self::Unknown,
+        }
+    }
+}
+
 /// Directives valid inside a SYMBOL block. Block-bodied POINTS is the only
 /// sub-block here; the parser still calls `block_range` on the token slice
 /// when it sees `Points` to extract the coord list.

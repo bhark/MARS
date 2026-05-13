@@ -9,7 +9,10 @@
 //!   lifting helpers.
 //! - `symbol.rs` owns SYMBOL parsing.
 
+mod class;
+mod label;
 mod layer;
+mod style_block;
 mod symbol;
 
 use std::collections::HashSet;

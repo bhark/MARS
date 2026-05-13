@@ -10,8 +10,10 @@ use crate::directive::LayerDirective;
 use crate::emitter::{BindingSource, ClassSkeleton, LabelSkeleton, LayerSkeleton, Skeleton, SourceSkeleton};
 use crate::parsing;
 use crate::scanner::{Token, block_range, is_block_opener};
-use crate::style::{parse_class, parse_label};
 use crate::translate::{is_unsupported, normalize_n_plus_one};
+
+use super::class::parse_class;
+use super::label::parse_label;
 
 pub(crate) fn handle_layer(
     body: &[Token],

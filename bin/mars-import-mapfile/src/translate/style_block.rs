@@ -1,190 +1,49 @@
-//! style, class, and label parsing for the mapfile translator.
+//! STYLE block parser and resolution helpers.
+//!
+//! A STYLE block (inside CLASS) collects scalar directives into a
+//! [`StyleBlock`]. Multiple STYLE blocks per class are then collapsed into
+//! a single resolved fill / stroke / marker / dash / opacity tuple via
+//! [`collapse_styles`]. Class-level dedup of the emitted [`StyleDef`] uses
+//! [`canonical_signature`].
+
+use std::collections::HashMap;
 
 use mars_style::Colour;
 use tracing::warn;
 
-use crate::directive::{LabelDirective, StyleDirective};
-use crate::emitter::{
-    ClassSkeleton, EmitFill, EmitLinePlacement, EmitMarker, EmitStrokeGap, LabelSkeleton, MarkerKind, Skeleton,
-    StyleDef, SymbolDef, slugify,
-};
+use crate::directive::StyleDirective;
+use crate::emitter::{EmitFill, EmitMarker, EmitStrokeGap, MarkerKind, SymbolDef};
 use crate::parsing;
-use crate::scanner::{Token, block_range, is_block_opener};
-use crate::translate::{is_unsupported, normalize_n_plus_one};
+use crate::scanner::Token;
 
 #[derive(Debug, Default)]
-struct StyleBlock {
-    color: Option<Colour>,
-    outlinecolor: Option<Colour>,
-    width: Option<f32>,
-    outlinewidth: Option<f32>,
-    pattern: Option<Vec<f32>>,
+pub(crate) struct StyleBlock {
+    pub(crate) color: Option<Colour>,
+    pub(crate) outlinecolor: Option<Colour>,
+    pub(crate) width: Option<f32>,
+    pub(crate) outlinewidth: Option<f32>,
+    pub(crate) pattern: Option<Vec<f32>>,
     /// STYLE.SYMBOL "<name>" - resolved against Skeleton::symbols at emit
     /// time to decide marker:/fill: { kind: hatch, ... } shape.
-    symbol: Option<String>,
+    pub(crate) symbol: Option<String>,
     /// STYLE.ANGLE - hatch angle override.
-    angle_deg: Option<f32>,
+    pub(crate) angle_deg: Option<f32>,
     /// STYLE.SIZE - marker size or hatch spacing override.
-    size: Option<f32>,
+    pub(crate) size: Option<f32>,
     /// STYLE.OPACITY <0..100> -> style-wide alpha in [0.0, 1.0].
-    opacity: Option<f32>,
+    pub(crate) opacity: Option<f32>,
     /// STYLE.OFFSET <x> [<y>] -> perpendicular stroke offset in pixels.
     /// mapserver passes (offset_px, -99) for parallel double-strokes; we
     /// honour the first arg as the perpendicular offset.
-    offset_px: Option<f32>,
+    pub(crate) offset_px: Option<f32>,
     /// STYLE.GAP <px> + STYLE.INITIALGAP <px> -> stamped marker along path.
-    gap_px: Option<f32>,
-    initial_gap_px: Option<f32>,
+    pub(crate) gap_px: Option<f32>,
+    pub(crate) initial_gap_px: Option<f32>,
     /// STYLE.LINEJOIN -> mars stroke_linejoin wire value.
-    linejoin: Option<&'static str>,
+    pub(crate) linejoin: Option<&'static str>,
 }
 
-pub(crate) fn parse_class(
-    body: &[Token],
-    class_line: usize,
-    layer_name: &str,
-    geom_kind: &str,
-    skel: &mut Skeleton,
-) -> Option<ClassSkeleton> {
-    let mut name: Option<String> = None;
-    let mut expression: Option<String> = None;
-    let mut styles: Vec<StyleBlock> = Vec::new();
-    let mut min_scale_denom: Option<u64> = None;
-    let mut max_scale_denom: Option<u64> = None;
-
-    let mut i = 0;
-    while i < body.len() {
-        let t = &body[i];
-        let kw = t.keyword.to_ascii_uppercase();
-        match kw.as_str() {
-            "NAME" if name.is_none() => {
-                name = t.args.first().cloned();
-                i += 1;
-                continue;
-            }
-            "MINSCALEDENOM" | "MAXSCALEDENOM" => {
-                if let Some(arg) = t.args.first() {
-                    match arg.parse::<f64>() {
-                        Ok(v) if v.is_finite() && v >= 0.0 => {
-                            let n = normalize_n_plus_one(v as u64);
-                            if kw == "MINSCALEDENOM" {
-                                min_scale_denom = Some(n);
-                            } else {
-                                max_scale_denom = Some(n);
-                            }
-                        }
-                        _ => warn!(line = t.line, keyword = %kw, value = %arg, "could not parse class scale denom"),
-                    }
-                }
-                i += 1;
-                continue;
-            }
-            "EXPRESSION" => {
-                let joined = t.args.join(" ");
-                match crate::expression::parse_mapfile_expression(&joined, t.line) {
-                    Ok(expr) => {
-                        expression = Some(format!("{expr}"));
-                    }
-                    Err(e) => {
-                        warn!(line = t.line, error = %e, "could not parse EXPRESSION");
-                        expression = Some(format!("# TODO: hand-translate: {joined}"));
-                    }
-                }
-                i += 1;
-                continue;
-            }
-            "STYLE" => {
-                if let Some(r) = block_range(body, i) {
-                    styles.push(parse_style_block(&body[r.start + 1..r.end - 1]));
-                    i = r.end;
-                    continue;
-                }
-            }
-            _ => {}
-        }
-        if is_unsupported(&kw) {
-            warn!(line = t.line, keyword = %kw, "unsupported class-level construct");
-            if is_block_opener(&kw)
-                && let Some(r) = block_range(body, i)
-            {
-                i = r.end;
-                continue;
-            }
-        }
-        i += 1;
-    }
-
-    let title = name.clone();
-    let class_name = slugify(&name.unwrap_or_else(|| format!("class_l{class_line}")));
-    let style_prefix = if geom_kind == "polygon" { "poly" } else { geom_kind };
-    let style_name = format!("{}_{}_{}", style_prefix, slugify(layer_name), class_name);
-
-    let collapsed = collapse_styles(&styles, class_line, &skel.symbols);
-
-    let canonical = canonical_signature(
-        geom_kind,
-        collapsed.fill.as_ref(),
-        collapsed.stroke.as_ref(),
-        collapsed.width,
-        collapsed.dasharray.as_ref(),
-        collapsed.marker.as_ref(),
-        collapsed.opacity,
-        collapsed.stroke_offset_px,
-        collapsed.stroke_gap.as_ref(),
-        collapsed.stroke_linejoin,
-    );
-
-    let existing = skel.styles.iter().find(|s| {
-        canonical_signature(
-            &s.style_type,
-            s.fill.as_ref(),
-            s.stroke.as_ref(),
-            s.stroke_width,
-            s.stroke_dasharray.as_ref(),
-            s.marker.as_ref(),
-            s.opacity,
-            s.stroke_offset_px,
-            s.stroke_gap.as_ref(),
-            s.stroke_linejoin,
-        ) == canonical
-    });
-
-    let style_ref = if let Some(st) = existing {
-        st.name.clone()
-    } else {
-        skel.styles.push(StyleDef {
-            name: style_name.clone(),
-            style_type: geom_kind.to_string(),
-            fill: collapsed.fill,
-            stroke: collapsed.stroke,
-            stroke_width: collapsed.width,
-            stroke_dasharray: collapsed.dasharray,
-            stroke_linejoin: collapsed.stroke_linejoin,
-            marker: collapsed.marker,
-            opacity: collapsed.opacity,
-            stroke_offset_px: collapsed.stroke_offset_px,
-            stroke_gap: collapsed.stroke_gap,
-            font_family: None,
-            font_size: None,
-            halo_color: None,
-            halo_width: None,
-            priority: None,
-            min_distance: None,
-        });
-        style_name
-    };
-
-    Some(ClassSkeleton {
-        name: class_name,
-        title,
-        when: expression,
-        min_scale_denom,
-        max_scale_denom,
-        style_ref,
-    })
-}
-
-fn parse_style_block(body: &[Token]) -> StyleBlock {
+pub(crate) fn parse_style_block(body: &[Token]) -> StyleBlock {
     let mut st = StyleBlock::default();
     for t in body {
         match StyleDirective::from_token(t) {
@@ -252,24 +111,24 @@ fn parse_style_block(body: &[Token]) -> StyleBlock {
 }
 
 /// outputs of [`collapse_styles`]: a single resolved fill/stroke/width/dash/
-/// marker tuple that drives `StyleDef` construction in [`parse_class`].
+/// marker tuple that drives `StyleDef` construction in `parse_class`.
 #[derive(Debug, Default)]
-struct CollapsedStyle {
-    fill: Option<EmitFill>,
-    stroke: Option<Colour>,
-    width: Option<f32>,
-    dasharray: Option<Vec<f32>>,
-    marker: Option<EmitMarker>,
-    opacity: Option<f32>,
-    stroke_offset_px: Option<f32>,
-    stroke_gap: Option<EmitStrokeGap>,
-    stroke_linejoin: Option<&'static str>,
+pub(crate) struct CollapsedStyle {
+    pub(crate) fill: Option<EmitFill>,
+    pub(crate) stroke: Option<Colour>,
+    pub(crate) width: Option<f32>,
+    pub(crate) dasharray: Option<Vec<f32>>,
+    pub(crate) marker: Option<EmitMarker>,
+    pub(crate) opacity: Option<f32>,
+    pub(crate) stroke_offset_px: Option<f32>,
+    pub(crate) stroke_gap: Option<EmitStrokeGap>,
+    pub(crate) stroke_linejoin: Option<&'static str>,
 }
 
-fn collapse_styles(
+pub(crate) fn collapse_styles(
     styles: &[StyleBlock],
     line: usize,
-    symbols: &std::collections::HashMap<String, SymbolDef>,
+    symbols: &HashMap<String, SymbolDef>,
 ) -> CollapsedStyle {
     if styles.len() > 1 {
         warn!(
@@ -365,7 +224,7 @@ fn collapse_styles(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn canonical_signature(
+pub(crate) fn canonical_signature(
     style_type: &str,
     fill: Option<&EmitFill>,
     stroke: Option<&Colour>,
@@ -441,137 +300,10 @@ fn canonical_signature(
     s
 }
 
-pub(crate) fn parse_label(
-    body: &[Token],
-    _line: usize,
-    layer_name: &str,
-    skel: &mut Skeleton,
-) -> Option<LabelSkeleton> {
-    let mut text: Option<String> = None;
-    let mut font: Option<String> = None;
-    let mut size: Option<f32> = None;
-    let mut color: Option<Colour> = None;
-    let mut outlinecolor: Option<Colour> = None;
-    let mut outlinewidth: Option<f32> = None;
-    let mut priority: Option<u16> = None;
-    let mut min_distance: Option<f32> = None;
-    let mut placement_line: Option<EmitLinePlacement> = None;
-
-    // builds the placement_line on demand; line-shape LABEL fields (ANGLE
-    // FOLLOW, REPEATDISTANCE, MAXOVERLAPANGLE) all flow into the same struct.
-    fn ensure_line(p: &mut Option<EmitLinePlacement>) -> &mut EmitLinePlacement {
-        p.get_or_insert(EmitLinePlacement {
-            repeat_m: None,
-            max_angle_delta_deg: None,
-        })
-    }
-
-    for t in body {
-        match LabelDirective::from_token(t) {
-            LabelDirective::Text(t) if text.is_none() => text = t.args.first().cloned(),
-            LabelDirective::Font(t) if font.is_none() => font = t.args.first().cloned(),
-            LabelDirective::Size(t) => size = parsing::first_parsed(t),
-            LabelDirective::Color(t) => color = parsing::rgb_triple(t).or(color),
-            LabelDirective::OutlineColor(t) => outlinecolor = parsing::rgb_triple(t).or(outlinecolor),
-            LabelDirective::OutlineWidth(t) => outlinewidth = parsing::first_parsed(t),
-            LabelDirective::Priority(t) => {
-                // mapserver PRIORITY is 1..=10 by convention; mars allows any
-                // u16. clamp to a sane range.
-                if let Some(v) = parsing::first_parsed::<i64>(t) {
-                    priority = Some(v.clamp(0, u16::MAX as i64) as u16);
-                }
-            }
-            LabelDirective::MinDistance(t) => {
-                if let Some(v) = parsing::first_parsed::<f32>(t) {
-                    min_distance = Some(v);
-                }
-            }
-            LabelDirective::RepeatDistance(t) => {
-                if let Some(v) = parsing::first_parsed::<f64>(t) {
-                    ensure_line(&mut placement_line).repeat_m = Some(v);
-                }
-            }
-            LabelDirective::MaxOverlapAngle(t) => {
-                if let Some(v) = parsing::first_parsed::<f32>(t) {
-                    ensure_line(&mut placement_line).max_angle_delta_deg = Some(v);
-                }
-            }
-            LabelDirective::Angle(t) => {
-                if let Some(arg) = t.args.first() {
-                    match arg.to_ascii_uppercase().as_str() {
-                        "FOLLOW" => {
-                            // mark placement as line; sampling defaults kick
-                            // in when repeat is unset.
-                            ensure_line(&mut placement_line);
-                        }
-                        "AUTO" => warn!(line = t.line, "LABEL ANGLE AUTO is not yet implemented; dropping"),
-                        other => {
-                            warn!(line = t.line, value = %other, "LABEL ANGLE numeric values are not yet implemented; dropping")
-                        }
-                    }
-                }
-            }
-            LabelDirective::NotImplemented(t) => {
-                let kw = t.keyword.to_ascii_uppercase();
-                if kw == "TYPE" {
-                    if let Some(arg) = t.args.first()
-                        && arg.eq_ignore_ascii_case("BITMAP")
-                    {
-                        warn!(
-                            line = t.line,
-                            "LABEL TYPE BITMAP is not yet implemented; falling back to TrueType"
-                        );
-                    }
-                } else {
-                    warn!(line = t.line, "LABEL {kw} is not yet implemented; dropping");
-                }
-            }
-            // re-occurrence of TEXT / FONT after the first is ignored; same
-            // for any keyword we don't understand inside a LABEL block.
-            LabelDirective::Text(_) | LabelDirective::Font(_) | LabelDirective::Unknown => {}
-        }
-    }
-
-    // empty text is kept so handle_layer can fill it in from LABELITEM. when
-    // neither TEXT nor LABELITEM is set we still emit the LabelSkeleton so
-    // style/placement state isn't lost; the operator gets a clean empty
-    // `text:` slot to fill in.
-    let text = text.unwrap_or_default();
-    let style_name = format!("label_{}", slugify(layer_name));
-    let fill = color.unwrap_or(Colour::rgb(0, 0, 0));
-    // label styles are not deduped against geometry styles
-    skel.styles.push(StyleDef {
-        name: style_name.clone(),
-        style_type: "label".into(),
-        fill: Some(EmitFill::Hex(fill)),
-        stroke: None,
-        stroke_width: None,
-        stroke_dasharray: None,
-        stroke_linejoin: None,
-        marker: None,
-        opacity: None,
-        stroke_offset_px: None,
-        stroke_gap: None,
-        font_family: font.or_else(|| Some("sans-serif".into())),
-        font_size: size.or(Some(12.0)),
-        halo_color: outlinecolor,
-        halo_width: outlinewidth,
-        priority,
-        min_distance,
-    });
-
-    Some(LabelSkeleton {
-        text,
-        style_ref: style_name,
-        placement_line,
-    })
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
-    use crate::scanner::Token;
 
     #[test]
     fn parse_style_block_extracts_color_and_width() {
@@ -609,7 +341,7 @@ mod tests {
 
     #[test]
     fn collapse_styles_resolves_named_circle_symbol_to_marker() {
-        let mut symbols = std::collections::HashMap::new();
+        let mut symbols = HashMap::new();
         symbols.insert("circle".into(), SymbolDef::Circle);
         let styles = vec![StyleBlock {
             color: Some(Colour::rgb(10, 20, 30)),
@@ -632,7 +364,7 @@ mod tests {
 
     #[test]
     fn collapse_styles_resolves_hatch_symbol_to_fill_kind_hatch() {
-        let mut symbols = std::collections::HashMap::new();
+        let mut symbols = HashMap::new();
         symbols.insert(
             "lines".into(),
             SymbolDef::Hatch {
