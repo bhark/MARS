@@ -9,8 +9,6 @@ use std::collections::HashMap;
 
 use percent_encoding::percent_decode_str;
 
-use mars_types::ImageFormat;
-
 use crate::WmtsError;
 
 pub(super) type Kvp = HashMap<String, String>;
@@ -41,22 +39,19 @@ pub(super) fn require(kvp: &Kvp, name: &'static str) -> Result<String, WmtsError
         .ok_or(WmtsError::MissingParam(name))
 }
 
-pub(super) fn parse_u32(kvp: &Kvp, name: &'static str) -> Result<u32, WmtsError> {
-    let raw = require(kvp, name)?;
-    raw.parse()
+/// extract `Option<u32>` from a KVP value: missing/empty -> `Ok(None)`;
+/// present but malformed -> `WmtsError::InvalidParam`. semantic `required`
+/// vs `optional` distinction lives in prepare, not parse.
+pub(super) fn parse_optional_u32(kvp: &Kvp, name: &'static str) -> Result<Option<u32>, WmtsError> {
+    let raw = match kvp.get(name) {
+        Some(s) if !s.is_empty() => s,
+        _ => return Ok(None),
+    };
+    let n = raw
+        .parse()
         .map_err(|e: std::num::ParseIntError| WmtsError::InvalidParam {
             name,
             reason: e.to_string(),
-        })
-}
-
-pub(super) fn parse_format(raw: &str) -> Result<ImageFormat, WmtsError> {
-    match raw {
-        "image/png" => Ok(ImageFormat::Png),
-        "image/jpeg" | "image/jpg" => Ok(ImageFormat::Jpeg),
-        other => Err(WmtsError::InvalidParam {
-            name: "format",
-            reason: format!("unsupported {other}"),
-        }),
-    }
+        })?;
+    Ok(Some(n))
 }

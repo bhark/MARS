@@ -5,6 +5,7 @@
 mod capabilities;
 mod exception;
 mod parse;
+mod prepare;
 
 pub use capabilities::capabilities_xml;
 pub use exception::ows_exception_report;
@@ -12,10 +13,10 @@ pub use exception::ows_exception_report;
 use std::collections::BTreeMap;
 
 use mars_config::{Config, TileMatrixSet};
-use mars_runtime::RenderPlan;
 use mars_types::ImageFormat;
 
 pub use parse::{parse_get_tile, parse_request, parse_rest_get_tile};
+pub use prepare::ResolvedGetTile;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WmtsError {
@@ -87,8 +88,8 @@ impl WmtsConfig {
 /// Top-level WMTS request taxonomy.
 #[derive(Debug)]
 pub enum WmtsRequest {
-    /// `request=GetTile` with a parsed [`RenderPlan`].
-    GetTile(RenderPlan),
+    /// `request=GetTile` with a fully-resolved render plan.
+    GetTile(ResolvedGetTile),
     /// `request=GetCapabilities`.
     GetCapabilities,
 }

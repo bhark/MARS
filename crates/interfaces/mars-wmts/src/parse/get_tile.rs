@@ -1,45 +1,43 @@
-//! WMTS `GetTile` parsing for both the KVP transport (`/wmts?...`) and the
-//! REST resource path
+//! WMTS `GetTile` extraction for both the KVP transport (`/wmts?...`) and
+//! the REST resource path
 //! (`/wmts/{Layer}/{Style}/{TileMatrixSet}/{TileMatrix}/{TileRow}/{TileCol}.{ext}`).
 //!
-//! KVP and REST converge on [`build_get_tile_plan`] so bbox math and config
-//! validation never drift between transports.
+//! Both transports lower to a single [`ParsedGetTile`] shape; semantic
+//! validation and bbox math live in [`crate::prepare::resolve_get_tile`].
+//! That single chokepoint guarantees REST and KVP cache keys never drift.
 
-use mars_config::TileMatrixSet;
 use mars_runtime::RenderPlan;
-use mars_types::{Bbox, ImageFormat, LayerId};
+use mars_types::ImageFormat;
 
-use super::common::{Kvp, parse_format, parse_kvp, parse_u32, require};
+use super::common::{parse_kvp, parse_optional_u32, Kvp};
+use crate::prepare::{resolve_get_tile, ParsedGetTile, ResolvedGetTile};
 use crate::{WmtsConfig, WmtsError};
 
-/// Parse a `GetTile` query-string into a [`RenderPlan`].
+/// Parse a KVP `GetTile` query-string into a [`RenderPlan`].
 pub fn parse_get_tile(query: &str, cfg: &WmtsConfig) -> Result<RenderPlan, WmtsError> {
     let kvp = parse_kvp(query);
-    parse_get_tile_inner(&kvp, cfg)
+    Ok(resolve_get_tile_from_kvp(&kvp, cfg)?.plan)
 }
 
-pub(super) fn parse_get_tile_inner(kvp: &Kvp, cfg: &WmtsConfig) -> Result<RenderPlan, WmtsError> {
-    if let Some(v) = kvp.get("version")
-        && v != "1.0.0"
-    {
-        return Err(WmtsError::InvalidParam {
-            name: "version",
-            reason: format!("only 1.0.0 supported, got {v}"),
-        });
-    }
+pub(super) fn resolve_get_tile_from_kvp(kvp: &Kvp, cfg: &WmtsConfig) -> Result<ResolvedGetTile, WmtsError> {
+    let parsed = parse_kvp_get_tile(kvp)?;
+    resolve_get_tile(parsed, cfg)
+}
 
-    // wmts is single-layer per request (one tile, one layer); style is similarly single.
-    let layer = require(kvp, "layer")?;
-    // STYLE is required by spec but may be empty (default style); keep loose.
-    let style = kvp.get("style").cloned().unwrap_or_default();
-    let format_raw = require(kvp, "format")?;
-    let tms_name = require(kvp, "tilematrixset")?;
-    let tm_raw = require(kvp, "tilematrix")?;
-    let tile_col = parse_u32(kvp, "tilecol")?;
-    let tile_row = parse_u32(kvp, "tilerow")?;
-    let format = parse_format(&format_raw)?;
+fn parse_kvp_get_tile(kvp: &Kvp) -> Result<ParsedGetTile, WmtsError> {
+    Ok(ParsedGetTile {
+        version: nonempty(kvp, "version"),
+        layer: nonempty(kvp, "layer"),
+        format: nonempty(kvp, "format").map(|s| parse_format_mime(&s)).transpose()?,
+        tilematrixset: nonempty(kvp, "tilematrixset"),
+        tilematrix: nonempty(kvp, "tilematrix"),
+        tilecol: parse_optional_u32(kvp, "tilecol")?,
+        tilerow: parse_optional_u32(kvp, "tilerow")?,
+    })
+}
 
-    build_get_tile_plan(&layer, &style, format, &tms_name, &tm_raw, tile_col, tile_row, cfg)
+fn nonempty(kvp: &Kvp, name: &str) -> Option<String> {
+    kvp.get(name).filter(|s| !s.is_empty()).cloned()
 }
 
 /// Parse a REST-form tile request. The router strips the path prefix and
@@ -48,7 +46,7 @@ pub(super) fn parse_get_tile_inner(kvp: &Kvp, cfg: &WmtsConfig) -> Result<Render
 ///
 /// `version` cannot be carried in the REST path - WMTS 1.0.0 is implicit.
 /// `style` per spec may be the literal `default` to mean "no style filter";
-/// the empty-vs-`default` distinction is collapsed in the underlying plan.
+/// that distinction is collapsed to empty here.
 #[allow(clippy::too_many_arguments)]
 pub fn parse_rest_get_tile(
     layer: &str,
@@ -60,6 +58,19 @@ pub fn parse_rest_get_tile(
     ext: &str,
     cfg: &WmtsConfig,
 ) -> Result<RenderPlan, WmtsError> {
+    let parsed = parse_rest(layer, style, tms, z, y, x, ext)?;
+    Ok(resolve_get_tile(parsed, cfg)?.plan)
+}
+
+fn parse_rest(
+    layer: &str,
+    _style: &str,
+    tms: &str,
+    z: &str,
+    y: &str,
+    x: &str,
+    ext: &str,
+) -> Result<ParsedGetTile, WmtsError> {
     let format = parse_format_ext(ext)?;
     let tile_col: u32 = x
         .parse()
@@ -73,84 +84,28 @@ pub fn parse_rest_get_tile(
             name: "tilerow",
             reason: e.to_string(),
         })?;
-    let style_norm = if style.eq_ignore_ascii_case("default") {
-        ""
-    } else {
-        style
-    };
-    build_get_tile_plan(layer, style_norm, format, tms, z, tile_col, tile_row, cfg)
+    // `style` (KVP or REST) is intentionally discarded: the renderer does
+    // not yet route per-style. Restore the field once there's a consumer.
+    Ok(ParsedGetTile {
+        version: None,
+        layer: Some(layer.to_owned()),
+        format: Some(format),
+        tilematrixset: Some(tms.to_owned()),
+        tilematrix: Some(z.to_owned()),
+        tilecol: Some(tile_col),
+        tilerow: Some(tile_row),
+    })
 }
 
-#[allow(clippy::too_many_arguments)]
-fn build_get_tile_plan(
-    layer: &str,
-    _style: &str,
-    format: ImageFormat,
-    tms_name: &str,
-    tilematrix: &str,
-    tile_col: u32,
-    tile_row: u32,
-    cfg: &WmtsConfig,
-) -> Result<RenderPlan, WmtsError> {
-    if layer.is_empty() {
-        return Err(WmtsError::MissingParam("layer"));
-    }
-    let layer_id = LayerId::new(layer.to_owned());
-
-    if !cfg.formats.is_empty() && !cfg.formats.contains(&format) {
-        return Err(WmtsError::InvalidParam {
+fn parse_format_mime(raw: &str) -> Result<ImageFormat, WmtsError> {
+    match raw {
+        "image/png" => Ok(ImageFormat::Png),
+        "image/jpeg" | "image/jpg" => Ok(ImageFormat::Jpeg),
+        other => Err(WmtsError::InvalidParam {
             name: "format",
-            reason: format!("{} not enabled", format.mime()),
-        });
+            reason: format!("unsupported {other}"),
+        }),
     }
-
-    let tms = cfg
-        .tile_matrix_sets
-        .get(tms_name)
-        .ok_or_else(|| WmtsError::InvalidParam {
-            name: "tilematrixset",
-            reason: format!("unknown tile matrix set `{tms_name}`"),
-        })?;
-
-    // tilematrix is the level identifier. The OGC spec models it as a string
-    // (matrix identifier); MARS config uses numeric `id`. Accept both forms:
-    // a bare integer matches `level.id`, anything else must equal a future
-    // string identifier (none today).
-    let level_id: u32 = tilematrix.parse().map_err(|_| WmtsError::InvalidParam {
-        name: "tilematrix",
-        reason: format!("expected integer level id, got `{tilematrix}`"),
-    })?;
-    let level = tms
-        .levels
-        .iter()
-        .find(|l| l.id == level_id)
-        .ok_or_else(|| WmtsError::InvalidParam {
-            name: "tilematrix",
-            reason: format!("level {level_id} not declared in `{tms_name}`"),
-        })?;
-
-    let bbox = tile_bbox(tms, level.scale_denominator, tile_col, tile_row, cfg.max_bbox_coord)?;
-
-    let [w, h] = tms.tile_size;
-    if w == 0 || h == 0 {
-        return Err(WmtsError::InvalidParam {
-            name: "tilematrixset",
-            reason: format!("`{tms_name}` declares zero tile_size"),
-        });
-    }
-
-    Ok(RenderPlan {
-        layers: vec![layer_id],
-        bbox,
-        width: w,
-        height: h,
-        crs: tms.crs.clone(),
-        format,
-        // WMTS scale denominators are spec-fixed at the OGC standardised
-        // pixel size; honouring service.scale_dpi here would desync routing
-        // from the TileMatrixSet definition.
-        scale_pixel_size_m: mars_runtime::OGC_STANDARDIZED_PIXEL_SIZE_M,
-    })
 }
 
 /// Map a REST URL file extension to an [`ImageFormat`].
@@ -165,95 +120,20 @@ fn parse_format_ext(ext: &str) -> Result<ImageFormat, WmtsError> {
     }
 }
 
-/// Compute the bbox for `(tile_col, tile_row)` at the given scale denominator.
-///
-/// OGC WMTS standardised pixel size is 0.28 mm. `pixel_size_in_meters =
-/// scale_denominator * 0.00028`. Conversion to CRS units divides by the CRS's
-/// meters-per-unit; for projected metric CRSes that is 1.0, for geographic
-/// CRSes (EPSG:4326) it is the equator-meter-per-degree constant.
-fn tile_bbox(
-    tms: &TileMatrixSet,
-    scale_denominator: f64,
-    tile_col: u32,
-    tile_row: u32,
-    max_coord: f64,
-) -> Result<Bbox, WmtsError> {
-    if !scale_denominator.is_finite() || scale_denominator <= 0.0 {
-        return Err(WmtsError::InvalidParam {
-            name: "tilematrix",
-            reason: "scale_denominator must be positive and finite".into(),
-        });
-    }
-
-    let meters_per_unit = meters_per_unit_for(tms.crs.as_str()).ok_or_else(|| WmtsError::InvalidParam {
-        name: "tilematrixset",
-        reason: format!("no meters-per-unit known for crs `{}`", tms.crs.as_str()),
-    })?;
-
-    let pixel_size_units = scale_denominator * STANDARDIZED_PIXEL_SIZE_M / meters_per_unit;
-    let [tw, th] = tms.tile_size;
-    let span_x = pixel_size_units * f64::from(tw);
-    let span_y = pixel_size_units * f64::from(th);
-
-    let min_x = tms.top_left[0] + f64::from(tile_col) * span_x;
-    let max_x = min_x + span_x;
-    let max_y = tms.top_left[1] - f64::from(tile_row) * span_y;
-    let min_y = max_y - span_y;
-
-    for v in [min_x, min_y, max_x, max_y] {
-        if !v.is_finite() {
-            return Err(WmtsError::InvalidParam {
-                name: "tilerow|tilecol",
-                reason: "computed bbox coordinate is non-finite".into(),
-            });
-        }
-        if v.abs() > max_coord {
-            return Err(WmtsError::InvalidParam {
-                name: "tilerow|tilecol",
-                reason: format!("computed bbox coordinate magnitude exceeds {max_coord}"),
-            });
-        }
-    }
-
-    Ok(Bbox::new(min_x, min_y, max_x, max_y))
-}
-
-/// OGC WMTS standardised pixel size (0.28 mm), used to derive ground span
-/// from a level's scale denominator.
-const STANDARDIZED_PIXEL_SIZE_M: f64 = 0.000_28;
-
-/// Equator-meters per degree on a sphere of WGS84 mean radius. Standard
-/// value baked into OGC well-known WGS84 TMS scale-set definitions.
-const METERS_PER_DEGREE_EQUATOR: f64 = 111_319.490_793_273_57;
-
-/// meters-per-unit lookup for the small CRS allowlist v1 ships with. Returns
-/// `None` for unknown CRSes; operators wanting another CRS must add it here
-/// (or, eventually, lift this into a PROJ-aware lookup).
-fn meters_per_unit_for(crs: &str) -> Option<f64> {
-    match crs {
-        // projected metric CRSes
-        "EPSG:25832" | "EPSG:25833" | "EPSG:3857" | "EPSG:3034" | "EPSG:3035" => Some(1.0),
-        // geographic, degrees
-        "EPSG:4326" | "urn:ogc:def:crs:EPSG::4326" | "CRS84" | "urn:ogc:def:crs:OGC:1.3:CRS84" => {
-            Some(METERS_PER_DEGREE_EQUATOR)
-        }
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
     use std::collections::BTreeMap;
 
-    use mars_config::TileMatrixLevel;
+    use mars_config::{TileMatrixLevel, TileMatrixSet};
     use mars_types::CrsCode;
 
     use super::*;
 
+    const TEST_PIXEL_SIZE_M: f64 = 0.000_28;
+    const METERS_PER_DEGREE_EQUATOR: f64 = 111_319.490_793_273_57;
+
     fn dk_tms() -> TileMatrixSet {
-        // mimics a minimal `dk_25832`-shaped matrix set:
-        // metric CRS, top-left at the typical extent corner, 256-px tiles.
         TileMatrixSet {
             crs: CrsCode::new("EPSG:25832"),
             top_left: [120_000.0, 6_500_000.0],
@@ -261,14 +141,13 @@ mod tests {
             levels: vec![
                 TileMatrixLevel {
                     id: 0,
-                    // 1638.4 m/px at level 0 with 256-px tiles = 419430.4 m per tile.
-                    scale_denominator: 1638.4 / STANDARDIZED_PIXEL_SIZE_M,
+                    scale_denominator: 1638.4 / TEST_PIXEL_SIZE_M,
                     matrix_width: 1,
                     matrix_height: 1,
                 },
                 TileMatrixLevel {
                     id: 1,
-                    scale_denominator: 819.2 / STANDARDIZED_PIXEL_SIZE_M,
+                    scale_denominator: 819.2 / TEST_PIXEL_SIZE_M,
                     matrix_width: 2,
                     matrix_height: 2,
                 },
@@ -296,8 +175,6 @@ mod tests {
         assert_eq!(plan.crs.as_str(), "EPSG:25832");
         assert_eq!(plan.width, 256);
         assert_eq!(plan.height, 256);
-        // tile (0,0) at level 0: top-left corner is the TMS top-left, span is
-        // pixel_size_units * tile_size. pixel_size_units = 1638.4 m at L0.
         let expected_span = 1638.4 * 256.0;
         assert!((plan.bbox.min_x - 120_000.0).abs() < 1e-6);
         assert!((plan.bbox.max_x - (120_000.0 + expected_span)).abs() < 1e-6);
@@ -388,8 +265,6 @@ mod tests {
 
     #[test]
     fn geographic_crs_uses_meters_per_degree() {
-        // a degree-based TMS sanity: at scale_denominator chosen so that
-        // pixel_size_units = 1.0 degree, 256-tile spans 256 degrees.
         let mut sets = BTreeMap::new();
         sets.insert(
             "world_4326".to_owned(),
@@ -399,9 +274,7 @@ mod tests {
                 tile_size: [256, 256],
                 levels: vec![TileMatrixLevel {
                     id: 0,
-                    // pixel_size_units = sd * 0.00028 / METERS_PER_DEGREE_EQUATOR
-                    // pick sd so units=1.0
-                    scale_denominator: METERS_PER_DEGREE_EQUATOR / STANDARDIZED_PIXEL_SIZE_M,
+                    scale_denominator: METERS_PER_DEGREE_EQUATOR / TEST_PIXEL_SIZE_M,
                     matrix_width: 2,
                     matrix_height: 1,
                 }],
@@ -457,8 +330,8 @@ mod tests {
 
     #[test]
     fn rest_get_tile_matches_kvp_plan() {
-        // REST and KVP must produce identical RenderPlans for the same tile so
-        // shared cache keys / parity expectations hold.
+        // load-bearing: REST and KVP must produce byte-identical RenderPlans
+        // for the same tile so cache-key parity holds.
         let kvp = parse_get_tile(
             "request=GetTile&layer=roads&style=&format=image/png&\
              tilematrixset=dk_25832&tilematrix=0&tilecol=2&tilerow=3",
@@ -470,8 +343,11 @@ mod tests {
         assert_eq!(kvp.width, rest.width);
         assert_eq!(kvp.height, rest.height);
         assert_eq!(kvp.format, rest.format);
+        assert_eq!(kvp.crs.as_str(), rest.crs.as_str());
         assert!((kvp.bbox.min_x - rest.bbox.min_x).abs() < 1e-9);
         assert!((kvp.bbox.max_y - rest.bbox.max_y).abs() < 1e-9);
+        assert!((kvp.bbox.max_x - rest.bbox.max_x).abs() < 1e-9);
+        assert!((kvp.bbox.min_y - rest.bbox.min_y).abs() < 1e-9);
     }
 
     #[test]
@@ -486,7 +362,6 @@ mod tests {
 
     #[test]
     fn rest_empty_style_equivalent_to_default() {
-        // empty and "default" must both work and produce the same plan
         let empty = parse_rest_get_tile("a", "", "dk_25832", "0", "0", "0", "png", &cfg()).unwrap();
         let default = parse_rest_get_tile("a", "default", "dk_25832", "0", "0", "0", "png", &cfg()).unwrap();
         assert_eq!(empty.layers, default.layers);
@@ -494,8 +369,13 @@ mod tests {
     }
 
     #[test]
+    fn rest_unknown_extension_rejected() {
+        let err = parse_rest_get_tile("a", "default", "dk_25832", "0", "0", "0", "tiff", &cfg()).unwrap_err();
+        assert!(matches!(err, WmtsError::InvalidParam { name: "format", .. }));
+    }
+
+    #[test]
     fn bbox_clamp_rejects_runaway_col() {
-        // tilecol large enough to push past max_bbox_coord (1e9)
         let q = "request=GetTile&layer=a&format=image/png&tilematrixset=dk_25832&\
                  tilematrix=0&tilecol=10000000&tilerow=0";
         let err = parse_get_tile(q, &cfg()).unwrap_err();

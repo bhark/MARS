@@ -89,7 +89,7 @@ pub async fn handle_wmts(State(state): State<AppState>, headers: HeaderMap, raw_
 
         match parsed {
             WmtsRequest::GetCapabilities => serve_capabilities(&state.wmts_capabilities, &headers),
-            WmtsRequest::GetTile(plan) => {
+            WmtsRequest::GetTile(mars_wmts::ResolvedGetTile { plan }) => {
                 let mime = plan.format.mime();
                 match state.runtime.render(&plan).await {
                     Ok(bytes) => {
