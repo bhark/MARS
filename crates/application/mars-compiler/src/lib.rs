@@ -36,7 +36,7 @@ use mars_config::Config;
 use mars_observability::{Metrics, rebalance_outcome};
 use mars_source::{ChangeBatch, ChangeEvent, ChangeFeed, ChangeSubscription, LeaderLock, LeaderLockGuard, Source};
 use mars_store::{ManifestStore, ObjectStore, StoreError};
-use mars_types::{BindingId, LevelMetadata, Manifest, PageEntry};
+use mars_types::{BindingId, LevelMetadata, Manifest};
 use tokio_util::sync::CancellationToken;
 
 use crate::stages::shared::governors;
@@ -440,65 +440,7 @@ impl Compiler {
     /// [`Self::run_rebalance_once`]; service path holds it for the lifetime
     /// of [`Self::run`]).
     async fn rebalance_locked(&self) -> Result<u64, CompilerError> {
-        let prior = self
-            .deps
-            .manifest
-            .current()
-            .await?
-            .ok_or(CompilerError::NoPriorManifest {
-                context: "rebalance_locked",
-            })?;
-        let plan = plan::build_bootstrap_plan(&self.config)?;
-
-        // collect candidate ops across every (binding, level).
-        let mut ops: Vec<rebalance::RebalanceOp> = Vec::new();
-        for binding_meta in &prior.bindings {
-            let Some(binding_plan) = plan.bindings.iter().find(|b| b.binding_id == binding_meta.binding_id) else {
-                continue;
-            };
-            for level in &binding_meta.levels {
-                let level_pages: Vec<PageEntry> = prior
-                    .pages
-                    .iter()
-                    .filter(|p| p.key.binding_id == binding_meta.binding_id && p.key.level == level.level)
-                    .cloned()
-                    .collect();
-                ops.extend(rebalance::rebalance_candidates(
-                    level,
-                    &level_pages,
-                    binding_plan.page_size_target_bytes,
-                ));
-            }
-        }
-        if ops.is_empty() {
-            // already balanced; bump version so cursors advance.
-            let sv = prior.source_version.clone();
-            let next = noop_bump::build(prior, sv);
-            return publish_with_retry(
-                self.deps.manifest.as_ref(),
-                &next,
-                &self.deps.metrics,
-                &CancellationToken::new(),
-            )
-            .await;
-        }
-
-        // mmap each binding's page-membership sidecar so the executor can
-        // resolve feature-id sets per source page.
-        let sidecars_owned = OwnedSidecars::fetch(self.deps.store.as_ref(), &prior.bindings).await?;
-        let sidecars = sidecars_owned.readers()?;
-
-        let working_set_bytes = self.config.compiler.compile_page_working_set()?;
-        let outcome = render::execute_rebalance(&self.deps, &plan, &prior, &sidecars, ops, working_set_bytes).await?;
-        let next_version = prior.version + 1;
-        let new_manifest = merge_manifest(&prior, &outcome, next_version, prior.source_version.clone());
-        publish_with_retry(
-            self.deps.manifest.as_ref(),
-            &new_manifest,
-            &self.deps.metrics,
-            &CancellationToken::new(),
-        )
-        .await
+        stages::rebalance::run(self).await
     }
 
     /// Long-running service mode. Acquires the leader lock, runs a snapshot

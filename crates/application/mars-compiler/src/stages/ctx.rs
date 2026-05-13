@@ -14,6 +14,8 @@
 
 use std::path::PathBuf;
 
+use mars_types::Manifest;
+
 use crate::disk_governor::DiskGovernor;
 use crate::memory_governor::MemoryGovernor;
 use crate::plan::BootstrapPlan;
@@ -38,4 +40,10 @@ pub(crate) struct SnapshotCtx {
     pub(crate) knobs: CompileKnobs,
     pub(crate) mem_governor: MemoryGovernor,
     pub(crate) disk_governor: DiskGovernor,
+}
+
+pub(crate) struct RebalanceCtx {
+    pub(crate) plan: BootstrapPlan,
+    pub(crate) prior: Manifest,
+    pub(crate) working_set_bytes: u64,
 }
