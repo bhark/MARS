@@ -60,10 +60,15 @@ only.
   example: Style with ten optional fields becomes `Resolved` with concrete
   alpha, width, cap, join, dash, offset. Stroke and fill pipelines never
   touch a raw `Option` again.
+- `crates/interfaces/mars-wms/src/prepare/` and
+  `crates/interfaces/mars-wmts/src/prepare/` apply the same shape on the
+  request side: per-operation `Parsed*` -> `Resolved*` (`ResolvedGetMap`,
+  `ResolvedGetFeatureInfo`, `ResolvedGetLegend`, `ResolvedGetTile`) with a
+  shared `ResolvedViewport` chokepoint so allowlist + bound + axis-order
+  checks live in one place and KVP / REST cache keys cannot drift.
 - A new optional field lands in `resolve` once, not in every consumer.
-- The same shape belongs in any future request-handler chain (WMS request
-  parsing -> `ResolvedRequest`), in compiler input handling, and in source
-  query planning.
+- The same shape belongs in compiler input handling and in source query
+  planning when they grow defaults.
 
 If two call sites are both unwrapping the same `Option` with the same default,
 your normalisation layer is missing a field.
@@ -152,16 +157,17 @@ Areas of likely growth, ranked by ROI for OGC parity. For each, the principle
 that applies most directly.
 
 - **WMS / WMTS operations** (`crates/interfaces/mars-wms`, `mars-wmts`).
-  Per-operation parse split is done: `parse/{mod,get_map,get_feature_info,
-  get_legend,get_tile,common}.rs`, with `parse_request` dispatching on
-  `request=` inside `parse/mod.rs`. Response formatting still lives at the
-  crate root (`capabilities.rs`, `feature_info.rs`, `exception.rs`). Next
-  operations land one module per request - `DescribeLayer`, WMS dimensions,
-  vendor params - extending the same `WmsRequest` / `WmtsRequest` enums and
-  the `parse_request` match. Add a request-side `prepare`-style
-  normalisation (parsed `Request` -> `ResolvedRequest`) once defaults and
-  vendor params start to multiply; today the per-operation parsers fold
-  defaults inline, which is fine while there are only a handful.
+  Per-operation parse split is done (`parse/{mod,get_map,get_feature_info,
+  get_legend,get_tile,common}.rs`), and the request-side `prepare`
+  normalisation (principle 3) has landed: `parse/*` returns Option-heavy
+  `Parsed*`, `prepare/*` produces `Resolved*` with every default and
+  validation applied exactly once. Shared viewport checks live in
+  `prepare/viewport.rs`; WMTS REST and KVP both flow through
+  `prepare::resolve_get_tile` so cache keys cannot drift. Next operations
+  land one module per request - `DescribeLayer`, WMS dimensions, vendor
+  params - as a new `parse_*` + `prepare/*_*.rs` pair plus one new
+  `WmsRequest` / `WmtsRequest` variant. Response formatting stays at the
+  crate root (`capabilities.rs`, `feature_info.rs`, `exception.rs`).
 
 - **Style and filter dialects** (`bin/mars-import-mapfile/`). The shape is
   scanner -> parser -> translate -> emit, with per-block parse/emit modules
