@@ -19,3 +19,6 @@ mod b_incremental;
 
 #[path = "e2e_suite/c_rendering.rs"]
 mod c_rendering;
+
+#[path = "e2e_suite/d_wmts.rs"]
+mod d_wmts;
