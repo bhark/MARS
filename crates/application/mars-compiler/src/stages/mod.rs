@@ -9,4 +9,6 @@
 //! that principle to sequence steps via one stage per file rather than one
 //! match arm per variant.
 
+pub(crate) mod ctx;
 pub(crate) mod shared;
+pub(crate) mod snapshot;

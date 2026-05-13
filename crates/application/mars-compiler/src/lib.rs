@@ -282,41 +282,7 @@ impl Compiler {
     }
 
     async fn apply_snapshot(&self, shutdown: &CancellationToken) -> Result<u64, CompilerError> {
-        let plan = plan::build_bootstrap_plan(&self.config)?;
-        let prev_version = self.deps.manifest.current().await?.map_or(0, |m| m.version);
-        let next_version = prev_version + 1;
-        let working_set_bytes = self.config.compiler.compile_page_working_set()?;
-        let plan_budget_bytes = self.config.compiler.compile_plan_budget()?;
-        let in_flight_budget_bytes = self.config.compiler.compile_in_flight_pages_budget()?;
-        let binding_parallelism = self.config.compiler.compile_binding_parallelism;
-        let spill_dir = self.config.compiler.compile_spill_dir_path();
-        let spill_open_file_limit = self.config.compiler.compile_spill_open_file_limit;
-        let governor = governors::build_memory_governor(&self.config.compiler)?;
-        let disk_governor = governors::build_disk_governor(&self.config.compiler)?;
-        let manifest = run_snapshot_from_plan(
-            &self.deps,
-            &plan,
-            self.config.service.name.clone(),
-            next_version,
-            working_set_bytes,
-            plan_budget_bytes,
-            in_flight_budget_bytes,
-            binding_parallelism,
-            &spill_dir,
-            spill_open_file_limit,
-            &governor,
-        )
-        .await?;
-        governors::log_memory_observations("compile.snapshot.governor", &governor);
-        governors::log_disk_observations("compile.snapshot.disk_governor", &disk_governor);
-        let v = publish_with_retry(self.deps.manifest.as_ref(), &manifest, &self.deps.metrics, shutdown).await?;
-        tracing::info!(
-            version = v,
-            bindings = manifest.bindings.len(),
-            pages = manifest.pages.len(),
-            "compiler: snapshot manifest published"
-        );
-        Ok(v)
+        stages::snapshot::run(self, shutdown).await
     }
 
     /// Apply one or more change batches as a single incremental cycle and
