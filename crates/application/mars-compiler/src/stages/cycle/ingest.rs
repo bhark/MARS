@@ -8,12 +8,12 @@
 use std::collections::HashMap;
 
 use mars_source::{ChangeBatch, ChangeEvent};
-use mars_types::{BindingId, LevelMetadata, Manifest};
+use mars_types::{BindingId, LevelMetadata};
 
 use crate::CompilerError;
 use crate::incremental::{DirtyPages, IncrementalCycle};
-use crate::plan::BootstrapPlan;
 use crate::sidecar::SidecarReader;
+use crate::stages::ctx::CycleCtx;
 
 pub(crate) struct IngestOutcome {
     pub(crate) dirty: DirtyPages,
@@ -22,19 +22,19 @@ pub(crate) struct IngestOutcome {
 }
 
 pub(crate) fn run(
-    plan: &BootstrapPlan,
+    ctx: &CycleCtx,
     sidecars: &HashMap<BindingId, SidecarReader<'_>>,
-    prior: &Manifest,
     reconcile_events: Vec<ChangeEvent>,
     batches: Vec<ChangeBatch>,
 ) -> Result<IngestOutcome, CompilerError> {
-    let level_meta: HashMap<BindingId, Vec<LevelMetadata>> = prior
+    let level_meta: HashMap<BindingId, Vec<LevelMetadata>> = ctx
+        .prior
         .bindings
         .iter()
         .map(|b| (b.binding_id.clone(), b.levels.clone()))
         .collect();
-    let mut cycle = IncrementalCycle::new(plan, sidecars, &level_meta);
-    let mut last_source_version: Option<String> = prior.source_version.clone();
+    let mut cycle = IncrementalCycle::new(&ctx.plan, sidecars, &level_meta);
+    let mut last_source_version: Option<String> = ctx.prior.source_version.clone();
     let mut event_count: u64 = 0;
     for event in reconcile_events {
         cycle.ingest(event)?;

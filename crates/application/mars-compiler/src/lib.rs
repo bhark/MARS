@@ -39,10 +39,6 @@ use mars_store::{ManifestStore, ObjectStore, StoreError};
 use mars_types::{BindingId, Manifest};
 use tokio_util::sync::CancellationToken;
 
-use crate::stages::shared::merge::merge_manifest;
-use crate::stages::shared::noop_bump;
-use crate::stages::shared::sidecars::OwnedSidecars;
-
 /// Capped exponential backoff schedule for retrying a transient publish.
 const PUBLISH_RETRY_DELAYS: &[Duration] = &[
     Duration::from_millis(100),
@@ -297,64 +293,7 @@ impl Compiler {
     }
 
     async fn apply_cycle(&self, batches: Vec<ChangeBatch>, shutdown: &CancellationToken) -> Result<u64, CompilerError> {
-        let prior = self
-            .deps
-            .manifest
-            .current()
-            .await?
-            .ok_or(CompilerError::NoPriorManifest {
-                context: "run_cycle_once",
-            })?;
-        let plan = plan::build_bootstrap_plan(&self.config)?;
-
-        let sidecars_owned = OwnedSidecars::fetch(self.deps.store.as_ref(), &prior.bindings).await?;
-        let sidecars = sidecars_owned.readers()?;
-
-        let reconcile_events = stages::cycle::reconcile_cadence::run(self, &plan, &sidecars).await?;
-
-        let ingest = stages::cycle::ingest::run(&plan, &sidecars, &prior, reconcile_events, batches)?;
-        let stages::cycle::ingest::IngestOutcome {
-            dirty,
-            last_source_version,
-            event_count,
-        } = ingest;
-        for w in &dirty.warnings {
-            tracing::warn!(?w, "incremental cycle warning");
-        }
-        self.deps.metrics.inc_compiler_dirty_cells(
-            dirty
-                .per_binding
-                .values()
-                .map(|d| d.per_level.values().map(|s| s.len() as u64).sum::<u64>())
-                .sum::<u64>(),
-        );
-        if event_count > 0 {
-            for _ in 0..event_count {
-                self.deps.metrics.inc_compiler_change_events();
-            }
-        }
-        if dirty.per_binding.is_empty() {
-            // no work; publish a no-op version bump so downstream cursors
-            // advance even on empty windows.
-            let next = noop_bump::build(prior, last_source_version);
-            return publish_with_retry(self.deps.manifest.as_ref(), &next, &self.deps.metrics, shutdown).await;
-        }
-
-        let outcome = stages::cycle::rebuild::run(
-            &self.deps,
-            &self.config.compiler,
-            &self.deps.metrics,
-            &plan,
-            &prior,
-            &sidecars,
-            dirty,
-        )
-        .await?;
-
-        // merge outcome into prior to produce the new manifest.
-        let next_version = prior.version + 1;
-        let new_manifest = merge_manifest(&prior, &outcome, next_version, last_source_version);
-        publish_with_retry(self.deps.manifest.as_ref(), &new_manifest, &self.deps.metrics, shutdown).await
+        stages::cycle::run(self, batches, shutdown).await
     }
 
     /// Run one opportunistic rebalance pass over the current manifest.

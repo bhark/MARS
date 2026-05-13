@@ -8,22 +8,22 @@
 //!
 //! takes `&Compiler` because `cycle_counter` lives on `Compiler` (its
 //! reset-on-leader-handover semantics are scoped to the leader-lock
-//! lifetime, not a per-call ctx). plan and sidecars are passed by
-//! reference; once `CycleCtx` lands they will flow through it.
+//! lifetime, not a per-call ctx); plan + sidecars come from `&CycleCtx`.
 
 use std::collections::HashMap;
 
 use mars_source::ChangeEvent;
 use mars_types::BindingId;
 
-use crate::plan::{BindingPlan, BootstrapPlan};
+use crate::plan::BindingPlan;
 use crate::reconcile;
 use crate::sidecar::SidecarReader;
+use crate::stages::ctx::CycleCtx;
 use crate::{Compiler, CompilerError};
 
 pub(crate) async fn run(
     c: &Compiler,
-    plan: &BootstrapPlan,
+    ctx: &CycleCtx,
     sidecars: &HashMap<BindingId, SidecarReader<'_>>,
 ) -> Result<Vec<ChangeEvent>, CompilerError> {
     // critical section: advance counters, snapshot due bindings, reset
@@ -31,7 +31,7 @@ pub(crate) async fn run(
     let due: Vec<BindingPlan> = {
         let mut counters = c.cycle_counter.write().await;
         let mut due = Vec::new();
-        for binding_plan in &plan.bindings {
+        for binding_plan in &ctx.plan.bindings {
             let counter = counters.entry(binding_plan.binding_id.clone()).or_insert(0);
             *counter = counter.saturating_add(1);
             if *counter >= binding_plan.reconcile_every_cycles {

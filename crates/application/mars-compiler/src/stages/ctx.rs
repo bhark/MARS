@@ -19,6 +19,7 @@ use mars_types::Manifest;
 use crate::disk_governor::DiskGovernor;
 use crate::memory_governor::MemoryGovernor;
 use crate::plan::BootstrapPlan;
+use crate::stages::shared::sidecars::OwnedSidecars;
 
 /// shared compile knobs read off config. snapshot uses every field;
 /// cycle uses every field except `binding_parallelism` (cycle does not
@@ -37,6 +38,15 @@ pub(crate) struct SnapshotCtx {
     pub(crate) plan: BootstrapPlan,
     pub(crate) service_name: String,
     pub(crate) next_version: u64,
+    pub(crate) knobs: CompileKnobs,
+    pub(crate) mem_governor: MemoryGovernor,
+    pub(crate) disk_governor: DiskGovernor,
+}
+
+pub(crate) struct CycleCtx {
+    pub(crate) plan: BootstrapPlan,
+    pub(crate) prior: Manifest,
+    pub(crate) sidecars: OwnedSidecars,
     pub(crate) knobs: CompileKnobs,
     pub(crate) mem_governor: MemoryGovernor,
     pub(crate) disk_governor: DiskGovernor,
