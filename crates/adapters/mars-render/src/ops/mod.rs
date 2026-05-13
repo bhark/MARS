@@ -11,10 +11,7 @@ use tiny_skia::Pixmap;
 
 pub(crate) fn dispatch(pm: &mut Pixmap, op: &DrawOp, fonts: &Fonts) -> Result<(), RenderError> {
     match op {
-        DrawOp::Path { path, style } => {
-            path::draw(pm, path, style);
-            Ok(())
-        }
+        DrawOp::Path { path, style } => path::draw(pm, path, style),
         DrawOp::Label {
             anchor,
             text,
