@@ -25,6 +25,8 @@ data:
     psql "$PG_DSN" -v ON_ERROR_STOP=1 -f /sql/assert-fixture.sql
     echo "[loader] creating replication pub + slot"
     psql "$PG_DSN" -v ON_ERROR_STOP=1 -f /sql/create-replication.sql
+    echo "[loader] applying synthetic poi table + publication membership"
+    psql "$PG_DSN" -v ON_ERROR_STOP=1 -f /sql/synthetic-poi.sql
     echo "[loader] done"
 ---
 apiVersion: batch/v1

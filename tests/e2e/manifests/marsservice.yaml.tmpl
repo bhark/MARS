@@ -97,7 +97,19 @@ spec:
         lo: 32768m
     interfaces:
       wms:  { enabled: true }
-      wmts: { enabled: true }
+      wmts:
+        enabled: true
+        versions: ["1.0.0"]
+        formats: ["image/png"]
+        tile_matrix_sets: [e2e_25832]
+    tile_matrix_sets:
+      e2e_25832:
+        crs: EPSG:25832
+        top_left: [850000, 6145000]
+        tile_size: [256, 256]
+        levels:
+          - { id: 0, scale_denominator: 25000000 }
+          - { id: 1, scale_denominator: 12500000 }
     reprojection:
       allowlist: [EPSG:25832]
     styles:
@@ -110,6 +122,19 @@ spec:
       line_road_minor:     { type: line, stroke: "#c8c8c8", stroke_width: 0.8 }
       line_waterway_wide:  { type: line, stroke: "#dcf0ff", stroke_width: 1.2 }
       line_waterway_narrow: { type: line, stroke: "#dcf0ff", stroke_width: 0.5 }
+      marker_poi:
+        type: point
+        fill: "#222222"
+        stroke: "#ffffff"
+        stroke_width: 1.0
+        marker: { kind: triangle, size: 10 }
+      label_poi:
+        type: label
+        font_family: "DejaVu Sans"
+        font_size: 12
+        fill: "#000000"
+        halo: { colour: "#ffffff", width: 1.5 }
+        priority: 100
     layers:
       - name: land
         title: "Land"
@@ -156,6 +181,16 @@ spec:
         classes:
           - { name: wide, title: "Wide waterways", when: "width_class = 'wide'", style: { type: ref, name: line_waterway_wide } }
           - { name: narrow, title: "Waterways", style: { type: ref, name: line_waterway_narrow } }
+      - name: poi
+        title: "Points of interest"
+        type: point
+        sources:
+          - { band: hi, from: e2e_source.poi, geometry_column: geom, id_column: id, attributes: [kind, name] }
+        classes:
+          - { name: default, title: "POI", style: { type: ref, name: marker_poi } }
+        label:
+          style: { type: ref, name: label_poi }
+          text: "{name}"
     observability:
       log_level: info
       log_format: json

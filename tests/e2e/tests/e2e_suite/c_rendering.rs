@@ -21,7 +21,7 @@ struct RenderCase {
 
 const CASES: &[RenderCase] = &[RenderCase {
     name: "wms_full",
-    path_and_query: "/wms?service=WMS&version=1.3.0&request=GetMap&layers=land,water,settlements,roads,buildings,waterways&styles=&crs=EPSG:25832&bbox=850000,6090000,895000,6145000&width=512&height=512&format=image/png",
+    path_and_query: "/wms?service=WMS&version=1.3.0&request=GetMap&layers=land,water,settlements,roads,buildings,waterways,poi&styles=&crs=EPSG:25832&bbox=850000,6090000,895000,6145000&width=512&height=512&format=image/png",
 }];
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
