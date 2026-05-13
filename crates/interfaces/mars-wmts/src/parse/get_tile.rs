@@ -1,35 +1,16 @@
-//! WMTS 1.0.0 request parsing.
-//!
-//! Covers both `GetTile` and `GetCapabilities` on the KVP path
-//! (`/wmts?...`) and `GetTile` on the REST resource path
+//! WMTS `GetTile` parsing for both the KVP transport (`/wmts?...`) and the
+//! REST resource path
 //! (`/wmts/{Layer}/{Style}/{TileMatrixSet}/{TileMatrix}/{TileRow}/{TileCol}.{ext}`).
-//! `GetFeatureInfo` rejects with `WmtsError::NotImplemented`.
 //!
-//! KVP and REST converge on `build_get_tile_plan` so bbox math and config
+//! KVP and REST converge on [`build_get_tile_plan`] so bbox math and config
 //! validation never drift between transports.
-
-use std::collections::HashMap;
-
-use percent_encoding::percent_decode_str;
 
 use mars_config::TileMatrixSet;
 use mars_runtime::RenderPlan;
 use mars_types::{Bbox, ImageFormat, LayerId};
 
-use crate::{WmtsConfig, WmtsError, WmtsRequest};
-
-/// Parse any WMTS request, dispatching on the `request=` parameter.
-pub fn parse_request(query: &str, cfg: &WmtsConfig) -> Result<WmtsRequest, WmtsError> {
-    let kvp = parse_kvp(query);
-    let request = require(&kvp, "request")?;
-    match request.as_str() {
-        s if s.eq_ignore_ascii_case("GetTile") => Ok(WmtsRequest::GetTile(parse_get_tile_inner(&kvp, cfg)?)),
-        s if s.eq_ignore_ascii_case("GetCapabilities") => Ok(WmtsRequest::GetCapabilities),
-        other => Err(WmtsError::NotImplemented {
-            what: format!("WMTS request={other}"),
-        }),
-    }
-}
+use super::common::{Kvp, parse_format, parse_kvp, parse_u32, require};
+use crate::{WmtsConfig, WmtsError};
 
 /// Parse a `GetTile` query-string into a [`RenderPlan`].
 pub fn parse_get_tile(query: &str, cfg: &WmtsConfig) -> Result<RenderPlan, WmtsError> {
@@ -37,7 +18,7 @@ pub fn parse_get_tile(query: &str, cfg: &WmtsConfig) -> Result<RenderPlan, WmtsE
     parse_get_tile_inner(&kvp, cfg)
 }
 
-fn parse_get_tile_inner(kvp: &Kvp, cfg: &WmtsConfig) -> Result<RenderPlan, WmtsError> {
+pub(super) fn parse_get_tile_inner(kvp: &Kvp, cfg: &WmtsConfig) -> Result<RenderPlan, WmtsError> {
     if let Some(v) = kvp.get("version")
         && v != "1.0.0"
     {
@@ -260,54 +241,6 @@ fn meters_per_unit_for(crs: &str) -> Option<f64> {
     }
 }
 
-// ---------- helpers ----------
-
-type Kvp = HashMap<String, String>;
-
-fn parse_kvp(query: &str) -> Kvp {
-    let mut out = HashMap::new();
-    for pair in query.trim_start_matches('?').split('&') {
-        if pair.is_empty() {
-            continue;
-        }
-        let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
-        out.insert(k.to_ascii_lowercase(), pct_decode(v));
-    }
-    out
-}
-
-fn pct_decode(s: &str) -> String {
-    let plus_decoded: String = s.chars().map(|c| if c == '+' { ' ' } else { c }).collect();
-    percent_decode_str(&plus_decoded).decode_utf8_lossy().into_owned()
-}
-
-fn require(kvp: &Kvp, name: &'static str) -> Result<String, WmtsError> {
-    kvp.get(name)
-        .filter(|s| !s.is_empty())
-        .cloned()
-        .ok_or(WmtsError::MissingParam(name))
-}
-
-fn parse_u32(kvp: &Kvp, name: &'static str) -> Result<u32, WmtsError> {
-    let raw = require(kvp, name)?;
-    raw.parse()
-        .map_err(|e: std::num::ParseIntError| WmtsError::InvalidParam {
-            name,
-            reason: e.to_string(),
-        })
-}
-
-fn parse_format(raw: &str) -> Result<ImageFormat, WmtsError> {
-    match raw {
-        "image/png" => Ok(ImageFormat::Png),
-        "image/jpeg" | "image/jpg" => Ok(ImageFormat::Jpeg),
-        other => Err(WmtsError::InvalidParam {
-            name: "format",
-            reason: format!("unsupported {other}"),
-        }),
-    }
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
@@ -435,21 +368,6 @@ mod tests {
                  tilematrix=0&tilecol=0&tilerow=0";
         let err = parse_get_tile(q, &cfg()).unwrap_err();
         assert!(matches!(err, WmtsError::InvalidParam { name: "format", .. }));
-    }
-
-    #[test]
-    fn dispatch_capabilities() {
-        let q = "service=WMTS&version=1.0.0&request=GetCapabilities";
-        let req = parse_request(q, &cfg()).unwrap();
-        assert!(matches!(req, WmtsRequest::GetCapabilities));
-    }
-
-    #[test]
-    fn unknown_request_not_implemented() {
-        let q = "request=GetFeatureInfo&layer=a&format=image/png&tilematrixset=dk_25832&\
-                 tilematrix=0&tilecol=0&tilerow=0&i=1&j=1";
-        let err = parse_request(q, &cfg()).unwrap_err();
-        assert!(matches!(err, WmtsError::NotImplemented { .. }));
     }
 
     #[test]
