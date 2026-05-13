@@ -25,6 +25,7 @@ pub mod route_index;
 pub mod sidecar;
 pub mod sidecar_arena;
 pub(crate) mod spill;
+mod stages;
 pub mod testing;
 
 use std::collections::HashMap;
@@ -38,35 +39,7 @@ use mars_store::{ManifestStore, ObjectStore, StoreError};
 use mars_types::{BindingId, LevelMetadata, Manifest, PageEntry};
 use tokio_util::sync::CancellationToken;
 
-use crate::sidecar::SidecarReader;
-
-/// Fetch every binding's page-membership sidecar from object storage.
-/// Returned bytes are kept owned so callers can borrow them when building
-/// `SidecarReader`s in [`open_sidecar_readers`].
-async fn fetch_sidecar_bytes(
-    store: &dyn ObjectStore,
-    bindings: &[mars_types::BindingMetadata],
-) -> Result<HashMap<BindingId, bytes::Bytes>, CompilerError> {
-    let mut out = HashMap::new();
-    for meta in bindings {
-        if let Some(entry) = &meta.page_membership_sidecar {
-            let bytes = store.get(&entry.key, entry.hash).await?;
-            out.insert(meta.binding_id.clone(), bytes);
-        }
-    }
-    Ok(out)
-}
-
-/// Open a `SidecarReader` over each entry in `bytes`. Readers borrow from the
-/// caller-owned map for the lifetime of `bytes`.
-fn open_sidecar_readers(
-    bytes: &HashMap<BindingId, bytes::Bytes>,
-) -> Result<HashMap<BindingId, SidecarReader<'_>>, CompilerError> {
-    bytes
-        .iter()
-        .map(|(id, b)| Ok((id.clone(), SidecarReader::open(b)?)))
-        .collect()
-}
+use crate::stages::shared::sidecars::OwnedSidecars;
 
 /// Capped exponential backoff schedule for retrying a transient publish.
 const PUBLISH_RETRY_DELAYS: &[Duration] = &[
@@ -366,8 +339,8 @@ impl Compiler {
             })?;
         let plan = plan::build_bootstrap_plan(&self.config)?;
 
-        let sidecar_bytes = fetch_sidecar_bytes(self.deps.store.as_ref(), &prior.bindings).await?;
-        let sidecars = open_sidecar_readers(&sidecar_bytes)?;
+        let sidecars_owned = OwnedSidecars::fetch(self.deps.store.as_ref(), &prior.bindings).await?;
+        let sidecars = sidecars_owned.readers()?;
 
         // periodic reconciliation: bump per-binding counters; for any binding
         // that hits its cadence, run a reconciliation pass and prepend the
@@ -551,8 +524,8 @@ impl Compiler {
 
         // mmap each binding's page-membership sidecar so the executor can
         // resolve feature-id sets per source page.
-        let sidecar_bytes = fetch_sidecar_bytes(self.deps.store.as_ref(), &prior.bindings).await?;
-        let sidecars = open_sidecar_readers(&sidecar_bytes)?;
+        let sidecars_owned = OwnedSidecars::fetch(self.deps.store.as_ref(), &prior.bindings).await?;
+        let sidecars = sidecars_owned.readers()?;
 
         let working_set_bytes = self.config.compiler.compile_page_working_set()?;
         let outcome = render::execute_rebalance(&self.deps, &plan, &prior, &sidecars, ops, working_set_bytes).await?;
