@@ -10,6 +10,7 @@
 //! match arm per variant.
 
 pub(crate) mod ctx;
+pub(crate) mod cycle;
 pub(crate) mod rebalance;
 pub(crate) mod shared;
 pub(crate) mod snapshot;

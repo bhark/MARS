@@ -34,7 +34,7 @@ use std::time::Duration;
 
 use mars_config::Config;
 use mars_observability::{Metrics, rebalance_outcome};
-use mars_source::{ChangeBatch, ChangeEvent, ChangeFeed, ChangeSubscription, LeaderLock, LeaderLockGuard, Source};
+use mars_source::{ChangeBatch, ChangeFeed, ChangeSubscription, LeaderLock, LeaderLockGuard, Source};
 use mars_store::{ManifestStore, ObjectStore, StoreError};
 use mars_types::{BindingId, LevelMetadata, Manifest};
 use tokio_util::sync::CancellationToken;
@@ -311,48 +311,7 @@ impl Compiler {
         let sidecars_owned = OwnedSidecars::fetch(self.deps.store.as_ref(), &prior.bindings).await?;
         let sidecars = sidecars_owned.readers()?;
 
-        // periodic reconciliation: under one write lock, advance every
-        // binding's cycle counter, snapshot which bindings are due, and
-        // reset the due counters in the same critical section so the
-        // reconcile.await below holds no lock. counters reset eagerly
-        // (before reconciliation runs) so a mid-loop error leaves the
-        // affected binding's next cycle starting at zero, matching the
-        // spirit of "a single oversized cycle doesn't repeatedly trigger".
-        let due: Vec<plan::BindingPlan> = {
-            let mut counters = self.cycle_counter.write().await;
-            let mut due = Vec::new();
-            for binding_plan in &plan.bindings {
-                let counter = counters.entry(binding_plan.binding_id.clone()).or_insert(0);
-                *counter = counter.saturating_add(1);
-                if *counter >= binding_plan.reconcile_every_cycles {
-                    *counter = 0;
-                    due.push(binding_plan.clone());
-                }
-            }
-            due
-        };
-
-        let mut reconcile_events: Vec<ChangeEvent> = Vec::new();
-        for binding_plan in &due {
-            let Some(sc) = sidecars.get(&binding_plan.binding_id) else {
-                continue;
-            };
-            let outcome = reconcile::reconcile_binding(&self.deps, binding_plan, sc).await?;
-            for w in [
-                ("missing_in_sidecar", outcome.report.missing_in_sidecar.len()),
-                ("orphan_in_sidecar", outcome.report.orphan_in_sidecar.len()),
-            ] {
-                if w.1 > 0 {
-                    tracing::warn!(
-                        binding = binding_plan.binding_id.as_str(),
-                        kind = w.0,
-                        count = w.1,
-                        "page-membership sidecar drift repaired by reconciliation"
-                    );
-                }
-            }
-            reconcile_events.extend(outcome.synthetic_events);
-        }
+        let reconcile_events = stages::cycle::reconcile_cadence::run(self, &plan, &sidecars).await?;
 
         // build an incremental cycle, ingest every event.
         let level_meta: HashMap<BindingId, Vec<LevelMetadata>> = prior
