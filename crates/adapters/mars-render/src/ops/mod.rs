@@ -4,6 +4,7 @@
 
 mod label;
 pub(crate) mod path;
+mod pattern;
 
 use mars_render_port::{DrawOp, RenderError};
 use mars_text::Fonts;
@@ -26,11 +27,7 @@ pub(crate) fn dispatch(pm: &mut Pixmap, op: &DrawOp, fonts: &Fonts) -> Result<Un
             rotation_rad,
             style,
         } => symbol::dispatch(pm, *anchor, *rotation_rad, style),
-        // pattern fills still stub at the DrawOp level; the slice-2
-        // commit wires this through pattern::dispatch.
-        DrawOp::Pattern { .. } => Err(RenderError::NotImplemented {
-            what: "DrawOp::Pattern",
-        }),
+        DrawOp::Pattern { path, style } => pattern::draw(pm, path, style),
     }
 }
 
@@ -80,18 +77,48 @@ mod tests {
     }
 
     #[test]
-    fn pattern_variant_returns_not_implemented() {
+    fn pattern_image_routes_to_pattern_dispatch() {
         let op = DrawOp::Pattern {
             path: PortPath {
                 subpaths: vec![Subpath {
-                    points: vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)],
+                    points: vec![(2.0, 2.0), (12.0, 2.0), (12.0, 12.0), (2.0, 12.0)],
                     closed: true,
                 }],
             },
-            style: Arc::new(Style::default()),
+            style: Arc::new(Style {
+                fill: Some(mars_style::FillPaint::Image {
+                    name: "brick".into(),
+                }),
+                ..Default::default()
+            }),
         };
-        let err = renderer().render(canvas(), &[op]).expect_err("must error");
-        assert!(matches!(err, RenderError::NotImplemented { what } if what == "DrawOp::Pattern"));
+        let err = renderer().render(canvas(), &[op]).expect_err("image stub");
+        assert!(matches!(err, RenderError::NotImplemented { what } if what == "FillPaint::Image"));
+    }
+
+    #[test]
+    fn pattern_with_solid_fill_returns_routing_contract_error() {
+        // procedural fill emitted via DrawOp::Pattern is a runtime/renderer
+        // contract slip; the typed Backend error pinpoints the seam.
+        let op = DrawOp::Pattern {
+            path: PortPath {
+                subpaths: vec![Subpath {
+                    points: vec![(2.0, 2.0), (12.0, 2.0), (12.0, 12.0), (2.0, 12.0)],
+                    closed: true,
+                }],
+            },
+            style: Arc::new(Style {
+                fill: Some(mars_style::FillPaint::Solid(mars_style::Colour {
+                    r: 255,
+                    g: 0,
+                    b: 0,
+                    a: 255,
+                })),
+                ..Default::default()
+            }),
+        };
+        let err = renderer().render(canvas(), &[op]).expect_err("routing error");
+        assert!(matches!(err, RenderError::Backend(msg) if msg.contains("DrawOp::Path")));
     }
 
     #[test]

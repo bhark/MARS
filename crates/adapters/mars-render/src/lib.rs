@@ -9,6 +9,7 @@ mod label;
 mod ops;
 mod path;
 mod path_offset;
+mod pattern;
 mod prepare;
 mod stroke;
 mod symbol;
