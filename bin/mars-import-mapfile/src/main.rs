@@ -5,6 +5,7 @@
 
 mod emitter;
 mod expression;
+mod parsing;
 mod scanner;
 mod style;
 mod translate;

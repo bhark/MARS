@@ -7,6 +7,7 @@ use tracing::warn;
 use crate::emitter::{
     BindingSource, ClassSkeleton, LabelSkeleton, LayerSkeleton, MarkerKind, Skeleton, SourceSkeleton, SymbolDef,
 };
+use crate::parsing;
 #[cfg(test)]
 use crate::scanner::scan;
 use crate::scanner::{Token, block_range, is_block_opener};
@@ -180,12 +181,12 @@ fn handle_layer(body: &[Token], layer_line: usize, skel: &mut Skeleton, include_
                 continue;
             }
             "CLASSITEM" if class_item.is_none() => {
-                class_item = t.args.first().map(|s| s.trim_matches('"').to_string());
+                class_item = parsing::first_unquoted(t);
                 i += 1;
                 continue;
             }
             "LABELITEM" if label_item.is_none() => {
-                label_item = t.args.first().map(|s| s.trim_matches('"').to_string());
+                label_item = parsing::first_unquoted(t);
                 i += 1;
                 continue;
             }
@@ -405,8 +406,8 @@ fn parse_symbol(body: &[Token]) -> Option<(String, SymbolDef)> {
         match kw.as_str() {
             "NAME" if name.is_none() => name = t.args.first().cloned(),
             "TYPE" if type_.is_none() => type_ = t.args.first().cloned(),
-            "ANGLE" => angle_deg = t.args.first().and_then(|a| a.parse().ok()),
-            "SIZE" => size = t.args.first().and_then(|a| a.parse().ok()),
+            "ANGLE" => angle_deg = parsing::first_parsed(t),
+            "SIZE" => size = parsing::first_parsed(t),
             "FILLED" => {
                 if let Some(arg) = t.args.first() {
                     filled = matches!(arg.to_ascii_uppercase().as_str(), "TRUE" | "ON" | "YES" | "1");
@@ -422,7 +423,7 @@ fn parse_symbol(body: &[Token]) -> Option<(String, SymbolDef)> {
                         if let Ok(v) = inner.keyword.parse::<f32>() {
                             coords.push(v);
                         }
-                        coords.extend(inner.args.iter().filter_map(|a| a.parse::<f32>().ok()));
+                        coords.extend(parsing::nums(inner));
                     }
                     for pair in coords.chunks_exact(2) {
                         points.push((pair[0], pair[1]));
@@ -432,19 +433,18 @@ fn parse_symbol(body: &[Token]) -> Option<(String, SymbolDef)> {
                 }
                 // POINTS without an END: read the (possibly inline) coord
                 // list off the current token's args.
-                let coords: Vec<f32> = t.args.iter().filter_map(|a| a.parse().ok()).collect();
-                for pair in coords.chunks_exact(2) {
+                for pair in parsing::nums(t).chunks_exact(2) {
                     points.push((pair[0], pair[1]));
                 }
             }
             "ANCHORPOINT" => {
-                let coords: Vec<f32> = t.args.iter().filter_map(|a| a.parse().ok()).collect();
+                let coords = parsing::nums(t);
                 if coords.len() >= 2 {
                     anchor = Some((coords[0], coords[1]));
                 }
             }
-            "FONT" => font = t.args.first().map(|s| s.trim_matches('"').to_string()),
-            "CHARACTER" => character = t.args.first().map(|s| s.trim_matches('"').to_string()),
+            "FONT" => font = parsing::first_unquoted(t),
+            "CHARACTER" => character = parsing::first_unquoted(t),
             _ => {}
         }
         i += 1;

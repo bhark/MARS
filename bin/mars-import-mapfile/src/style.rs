@@ -7,6 +7,7 @@ use crate::emitter::{
     ClassSkeleton, EmitFill, EmitLinePlacement, EmitMarker, EmitStrokeGap, LabelSkeleton, MarkerKind, Skeleton,
     StyleDef, SymbolDef, slugify,
 };
+use crate::parsing;
 use crate::scanner::{Token, block_range, is_block_opener};
 use crate::translate::{is_unsupported, normalize_n_plus_one};
 
@@ -187,28 +188,12 @@ fn parse_style_block(body: &[Token]) -> StyleBlock {
     for t in body {
         let kw = t.keyword.to_ascii_uppercase();
         match kw.as_str() {
-            "COLOR" if t.args.len() >= 3 => {
-                if let (Ok(r), Ok(g), Ok(b)) = (t.args[0].parse(), t.args[1].parse(), t.args[2].parse()) {
-                    st.color = Some(Colour::rgb(r, g, b));
-                }
-            }
-            "OUTLINECOLOR" if t.args.len() >= 3 => {
-                if let (Ok(r), Ok(g), Ok(b)) = (t.args[0].parse(), t.args[1].parse(), t.args[2].parse()) {
-                    st.outlinecolor = Some(Colour::rgb(r, g, b));
-                }
-            }
-            "WIDTH" => {
-                if let Ok(v) = t.args.first().unwrap_or(&String::new()).parse::<f32>() {
-                    st.width = Some(v);
-                }
-            }
-            "OUTLINEWIDTH" => {
-                if let Ok(v) = t.args.first().unwrap_or(&String::new()).parse::<f32>() {
-                    st.outlinewidth = Some(v);
-                }
-            }
+            "COLOR" => st.color = parsing::rgb_triple(t).or(st.color),
+            "OUTLINECOLOR" => st.outlinecolor = parsing::rgb_triple(t).or(st.outlinecolor),
+            "WIDTH" => st.width = parsing::first_parsed(t).or(st.width),
+            "OUTLINEWIDTH" => st.outlinewidth = parsing::first_parsed(t).or(st.outlinewidth),
             "PATTERN" => {
-                let nums: Vec<f32> = t.args.iter().filter_map(|a| a.parse().ok()).collect();
+                let nums = parsing::nums(t);
                 if !nums.is_empty() {
                     st.pattern = Some(nums);
                 }
@@ -216,26 +201,18 @@ fn parse_style_block(body: &[Token]) -> StyleBlock {
             "SYMBOL" => {
                 // STYLE.SYMBOL takes one arg: either a symbol name (string)
                 // or a numeric index (legacy). we only resolve named symbols.
-                if let Some(name) = t.args.first() {
-                    let s = name.trim_matches('"').to_string();
-                    if !s.is_empty() && s.parse::<f64>().is_err() {
-                        st.symbol = Some(s);
-                    }
+                if let Some(s) = parsing::first_unquoted(t)
+                    && !s.is_empty()
+                    && s.parse::<f64>().is_err()
+                {
+                    st.symbol = Some(s);
                 }
             }
-            "ANGLE" => {
-                if let Some(v) = t.args.first().and_then(|a| a.parse::<f32>().ok()) {
-                    st.angle_deg = Some(v);
-                }
-            }
-            "SIZE" => {
-                if let Some(v) = t.args.first().and_then(|a| a.parse::<f32>().ok()) {
-                    st.size = Some(v);
-                }
-            }
+            "ANGLE" => st.angle_deg = parsing::first_parsed(t).or(st.angle_deg),
+            "SIZE" => st.size = parsing::first_parsed(t).or(st.size),
             "OPACITY" => {
                 // mapserver OPACITY is 0..100; mars wants 0.0..1.0.
-                if let Some(v) = t.args.first().and_then(|a| a.parse::<f32>().ok()) {
+                if let Some(v) = parsing::first_parsed::<f32>(t) {
                     st.opacity = Some((v / 100.0).clamp(0.0, 1.0));
                 }
             }
@@ -244,23 +221,17 @@ fn parse_style_block(body: &[Token]) -> StyleBlock {
                 // either a real y offset or -99 (mapserver's "parallel
                 // double stroke" marker). we honour dx and drop the second
                 // arg.
-                if let Some(v) = t.args.first().and_then(|a| a.parse::<f32>().ok()) {
-                    st.offset_px = Some(v);
-                }
+                st.offset_px = parsing::first_parsed(t).or(st.offset_px);
             }
             "GAP" => {
-                if let Some(v) = t.args.first().and_then(|a| a.parse::<f32>().ok()) {
-                    // mapserver: negative gap means "stamp marker along
-                    // line" with stride |gap|; positive gap is a different
-                    // sentinel mode. interval_px is unsigned here.
+                // mapserver: negative gap means "stamp marker along line"
+                // with stride |gap|; positive gap is a different sentinel
+                // mode. interval_px is unsigned here.
+                if let Some(v) = parsing::first_parsed::<f32>(t) {
                     st.gap_px = Some(v.abs());
                 }
             }
-            "INITIALGAP" => {
-                if let Some(v) = t.args.first().and_then(|a| a.parse::<f32>().ok()) {
-                    st.initial_gap_px = Some(v);
-                }
-            }
+            "INITIALGAP" => st.initial_gap_px = parsing::first_parsed(t).or(st.initial_gap_px),
             "LINEJOIN" => {
                 if let Some(arg) = t.args.first() {
                     match arg.to_ascii_lowercase().as_str() {
@@ -500,39 +471,29 @@ pub(crate) fn parse_label(
         match kw.as_str() {
             "TEXT" if text.is_none() => text = t.args.first().cloned(),
             "FONT" if font.is_none() => font = t.args.first().cloned(),
-            "SIZE" => size = t.args.first().and_then(|a| a.parse().ok()),
-            "COLOR" if t.args.len() >= 3 => {
-                if let (Ok(r), Ok(g), Ok(b)) = (t.args[0].parse(), t.args[1].parse(), t.args[2].parse()) {
-                    color = Some(Colour::rgb(r, g, b));
-                }
-            }
-            "OUTLINECOLOR" if t.args.len() >= 3 => {
-                if let (Ok(r), Ok(g), Ok(b)) = (t.args[0].parse(), t.args[1].parse(), t.args[2].parse()) {
-                    outlinecolor = Some(Colour::rgb(r, g, b));
-                }
-            }
-            "OUTLINEWIDTH" => {
-                outlinewidth = t.args.first().and_then(|a| a.parse().ok());
-            }
+            "SIZE" => size = parsing::first_parsed(t),
+            "COLOR" => color = parsing::rgb_triple(t).or(color),
+            "OUTLINECOLOR" => outlinecolor = parsing::rgb_triple(t).or(outlinecolor),
+            "OUTLINEWIDTH" => outlinewidth = parsing::first_parsed(t),
             "PRIORITY" => {
-                if let Some(v) = t.args.first().and_then(|a| a.parse::<i64>().ok()) {
-                    // mapserver PRIORITY is 1..=10 by convention; mars allows
-                    // any u16. clamp to a sane range.
+                // mapserver PRIORITY is 1..=10 by convention; mars allows any
+                // u16. clamp to a sane range.
+                if let Some(v) = parsing::first_parsed::<i64>(t) {
                     priority = Some(v.clamp(0, u16::MAX as i64) as u16);
                 }
             }
             "MINDISTANCE" => {
-                if let Some(v) = t.args.first().and_then(|a| a.parse::<f32>().ok()) {
+                if let Some(v) = parsing::first_parsed::<f32>(t) {
                     min_distance = Some(v);
                 }
             }
             "REPEATDISTANCE" => {
-                if let Some(v) = t.args.first().and_then(|a| a.parse::<f64>().ok()) {
+                if let Some(v) = parsing::first_parsed::<f64>(t) {
                     ensure_line(&mut placement_line).repeat_m = Some(v);
                 }
             }
             "MAXOVERLAPANGLE" => {
-                if let Some(v) = t.args.first().and_then(|a| a.parse::<f32>().ok()) {
+                if let Some(v) = parsing::first_parsed::<f32>(t) {
                     ensure_line(&mut placement_line).max_angle_delta_deg = Some(v);
                 }
             }
