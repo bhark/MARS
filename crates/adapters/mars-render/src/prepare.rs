@@ -47,7 +47,7 @@ impl UnimplementedFeatures {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(crate) struct ResolvedFill {
     pub paint: FillPaint,
     /// 0..=1; style.opacity baked in. multiplied into the paint colour's
@@ -82,7 +82,7 @@ pub(crate) fn resolve(style: &Style) -> Resolved {
         stroke_gap: style.stroke_gap.is_some(),
     };
 
-    let fill = style.fill.map(|paint| ResolvedFill { paint, alpha: opacity });
+    let fill = style.fill.clone().map(|paint| ResolvedFill { paint, alpha: opacity });
 
     let stroke = style.stroke.and_then(|colour| {
         let requested = style.stroke_width.unwrap_or(1.0);

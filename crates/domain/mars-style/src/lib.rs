@@ -207,10 +207,16 @@ pub struct StrokeGap {
     pub initial_px: f32,
 }
 
-/// Polygon fill paint. `Solid` is a bare hex string on the wire; `Hatch` is a
-/// tagged map. `#[non_exhaustive]` so future variants (cross-hatch, dots,
-/// pixmap) land additively.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// Polygon fill paint. `Solid` is a bare hex string on the wire; `Hatch`
+/// and `Image` are tagged maps. `#[non_exhaustive]` so future variants
+/// (gradient, svg, dots) land additively.
+///
+/// Procedural variants (`Solid`, `Hatch`) reach the renderer through
+/// `DrawOp::Path` and the `fill/` dispatcher. Non-procedural variants
+/// (`Image`, future `Svg`) reach the renderer through `DrawOp::Pattern`
+/// and the `pattern/` dispatcher; the runtime is responsible for picking
+/// the right DrawOp variant per fill paint.
+#[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum FillPaint {
     Solid(Colour),
@@ -220,12 +226,19 @@ pub enum FillPaint {
         line_width: f32,
         colour: Colour,
     },
+    /// Tiled non-procedural image pattern. `name` keys into a renderer-
+    /// side image registry (analog of the `Fonts` registry passed to the
+    /// rasteriser); opacity flows from `Style::opacity`. Sizing /
+    /// rotation knobs are deferred until a concrete need surfaces.
+    Image {
+        name: String,
+    },
 }
 
 impl Serialize for FillPaint {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        match *self {
+        match self {
             // bare hex string preserves wire-format symmetry with the legacy
             // `fill: Option<Colour>` form. existing configs and goldens stay
             // diff-clean.
@@ -238,10 +251,16 @@ impl Serialize for FillPaint {
             } => {
                 let mut st = s.serialize_struct("Hatch", 5)?;
                 st.serialize_field("kind", "hatch")?;
-                st.serialize_field("spacing", &spacing)?;
-                st.serialize_field("angle_deg", &angle_deg)?;
-                st.serialize_field("line_width", &line_width)?;
-                st.serialize_field("colour", &colour)?;
+                st.serialize_field("spacing", spacing)?;
+                st.serialize_field("angle_deg", angle_deg)?;
+                st.serialize_field("line_width", line_width)?;
+                st.serialize_field("colour", colour)?;
+                st.end()
+            }
+            Self::Image { name } => {
+                let mut st = s.serialize_struct("Image", 2)?;
+                st.serialize_field("kind", "image")?;
+                st.serialize_field("name", name)?;
                 st.end()
             }
         }
@@ -262,7 +281,7 @@ impl<'de> serde::de::Visitor<'de> for FillPaintVisitor {
     type Value = FillPaint;
 
     fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("a hex colour string (#rrggbb / #rrggbbaa) or a tagged map (kind: solid|hatch)")
+        f.write_str("a hex colour string (#rrggbb / #rrggbbaa) or a tagged map (kind: solid|hatch|image)")
     }
 
     fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
@@ -289,6 +308,9 @@ impl<'de> serde::de::Visitor<'de> for FillPaintVisitor {
                 line_width: f32,
                 colour: Colour,
             },
+            Image {
+                name: String,
+            },
         }
         let tagged = Tagged::deserialize(serde::de::value::MapAccessDeserializer::new(map))?;
         Ok(match tagged {
@@ -304,6 +326,7 @@ impl<'de> serde::de::Visitor<'de> for FillPaintVisitor {
                 line_width,
                 colour,
             },
+            Tagged::Image { name } => FillPaint::Image { name },
         })
     }
 }
@@ -583,6 +606,19 @@ mod tests {
         assert!(out.contains("angle_deg: 45.0"));
         assert!(out.contains("line_width: 0.5"));
         assert!(out.contains("colour: '#404040'"));
+    }
+
+    #[test]
+    fn fill_paint_image_yaml_roundtrip_tagged() {
+        let yaml = "kind: image\nname: brick\n";
+        let fp: FillPaint = serde_yaml_ng::from_str(yaml).unwrap();
+        match &fp {
+            FillPaint::Image { name } => assert_eq!(name, "brick"),
+            _ => panic!("expected image"),
+        }
+        let out = serde_yaml_ng::to_string(&fp).unwrap();
+        assert!(out.contains("kind: image"));
+        assert!(out.contains("name: brick"));
     }
 
     #[test]
