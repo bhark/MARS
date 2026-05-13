@@ -40,6 +40,11 @@ impl UnimplementedFeatures {
         .into_iter()
         .flatten()
     }
+
+    pub(crate) fn merge(&mut self, other: Self) {
+        self.glyph_marker |= other.glyph_marker;
+        self.stroke_gap |= other.stroke_gap;
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

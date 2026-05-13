@@ -10,20 +10,14 @@ use tiny_skia::Pixmap;
 
 use crate::fill;
 use crate::path::build_path;
-use crate::prepare;
+use crate::prepare::{self, UnimplementedFeatures};
 use crate::stroke;
 
-pub(crate) fn draw(pm: &mut Pixmap, path: &PortPath, style: &Style) -> Result<(), RenderError> {
+pub(crate) fn draw(pm: &mut Pixmap, path: &PortPath, style: &Style) -> Result<UnimplementedFeatures, RenderError> {
     let Some(tsk_path) = build_path(path) else {
-        return Ok(());
+        return Ok(UnimplementedFeatures::default());
     };
     let resolved = prepare::resolve(style);
-
-    if resolved.unimplemented.any() {
-        for what in resolved.unimplemented.names() {
-            tracing::warn!(feature = what, "render feature not yet implemented");
-        }
-    }
 
     if let Some(fill_resolved) = &resolved.fill {
         fill::draw(pm, &tsk_path, fill_resolved)?;
@@ -33,5 +27,5 @@ pub(crate) fn draw(pm: &mut Pixmap, path: &PortPath, style: &Style) -> Result<()
         stroke::draw(pm, path, &tsk_path, stroke_resolved);
     }
 
-    Ok(())
+    Ok(resolved.unimplemented)
 }

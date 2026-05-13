@@ -48,8 +48,14 @@ impl Renderer for TinySkiaRenderer {
             crate::canvas::fill_background(&mut pm, bg);
         }
 
+        let mut unimplemented = crate::prepare::UnimplementedFeatures::default();
         for op in ops {
-            ops::dispatch(&mut pm, op, &self.fonts)?;
+            unimplemented.merge(ops::dispatch(&mut pm, op, &self.fonts)?);
+        }
+        if unimplemented.any() {
+            for what in unimplemented.names() {
+                tracing::warn!(feature = what, "render feature not yet implemented");
+            }
         }
 
         let width = pm.width();

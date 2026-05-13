@@ -6,6 +6,7 @@ use mars_text::Fonts;
 use tiny_skia::Pixmap;
 
 use crate::label;
+use crate::prepare::UnimplementedFeatures;
 
 pub(crate) fn draw(
     pm: &mut Pixmap,
@@ -14,6 +15,6 @@ pub(crate) fn draw(
     style: &LabelStyle,
     angle_rad: f32,
     fonts: &Fonts,
-) -> Result<(), RenderError> {
-    label::draw(pm, anchor, text, style, angle_rad, fonts)
+) -> Result<UnimplementedFeatures, RenderError> {
+    label::draw(pm, anchor, text, style, angle_rad, fonts).map(|()| UnimplementedFeatures::default())
 }
