@@ -95,6 +95,31 @@ mod tests {
     }
 
     #[test]
+    fn symbol_with_glyph_marker_surfaces_unimplemented_flag() {
+        use tiny_skia::Pixmap as SkPixmap;
+
+        let mut pm = SkPixmap::new(16, 16).unwrap();
+        let fonts = mars_text::Fonts::with_default();
+        let op = DrawOp::Symbol {
+            anchor: (8.0, 8.0),
+            rotation_rad: 0.0,
+            style: Arc::new(Style {
+                marker: Some(MarkerSymbol::Glyph {
+                    font_family: "x".into(),
+                    ch: "a".into(),
+                    size: 6.0,
+                }),
+                ..Default::default()
+            }),
+        };
+        let flags = dispatch(&mut pm, &op, &fonts).expect("dispatch ok");
+        assert!(
+            flags.glyph_marker,
+            "glyph_marker flag must propagate from symbol dispatch"
+        );
+    }
+
+    #[test]
     fn path_with_glyph_marker_surfaces_unimplemented_flag() {
         use tiny_skia::Pixmap as SkPixmap;
 
