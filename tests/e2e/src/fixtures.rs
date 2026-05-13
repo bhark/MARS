@@ -49,8 +49,8 @@ pub fn fixture_filename(path: &std::path::Path) -> Result<String> {
 
 /// create the `fixture-sql` ConfigMap with the canonical assert + replication
 /// SQL files, plus the e2e-only synthetic-poi extension consumed by the
-/// loader. server-side apply so reruns inside the same namespace are
-/// idempotent.
+/// loader and the mutate-source script applied by b_incremental. server-side
+/// apply so reruns inside the same namespace are idempotent.
 pub async fn apply_sql_configmap(client: Arc<Client>, ns: &str) -> Result<()> {
     let repo = repo_root()?;
     let shared = repo.join("tests/integration/fixtures/local-map-subset");
@@ -64,11 +64,15 @@ pub async fn apply_sql_configmap(client: Arc<Client>, ns: &str) -> Result<()> {
     let synthetic_poi = fs::read_to_string(e2e_sql.join("synthetic-poi.sql"))
         .await
         .with_context(|| format!("read {}/synthetic-poi.sql", e2e_sql.display()))?;
+    let mutate_source = fs::read_to_string(e2e_sql.join("mutate-source.sql"))
+        .await
+        .with_context(|| format!("read {}/mutate-source.sql", e2e_sql.display()))?;
 
     let mut data = BTreeMap::new();
     data.insert("assert-fixture.sql".to_string(), assert);
     data.insert("create-replication.sql".to_string(), replication);
     data.insert("synthetic-poi.sql".to_string(), synthetic_poi);
+    data.insert("mutate-source.sql".to_string(), mutate_source);
 
     let cm = ConfigMap {
         metadata: ObjectMeta {

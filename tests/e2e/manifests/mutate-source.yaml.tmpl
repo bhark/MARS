@@ -1,0 +1,35 @@
+# one-shot Job that applies tests/e2e/sql/mutate-source.sql to the in-cluster
+# postgis. b_incremental applies this Job after capturing the baseline manifest
+# version and re-renders to confirm the change-feed -> compile -> publish ->
+# manifest-swap chain propagates the edit through to the runtime's output.
+# the SQL lives in the same `fixture-sql` ConfigMap built by src/fixtures.rs.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mutate-source
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: psql
+          image: postgis/postgis:18-3.6
+          env:
+            - name: PG_DSN
+              value: "postgres://mars:mars@postgis:5432/mars"
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              echo "[mutate-source] applying mutate-source.sql"
+              psql "$PG_DSN" -v ON_ERROR_STOP=1 -f /sql/mutate-source.sql
+              echo "[mutate-source] done"
+          volumeMounts:
+            - { name: sql, mountPath: /sql }
+      volumes:
+        - name: sql
+          configMap:
+            name: fixture-sql

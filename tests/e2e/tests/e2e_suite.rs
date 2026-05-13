@@ -14,5 +14,8 @@ mod scenario;
 #[path = "e2e_suite/a_bootstrap.rs"]
 mod a_bootstrap;
 
+#[path = "e2e_suite/b_incremental.rs"]
+mod b_incremental;
+
 #[path = "e2e_suite/c_rendering.rs"]
 mod c_rendering;
