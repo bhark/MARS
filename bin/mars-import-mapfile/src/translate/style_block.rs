@@ -16,6 +16,12 @@ use crate::emitter::{EmitFill, EmitMarker, EmitStrokeGap, MarkerKind, SymbolDef}
 use crate::parsing;
 use crate::scanner::Token;
 
+fn push_unique(bag: &mut Vec<&'static str>, name: &'static str) {
+    if !bag.contains(&name) {
+        bag.push(name);
+    }
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct StyleBlock {
     pub(crate) color: Option<Colour>,
@@ -41,9 +47,9 @@ pub(crate) struct StyleBlock {
     pub(crate) initial_gap_px: Option<f32>,
     /// STYLE.LINEJOIN -> mars stroke_linejoin wire value.
     pub(crate) linejoin: Option<&'static str>,
-    /// Directive names recognised but not yet implemented (MINWIDTH, MAXWIDTH).
-    /// Aggregated at resolve time so the parser stays a pure data sink;
-    /// `emit_layer` fires one warn per layer summarising what was dropped.
+    /// Recognised-but-not-implemented STYLE directive names. Aggregated at
+    /// resolve time so the parser stays a pure data sink; `emit_layer` fires
+    /// one warn per layer summarising what was dropped.
     pub(crate) unimplemented: Vec<&'static str>,
 }
 
@@ -101,7 +107,7 @@ pub(crate) fn parse_style_block(body: &[Token]) -> StyleBlock {
                         "miter" => st.linejoin = Some("miter"),
                         "round" => st.linejoin = Some("round"),
                         "bevel" => st.linejoin = Some("bevel"),
-                        _ => warn!(line = t.line, linejoin = %arg, "unknown STYLE LINEJOIN; dropping"),
+                        _ => push_unique(&mut st.unimplemented, "STYLE.LINEJOIN (unknown value)"),
                     }
                 }
             }
@@ -109,13 +115,11 @@ pub(crate) fn parse_style_block(body: &[Token]) -> StyleBlock {
                 // record the dropped directive as a typed signal; the
                 // layer-level warn fires once at emit time.
                 let name: &'static str = match t.keyword.to_ascii_uppercase().as_str() {
-                    "MINWIDTH" => "MINWIDTH",
-                    "MAXWIDTH" => "MAXWIDTH",
+                    "MINWIDTH" => "STYLE.MINWIDTH",
+                    "MAXWIDTH" => "STYLE.MAXWIDTH",
                     _ => "STYLE attenuation",
                 };
-                if !st.unimplemented.contains(&name) {
-                    st.unimplemented.push(name);
-                }
+                push_unique(&mut st.unimplemented, name);
             }
             StyleDirective::Unknown => {}
         }
@@ -124,7 +128,10 @@ pub(crate) fn parse_style_block(body: &[Token]) -> StyleBlock {
 }
 
 /// outputs of [`collapse_styles`]: a single resolved fill/stroke/width/dash/
-/// marker tuple that drives `StyleDef` construction in `parse_class`.
+/// marker tuple that drives `StyleDef` construction in `parse_class`. The
+/// `unimplemented` bag carries directive names that survived parsing but were
+/// dropped during symbol resolution; `resolve_class` merges it into the
+/// class-level bag alongside the parser-side `StyleBlock.unimplemented`.
 #[derive(Debug, Default)]
 pub(crate) struct CollapsedStyle {
     pub(crate) fill: Option<EmitFill>,
@@ -136,6 +143,7 @@ pub(crate) struct CollapsedStyle {
     pub(crate) stroke_offset_px: Option<f32>,
     pub(crate) stroke_gap: Option<EmitStrokeGap>,
     pub(crate) stroke_linejoin: Option<&'static str>,
+    pub(crate) unimplemented: Vec<&'static str>,
 }
 
 pub(crate) fn collapse_styles(
@@ -155,6 +163,7 @@ pub(crate) fn collapse_styles(
     // precedence over the symbol's own defaults.
     let mut resolved_marker: Option<EmitMarker> = None;
     let mut resolved_hatch: Option<EmitFill> = None;
+    let mut unimplemented: Vec<&'static str> = Vec::new();
 
     for s in styles {
         if let Some(sym_name) = &s.symbol {
@@ -199,25 +208,27 @@ pub(crate) fn collapse_styles(
                     });
                 }
                 Some(SymbolDef::NotImplemented { raw_type }) => {
-                    // typed signal from parse_symbol: a recognised SYMBOL
-                    // block whose TYPE we don't translate yet. warn with the
-                    // actual TYPE string so the operator can hand-edit.
-                    warn!(
-                        line = line,
-                        symbol = sym_name.as_str(),
-                        raw_type = raw_type.as_str(),
-                        "STYLE.SYMBOL TYPE not yet implemented; dropping marker"
-                    );
+                    // map known mapfile TYPE keywords to specific bag entries
+                    // so the operator sees which kind of symbol was dropped.
+                    let name: &'static str = match raw_type.as_str() {
+                        "PIXMAP" => "STYLE.SYMBOL PIXMAP",
+                        "SVG" => "STYLE.SYMBOL SVG",
+                        "OGR" => "STYLE.SYMBOL OGR",
+                        _ => "STYLE.SYMBOL (unimplemented type)",
+                    };
+                    push_unique(&mut unimplemented, name);
                 }
                 None => {
-                    warn!(
-                        line = line,
-                        symbol = sym_name.as_str(),
-                        "STYLE.SYMBOL references undefined symbol; ignoring"
-                    );
+                    push_unique(&mut unimplemented, "STYLE.SYMBOL (undefined)");
                 }
             }
         }
+    }
+
+    // ANGLE outside a hatch context is silently ignored at draw time;
+    // surface it so the operator sees it in the layer-level warn.
+    if resolved_hatch.is_none() && styles.iter().any(|s| s.angle_deg.is_some()) {
+        push_unique(&mut unimplemented, "STYLE.ANGLE (non-hatch)");
     }
 
     let solid_fill = styles.iter().rev().find_map(|s| s.color).map(EmitFill::Hex);
@@ -244,6 +255,7 @@ pub(crate) fn collapse_styles(
         stroke_offset_px,
         stroke_gap,
         stroke_linejoin,
+        unimplemented,
     }
 }
 
@@ -418,6 +430,119 @@ mod tests {
             other => panic!("expected hatch fill, got {other:?}"),
         }
         assert!(c.marker.is_none());
+    }
+
+    #[test]
+    fn parse_style_block_flags_unknown_linejoin() {
+        let toks = vec![Token {
+            line: 1,
+            keyword: "LINEJOIN".into(),
+            args: vec!["zigzag".into()],
+        }];
+        let st = parse_style_block(&toks);
+        assert!(st.linejoin.is_none());
+        assert_eq!(st.unimplemented, vec!["STYLE.LINEJOIN (unknown value)"]);
+    }
+
+    #[test]
+    fn parse_style_block_flags_minwidth_maxwidth_once() {
+        let toks = vec![
+            Token {
+                line: 1,
+                keyword: "MINWIDTH".into(),
+                args: vec!["0.5".into()],
+            },
+            Token {
+                line: 2,
+                keyword: "MAXWIDTH".into(),
+                args: vec!["5".into()],
+            },
+            Token {
+                line: 3,
+                keyword: "MINWIDTH".into(),
+                args: vec!["0.25".into()],
+            },
+        ];
+        let st = parse_style_block(&toks);
+        assert_eq!(st.unimplemented, vec!["STYLE.MINWIDTH", "STYLE.MAXWIDTH"]);
+    }
+
+    #[test]
+    fn collapse_styles_flags_undefined_symbol() {
+        let styles = vec![StyleBlock {
+            symbol: Some("ghost".into()),
+            ..Default::default()
+        }];
+        let c = collapse_styles(&styles, 1, &HashMap::new());
+        assert_eq!(c.unimplemented, vec!["STYLE.SYMBOL (undefined)"]);
+        assert!(c.marker.is_none());
+    }
+
+    #[test]
+    fn collapse_styles_flags_not_implemented_symbol_type_pixmap() {
+        let mut symbols = HashMap::new();
+        symbols.insert(
+            "pix".into(),
+            SymbolDef::NotImplemented {
+                raw_type: "PIXMAP".into(),
+            },
+        );
+        let styles = vec![StyleBlock {
+            symbol: Some("pix".into()),
+            ..Default::default()
+        }];
+        let c = collapse_styles(&styles, 1, &symbols);
+        assert_eq!(c.unimplemented, vec!["STYLE.SYMBOL PIXMAP"]);
+    }
+
+    #[test]
+    fn collapse_styles_flags_not_implemented_symbol_type_unknown() {
+        let mut symbols = HashMap::new();
+        symbols.insert(
+            "weird".into(),
+            SymbolDef::NotImplemented {
+                raw_type: "BIZARRO".into(),
+            },
+        );
+        let styles = vec![StyleBlock {
+            symbol: Some("weird".into()),
+            ..Default::default()
+        }];
+        let c = collapse_styles(&styles, 1, &symbols);
+        assert_eq!(c.unimplemented, vec!["STYLE.SYMBOL (unimplemented type)"]);
+    }
+
+    #[test]
+    fn collapse_styles_flags_angle_on_non_hatch() {
+        let mut symbols = HashMap::new();
+        symbols.insert("circle".into(), SymbolDef::Circle);
+        let styles = vec![StyleBlock {
+            symbol: Some("circle".into()),
+            angle_deg: Some(30.0),
+            ..Default::default()
+        }];
+        let c = collapse_styles(&styles, 1, &symbols);
+        assert!(c.marker.is_some());
+        assert_eq!(c.unimplemented, vec!["STYLE.ANGLE (non-hatch)"]);
+    }
+
+    #[test]
+    fn collapse_styles_does_not_flag_angle_on_hatch() {
+        let mut symbols = HashMap::new();
+        symbols.insert(
+            "lines".into(),
+            SymbolDef::Hatch {
+                angle_deg: None,
+                size: None,
+            },
+        );
+        let styles = vec![StyleBlock {
+            symbol: Some("lines".into()),
+            angle_deg: Some(45.0),
+            ..Default::default()
+        }];
+        let c = collapse_styles(&styles, 1, &symbols);
+        assert!(c.unimplemented.is_empty());
     }
 
     #[test]

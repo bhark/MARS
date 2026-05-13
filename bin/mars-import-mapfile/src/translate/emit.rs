@@ -18,7 +18,7 @@ pub(crate) fn emit_layer(r: ResolvedLayer, skel: &mut Skeleton) {
         warn!(
             layer = %r.name,
             dropped = ?r.unimplemented,
-            "layer has unimplemented STYLE directives; dropping"
+            "layer has unimplemented STYLE/LABEL directives; dropping"
         );
     }
 

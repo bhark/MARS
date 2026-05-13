@@ -226,6 +226,11 @@ fn resolve_class(
             }
         }
     }
+    for u in &collapsed.unimplemented {
+        if !unimplemented.contains(u) {
+            unimplemented.push(*u);
+        }
+    }
 
     ResolvedClass {
         class_name,
