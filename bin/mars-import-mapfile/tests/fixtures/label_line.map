@@ -1,0 +1,29 @@
+# Line-label placement fixture: ANGLE FOLLOW + REPEATDISTANCE +
+# MAXOVERLAPANGLE produce a placement.line struct. Exercises both the
+# label-side scale_token path and PRIORITY/MINDISTANCE on a label style.
+MAP
+  NAME "labels"
+  TITLE "Line Label Placement"
+
+  LAYER
+    NAME "streets"
+    TYPE LINE
+    STATUS ON
+    DATA "geom FROM streets"
+    PROCESSING "ITEMS=ogc_fid,name"
+
+    LABEL
+      TEXT "[name]"
+      FONT "serif"
+      SIZE 11
+      COLOR 30 30 30
+      OUTLINECOLOR 250 250 250
+      OUTLINEWIDTH 1.5
+      PRIORITY 6
+      MINDISTANCE 40
+      ANGLE FOLLOW
+      REPEATDISTANCE 250
+      MAXOVERLAPANGLE 25
+    END
+  END
+END

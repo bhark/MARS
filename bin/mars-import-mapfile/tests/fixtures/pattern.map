@@ -1,0 +1,25 @@
+# PATTERN parsing fixture. PATTERN is an inline-list directive terminated by
+# END, which the scanner emits as its own token. block_range treats that END
+# as a STYLE close; PATTERN must therefore be the last meaningful directive
+# inside its STYLE block. Locks that current behaviour.
+MAP
+  NAME "pattern"
+  TITLE "Pattern Style"
+
+  LAYER
+    NAME "trails"
+    TYPE LINE
+    STATUS ON
+    DATA "geom FROM trails"
+    PROCESSING "ITEMS=ogc_fid"
+
+    CLASS
+      NAME "dashed"
+      STYLE
+        COLOR 80 80 80
+        WIDTH 1.5
+        PATTERN 6 3 2 3 END
+      END
+    END
+  END
+END

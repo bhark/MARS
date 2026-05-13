@@ -1,0 +1,37 @@
+# CLASSITEM + LABELITEM implicit-expression / template fixture. exercises
+# the implicit `<classitem> = '<NAME>'` predicate when CLASS lacks
+# EXPRESSION, and the `{<col>}` LABEL text template when LABEL lacks TEXT.
+MAP
+  NAME "classitem"
+  TITLE "Classitem Coverage"
+
+  LAYER
+    NAME "areas"
+    TYPE POLYGON
+    STATUS ON
+    DATA "geom FROM areas"
+    PROCESSING "ITEMS=ogc_fid,kind,name"
+    CLASSITEM "kind"
+    LABELITEM "name"
+
+    CLASS
+      NAME "park"
+      STYLE
+        COLOR 180 220 180
+      END
+    END
+
+    CLASS
+      NAME "water"
+      STYLE
+        COLOR 100 150 220
+      END
+    END
+
+    LABEL
+      FONT "sans"
+      SIZE 9
+      COLOR 0 0 0
+    END
+  END
+END

@@ -1,0 +1,31 @@
+# SYMBOL parsing fixture - single layer using STYLE.SYMBOL ref.
+MAP
+  NAME "symbols"
+  TITLE "Symbol Coverage"
+
+  SYMBOL
+    NAME "hatch45"
+    TYPE HATCH
+    ANGLE 45
+    SIZE 8
+  END
+
+  LAYER
+    NAME "industrial"
+    TYPE POLYGON
+    STATUS ON
+    DATA "geom FROM industrial"
+    PROCESSING "ITEMS=ogc_fid"
+
+    CLASS
+      NAME "factory"
+      STYLE
+        SYMBOL "hatch45"
+        COLOR 60 60 60
+        ANGLE 30
+        SIZE 12
+        WIDTH 1.5
+      END
+    END
+  END
+END

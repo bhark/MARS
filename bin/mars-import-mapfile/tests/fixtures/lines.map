@@ -1,0 +1,28 @@
+# LINE-layer fixture covering style fields that the minimal fixture misses:
+# PATTERN (dasharray), LINEJOIN, OFFSET, GAP/INITIALGAP, OPACITY.
+MAP
+  NAME "lines"
+  TITLE "Line Style Coverage"
+
+  LAYER
+    NAME "rivers"
+    TYPE LINE
+    STATUS ON
+    DATA "geom FROM rivers"
+    PROCESSING "ITEMS=ogc_fid,name,rank"
+
+    CLASS
+      NAME "major"
+      EXPRESSION ([rank] = 1)
+      STYLE
+        COLOR 60 120 200
+        WIDTH 2.0
+        LINEJOIN round
+        OPACITY 75
+        OFFSET 1.5 -99
+        GAP -20
+        INITIALGAP 4
+      END
+    END
+  END
+END

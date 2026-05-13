@@ -13,24 +13,57 @@ fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }
 
-#[test]
-fn produces_expected_yaml() {
-    let expected_path = fixture_dir().join("minimal.expected.yaml");
-    let expected = std::fs::read_to_string(&expected_path).expect("read minimal.expected.yaml");
+fn assert_fixture_matches(stem: &str) {
+    let expected_path = fixture_dir().join(format!("{stem}.expected.yaml"));
+    let expected = std::fs::read_to_string(&expected_path).expect("read fixture expected yaml");
 
     let out = Command::new(bin_path())
-        .arg(fixture_dir().join("minimal.map"))
+        .arg(fixture_dir().join(format!("{stem}.map")))
         .output()
         .expect("run binary");
-    assert!(out.status.success(), "non-strict run should succeed");
+    assert!(
+        out.status.success(),
+        "non-strict run should succeed for {stem}; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
 
     let stdout = String::from_utf8(out.stdout).expect("utf8");
     assert_eq!(
         stdout.trim(),
         expected.trim(),
-        "stdout does not match {}. To regenerate: cargo run -p mars-import-mapfile -- tests/fixtures/minimal.map > tests/fixtures/minimal.expected.yaml",
-        expected_path.display()
+        "stdout does not match {}. To regenerate: cargo run -p mars-import-mapfile -- tests/fixtures/{stem}.map > tests/fixtures/{stem}.expected.yaml",
+        expected_path.display(),
     );
+}
+
+#[test]
+fn produces_expected_yaml() {
+    assert_fixture_matches("minimal");
+}
+
+#[test]
+fn symbols_fixture_matches() {
+    assert_fixture_matches("symbols");
+}
+
+#[test]
+fn lines_fixture_matches() {
+    assert_fixture_matches("lines");
+}
+
+#[test]
+fn pattern_fixture_matches() {
+    assert_fixture_matches("pattern");
+}
+
+#[test]
+fn classitem_fixture_matches() {
+    assert_fixture_matches("classitem");
+}
+
+#[test]
+fn label_line_fixture_matches() {
+    assert_fixture_matches("label_line");
 }
 
 #[test]
