@@ -31,9 +31,9 @@ pub fn parse_request(query: &str, cfg: &WmsConfig) -> Result<WmsRequest, WmsErro
     match request.as_str() {
         s if s.eq_ignore_ascii_case("GetMap") => Ok(WmsRequest::GetMap(resolve_get_map_from_kvp(&kvp, cfg)?)),
         s if s.eq_ignore_ascii_case("GetCapabilities") => Ok(WmsRequest::GetCapabilities),
-        s if s.eq_ignore_ascii_case("GetFeatureInfo") => {
-            Ok(WmsRequest::GetFeatureInfo(resolve_get_feature_info_from_kvp(&kvp, cfg)?))
-        }
+        s if s.eq_ignore_ascii_case("GetFeatureInfo") => Ok(WmsRequest::GetFeatureInfo(
+            resolve_get_feature_info_from_kvp(&kvp, cfg)?,
+        )),
         s if s.eq_ignore_ascii_case("GetLegendGraphic") => {
             Ok(WmsRequest::GetLegendGraphic(resolve_get_legend_from_kvp(&kvp, cfg)?))
         }

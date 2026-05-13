@@ -1,8 +1,8 @@
 //! `GetLegendGraphic` KVP extraction. Produces an Option-heavy
 //! [`ParsedGetLegend`] consumed by [`crate::prepare::resolve_get_legend`].
 
-use super::common::{nonempty, parse_kvp, parse_optional_u32, Kvp};
-use crate::prepare::{resolve_get_legend, ParsedGetLegend, ResolvedGetLegend};
+use super::common::{Kvp, nonempty, parse_kvp, parse_optional_u32};
+use crate::prepare::{ParsedGetLegend, ResolvedGetLegend, resolve_get_legend};
 use crate::{WmsConfig, WmsError};
 
 /// Parse a `GetLegendGraphic` query-string into a [`ResolvedGetLegend`].

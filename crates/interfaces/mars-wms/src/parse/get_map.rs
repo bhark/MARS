@@ -5,9 +5,9 @@
 
 use mars_types::LayerId;
 
-use super::common::{nonempty, parse_kvp, parse_optional_u32, Kvp};
+use super::common::{Kvp, nonempty, parse_kvp, parse_optional_u32};
 use crate::prepare::viewport::ParsedViewport;
-use crate::prepare::{resolve_get_map, ParsedGetMap, ResolvedGetMap};
+use crate::prepare::{ParsedGetMap, ResolvedGetMap, resolve_get_map};
 use crate::{WmsConfig, WmsError};
 
 /// Parse a `GetMap` query-string and resolve it. Public facade used by the

@@ -40,7 +40,10 @@ pub(crate) fn resolve_get_tile(p: ParsedGetTile, cfg: &WmtsConfig) -> Result<Res
         });
     }
 
-    let tms_name = p.tilematrixset.as_deref().ok_or(WmtsError::MissingParam("tilematrixset"))?;
+    let tms_name = p
+        .tilematrixset
+        .as_deref()
+        .ok_or(WmtsError::MissingParam("tilematrixset"))?;
     let tms = cfg
         .tile_matrix_sets
         .get(tms_name)
@@ -57,10 +60,14 @@ pub(crate) fn resolve_get_tile(p: ParsedGetTile, cfg: &WmtsConfig) -> Result<Res
         name: "tilematrix",
         reason: format!("expected integer level id, got `{tm_raw}`"),
     })?;
-    let level = tms.levels.iter().find(|l| l.id == level_id).ok_or_else(|| WmtsError::InvalidParam {
-        name: "tilematrix",
-        reason: format!("level {level_id} not declared in `{tms_name}`"),
-    })?;
+    let level = tms
+        .levels
+        .iter()
+        .find(|l| l.id == level_id)
+        .ok_or_else(|| WmtsError::InvalidParam {
+            name: "tilematrix",
+            reason: format!("level {level_id} not declared in `{tms_name}`"),
+        })?;
 
     let tile_col = p.tilecol.ok_or(WmtsError::MissingParam("tilecol"))?;
     let tile_row = p.tilerow.ok_or(WmtsError::MissingParam("tilerow"))?;

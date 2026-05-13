@@ -86,9 +86,7 @@ mod tests {
                 }],
             },
             style: Arc::new(Style {
-                fill: Some(mars_style::FillPaint::Image {
-                    name: "brick".into(),
-                }),
+                fill: Some(mars_style::FillPaint::Image { name: "brick".into() }),
                 ..Default::default()
             }),
         };

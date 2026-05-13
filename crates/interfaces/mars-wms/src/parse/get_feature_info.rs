@@ -6,9 +6,9 @@
 
 use mars_types::LayerId;
 
-use super::common::{nonempty, parse_kvp, parse_optional_u32, Kvp};
+use super::common::{Kvp, nonempty, parse_kvp, parse_optional_u32};
 use super::get_map::parse_viewport;
-use crate::prepare::{resolve_get_feature_info, ParsedGetFeatureInfo, ResolvedGetFeatureInfo};
+use crate::prepare::{ParsedGetFeatureInfo, ResolvedGetFeatureInfo, resolve_get_feature_info};
 use crate::{WmsConfig, WmsError};
 
 /// Parse a `GetFeatureInfo` query-string into a [`ResolvedGetFeatureInfo`].

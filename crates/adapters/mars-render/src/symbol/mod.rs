@@ -220,10 +220,7 @@ mod tests {
         let png = render_marker(MarkerSymbol::X { size: 12.0 });
         // same coverage as cross (it's the same polygon rotated 45°).
         let n = red_pixel_count(&png);
-        assert!(
-            n > 60 && n < 100,
-            "expected ~80 fully-red pixels for a 12px x, got {n}"
-        );
+        assert!(n > 60 && n < 100, "expected ~80 fully-red pixels for a 12px x, got {n}");
     }
 
     #[test]

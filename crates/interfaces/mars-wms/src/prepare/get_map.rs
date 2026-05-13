@@ -4,8 +4,8 @@
 
 use mars_runtime::RenderPlan;
 
-use super::viewport::resolve_viewport;
 use super::ParsedGetMap;
+use super::viewport::resolve_viewport;
 use crate::{ExceptionsFormat, WmsConfig, WmsError};
 
 /// Fully-validated GetMap request. The dispatcher in
@@ -54,7 +54,7 @@ fn resolve_exceptions(raw: Option<&str>) -> Result<ExceptionsFormat, WmsError> {
 mod tests {
     use mars_types::{CrsCode, ImageFormat, LayerId};
 
-    use super::super::{viewport::ParsedViewport, ParsedGetMap};
+    use super::super::{ParsedGetMap, viewport::ParsedViewport};
     use super::*;
 
     fn cfg() -> WmsConfig {

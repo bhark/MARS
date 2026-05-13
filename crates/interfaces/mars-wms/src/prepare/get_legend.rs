@@ -152,6 +152,12 @@ mod tests {
             rule: None,
         };
         let err = resolve_get_legend(p, &cfg()).unwrap_err();
-        assert!(matches!(err, WmsError::InvalidParam { name: "width|height", .. }));
+        assert!(matches!(
+            err,
+            WmsError::InvalidParam {
+                name: "width|height",
+                ..
+            }
+        ));
     }
 }

@@ -11,10 +11,10 @@
 use mars_runtime::RenderPlan;
 use mars_types::LayerId;
 
-use super::viewport::resolve_viewport;
 use super::ParsedGetFeatureInfo;
+use super::viewport::resolve_viewport;
 use crate::feature_info::info_format_mime;
-use crate::{InfoFormat, WmsConfig, WmsError, MAX_FEATURE_COUNT};
+use crate::{InfoFormat, MAX_FEATURE_COUNT, WmsConfig, WmsError};
 
 /// Fully-validated GetFeatureInfo request. `plan.layers` has been swapped
 /// to QUERY_LAYERS so the runtime walks only those bindings.
@@ -51,10 +51,7 @@ pub(crate) fn resolve_get_feature_info(
         });
     }
 
-    let info_format_raw = p
-        .info_format
-        .as_deref()
-        .ok_or(WmsError::MissingParam("info_format"))?;
+    let info_format_raw = p.info_format.as_deref().ok_or(WmsError::MissingParam("info_format"))?;
     let info_format = info_format_mime(info_format_raw).ok_or(WmsError::InvalidParam {
         name: "info_format",
         reason: format!("unsupported `{info_format_raw}`"),
@@ -121,7 +118,13 @@ mod tests {
         }
     }
 
-    fn parsed(query_layers: Vec<&str>, i: u32, j: u32, info_format: &str, feature_count: Option<u32>) -> ParsedGetFeatureInfo {
+    fn parsed(
+        query_layers: Vec<&str>,
+        i: u32,
+        j: u32,
+        info_format: &str,
+        feature_count: Option<u32>,
+    ) -> ParsedGetFeatureInfo {
         ParsedGetFeatureInfo {
             viewport: ParsedViewport {
                 version: Some("1.3.0".into()),
@@ -160,7 +163,13 @@ mod tests {
     fn query_layers_must_be_subset_of_layers() {
         let p = parsed(vec!["z"], 0, 0, "text/plain", None);
         let err = resolve_get_feature_info(p, &cfg()).unwrap_err();
-        assert!(matches!(err, WmsError::InvalidParam { name: "query_layers", .. }));
+        assert!(matches!(
+            err,
+            WmsError::InvalidParam {
+                name: "query_layers",
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -182,7 +191,13 @@ mod tests {
     fn unsupported_info_format_rejected() {
         let p = parsed(vec!["a"], 0, 0, "application/vnd.ogc.gml", None);
         let err = resolve_get_feature_info(p, &cfg()).unwrap_err();
-        assert!(matches!(err, WmsError::InvalidParam { name: "info_format", .. }));
+        assert!(matches!(
+            err,
+            WmsError::InvalidParam {
+                name: "info_format",
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -203,6 +218,12 @@ mod tests {
     fn feature_count_zero_rejected() {
         let p = parsed(vec!["a"], 0, 0, "text/plain", Some(0));
         let err = resolve_get_feature_info(p, &cfg()).unwrap_err();
-        assert!(matches!(err, WmsError::InvalidParam { name: "feature_count", .. }));
+        assert!(matches!(
+            err,
+            WmsError::InvalidParam {
+                name: "feature_count",
+                ..
+            }
+        ));
     }
 }

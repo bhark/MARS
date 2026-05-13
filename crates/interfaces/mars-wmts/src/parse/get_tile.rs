@@ -9,8 +9,8 @@
 use mars_runtime::RenderPlan;
 use mars_types::ImageFormat;
 
-use super::common::{parse_kvp, parse_optional_u32, Kvp};
-use crate::prepare::{resolve_get_tile, ParsedGetTile, ResolvedGetTile};
+use super::common::{Kvp, parse_kvp, parse_optional_u32};
+use crate::prepare::{ParsedGetTile, ResolvedGetTile, resolve_get_tile};
 use crate::{WmtsConfig, WmtsError};
 
 /// Parse a KVP `GetTile` query-string into a [`RenderPlan`].
