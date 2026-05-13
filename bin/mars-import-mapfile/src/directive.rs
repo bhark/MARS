@@ -8,6 +8,74 @@
 
 use crate::scanner::Token;
 
+/// Top-level (MAP-body) directive.
+#[derive(Debug)]
+pub(crate) enum MapDirective<'a> {
+    Name(&'a Token),
+    Title(&'a Token),
+    Layer(&'a Token),
+    Symbol,
+    /// Keyword present in the `UNSUPPORTED` list - the parser warns at use
+    /// site and skips a matching block range when applicable.
+    Unsupported(&'a Token),
+    Unknown,
+}
+
+impl<'a> MapDirective<'a> {
+    pub(crate) fn from_token(t: &'a Token, is_unsupported: impl FnOnce(&str) -> bool) -> Self {
+        match t.keyword.to_ascii_uppercase().as_str() {
+            "NAME" => Self::Name(t),
+            "TITLE" => Self::Title(t),
+            "LAYER" => Self::Layer(t),
+            "SYMBOL" => Self::Symbol,
+            other if is_unsupported(other) => Self::Unsupported(t),
+            _ => Self::Unknown,
+        }
+    }
+}
+
+/// Directives inside a LAYER block. Block-bodied variants carry the opener
+/// token so the parser keeps its line number for warnings; the slice is
+/// extracted by the parser via `block_range`.
+#[derive(Debug)]
+pub(crate) enum LayerDirective<'a> {
+    Name(&'a Token),
+    Title(&'a Token),
+    Type(&'a Token),
+    Data(&'a Token),
+    ClassItem(&'a Token),
+    LabelItem(&'a Token),
+    MinScaleDenom(&'a Token),
+    MaxScaleDenom(&'a Token),
+    Processing(&'a Token),
+    ScaleToken,
+    Class(&'a Token),
+    Label(&'a Token),
+    Unsupported(&'a Token),
+    Unknown,
+}
+
+impl<'a> LayerDirective<'a> {
+    pub(crate) fn from_token(t: &'a Token, is_unsupported: impl FnOnce(&str) -> bool) -> Self {
+        match t.keyword.to_ascii_uppercase().as_str() {
+            "NAME" => Self::Name(t),
+            "TITLE" => Self::Title(t),
+            "TYPE" => Self::Type(t),
+            "DATA" => Self::Data(t),
+            "CLASSITEM" => Self::ClassItem(t),
+            "LABELITEM" => Self::LabelItem(t),
+            "MINSCALEDENOM" => Self::MinScaleDenom(t),
+            "MAXSCALEDENOM" => Self::MaxScaleDenom(t),
+            "PROCESSING" => Self::Processing(t),
+            "SCALETOKEN" => Self::ScaleToken,
+            "CLASS" => Self::Class(t),
+            "LABEL" => Self::Label(t),
+            other if is_unsupported(other) => Self::Unsupported(t),
+            _ => Self::Unknown,
+        }
+    }
+}
+
 /// Directives valid inside a SYMBOL block. Block-bodied POINTS is the only
 /// sub-block here; the parser still calls `block_range` on the token slice
 /// when it sees `Points` to extract the coord list.

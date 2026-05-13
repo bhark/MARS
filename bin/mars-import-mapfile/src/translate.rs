@@ -4,7 +4,7 @@ use std::collections::{BTreeSet, HashSet};
 
 use tracing::warn;
 
-use crate::directive::SymbolDirective;
+use crate::directive::{LayerDirective, MapDirective, SymbolDirective};
 use crate::emitter::{
     BindingSource, ClassSkeleton, LabelSkeleton, LayerSkeleton, MarkerKind, Skeleton, SourceSkeleton, SymbolDef,
 };
@@ -65,57 +65,54 @@ fn walk(tokens: &[Token], skel: &mut Skeleton, include_layers: Option<&HashSet<S
     let mut i = 0;
     while i < tokens.len() {
         let t = &tokens[i];
-        let kw = t.keyword.to_ascii_uppercase();
-
-        if kw == "NAME" && skel.service_name.is_none() {
-            if let Some(v) = t.args.first() {
-                skel.service_name = Some(v.clone());
+        match MapDirective::from_token(t, is_unsupported) {
+            MapDirective::Name(t) if skel.service_name.is_none() => {
+                if let Some(v) = t.args.first() {
+                    skel.service_name = Some(v.clone());
+                }
             }
-            i += 1;
-            continue;
-        }
-        if kw == "TITLE" && skel.service_title.is_none() {
-            if let Some(v) = t.args.first() {
-                skel.service_title = Some(v.clone());
+            MapDirective::Title(t) if skel.service_title.is_none() => {
+                if let Some(v) = t.args.first() {
+                    skel.service_title = Some(v.clone());
+                }
             }
-            i += 1;
-            continue;
-        }
-
-        if kw == "LAYER" {
-            let range = block_range(tokens, i).unwrap_or(i..i + 1);
-            let body: &[Token] = if range.end > range.start + 1 {
-                &tokens[range.start + 1..range.end - 1]
-            } else {
-                &[]
-            };
-            handle_layer(body, t.line, skel, include_layers);
-            i = range.end;
-            continue;
-        }
-
-        if kw == "SYMBOL" {
-            let range = block_range(tokens, i).unwrap_or(i..i + 1);
-            let body: &[Token] = if range.end > range.start + 1 {
-                &tokens[range.start + 1..range.end - 1]
-            } else {
-                &[]
-            };
-            if let Some((name, def)) = parse_symbol(body) {
-                skel.symbols.insert(name, def);
-            }
-            i = range.end;
-            continue;
-        }
-
-        if is_unsupported(&kw) {
-            warn!(line = t.line, keyword = %kw, "unsupported mapfile construct");
-            if is_block_opener(&kw)
-                && let Some(r) = block_range(tokens, i)
-            {
-                i = r.end;
+            MapDirective::Layer(open) => {
+                let range = block_range(tokens, i).unwrap_or(i..i + 1);
+                let body: &[Token] = if range.end > range.start + 1 {
+                    &tokens[range.start + 1..range.end - 1]
+                } else {
+                    &[]
+                };
+                handle_layer(body, open.line, skel, include_layers);
+                i = range.end;
                 continue;
             }
+            MapDirective::Symbol => {
+                let range = block_range(tokens, i).unwrap_or(i..i + 1);
+                let body: &[Token] = if range.end > range.start + 1 {
+                    &tokens[range.start + 1..range.end - 1]
+                } else {
+                    &[]
+                };
+                if let Some((name, def)) = parse_symbol(body) {
+                    skel.symbols.insert(name, def);
+                }
+                i = range.end;
+                continue;
+            }
+            MapDirective::Unsupported(t) => {
+                warn!(line = t.line, keyword = %t.keyword, "unsupported mapfile construct");
+                if is_block_opener(&t.keyword)
+                    && let Some(r) = block_range(tokens, i)
+                {
+                    i = r.end;
+                    continue;
+                }
+            }
+            // re-occurrence of NAME / TITLE after the first wins-once rule
+            // is ignored; same for keywords we don't understand at top
+            // level.
+            MapDirective::Name(_) | MapDirective::Title(_) | MapDirective::Unknown => {}
         }
         i += 1;
     }
@@ -159,66 +156,32 @@ fn handle_layer(body: &[Token], layer_line: usize, skel: &mut Skeleton, include_
     let mut i = 0;
     while i < body.len() {
         let t = &body[i];
-        let kw = t.keyword.to_ascii_uppercase();
-        match kw.as_str() {
-            "NAME" if name.is_none() => {
-                name = t.args.first().cloned();
-                i += 1;
-                continue;
-            }
-            "TITLE" if title.is_none() => {
-                title = t.args.first().cloned();
-                i += 1;
-                continue;
-            }
-            "TYPE" if layer_type.is_none() => {
-                layer_type = t.args.first().cloned();
-                i += 1;
-                continue;
-            }
-            "DATA" if data.is_none() => {
-                data = Some(t.args.join(" "));
-                i += 1;
-                continue;
-            }
-            "CLASSITEM" if class_item.is_none() => {
-                class_item = parsing::first_unquoted(t);
-                i += 1;
-                continue;
-            }
-            "LABELITEM" if label_item.is_none() => {
-                label_item = parsing::first_unquoted(t);
-                i += 1;
-                continue;
-            }
-            "MINSCALEDENOM" | "MAXSCALEDENOM" => {
-                if let Some(arg) = t.args.first() {
-                    match arg.parse::<f64>() {
-                        Ok(v) if v.is_finite() && v >= 0.0 => {
-                            let n = normalize_n_plus_one(v as u64);
-                            if kw == "MINSCALEDENOM" {
-                                _min_scale_denom = Some(n);
-                            } else {
-                                max_scale_denom = Some(n);
-                            }
-                        }
-                        _ => warn!(line = t.line, keyword = %kw, value = %arg, "could not parse scale denom"),
-                    }
+        match LayerDirective::from_token(t, is_unsupported) {
+            LayerDirective::Name(t) if name.is_none() => name = t.args.first().cloned(),
+            LayerDirective::Title(t) if title.is_none() => title = t.args.first().cloned(),
+            LayerDirective::Type(t) if layer_type.is_none() => layer_type = t.args.first().cloned(),
+            LayerDirective::Data(t) if data.is_none() => data = Some(t.args.join(" ")),
+            LayerDirective::ClassItem(t) if class_item.is_none() => class_item = parsing::first_unquoted(t),
+            LayerDirective::LabelItem(t) if label_item.is_none() => label_item = parsing::first_unquoted(t),
+            LayerDirective::MinScaleDenom(t) => {
+                if let Some(n) = parse_scale_denom_arg(t) {
+                    _min_scale_denom = Some(n);
                 }
-                i += 1;
-                continue;
             }
-            "PROCESSING" => {
+            LayerDirective::MaxScaleDenom(t) => {
+                if let Some(n) = parse_scale_denom_arg(t) {
+                    max_scale_denom = Some(n);
+                }
+            }
+            LayerDirective::Processing(t) => {
                 if let Some(arg) = t.args.first() {
                     let up = arg.to_ascii_uppercase();
                     if let Some(rest) = up.strip_prefix("ITEMS=") {
                         processing_items = Some(rest.to_string());
                     }
                 }
-                i += 1;
-                continue;
             }
-            "SCALETOKEN" => {
+            LayerDirective::ScaleToken => {
                 if let Some(r) = block_range(body, i) {
                     let st_body = &body[r.start + 1..r.end - 1];
                     let mut j = 0;
@@ -237,7 +200,7 @@ fn handle_layer(body: &[Token], layer_line: usize, skel: &mut Skeleton, include_
                     continue;
                 }
             }
-            "CLASS" => {
+            LayerDirective::Class(t) => {
                 if let Some(r) = block_range(body, i) {
                     let resolved_name = name.clone().unwrap_or_else(|| format!("unnamed_layer_l{layer_line}"));
                     let geom = layer_type.as_deref().and_then(mapfile_type_to_geom);
@@ -254,7 +217,7 @@ fn handle_layer(body: &[Token], layer_line: usize, skel: &mut Skeleton, include_
                     continue;
                 }
             }
-            "LABEL" => {
+            LayerDirective::Label(t) => {
                 if let Some(r) = block_range(body, i) {
                     let resolved_name = name.clone().unwrap_or_else(|| format!("unnamed_layer_l{layer_line}"));
                     if let Some(lbl) = parse_label(&body[r.start + 1..r.end - 1], t.line, &resolved_name, skel) {
@@ -264,17 +227,25 @@ fn handle_layer(body: &[Token], layer_line: usize, skel: &mut Skeleton, include_
                     continue;
                 }
             }
-            _ => {}
-        }
-
-        if is_unsupported(&kw) {
-            warn!(line = t.line, keyword = %kw, "unsupported mapfile construct");
-            if is_block_opener(&kw)
-                && let Some(r) = block_range(body, i)
-            {
-                i = r.end;
-                continue;
+            LayerDirective::Unsupported(t) => {
+                warn!(line = t.line, keyword = %t.keyword, "unsupported mapfile construct");
+                if is_block_opener(&t.keyword)
+                    && let Some(r) = block_range(body, i)
+                {
+                    i = r.end;
+                    continue;
+                }
             }
+            // re-occurrence of a wins-once scalar (NAME / TITLE / TYPE / DATA
+            // / CLASSITEM / LABELITEM) after the first is ignored; same for
+            // anything outside the known directive set.
+            LayerDirective::Name(_)
+            | LayerDirective::Title(_)
+            | LayerDirective::Type(_)
+            | LayerDirective::Data(_)
+            | LayerDirective::ClassItem(_)
+            | LayerDirective::LabelItem(_)
+            | LayerDirective::Unknown => {}
         }
         i += 1;
     }
@@ -631,6 +602,20 @@ fn parse_scale_token(body: &[Token]) -> Vec<(u64, String)> {
 }
 
 /// canonicalize MapServer's `MINSCALEDENOM = N+1` half-open convention.
+/// parse a MIN/MAXSCALEDENOM argument, applying the N+1 canonicalisation.
+/// returns `None` on missing / non-finite / negative input, warning at the
+/// token's line with the rejected raw value.
+fn parse_scale_denom_arg(t: &Token) -> Option<u64> {
+    let arg = t.args.first()?;
+    match arg.parse::<f64>() {
+        Ok(v) if v.is_finite() && v >= 0.0 => Some(normalize_n_plus_one(v as u64)),
+        _ => {
+            warn!(line = t.line, keyword = %t.keyword, value = %arg, "could not parse scale denom");
+            None
+        }
+    }
+}
+
 /// when `n - 1` lands cleanly on a "round" base (10000, 5000, 1000, 500, 100),
 /// snap down. conservative - values not on a round base are left alone.
 pub(crate) fn normalize_n_plus_one(n: u64) -> u64 {
