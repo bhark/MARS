@@ -39,7 +39,6 @@ use mars_store::{ManifestStore, ObjectStore, StoreError};
 use mars_types::{BindingId, Manifest};
 use tokio_util::sync::CancellationToken;
 
-use crate::stages::shared::governors;
 use crate::stages::shared::merge::merge_manifest;
 use crate::stages::shared::noop_bump;
 use crate::stages::shared::sidecars::OwnedSidecars;
@@ -341,33 +340,16 @@ impl Compiler {
             return publish_with_retry(self.deps.manifest.as_ref(), &next, &self.deps.metrics, shutdown).await;
         }
 
-        // rebuild dirty pages.
-        let working_set_bytes = self.config.compiler.compile_page_working_set()?;
-        let plan_budget_bytes = self.config.compiler.compile_plan_budget()?;
-        let in_flight_budget_bytes = self.config.compiler.compile_in_flight_pages_budget()?;
-        let spill_dir = self.config.compiler.compile_spill_dir_path();
-        let spill_open_file_limit = self.config.compiler.compile_spill_open_file_limit;
-        let governor = governors::build_memory_governor(&self.config.compiler)?;
-        let disk_governor = governors::build_disk_governor(&self.config.compiler)?;
-        let started = std::time::Instant::now();
-        let outcome = render::rebuild_pages(
+        let outcome = stages::cycle::rebuild::run(
             &self.deps,
+            &self.config.compiler,
+            &self.deps.metrics,
             &plan,
             &prior,
             &sidecars,
             dirty,
-            working_set_bytes,
-            plan_budget_bytes,
-            in_flight_budget_bytes,
-            &spill_dir,
-            spill_open_file_limit,
-            &governor,
         )
         .await?;
-        self.deps.metrics.observe_compiler_rebuild_duration(started.elapsed());
-        governors::log_memory_observations("compile.cycle.governor", &governor);
-        governors::log_disk_observations("compile.cycle.disk_governor", &disk_governor);
-        let _ = disk_governor;
 
         // merge outcome into prior to produce the new manifest.
         let next_version = prior.version + 1;

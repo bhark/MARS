@@ -6,4 +6,5 @@
 //! inline and calls each extracted stage one by one.
 
 pub(crate) mod ingest;
+pub(crate) mod rebuild;
 pub(crate) mod reconcile_cadence;
