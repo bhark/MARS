@@ -183,11 +183,21 @@ that applies most directly.
   vocabulary, or has postgres' shape leaked in? Widen the port in its own
   commit if needed; never let an adapter add methods downstream code calls.
 
-- **Compiler stages** (`crates/application/mars-compiler`). Feature
-  extraction, attribute encoding, class assignment, label-candidate
-  generation. Principle 4 applies: each stage one module, a parent that
-  dispatches the pipeline. Watch for hidden coupling between stages
-  (shared mutable state) - that is principle 3 missing.
+- **Compiler stages** (`crates/application/mars-compiler`). The three
+  pipelines (snapshot, cycle, rebalance) live as flat orchestrators under
+  `stages/` with one module per stage and an explicit per-pipeline ctx
+  (`SnapshotCtx`, `CycleCtx`, `RebalanceCtx`) carrying typed inputs +
+  outputs between steps; cross-pipeline helpers (`merge`, `noop_bump`,
+  `governors`, `sidecars`) live under `stages/shared/`. Principle 4 in
+  sequence form: each `stages/<pipeline>.rs` reads as a ~6-line linear
+  call list, each `stages/<pipeline>/*.rs` is one stage testable in
+  isolation. New compile stages (attribute encoding, label-candidate
+  generation, class assignment) land as a new module under the right
+  pipeline directory plus one new call in the orchestrator. Pipeline-
+  scoped state (`MemoryGovernor`, `DiskGovernor`) lives on the ctx;
+  leader-lock-scoped state (`cycle_counter`) stays on `Compiler`. Watch
+  for hidden coupling that returns via local-variable mutation in the
+  orchestrators - that is principle 3 missing.
 
 - **Symbol and raster rendering.** New `DrawOp` variants are reserved
   (`Symbol`, `Pattern` already stubbed). Implementation lands per
