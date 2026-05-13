@@ -15,8 +15,24 @@ pub(crate) struct Scenario {
     pub(crate) ns: NamespaceGuard,
 }
 
+/// knobs the per-scenario MarsService template is parameterised on.
+#[derive(Debug, Clone)]
+pub(crate) struct ScenarioOptions {
+    pub(crate) runtime_replicas: u32,
+}
+
+impl Default for ScenarioOptions {
+    fn default() -> Self {
+        Self { runtime_replicas: 1 }
+    }
+}
+
 impl Scenario {
     pub(crate) async fn up(prefix: &str) -> Result<Self> {
+        Self::up_with(prefix, ScenarioOptions::default()).await
+    }
+
+    pub(crate) async fn up_with(prefix: &str, opts: ScenarioOptions) -> Result<Self> {
         let client = cluster::client().await?;
         let ns = NamespaceGuard::create(client.clone(), prefix).await?;
         let mars_image_repo =
@@ -83,9 +99,11 @@ impl Scenario {
 
         // MarsService — the operator (already running cluster-wide) reconciles
         // this into ConfigMap + PVCs + compiler/runtime Deployments + Service.
+        let runtime_replicas = opts.runtime_replicas.to_string();
         let mut vars = HashMap::new();
         vars.insert("IMAGE_REPOSITORY", mars_image_repo.as_str());
         vars.insert("IMAGE_TAG", mars_image_tag.as_str());
+        vars.insert("RUNTIME_REPLICAS", runtime_replicas.as_str());
         deploy::apply_template(
             client.clone(),
             &disc,
