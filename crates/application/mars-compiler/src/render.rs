@@ -32,6 +32,7 @@
 //! every path; [`rebalance`] owns the Split / Merge executor.
 
 mod flush;
+mod page_accumulator;
 mod pass2;
 mod rebalance;
 

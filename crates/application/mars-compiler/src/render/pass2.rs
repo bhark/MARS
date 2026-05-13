@@ -4,7 +4,6 @@
 //! [`super::flush::flush_one_page`]; partial buffers spill to disk when the
 //! shared in-flight budget trips.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use futures_util::StreamExt;
@@ -20,6 +19,7 @@ use crate::sidecar::encode_sidecar;
 use crate::{CompilerError, Deps};
 
 use super::flush::flush_one_page;
+use super::page_accumulator::PageAccumulator;
 use super::{
     BindingOutput, KeyedRow, compute_row_fingerprint_from_wkb, empty_level_metadata, membership_sidecar_object_key,
 };
@@ -145,7 +145,7 @@ pub async fn rebuild_binding_from_plan<'a>(
     let mut builder = BindingOutputBuilder::new(binding_plan, layer_plans);
 
     let mut targets = crate::route_index::RouteIndex::with_governor(governor, spill_dir)?;
-    let mut expected: HashMap<(usize, PageId), usize> = HashMap::new();
+    let mut acc = PageAccumulator::new();
     for (lvl_idx, level_pp) in page_plan.levels.iter().enumerate() {
         for planned in &level_pp.pages {
             if planned.row_keys.len() != planned.feature_ids.len() {
@@ -153,7 +153,7 @@ pub async fn rebuild_binding_from_plan<'a>(
                     what: "rebuild_from_plan: planned row_keys / feature_ids length mismatch",
                 });
             }
-            expected.insert((lvl_idx, planned.page_id), planned.row_keys.len());
+            acc.set_expected(lvl_idx, planned.page_id, planned.row_keys.len());
             for rk in &planned.row_keys {
                 targets.insert(*rk, (lvl_idx, planned.page_id))?;
             }
@@ -175,18 +175,6 @@ pub async fn rebuild_binding_from_plan<'a>(
         "compile.route_index.freeze",
     );
 
-    let mut partial: HashMap<(usize, PageId), Vec<KeyedRow>> = HashMap::new();
-    let mut pruned: HashMap<(usize, PageId), Vec<KeyedRow>> = HashMap::new();
-    let mut received: HashMap<(usize, PageId), usize> = HashMap::new();
-    let mut page_bytes: HashMap<(usize, PageId), u64> = HashMap::new();
-    // governor reservations shadowing `page_bytes` so peak/in-flight bytes
-    // surface in the shared cap. piece 1 wires this as a no-op: a failed
-    // try_acquire is silently ignored - the existing in_flight_bytes /
-    // spill trigger keeps semantics. piece 3 narrows producers so the
-    // governor becomes load-bearing.
-    let mut page_reservations: HashMap<(usize, PageId), Vec<crate::memory_governor::MemoryReservation>> =
-        HashMap::new();
-    let mut in_flight_bytes: u64 = 0;
     let mut spill = crate::spill::SpillManager::new(spill_dir, spill_open_file_limit)?;
 
     let mut stream = session.fetch_full_table_streaming().await?;
@@ -248,41 +236,21 @@ pub async fn rebuild_binding_from_plan<'a>(
                     spill.append(lvl_idx, page_id, crate::spill::SpillKind::Pruned, r)?;
                 }
             } else {
-                if let Some(kr) = kept_row {
-                    partial.entry((lvl_idx, page_id)).or_default().push(kr);
-                }
-                if let Some(kr) = pruned_row {
-                    pruned.entry((lvl_idx, page_id)).or_default().push(kr);
-                }
-                *page_bytes.entry((lvl_idx, page_id)).or_insert(0) += kr_bytes;
-                in_flight_bytes = in_flight_bytes.saturating_add(kr_bytes);
-                if let Some(res) = governor.try_acquire(kr_bytes) {
-                    page_reservations.entry((lvl_idx, page_id)).or_default().push(res);
-                }
+                acc.push(lvl_idx, page_id, kept_row, pruned_row, kr_bytes, governor);
             }
 
-            let r = received.entry((lvl_idx, page_id)).or_insert(0);
-            *r += 1;
             // page complete: drain its buffers (memory and/or spill), write
             // the artifact + sidecars, reclaim its working-set footprint.
-            if *r == expected[&(lvl_idx, page_id)] {
+            if acc.record_arrival(lvl_idx, page_id) {
                 let (kept, dropped) = if spill.is_spilled(lvl_idx, page_id) {
                     let (mut k, mut d) = spill.drain(lvl_idx, page_id)?;
-                    if let Some(extra) = partial.remove(&(lvl_idx, page_id)) {
-                        k.extend(extra);
-                    }
-                    if let Some(extra) = pruned.remove(&(lvl_idx, page_id)) {
-                        d.extend(extra);
-                    }
+                    let (extra_k, extra_d) = acc.take(lvl_idx, page_id);
+                    k.extend(extra_k);
+                    d.extend(extra_d);
                     (k, d)
                 } else {
-                    let k = partial.remove(&(lvl_idx, page_id)).unwrap_or_default();
-                    let d = pruned.remove(&(lvl_idx, page_id)).unwrap_or_default();
-                    (k, d)
+                    acc.take(lvl_idx, page_id)
                 };
-                let bytes = page_bytes.remove(&(lvl_idx, page_id)).unwrap_or(0);
-                in_flight_bytes = in_flight_bytes.saturating_sub(bytes);
-                page_reservations.remove(&(lvl_idx, page_id));
                 builder
                     .flush_page(
                         deps,
@@ -301,25 +269,12 @@ pub async fn rebuild_binding_from_plan<'a>(
         // soft trigger: when the in-memory partial-page set crosses the
         // budget, evict everything to per-page spill files. subsequent rows
         // for those pages append directly to disk.
-        if in_flight_bytes > in_flight_budget_bytes {
-            let evicted = spill.flush_all_partials(&mut partial, &mut pruned, &mut page_bytes)?;
-            in_flight_bytes = in_flight_bytes.saturating_sub(evicted);
-            // every page with a live reservation just got evicted to disk.
-            page_reservations.clear();
+        if acc.in_flight_bytes() > in_flight_budget_bytes {
+            acc.evict_to_spill(&mut spill)?;
         }
     }
 
-    // short-stream guard: every (level, page_id) must have hit its expected
-    // count; rolling back via the snapshot would otherwise leave silent
-    // gaps in the binding's substrate.
-    for (route, exp) in &expected {
-        let got = received.get(route).copied().unwrap_or(0);
-        if got != *exp {
-            return Err(CompilerError::InvariantViolation {
-                what: "rebuild_from_plan: full-table stream returned fewer rows than the snapshot plan",
-            });
-        }
-    }
+    acc.verify_complete()?;
 
     let (mut levels_pages, class_sidecars, label_sidecars) = builder.into_parts();
 
