@@ -311,15 +311,19 @@ pub(super) fn marker_path_at(m: &MarkerSymbol, pos: (f32, f32)) -> Path {
                 closed: false,
             }],
         },
-        // future MarkerSymbol variants land additively. fall back to a
-        // zero-extent single-point path so the renderer's stroke arm still
-        // runs but no marker shape is drawn.
-        _ => Path {
-            subpaths: vec![Subpath {
-                points: vec![(cx, cy)],
-                closed: false,
-            }],
-        },
+        // future MarkerSymbol variants land additively. fail loud in dev/CI so
+        // a new variant cannot ship as an invisible marker; release builds
+        // keep the degenerate single-point fallback so the renderer's stroke
+        // arm still runs.
+        other => {
+            debug_assert!(false, "unhandled MarkerSymbol variant: {other:?}");
+            Path {
+                subpaths: vec![Subpath {
+                    points: vec![(cx, cy)],
+                    closed: false,
+                }],
+            }
+        }
     }
 }
 
