@@ -41,6 +41,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::stages::shared::governors;
 use crate::stages::shared::merge::merge_manifest;
+use crate::stages::shared::noop_bump;
 use crate::stages::shared::sidecars::OwnedSidecars;
 
 /// Capped exponential backoff schedule for retrying a transient publish.
@@ -418,12 +419,7 @@ impl Compiler {
         if dirty.per_binding.is_empty() {
             // no work; publish a no-op version bump so downstream cursors
             // advance even on empty windows.
-            let next_version = prior.version + 1;
-            let mut next = prior;
-            next.version = next_version;
-            next.epoch = next_version;
-            next.source_version = last_source_version;
-            next.created_at = std::time::SystemTime::now();
+            let next = noop_bump::build(prior, last_source_version);
             return publish_with_retry(self.deps.manifest.as_ref(), &next, &self.deps.metrics, shutdown).await;
         }
 
@@ -510,11 +506,8 @@ impl Compiler {
         }
         if ops.is_empty() {
             // already balanced; bump version so cursors advance.
-            let next_version = prior.version + 1;
-            let mut next = prior;
-            next.version = next_version;
-            next.epoch = next_version;
-            next.created_at = std::time::SystemTime::now();
+            let sv = prior.source_version.clone();
+            let next = noop_bump::build(prior, sv);
             return publish_with_retry(
                 self.deps.manifest.as_ref(),
                 &next,
