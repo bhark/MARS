@@ -264,7 +264,12 @@ pub struct Compiler {
     /// means we can keep this in process; on leader handover the counter
     /// resets, which is intentional (a new leader runs a fresh
     /// reconciliation pass before drift accumulates).
-    cycle_counter: tokio::sync::RwLock<HashMap<BindingId, u32>>,
+    ///
+    /// `parking_lot::Mutex` rather than `tokio::sync::RwLock`: the
+    /// critical section is purely sync (no `.await` under the guard) and
+    /// every access mutates, so the async-aware RwLock would just be
+    /// noise. infallible `lock()` keeps the call site clean.
+    cycle_counter: parking_lot::Mutex<HashMap<BindingId, u32>>,
 }
 
 impl Compiler {
@@ -274,7 +279,7 @@ impl Compiler {
         Self {
             deps,
             config,
-            cycle_counter: tokio::sync::RwLock::new(HashMap::new()),
+            cycle_counter: parking_lot::Mutex::new(HashMap::new()),
         }
     }
 

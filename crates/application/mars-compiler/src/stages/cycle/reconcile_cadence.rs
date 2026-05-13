@@ -2,7 +2,7 @@
 //!
 //! advances each binding's cycle counter and, for any binding whose
 //! counter hits its configured cadence, runs a reconciliation pass. the
-//! counter mutation lives under one write lock; the reconciliation await
+//! counter mutation lives under one sync lock; the reconciliation await
 //! runs lock-free with the snapshot of due bindings taken inside the
 //! critical section.
 //!
@@ -29,7 +29,7 @@ pub(crate) async fn run(
     // critical section: advance counters, snapshot due bindings, reset
     // their counters. no await held under the lock.
     let due: Vec<BindingPlan> = {
-        let mut counters = c.cycle_counter.write().await;
+        let mut counters = c.cycle_counter.lock();
         let mut due = Vec::new();
         for binding_plan in &ctx.plan.bindings {
             let counter = counters.entry(binding_plan.binding_id.clone()).or_insert(0);

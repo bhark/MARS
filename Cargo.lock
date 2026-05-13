@@ -2525,6 +2525,7 @@ dependencies = [
  "mars-store",
  "mars-style",
  "mars-types",
+ "parking_lot",
  "serde_yaml_ng",
  "tempfile",
  "thiserror 2.0.18",
