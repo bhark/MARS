@@ -22,3 +22,6 @@ mod c_rendering;
 
 #[path = "e2e_suite/d_wmts.rs"]
 mod d_wmts;
+
+#[path = "e2e_suite/e_resilience.rs"]
+mod e_resilience;
