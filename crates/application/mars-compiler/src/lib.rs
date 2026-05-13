@@ -702,10 +702,9 @@ pub async fn run_snapshot_from_plan(
     ) -> Result<BindingOutput, CompilerError> {
         let port_binding = PortBinding::new(
             SourceCollectionId::new(binding_plan.binding_id.as_str()),
-            binding_plan.schema(),
-            binding_plan.table(),
-            binding_plan.geometry_column.clone(),
-            binding_plan.id_column.as_deref().unwrap_or("id"),
+            binding_plan.source_table.clone(),
+            binding_plan.geometry_field.clone(),
+            binding_plan.id_field.as_deref().unwrap_or("id"),
             binding_plan.attributes.clone(),
             binding_plan.native_crs.clone(),
         )?

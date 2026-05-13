@@ -1,4 +1,4 @@
-//! e2e: `fetch_by_feature_ids` streams sparse primary-key lookups.
+//! e2e: `Source::stream_rows_by_id` streams sparse primary-key lookups.
 
 #![cfg(feature = "integration")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -17,7 +17,7 @@ use testcontainers::{
 };
 
 #[tokio::test]
-async fn fetch_by_feature_ids_yields_matching_rows() {
+async fn stream_rows_by_id_yields_matching_rows() {
     let password = Alphanumeric.sample_string(&mut rand::rng(), 16);
     let container = GenericImage::new("postgis/postgis", "16-3.4")
         .with_exposed_port(5432.tcp())
@@ -70,8 +70,7 @@ async fn fetch_by_feature_ids_yields_matching_rows() {
     let src = PgSource::connect(cfg).await.unwrap();
     let binding = SourceBinding::new(
         SourceCollectionId::new("rows"),
-        "public",
-        "rows",
+        "public.rows",
         "geom",
         "gid",
         vec!["name".into()],
@@ -80,7 +79,7 @@ async fn fetch_by_feature_ids_yields_matching_rows() {
     .unwrap();
 
     let ids = [7_i64, 3, 18, 3, 99];
-    let mut stream = src.fetch_by_feature_ids(&binding, &ids).await.unwrap();
+    let mut stream = src.stream_rows_by_id(&binding, &ids).await.unwrap();
     let mut seen_ids: BTreeSet<u64> = BTreeSet::new();
     while let Some(item) = stream.next().await {
         let row = item.unwrap();

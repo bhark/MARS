@@ -1,5 +1,5 @@
-//! e2e: `fetch_full_table_streaming` against a postgis container streams every
-//! row of a synthetic table without buffering, irrespective of physical order.
+//! e2e: `Source::stream_rows` against a postgis container streams every row
+//! of a synthetic table without buffering, irrespective of physical order.
 
 #![cfg(feature = "integration")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -20,7 +20,7 @@ use testcontainers::{
 const ROW_COUNT: i64 = 100;
 
 #[tokio::test]
-async fn fetch_full_table_streaming_yields_every_row() {
+async fn stream_rows_yields_every_row() {
     let password = Alphanumeric.sample_string(&mut rand::rng(), 16);
     let container = GenericImage::new("postgis/postgis", "16-3.4")
         .with_exposed_port(5432.tcp())
@@ -75,8 +75,7 @@ async fn fetch_full_table_streaming_yields_every_row() {
     let src = PgSource::connect(cfg).await.unwrap();
     let binding = SourceBinding::new(
         SourceCollectionId::new("rows"),
-        "public",
-        "rows",
+        "public.rows",
         "geom",
         "gid",
         vec!["name".into()],
@@ -84,7 +83,7 @@ async fn fetch_full_table_streaming_yields_every_row() {
     )
     .unwrap();
 
-    let mut stream = src.fetch_full_table_streaming(&binding).await.unwrap();
+    let mut stream = src.stream_rows(&binding).await.unwrap();
     let mut seen_ids: BTreeSet<u64> = BTreeSet::new();
     while let Some(item) = stream.next().await {
         let row = item.unwrap();
@@ -103,7 +102,7 @@ async fn fetch_full_table_streaming_yields_every_row() {
 }
 
 #[tokio::test]
-async fn fetch_full_table_streaming_skips_null_geom_rows() {
+async fn stream_rows_skips_null_geom_rows() {
     let password = Alphanumeric.sample_string(&mut rand::rng(), 16);
     let container = GenericImage::new("postgis/postgis", "16-3.4")
         .with_exposed_port(5432.tcp())
@@ -148,8 +147,7 @@ async fn fetch_full_table_streaming_skips_null_geom_rows() {
     let src = PgSource::connect(cfg).await.unwrap();
     let binding = SourceBinding::new(
         SourceCollectionId::new("rows"),
-        "public",
-        "rows",
+        "public.rows",
         "geom",
         "gid",
         vec!["name".into()],
@@ -157,7 +155,7 @@ async fn fetch_full_table_streaming_skips_null_geom_rows() {
     )
     .unwrap();
 
-    let mut stream = src.fetch_full_table_streaming(&binding).await.unwrap();
+    let mut stream = src.stream_rows(&binding).await.unwrap();
     let mut seen_ids: BTreeSet<u64> = BTreeSet::new();
     while let Some(item) = stream.next().await {
         let row = item.unwrap();

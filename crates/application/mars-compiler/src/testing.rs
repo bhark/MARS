@@ -1,8 +1,8 @@
 //! Test-only adapters for the unified compile pipeline.
 //!
 //! [`FullScanCompileSession`] wraps any [`Source`] into a [`CompileSession`]
-//! by streaming the underlying table for both pass-1 (geometry summaries)
-//! and pass-2 (full-table hydration). Used by integration tests and
+//! by streaming the underlying collection for both pass-1 (geometry
+//! summaries) and pass-2 (row hydration). Used by integration tests and
 //! benches whose fakes don't open a real snapshot transaction; the
 //! production postgres adapter overrides `Source::open_compile_session`
 //! with the real REPEATABLE READ session.
@@ -41,18 +41,16 @@ impl<'a> FullScanCompileSession<'a> {
 
 #[async_trait]
 impl<'a> CompileSession for FullScanCompileSession<'a> {
-    async fn fetch_geometry_summary<'b>(
+    async fn stream_geometry_summary<'b>(
         &'b mut self,
     ) -> Result<BoxStream<'b, Result<RowSummary, SourceError>>, SourceError> {
-        let stream = self.source.fetch_full_table_streaming(self.binding).await?;
+        let stream = self.source.stream_rows(self.binding).await?;
         let mapped = stream.map(|item| item.and_then(summary_from_row_bytes));
         Ok(Box::pin(mapped))
     }
 
-    async fn fetch_full_table_streaming<'b>(
-        &'b mut self,
-    ) -> Result<BoxStream<'b, Result<RowBytes, SourceError>>, SourceError> {
-        let stream = self.source.fetch_full_table_streaming(self.binding).await?;
+    async fn stream_rows<'b>(&'b mut self) -> Result<BoxStream<'b, Result<RowBytes, SourceError>>, SourceError> {
+        let stream = self.source.stream_rows(self.binding).await?;
         // synthesise row_key identically to summary_from_row_bytes so pass-1
         // and pass-2 keys join.
         let mapped = stream.map(|item| {

@@ -67,7 +67,7 @@ impl FakeSource {
 
 #[async_trait]
 impl PortSource for FakeSource {
-    async fn fetch_full_table_streaming<'a>(
+    async fn stream_rows<'a>(
         &'a self,
         _binding: &'a PortBinding,
     ) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError> {
@@ -76,7 +76,7 @@ impl PortSource for FakeSource {
         Ok(Box::pin(stream::iter(owned.into_iter().map(Ok))))
     }
 
-    async fn fetch_by_feature_ids<'a>(
+    async fn stream_rows_by_id<'a>(
         &'a self,
         _binding: &'a PortBinding,
         ids: &'a [i64],

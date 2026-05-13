@@ -5,14 +5,14 @@
 //! the unified compile pipeline see the same row set. Adapter side of the
 //! `mars_source::CompileSession` port.
 //!
-//! Pass-1 (`fetch_geometry_summary`) and pass-2 (`fetch_full_table_streaming`)
-//! both emit `(tableoid, ctid)` as the snapshot-stable row identity packed
-//! into a [`SourceRowKey`]. Both columns are read-only system columns
-//! supported by every heap-backed relation; the page planner uses the key as
-//! the terminal sort tier after `(hilbert_key, feature_id)` and pass-2
-//! buckets streamed rows into planned pages by joining on it. A single
-//! sequential scan avoids per-page `WHERE id = ANY($1)` round-trips,
-//! whose heap-walk cost dominated compile time on large bindings.
+//! Pass-1 (`stream_geometry_summary`) and pass-2 (`stream_rows`) both emit
+//! `(tableoid, ctid)` as the snapshot-stable row identity packed into a
+//! [`SourceRowKey`]. Both columns are read-only system columns supported by
+//! every heap-backed relation; the page planner uses the key as the terminal
+//! sort tier after `(hilbert_key, feature_id)` and pass-2 buckets streamed
+//! rows into planned pages by joining on it. A single sequential scan avoids
+//! per-page `WHERE id = ANY($1)` round-trips, whose heap-walk cost dominated
+//! compile time on large bindings.
 
 use async_trait::async_trait;
 use deadpool_postgres::Object;
@@ -22,7 +22,7 @@ use mars_source::{CompileSession, RowBytes, RowSummary, SourceBinding, SourceErr
 
 use crate::SqlParam;
 use crate::fetch::{append_binding_filter, decode_row_pub};
-use crate::quote::quote_ident;
+use crate::quote::{quote_ident, split_from};
 
 /// One compile-time session against a single binding. Owns a pooled
 /// connection in `REPEATABLE READ` until the caller invokes `commit` or
@@ -84,7 +84,7 @@ impl PgCompileSession {
 
 #[async_trait]
 impl CompileSession for PgCompileSession {
-    async fn fetch_geometry_summary<'a>(
+    async fn stream_geometry_summary<'a>(
         &'a mut self,
     ) -> Result<BoxStream<'a, Result<RowSummary, SourceError>>, SourceError> {
         let object = self.client()?;
@@ -99,9 +99,7 @@ impl CompileSession for PgCompileSession {
         Ok(Box::pin(mapped))
     }
 
-    async fn fetch_full_table_streaming<'a>(
-        &'a mut self,
-    ) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError> {
+    async fn stream_rows<'a>(&'a mut self) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError> {
         let object = self.client()?;
         let row_stream = object
             .query_raw(&self.full_sql, self.full_params.iter())
@@ -233,10 +231,11 @@ fn pack_row_key(tableoid: u32, block: u32, offset: u16) -> SourceRowKey {
 /// the same predicate runs in pass-2 so the two scans stay row-set aligned
 /// under the shared snapshot.
 fn build_summary_query(binding: &SourceBinding) -> Result<(String, Vec<SqlParam>), SourceError> {
-    let id_q = quote_ident(&binding.id_column)?;
-    let geom_q = quote_ident(&binding.geometry_column)?;
-    let schema_q = quote_ident(&binding.from_schema)?;
-    let table_q = quote_ident(&binding.from_table)?;
+    let (schema, table) = split_from(&binding.from);
+    let id_q = quote_ident(&binding.id_field)?;
+    let geom_q = quote_ident(&binding.geometry_field)?;
+    let schema_q = quote_ident(schema)?;
+    let table_q = quote_ident(table)?;
     let mut sql = format!(
         "SELECT {id_q}::int8, \
                 tableoid::oid, \
@@ -262,10 +261,11 @@ fn build_summary_query(binding: &SourceBinding) -> Result<(String, Vec<SqlParam>
 /// tables. The NULL-geom predicate mirrors pass-1 so the two scans see the
 /// same row set under the shared snapshot.
 fn build_full_table_query(binding: &SourceBinding) -> Result<(String, Vec<SqlParam>), SourceError> {
-    let id_q = quote_ident(&binding.id_column)?;
-    let geom_q = quote_ident(&binding.geometry_column)?;
-    let schema_q = quote_ident(&binding.from_schema)?;
-    let table_q = quote_ident(&binding.from_table)?;
+    let (schema, table) = split_from(&binding.from);
+    let id_q = quote_ident(&binding.id_field)?;
+    let geom_q = quote_ident(&binding.geometry_field)?;
+    let schema_q = quote_ident(schema)?;
+    let table_q = quote_ident(table)?;
 
     let mut select = format!("{id_q}, ST_AsBinary({geom_q}) AS geom");
     for a in &binding.attributes {
@@ -309,8 +309,7 @@ mod tests {
     fn summary_sql_is_well_formed() {
         let b = SourceBinding::new(
             mars_source::SourceCollectionId::new("c"),
-            "public",
-            "t",
+            "public.t",
             "geom",
             "gid",
             vec![],
@@ -332,8 +331,7 @@ mod tests {
     fn full_table_sql_is_well_formed() {
         let b = SourceBinding::new(
             mars_source::SourceCollectionId::new("c"),
-            "public",
-            "t",
+            "public.t",
             "geom",
             "gid",
             vec!["name".into(), "kind".into()],

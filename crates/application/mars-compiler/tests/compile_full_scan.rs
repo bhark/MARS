@@ -50,13 +50,13 @@ fn row(id: u64, x: f64, y: f64, key_seed: u64) -> RowBytes {
 struct UnusedSource;
 #[async_trait]
 impl Source for UnusedSource {
-    async fn fetch_full_table_streaming<'a>(
+    async fn stream_rows<'a>(
         &'a self,
         _binding: &'a PortBinding,
     ) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError> {
         Ok(Box::pin(stream::empty()))
     }
-    async fn fetch_by_feature_ids<'a>(
+    async fn stream_rows_by_id<'a>(
         &'a self,
         _binding: &'a PortBinding,
         _ids: &'a [i64],
@@ -113,8 +113,8 @@ fn binding_plan() -> BindingPlan {
         binding_id: BindingId::try_new("points").unwrap(),
         source_table: "public.points".into(),
         filter: None,
-        geometry_column: "geom".into(),
-        id_column: Some("id".into()),
+        geometry_field: "geom".into(),
+        id_field: Some("id".into()),
         attributes: vec!["name".into()],
         native_crs: CrsCode::new("EPSG:25832"),
         levels: vec![LevelPlan {
@@ -166,7 +166,7 @@ struct ScriptedSession {
 
 #[async_trait]
 impl CompileSession for ScriptedSession {
-    async fn fetch_geometry_summary<'a>(
+    async fn stream_geometry_summary<'a>(
         &'a mut self,
     ) -> Result<BoxStream<'a, Result<RowSummary, SourceError>>, SourceError> {
         // pass-1 is not exercised by these tests; the page plan is supplied
@@ -174,9 +174,7 @@ impl CompileSession for ScriptedSession {
         Ok(Box::pin(stream::empty()))
     }
 
-    async fn fetch_full_table_streaming<'a>(
-        &'a mut self,
-    ) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError> {
+    async fn stream_rows<'a>(&'a mut self) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError> {
         let drained = std::mem::take(&mut self.rows);
         Ok(Box::pin(stream::iter(drained.into_iter().map(Ok))))
     }

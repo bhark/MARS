@@ -1,8 +1,7 @@
 //! Per-call SQL builder.
 //!
-//! Page-keyed entry points (`fetch_full_table_streaming` for bootstrap,
-//! `fetch_by_feature_ids` for incremental rebuild) on top of the same SQL
-//! builder + row decoder.
+//! Page-keyed entry points (`stream_rows` for bootstrap, `stream_rows_by_id`
+//! for incremental rebuild) on top of the same SQL builder + row decoder.
 
 #![allow(dead_code)]
 
@@ -17,14 +16,14 @@ use tokio_postgres::types::{ToSql, Type};
 
 use crate::SqlParam;
 use crate::lower::lower_to_sql;
-use crate::quote::quote_ident;
+use crate::quote::{quote_ident, split_from};
 
 const PG_ID_BATCH: usize = 16_384;
 
 /// Stream every row of `binding`'s table in pg-table order. The producer runs
 /// on a spawned task so the returned stream owns nothing borrowed from the
 /// pool checkout; back-pressure flows through a bounded mpsc channel.
-pub(crate) async fn fetch_full_table_streaming(
+pub(crate) async fn stream_rows(
     pool: Pool,
     binding: SourceBinding,
 ) -> Result<BoxStream<'static, Result<RowBytes, SourceError>>, SourceError> {
@@ -74,7 +73,7 @@ pub(crate) async fn fetch_full_table_streaming(
     Ok(Box::pin(stream))
 }
 
-pub(crate) async fn fetch_by_feature_ids(
+pub(crate) async fn stream_rows_by_id(
     pool: Pool,
     binding: SourceBinding,
     ids: Vec<i64>,
@@ -195,9 +194,10 @@ pub(crate) async fn stream_feature_ids(
 }
 
 fn build_feature_ids_only_query(binding: &SourceBinding) -> Result<(String, Vec<SqlParam>), SourceError> {
-    let id_q = quote_ident(&binding.id_column)?;
-    let schema_q = quote_ident(&binding.from_schema)?;
-    let table_q = quote_ident(&binding.from_table)?;
+    let (schema, table) = split_from(&binding.from);
+    let id_q = quote_ident(&binding.id_field)?;
+    let schema_q = quote_ident(schema)?;
+    let table_q = quote_ident(table)?;
     let mut sql = format!("SELECT {id_q} FROM {schema_q}.{table_q}");
     let mut params: Vec<SqlParam> = Vec::new();
     if binding.filter.is_some() {
@@ -216,10 +216,11 @@ fn build_feature_ids_only_query(binding: &SourceBinding) -> Result<(String, Vec<
 /// the non-Option Vec<u8> decoder cannot represent, and a row with no
 /// geometry has nothing to render anyway.
 fn build_full_table_query(binding: &SourceBinding) -> Result<(String, Vec<SqlParam>), SourceError> {
-    let id_q = quote_ident(&binding.id_column)?;
-    let geom_q = quote_ident(&binding.geometry_column)?;
-    let schema_q = quote_ident(&binding.from_schema)?;
-    let table_q = quote_ident(&binding.from_table)?;
+    let (schema, table) = split_from(&binding.from);
+    let id_q = quote_ident(&binding.id_field)?;
+    let geom_q = quote_ident(&binding.geometry_field)?;
+    let schema_q = quote_ident(schema)?;
+    let table_q = quote_ident(table)?;
 
     let mut select = format!("{id_q}, ST_AsBinary({geom_q}) AS geom");
     for a in &binding.attributes {
@@ -234,10 +235,11 @@ fn build_full_table_query(binding: &SourceBinding) -> Result<(String, Vec<SqlPar
 }
 
 fn build_feature_ids_query(binding: &SourceBinding) -> Result<(String, Vec<SqlParam>), SourceError> {
-    let id_q = quote_ident(&binding.id_column)?;
-    let geom_q = quote_ident(&binding.geometry_column)?;
-    let schema_q = quote_ident(&binding.from_schema)?;
-    let table_q = quote_ident(&binding.from_table)?;
+    let (schema, table) = split_from(&binding.from);
+    let id_q = quote_ident(&binding.id_field)?;
+    let geom_q = quote_ident(&binding.geometry_field)?;
+    let schema_q = quote_ident(schema)?;
+    let table_q = quote_ident(table)?;
 
     let mut select = format!("{id_q}, ST_AsBinary({geom_q}) AS geom");
     for a in &binding.attributes {
@@ -292,10 +294,11 @@ pub(crate) fn build_query(
     srid: i32,
     filter: Option<&Expr>,
 ) -> Result<(String, Vec<SqlParam>), SourceError> {
-    let id_q = quote_ident(&binding.id_column)?;
-    let geom_q = quote_ident(&binding.geometry_column)?;
-    let schema_q = quote_ident(&binding.from_schema)?;
-    let table_q = quote_ident(&binding.from_table)?;
+    let (schema, table) = split_from(&binding.from);
+    let id_q = quote_ident(&binding.id_field)?;
+    let geom_q = quote_ident(&binding.geometry_field)?;
+    let schema_q = quote_ident(schema)?;
+    let table_q = quote_ident(table)?;
 
     let mut select = format!("{id_q}, ST_AsBinary({geom_q}) AS geom");
     for a in &binding.attributes {
@@ -523,8 +526,7 @@ mod tests {
     fn b() -> SourceBinding {
         SourceBinding::new(
             SourceCollectionId::new("c"),
-            "public",
-            "t",
+            "public.t",
             "geom",
             "gid",
             vec!["name".into(), "kind".into()],
@@ -601,11 +603,10 @@ mod tests {
     }
 
     #[test]
-    fn id_column_only_attrs() {
+    fn id_field_only_attrs() {
         let binding = SourceBinding::new(
             SourceCollectionId::new("c"),
-            "public",
-            "t",
+            "public.t",
             "geom",
             "gid",
             vec![],
@@ -627,8 +628,7 @@ mod tests {
         let e = parse("name = 'a' AND kind IN (1, 2, 3) AND area >= 10").unwrap();
         let binding = SourceBinding::new(
             SourceCollectionId::new("c"),
-            "public",
-            "t",
+            "public.t",
             "geom",
             "gid",
             vec!["name".into(), "kind".into(), "area".into()],

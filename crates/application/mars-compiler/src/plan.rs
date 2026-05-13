@@ -3,7 +3,7 @@
 //! a [`BootstrapPlan`] is the deduplicated set of bindings that the snapshot
 //! will materialise. derived from a validated [`mars_config::Config`]: every
 //! [`mars_config::SourceBinding`] across every layer collapses to a single
-//! [`BindingPlan`] keyed by `(from, geometry_column, attributes)`. layers
+//! [`BindingPlan`] keyed by `(from, geometry_field, attributes)`. layers
 //! that reference the same source see the same binding, and therefore share
 //! page artifacts.
 //!
@@ -105,8 +105,8 @@ pub struct LevelPlan {
 pub struct BindingPlan {
     pub binding_id: BindingId,
     pub source_table: String,
-    pub geometry_column: String,
-    pub id_column: Option<String>,
+    pub geometry_field: String,
+    pub id_field: Option<String>,
     pub attributes: Vec<String>,
     /// Pre-parsed binding-level filter; ANDed into the source SELECT at fetch
     /// time. Two bindings on the same table with different filters cannot
@@ -128,22 +128,6 @@ pub struct BindingPlan {
     /// rebuild. Resolved from
     /// [`mars_config::SourceBinding::resolved_simplifier`].
     pub simplifier: SimplifierKind,
-}
-
-impl BindingPlan {
-    /// Schema portion of `source_table` (`"schema.table"`); defaults to `"public"`.
-    #[must_use]
-    pub fn schema(&self) -> &str {
-        self.source_table.split_once('.').map_or("public", |(s, _)| s)
-    }
-
-    /// Table portion of `source_table` (`"schema.table"`); the whole string when no dot.
-    #[must_use]
-    pub fn table(&self) -> &str {
-        self.source_table
-            .split_once('.')
-            .map_or(self.source_table.as_str(), |(_, t)| t)
-    }
 }
 
 /// One pre-parsed class entry on a [`LayerPlan`]. `when` parses once at
@@ -201,7 +185,7 @@ impl BootstrapPlan {
 }
 
 /// Build a [`BootstrapPlan`] from a validated config. dedup key is
-/// `(from, geometry_column, attributes)`; a binding with no `levels:`
+/// `(from, geometry_field, attributes)`; a binding with no `levels:`
 /// declared defaults to a single level-0 (raw) entry, since the snapshot
 /// always materialises at least the canonical level.
 pub fn build_bootstrap_plan(cfg: &Config) -> Result<BootstrapPlan, PlanError> {
@@ -235,8 +219,8 @@ pub fn build_bootstrap_plan(cfg: &Config) -> Result<BootstrapPlan, PlanError> {
             let plan = BindingPlan {
                 binding_id: id.clone(),
                 source_table: from.to_owned(),
-                geometry_column: binding.geometry_column.clone(),
-                id_column: binding.id_column.clone(),
+                geometry_field: binding.geometry_column.clone(),
+                id_field: binding.id_column.clone(),
                 attributes: binding.attributes.clone(),
                 filter: filter_parsed,
                 native_crs: native_crs.clone(),
@@ -384,10 +368,10 @@ fn binding_id_for(from: &str) -> Result<BindingId, PlanError> {
 }
 
 fn ensure_consistent(existing: &BindingPlan, candidate: &BindingPlan) -> Result<(), PlanError> {
-    if existing.geometry_column != candidate.geometry_column {
+    if existing.geometry_field != candidate.geometry_field {
         return Err(PlanError::ConflictingBinding {
             id: existing.binding_id.clone(),
-            detail: "geometry_column",
+            detail: "geometry_field",
         });
     }
     if existing.attributes != candidate.attributes {
@@ -396,10 +380,10 @@ fn ensure_consistent(existing: &BindingPlan, candidate: &BindingPlan) -> Result<
             detail: "attributes",
         });
     }
-    if existing.id_column != candidate.id_column {
+    if existing.id_field != candidate.id_field {
         return Err(PlanError::ConflictingBinding {
             id: existing.binding_id.clone(),
-            detail: "id_column",
+            detail: "id_field",
         });
     }
     if existing.filter != candidate.filter {
@@ -596,7 +580,7 @@ mod tests {
         let b = &plan.bindings[0];
         assert_eq!(b.binding_id.as_str(), "buildings");
         assert_eq!(b.source_table, "buildings");
-        assert_eq!(b.geometry_column, "geom");
+        assert_eq!(b.geometry_field, "geom");
         assert_eq!(b.attributes, vec!["name".to_string()]);
         assert_eq!(b.native_crs.as_str(), "EPSG:25832");
         assert_eq!(b.levels.len(), 1);
@@ -708,7 +692,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_conflicting_geometry_column() {
+    fn rejects_conflicting_geometry_field() {
         let mut b1 = binding("parcels");
         let mut b2 = binding("parcels");
         b2.geometry_column = "shape".into();
@@ -718,7 +702,7 @@ mod tests {
         assert!(matches!(
             err,
             PlanError::ConflictingBinding {
-                detail: "geometry_column",
+                detail: "geometry_field",
                 ..
             }
         ));

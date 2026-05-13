@@ -18,7 +18,7 @@ use super::flush::{emit_layer_sidecars, filter_unmatched_rows, flush_page};
 use super::{KeyedRow, RebuildOutcome, drain_pruned_through, enforce_page_budget, hydrate_keyed_rows};
 
 /// Apply a list of [`RebalanceOp`]s, fetching the affected feature ids via
-/// `Source::fetch_by_feature_ids` and emitting fresh page artifacts plus
+/// `Source::stream_rows_by_id` and emitting fresh page artifacts plus
 /// class / label sidecars. Source pages are dropped; replacement pages are
 /// allocated fresh `PageId`s above the existing maximum at the affected
 /// (binding, level). The page-membership sidecar is left untouched -- a
@@ -132,10 +132,9 @@ async fn execute_rebalance_one_binding(
     // fetch rows.
     let port_binding = PortBinding::new(
         SourceCollectionId::new(binding_plan.binding_id.as_str()),
-        binding_plan.schema(),
-        binding_plan.table(),
-        binding_plan.geometry_column.clone(),
-        binding_plan.id_column.as_deref().unwrap_or("id"),
+        binding_plan.source_table.clone(),
+        binding_plan.geometry_field.clone(),
+        binding_plan.id_field.as_deref().unwrap_or("id"),
         binding_plan.attributes.clone(),
         binding_plan.native_crs.clone(),
     )?
@@ -144,7 +143,7 @@ async fn execute_rebalance_one_binding(
         .iter()
         .map(|f| i64::try_from(*f).unwrap_or(i64::MAX))
         .collect();
-    let stream = deps.source.fetch_by_feature_ids(&port_binding, &ids).await?;
+    let stream = deps.source.stream_rows_by_id(&port_binding, &ids).await?;
     let mut rows = hydrate_keyed_rows(stream, combined_bbox).await?;
     rows.sort_by(|a, b| {
         a.key

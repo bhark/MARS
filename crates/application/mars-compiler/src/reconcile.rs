@@ -60,10 +60,9 @@ pub async fn reconcile_binding(
 ) -> Result<ReconciliationOutcome, CompilerError> {
     let port_binding = PortBinding::new(
         SourceCollectionId::new(binding_plan.binding_id.as_str()),
-        binding_plan.schema(),
-        binding_plan.table(),
-        binding_plan.geometry_column.clone(),
-        binding_plan.id_column.as_deref().unwrap_or("id"),
+        binding_plan.source_table.clone(),
+        binding_plan.geometry_field.clone(),
+        binding_plan.id_field.as_deref().unwrap_or("id"),
         binding_plan.attributes.clone(),
         binding_plan.native_crs.clone(),
     )?
@@ -139,7 +138,7 @@ pub async fn reconcile_binding(
             .iter()
             .map(|id| i64::try_from(*id).unwrap_or(i64::MAX))
             .collect();
-        let mut geom_stream = deps.source.fetch_by_feature_ids(&port_binding, &ids_signed).await?;
+        let mut geom_stream = deps.source.stream_rows_by_id(&port_binding, &ids_signed).await?;
         while let Some(item) = geom_stream.next().await {
             let row = item?;
             let envelope = envelope_from_wkb(&row.geometry, row.feature_id)?;
@@ -211,16 +210,16 @@ mod tests {
 
     #[async_trait]
     impl Source for ReconcileSource {
-        async fn fetch_full_table_streaming<'a>(
+        async fn stream_rows<'a>(
             &'a self,
             _binding: &'a PortBinding,
         ) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError> {
             Err(SourceError::NotImplemented {
-                what: "test fetch_full_table_streaming",
+                what: "test stream_rows",
             })
         }
 
-        async fn fetch_by_feature_ids<'a>(
+        async fn stream_rows_by_id<'a>(
             &'a self,
             _binding: &'a PortBinding,
             ids: &'a [i64],
@@ -264,8 +263,8 @@ mod tests {
             binding_id: BindingId::try_new("points").unwrap(),
             source_table: "points".into(),
             filter: None,
-            geometry_column: "geom".into(),
-            id_column: Some("id".into()),
+            geometry_field: "geom".into(),
+            id_field: Some("id".into()),
             attributes: vec![],
             native_crs: CrsCode::new("EPSG:25832"),
             levels: vec![LevelPlan {

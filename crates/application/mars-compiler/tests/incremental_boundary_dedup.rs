@@ -63,7 +63,7 @@ impl FakeSource {
 
 #[async_trait]
 impl Source for FakeSource {
-    async fn fetch_full_table_streaming<'a>(
+    async fn stream_rows<'a>(
         &'a self,
         _binding: &'a PortBinding,
     ) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError> {
@@ -72,7 +72,7 @@ impl Source for FakeSource {
         Ok(Box::pin(stream::iter(owned.into_iter().map(Ok))))
     }
 
-    async fn fetch_by_feature_ids<'a>(
+    async fn stream_rows_by_id<'a>(
         &'a self,
         _binding: &'a PortBinding,
         ids: &'a [i64],
@@ -141,8 +141,8 @@ fn binding_plan(id: &str) -> BindingPlan {
         binding_id: BindingId::try_new(id).unwrap(),
         source_table: id.to_string(),
         filter: None,
-        geometry_column: "geom".into(),
-        id_column: Some("id".into()),
+        geometry_field: "geom".into(),
+        id_field: Some("id".into()),
         attributes: vec!["name".into()],
         native_crs: CrsCode::new("EPSG:25832"),
         levels: vec![LevelPlan {

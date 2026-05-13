@@ -523,8 +523,9 @@ pub struct Manifest {
     pub class_sidecars: Vec<LayerSidecarEntry>,
     pub label_sidecars: Vec<LayerSidecarEntry>,
     pub style_artifact: Option<ArtifactEntry>,
-    /// opaque source-side cursor (e.g. pgoutput LSN) at which this manifest's
-    /// state was captured. snapshot compiles set this to `None`.
+    /// opaque source-side cursor at which this manifest's state was captured
+    /// (e.g. WAL position, change-stream token). snapshot compiles set this
+    /// to `None`.
     pub source_version: Option<String>,
     /// monotonic counter cross-checked by readers as a sanity gate against
     /// out-of-order manifest pointer publishes.

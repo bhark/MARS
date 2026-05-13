@@ -27,7 +27,7 @@ pub struct BindingDirty {
     pub per_level: BTreeMap<DecimationLevel, BTreeSet<PageId>>,
     /// feature ids observed by this cycle's events. populated for
     /// Insert / Update / Delete; the rebuild path includes these in
-    /// `fetch_by_feature_ids` so newly inserted features land in the
+    /// `stream_rows_by_id` so newly inserted features land in the
     /// right page even though the page-membership sidecar does not yet
     /// know about them. `Truncate` clears this set since the binding
     /// reverts to the bootstrap path.
@@ -272,8 +272,8 @@ mod tests {
             binding_id: BindingId::try_new(id).unwrap(),
             source_table: id.to_string(),
             filter: None,
-            geometry_column: "geom".into(),
-            id_column: Some("id".into()),
+            geometry_field: "geom".into(),
+            id_field: Some("id".into()),
             attributes: Vec::new(),
             native_crs: CrsCode::new("EPSG:25832"),
             levels: vec![LevelPlan {

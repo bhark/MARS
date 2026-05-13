@@ -177,7 +177,7 @@ pub async fn rebuild_binding_from_plan<'a>(
 
     let mut spill = crate::spill::SpillManager::new(spill_dir, spill_open_file_limit)?;
 
-    let mut stream = session.fetch_full_table_streaming().await?;
+    let mut stream = session.stream_rows().await?;
     while let Some(item) = stream.next().await {
         let row: RowBytes = item?;
         // a row whose pass-1 bbox failed every level's filter has no route

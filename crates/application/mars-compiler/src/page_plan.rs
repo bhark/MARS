@@ -4,9 +4,8 @@
 //!
 //! The output [`PagePlan`] carries per-level page boundaries plus the
 //! member feature ids and snapshot-stable row keys. Pass 2 streams the
-//! bound table once via
-//! [`mars_source::CompileSession::fetch_full_table_streaming`] and
-//! buckets rows into the planned pages by joining each row's
+//! bound collection once via [`mars_source::CompileSession::stream_rows`]
+//! and buckets rows into the planned pages by joining each row's
 //! [`SourceRowKey`] against the page's `row_keys`. The two passes share a
 //! single `REPEATABLE READ` snapshot, so the row set is identical
 //! between the planner and the renderer.
@@ -112,7 +111,7 @@ pub async fn compute_page_plan(
     let mut bbox_acc = BboxAcc::default();
     let mut feature_count_total: u64 = 0;
     {
-        let mut stream = session.fetch_geometry_summary().await?;
+        let mut stream = session.stream_geometry_summary().await?;
         while let Some(item) = stream.next().await {
             let s: RowSummary = item?;
             if rows.len() >= max_rows {
@@ -319,15 +318,13 @@ mod tests {
 
     #[async_trait]
     impl CompileSession for FakeSession {
-        async fn fetch_geometry_summary<'a>(
+        async fn stream_geometry_summary<'a>(
             &'a mut self,
         ) -> Result<BoxStream<'a, Result<RowSummary, SourceError>>, SourceError> {
             let drained = std::mem::take(&mut self.summaries);
             Ok(Box::pin(stream::iter(drained.into_iter().map(Ok))))
         }
-        async fn fetch_full_table_streaming<'a>(
-            &'a mut self,
-        ) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError> {
+        async fn stream_rows<'a>(&'a mut self) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError> {
             Ok(Box::pin(stream::empty()))
         }
         async fn commit(self: Box<Self>) -> Result<(), SourceError> {
@@ -343,8 +340,8 @@ mod tests {
             binding_id: BindingId::try_new("planned").unwrap(),
             source_table: "planned".into(),
             filter: None,
-            geometry_column: "geom".into(),
-            id_column: Some("id".into()),
+            geometry_field: "geom".into(),
+            id_field: Some("id".into()),
             attributes: vec![],
             native_crs: CrsCode::new("EPSG:25832"),
             levels,

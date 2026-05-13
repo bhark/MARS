@@ -1,15 +1,14 @@
 //! Page emission and rebalance executor for the unified compile pipeline.
 //!
 //! This module is pass 2 of the unified compile flow. Bootstrap drives it
-//! via [`rebuild_binding_from_plan`] which streams the bound table once
-//! per binding through
-//! [`mars_source::CompileSession::fetch_full_table_streaming`] and buckets
-//! rows into the planned (level, page_id) targets keyed on
+//! via [`rebuild_binding_from_plan`] which streams the bound collection once
+//! per binding through [`mars_source::CompileSession::stream_rows`] and
+//! buckets rows into the planned (level, page_id) targets keyed on
 //! [`mars_source::SourceRowKey`]; completed pages eager-flush, simplify,
 //! emit artifacts, and write class / label sidecars. The incremental
 //! cycle drives [`rebuild_pages`] against the dirty set produced by
 //! [`crate::incremental::IncrementalCycle`] and the prior manifest using
-//! the stateless [`mars_source::Source::fetch_by_feature_ids`] surface; it
+//! the stateless [`mars_source::Source::stream_rows_by_id`] surface; it
 //! additionally refreshes the per-binding page-membership sidecar so the
 //! next cycle's old-side lookups resolve correctly.
 //!
@@ -314,10 +313,9 @@ async fn rebuild_binding_truncate(
 
     let port_binding = PortBinding::new(
         SourceCollectionId::new(binding_plan.binding_id.as_str()),
-        binding_plan.schema(),
-        binding_plan.table(),
-        binding_plan.geometry_column.clone(),
-        binding_plan.id_column.as_deref().unwrap_or("id"),
+        binding_plan.source_table.clone(),
+        binding_plan.geometry_field.clone(),
+        binding_plan.id_field.as_deref().unwrap_or("id"),
         binding_plan.attributes.clone(),
         binding_plan.native_crs.clone(),
     )?
@@ -441,10 +439,9 @@ async fn rebuild_binding_incremental(
     // 3. fetch from source.
     let port_binding = PortBinding::new(
         SourceCollectionId::new(binding_plan.binding_id.as_str()),
-        binding_plan.schema(),
-        binding_plan.table(),
-        binding_plan.geometry_column.clone(),
-        binding_plan.id_column.as_deref().unwrap_or("id"),
+        binding_plan.source_table.clone(),
+        binding_plan.geometry_field.clone(),
+        binding_plan.id_field.as_deref().unwrap_or("id"),
         binding_plan.attributes.clone(),
         binding_plan.native_crs.clone(),
     )?
@@ -453,7 +450,7 @@ async fn rebuild_binding_incremental(
         .iter()
         .map(|f| i64::try_from(*f).unwrap_or(i64::MAX))
         .collect();
-    let stream = deps.source.fetch_by_feature_ids(&port_binding, &ids).await?;
+    let stream = deps.source.stream_rows_by_id(&port_binding, &ids).await?;
     let rows = hydrate_keyed_rows(stream, combined_bbox).await?;
     let mut returned_counts: BTreeMap<u64, u32> = BTreeMap::new();
     for r in &rows {

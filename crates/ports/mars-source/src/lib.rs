@@ -1,12 +1,12 @@
-//! Port traits for source databases and change feeds.
+//! Port traits for source backends and change feeds.
 //!
 //! `Source` is the read interface used by the compiler to materialise
 //! geometries and attributes per page. `ChangeFeed` is the subscription
 //! interface that produces dirty-page events. Both are
 //! runtime-agnostic - concrete adapters live in `crates/adapters/mars-source-*`.
 //!
-//! `CompileSession` exposes a snapshot-stable `fetch_full_table_streaming`
-//! that reuses the pass-1 transaction.
+//! `CompileSession` exposes a snapshot-stable `stream_rows` that reuses the
+//! pass-1 transaction.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
@@ -32,7 +32,7 @@ pub enum SourceError {
     },
     /// Connectivity, transport, or driver error. `what` is a stable short
     /// label callers can match on; `source` carries the original adapter
-    /// error chain so `anyhow`'s `{:#}` walks SQLSTATE / severity / cause
+    /// error chain so `anyhow`'s `{:#}` walks the backend error code / cause
     /// without forcing a port-level dependency on a specific driver.
     #[error("backend: {what}")]
     Backend {
@@ -42,7 +42,7 @@ pub enum SourceError {
         #[source]
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
-    /// The change feed slot was lost or fell too far behind. Recovery is via
+    /// The change feed cursor was lost or fell too far behind. Recovery is via
     /// snapshot compile.
     #[error("change feed gone; full snapshot required")]
     ChangeFeedGone,
@@ -50,8 +50,8 @@ pub enum SourceError {
     #[error("invalid binding: {0}")]
     InvalidBinding(String),
     /// A filter expression referenced an identifier outside the binding's
-    /// allowlist (`binding.attributes ∪ {binding.id_column}`). SQL lowering
-    /// refuses to inject unknown identifiers.
+    /// allowlist (`binding.attributes ∪ {binding.id_field}`). The adapter's
+    /// filter lowering refuses to inject unknown identifiers.
     #[error("unknown identifier: {name}")]
     UnknownIdent {
         /// Identifier that was not present in the allowlist.
@@ -96,16 +96,16 @@ pub struct GeometryEnvelope {
     pub bbox: Bbox,
 }
 
-/// One change-feed event, lowered from a postgres logical-decoding message
-/// or a polling diff.
+/// One change-feed event, lowered from an upstream change-feed message or a
+/// polling diff.
 ///
-/// `old_envelope` is `Some` only when the feed supplies the old row, e.g.
-/// postgres `REPLICA IDENTITY FULL`.
+/// `old_envelope` is `Some` only when the feed is configured to supply prior
+/// values for updates and deletes.
 #[derive(Debug, Clone)]
 pub enum ChangeEvent {
     /// A row was inserted.
     Insert {
-        /// Logical name of the source table / collection.
+        /// Logical name of the source collection.
         collection: SourceCollectionId,
         /// stable feature id.
         feature_id: u64,
@@ -114,7 +114,7 @@ pub enum ChangeEvent {
     },
     /// A row was updated.
     Update {
-        /// Logical name of the source table / collection.
+        /// Logical name of the source collection.
         collection: SourceCollectionId,
         /// stable feature id.
         feature_id: u64,
@@ -125,7 +125,7 @@ pub enum ChangeEvent {
     },
     /// A row was deleted.
     Delete {
-        /// Logical name of the source table / collection.
+        /// Logical name of the source collection.
         collection: SourceCollectionId,
         /// stable feature id.
         feature_id: u64,
@@ -135,71 +135,68 @@ pub enum ChangeEvent {
     /// The whole collection was truncated; the binding goes through a
     /// bootstrap-equivalent rebuild.
     Truncate {
-        /// Logical name of the source table / collection.
+        /// Logical name of the source collection.
         collection: SourceCollectionId,
     },
 }
 
 /// A committed batch of change events. Adapters MUST only emit a batch once
-/// the upstream transaction has committed; the `source_version` cursor (e.g.
-/// pgoutput LSN) lets the compiler advance manifest provenance atomically
-/// per batch.
+/// the upstream transaction has committed; the `source_version` cursor lets
+/// the compiler advance manifest provenance atomically per batch.
 #[derive(Debug, Clone)]
 pub struct ChangeBatch {
     /// Ordered events committed together.
     pub events: Vec<ChangeEvent>,
-    /// Opaque source-side cursor identifying the committed position. `None`
-    /// when the adapter has no notion of a cursor (polling fallback).
+    /// Opaque backend-side cursor identifying the committed position (e.g.
+    /// WAL position, change-stream token, ETag). `None` when the adapter has
+    /// no notion of a cursor (polling fallback).
     pub source_version: Option<String>,
 }
 
-/// Source-side binding: maps a logical `SourceCollectionId` onto the physical
-/// table, geometry/id columns, attribute projection, and CRS. Lives in
-/// `mars-source` because every field is database-vocabulary, not domain.
+/// Source-side binding: maps a logical `SourceCollectionId` onto a backend
+/// locator, geometry/id fields, attribute projection, and CRS. Lives in
+/// `mars-source` because every field is a backend-shaped locator, not domain.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SourceBinding {
     /// Logical collection name.
     pub collection: SourceCollectionId,
-    /// Source schema (e.g. `public`).
-    pub from_schema: String,
-    /// Source table.
-    pub from_table: String,
-    /// Geometry column name.
-    pub geometry_column: String,
-    /// Stable feature-id column name.
-    pub id_column: String,
+    /// Opaque backend-side locator for the source records. Format is defined
+    /// by the adapter (e.g. `"schema.table"` for relational backends, a
+    /// collection path for document stores, an object-store prefix, etc.).
+    pub from: String,
+    /// Geometry field name within each record.
+    pub geometry_field: String,
+    /// Stable feature-id field name within each record.
+    pub id_field: String,
     /// Ordered, deduplicated attribute projection.
     pub attributes: Vec<String>,
     /// Source CRS.
     pub crs: CrsCode,
-    /// Optional binding-level filter ANDed into every SELECT this binding
-    /// drives. Idents must already be in `attributes ∪ {id_column}` (the
+    /// Optional binding-level filter applied to every scan this binding
+    /// drives. Idents must already be in `attributes ∪ {id_field}` (the
     /// caller is expected to validate up front; lowering double-checks).
     pub filter: Option<mars_expr::Expr>,
 }
 
 impl SourceBinding {
     /// Construct after validating attribute uniqueness and non-empty
-    /// schema/table/column names.
+    /// locator / field names.
     pub fn new(
         collection: SourceCollectionId,
-        from_schema: impl Into<String>,
-        from_table: impl Into<String>,
-        geometry_column: impl Into<String>,
-        id_column: impl Into<String>,
+        from: impl Into<String>,
+        geometry_field: impl Into<String>,
+        id_field: impl Into<String>,
         attributes: Vec<String>,
         crs: CrsCode,
     ) -> Result<Self, SourceError> {
-        let from_schema = from_schema.into();
-        let from_table = from_table.into();
-        let geometry_column = geometry_column.into();
-        let id_column = id_column.into();
+        let from = from.into();
+        let geometry_field = geometry_field.into();
+        let id_field = id_field.into();
 
         for (label, v) in [
-            ("from_schema", &from_schema),
-            ("from_table", &from_table),
-            ("geometry_column", &geometry_column),
-            ("id_column", &id_column),
+            ("from", &from),
+            ("geometry_field", &geometry_field),
+            ("id_field", &id_field),
         ] {
             if v.is_empty() {
                 return Err(SourceError::InvalidBinding(format!("{label} is empty")));
@@ -219,18 +216,17 @@ impl SourceBinding {
 
         Ok(Self {
             collection,
-            from_schema,
-            from_table,
-            geometry_column,
-            id_column,
+            from,
+            geometry_field,
+            id_field,
             attributes,
             crs,
             filter: None,
         })
     }
 
-    /// Attach (or clear) a binding-level filter expression. Lowering ANDs
-    /// it into the source SELECT in addition to any caller-supplied filter.
+    /// Attach (or clear) a binding-level filter expression. Lowering applies
+    /// it to the source scan in addition to any caller-supplied filter.
     #[must_use]
     pub fn with_filter(mut self, filter: Option<mars_expr::Expr>) -> Self {
         self.filter = filter;
@@ -256,33 +252,33 @@ pub enum AttrValue {
 }
 
 /// Read-side port.
-/// - `fetch_full_table_streaming(binding)` for snapshot bootstrap, and
-/// - `fetch_by_feature_ids(binding, ids)` for incremental page rebuilds
-///   (`WHERE id_column = ANY($1)`; bag-valued - sources are allowed to
+/// - `stream_rows(binding)` for snapshot bootstrap, and
+/// - `stream_rows_by_id(binding, ids)` for incremental page rebuilds
+///   (filtered to the supplied id set; bag-valued - sources are allowed to
 ///   return multiple rows per id, in which case the compiler treats each
 ///   row as a distinct substrate feature for rendering purposes).
 #[async_trait]
 pub trait Source: Send + Sync + 'static {
-    /// Stream every row of `binding`'s table in undefined order. Cursor /
-    /// pipelined under the hood so the compiler can sort externally without
+    /// Stream every row of `binding`'s collection in undefined order.
+    /// Streamed under the hood so the compiler can sort externally without
     /// pulling the full result set into RAM. Adapters that have not yet
     /// implemented this surface return `SourceError::NotImplemented`.
-    async fn fetch_full_table_streaming<'a>(
+    async fn stream_rows<'a>(
         &'a self,
         binding: &'a SourceBinding,
     ) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError>;
 
     /// stream rows matching feature ids.
-    async fn fetch_by_feature_ids<'a>(
+    async fn stream_rows_by_id<'a>(
         &'a self,
         binding: &'a SourceBinding,
         ids: &'a [i64],
     ) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError>;
 
-    /// Stream every feature id present in the binding's table, in undefined
-    /// order. Used by the periodic reconciliation hook to compare the source
-    /// id set against the page-membership sidecar's id set without paying the
-    /// cost of a full geometry/attribute fetch.
+    /// Stream every feature id present in the binding's collection, in
+    /// undefined order. Used by the periodic reconciliation hook to compare
+    /// the source id set against the page-membership sidecar's id set
+    /// without paying the cost of a full geometry/attribute fetch.
     async fn stream_feature_ids<'a>(
         &'a self,
         binding: &'a SourceBinding,
@@ -292,7 +288,7 @@ pub trait Source: Send + Sync + 'static {
     /// holds one connection in a snapshot-isolated transaction so a pass-1
     /// geometry summary scan and a pass-2 row hydration scan see identical
     /// row sets. Non-snapshot callers (incremental cycles) keep using the
-    /// stateless `fetch_*` methods above. Default impl is `NotImplemented`
+    /// stateless `stream_*` methods above. Default impl is `NotImplemented`
     /// so adapters opt in explicitly.
     async fn open_compile_session<'a>(
         &'a self,
@@ -305,10 +301,8 @@ pub trait Source: Send + Sync + 'static {
 }
 
 /// Opaque per-row identity stable within a single `CompileSession`'s
-/// snapshot. Adapters populate per their backing store; the postgres
-/// adapter packs `tableoid` then `BlockNumber` then `OffsetNumber` (10
-/// useful bytes, zero-padded). 16 bytes leaves room for future
-/// row-routing metadata without a port-wide widening.
+/// snapshot. Adapters populate per their backing store. 16 bytes leaves
+/// room for future row-routing metadata without a port-wide widening.
 ///
 /// The page planner uses it as a strict tiebreaker after
 /// `(hilbert_key, feature_id)` to make pass-1 sort fully deterministic
@@ -334,7 +328,7 @@ impl SourceRowKey {
     pub const ZERO: Self = Self([0u8; 16]);
 }
 
-/// Per-row geometry summary produced by [`CompileSession::fetch_geometry_summary`].
+/// Per-row geometry summary produced by [`CompileSession::stream_geometry_summary`].
 /// Bbox + byte length + a snapshot-stable row identity - exactly the
 /// fixed-size record the pass-1 page planner needs.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -353,33 +347,31 @@ pub struct RowSummary {
 
 /// Compile-time session bound to one `SourceBinding`. Holds a connection in
 /// a snapshot-isolated transaction so pass-1 (geometry summary) and pass-2
-/// (full-table row hydration) see the same rows.
+/// (full row hydration) see the same rows.
 ///
 /// `&mut self` on the streaming methods enforces one stream at a time:
 /// callers drain (or drop) one stream before opening the next.
 ///
 /// `RowSummary::row_key` carries an opaque snapshot-stable row identity
-/// (Postgres: `tableoid + ctid`) used by the page planner as the terminal
-/// sort tier after `(hilbert_key, feature_id)`.
+/// used by the page planner as the terminal sort tier after
+/// `(hilbert_key, feature_id)`.
 #[async_trait]
 pub trait CompileSession: Send + Sync {
-    /// Stream a per-row geometry summary across the bound table. Pass 1
+    /// Stream a per-row geometry summary across the bound collection. Pass 1
     /// of the unified compile pipeline.
-    async fn fetch_geometry_summary<'a>(
+    async fn stream_geometry_summary<'a>(
         &'a mut self,
     ) -> Result<BoxStream<'a, Result<RowSummary, SourceError>>, SourceError>;
 
-    /// Stream every row of the bound table from the same snapshot, in
+    /// Stream every row of the bound collection from the same snapshot, in
     /// adapter-native order. Pass 2 of the unified compile pipeline.
     ///
     /// Each yielded `RowBytes` carries a snapshot-stable `row_key` derived
-    /// from the same source as `RowSummary::row_key` (postgres: `tableoid +
-    /// ctid`); the compiler buckets rows into the planned pages by joining
-    /// on `row_key`. Bag-valued: rows that exploded into multiple parts
-    /// upstream are still returned as distinct rows.
-    async fn fetch_full_table_streaming<'a>(
-        &'a mut self,
-    ) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError>;
+    /// from the same source as `RowSummary::row_key`; the compiler buckets
+    /// rows into the planned pages by joining on `row_key`. Bag-valued: rows
+    /// that exploded into multiple parts upstream are still returned as
+    /// distinct rows.
+    async fn stream_rows<'a>(&'a mut self) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError>;
 
     /// Commit the snapshot transaction. Call on the success path of a
     /// compile session.
@@ -397,7 +389,7 @@ pub trait CompileSession: Send + Sync {
 /// `(name, AttrValue)` pairs ordered to match the binding's projection.
 ///
 /// `row_key` carries the snapshot-stable row identity when the row was
-/// produced inside a `CompileSession`. Stateless `Source::fetch_*` callers
+/// produced inside a `CompileSession`. Stateless `Source::stream_*` callers
 /// have no transactional snapshot to hang an identity off and set it to
 /// [`SourceRowKey::ZERO`].
 #[derive(Debug, Clone)]
@@ -425,22 +417,20 @@ pub mod stub {
 
     #[async_trait]
     impl Source for NotImplementedSource {
-        async fn fetch_full_table_streaming<'a>(
+        async fn stream_rows<'a>(
             &'a self,
             _binding: &'a SourceBinding,
         ) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError> {
-            Err(SourceError::NotImplemented {
-                what: "fetch_full_table_streaming",
-            })
+            Err(SourceError::NotImplemented { what: "stream_rows" })
         }
 
-        async fn fetch_by_feature_ids<'a>(
+        async fn stream_rows_by_id<'a>(
             &'a self,
             _binding: &'a SourceBinding,
             _ids: &'a [i64],
         ) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError> {
             Err(SourceError::NotImplemented {
-                what: "fetch_by_feature_ids",
+                what: "stream_rows_by_id",
             })
         }
 
@@ -533,8 +523,7 @@ mod tests {
     fn binding_constructor_accepts_valid() {
         let b = SourceBinding::new(
             SourceCollectionId::new("roads"),
-            "public",
-            "roads",
+            "public.roads",
             "geom",
             "gid",
             vec!["name".into(), "class".into()],
@@ -542,10 +531,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(b.collection.as_str(), "roads");
-        assert_eq!(b.from_schema, "public");
-        assert_eq!(b.from_table, "roads");
-        assert_eq!(b.geometry_column, "geom");
-        assert_eq!(b.id_column, "gid");
+        assert_eq!(b.from, "public.roads");
+        assert_eq!(b.geometry_field, "geom");
+        assert_eq!(b.id_field, "gid");
         assert_eq!(b.attributes, vec!["name".to_string(), "class".to_string()]);
         assert_eq!(b.crs.as_str(), "EPSG:25832");
     }
@@ -554,8 +542,7 @@ mod tests {
     fn binding_rejects_duplicate_attribute() {
         let r = SourceBinding::new(
             SourceCollectionId::new("c"),
-            "s",
-            "t",
+            "s.t",
             "g",
             "id",
             vec!["a".into(), "a".into()],
@@ -569,7 +556,6 @@ mod tests {
         let r = SourceBinding::new(
             SourceCollectionId::new("c"),
             "",
-            "t",
             "g",
             "id",
             vec![],

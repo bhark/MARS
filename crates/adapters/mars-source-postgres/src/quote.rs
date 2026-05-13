@@ -1,7 +1,18 @@
-//! Identifier quoting. Bare-ident only; dotted names rejected so callers must
-//! split schema and table themselves and quote each piece.
+//! Identifier quoting and locator splitting. `quote_ident` is bare-ident only;
+//! dotted names are rejected so callers must split schema and table via
+//! [`split_from`] first and quote each piece independently.
 
 use mars_source::SourceError;
+
+/// Split a binding's opaque `from` locator into postgres `(schema, table)`.
+/// Mirrors the config-side convention: single-segment names route to
+/// `"public"`; everything past the first dot is the table identifier.
+pub(crate) fn split_from(from: &str) -> (&str, &str) {
+    match from.split_once('.') {
+        Some((s, t)) => (s, t),
+        None => ("public", from),
+    }
+}
 
 /// Quote a bare SQL identifier (column / table / schema). Rejects dotted,
 /// empty, and NUL-bearing inputs so the result is always safe to splice
@@ -60,5 +71,19 @@ mod tests {
     #[test]
     fn rejects_empty() {
         assert!(matches!(quote_ident(""), Err(SourceError::Backend { .. })));
+    }
+
+    #[test]
+    fn split_from_dotted() {
+        assert_eq!(split_from("public.roads"), ("public", "roads"));
+        assert_eq!(
+            split_from("geo.administrative.regions"),
+            ("geo", "administrative.regions")
+        );
+    }
+
+    #[test]
+    fn split_from_defaults_to_public() {
+        assert_eq!(split_from("roads"), ("public", "roads"));
     }
 }

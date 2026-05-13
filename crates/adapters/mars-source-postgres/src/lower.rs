@@ -1,7 +1,7 @@
 //! Lower a `mars-expr::Expr` to a parameterised SQL `WHERE` fragment.
 //!
 //! Identifiers are checked against the binding's allowlist
-//! (`attributes ∪ {id_column}`) and emitted via `quote_ident`. Values are
+//! (`attributes ∪ {id_field}`) and emitted via `quote_ident`. Values are
 //! always parameterised as `$N`; the caller offsets `N` past the spatial
 //! params.
 
@@ -41,7 +41,7 @@ impl<'a> LowerCtx<'a> {
     }
 
     fn check_ident(&self, name: &str) -> Result<String, SourceError> {
-        let allowed = self.binding.id_column == name || self.binding.attributes.iter().any(|a| a == name);
+        let allowed = self.binding.id_field == name || self.binding.attributes.iter().any(|a| a == name);
         if !allowed {
             return Err(SourceError::UnknownIdent { name: name.to_string() });
         }
@@ -144,8 +144,7 @@ mod tests {
     fn binding(attrs: &[&str], id: &str) -> SourceBinding {
         SourceBinding::new(
             SourceCollectionId::new("c"),
-            "public",
-            "t",
+            "public.t",
             "geom",
             id,
             attrs.iter().map(|s| (*s).to_string()).collect(),
@@ -210,7 +209,7 @@ mod tests {
     }
 
     #[test]
-    fn id_column_in_allowlist() {
+    fn id_field_in_allowlist() {
         let e = parse("gid = 7").unwrap();
         let b = binding(&[], "gid");
         let (sql, params) = lower_to_sql(&e, &b, 1).unwrap();

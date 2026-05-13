@@ -237,19 +237,19 @@ impl PgSource {
 
 #[async_trait]
 impl Source for PgSource {
-    async fn fetch_full_table_streaming<'a>(
+    async fn stream_rows<'a>(
         &'a self,
         binding: &'a SourceBinding,
     ) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError> {
-        fetch::fetch_full_table_streaming(self.pool.clone(), binding.clone()).await
+        fetch::stream_rows(self.pool.clone(), binding.clone()).await
     }
 
-    async fn fetch_by_feature_ids<'a>(
+    async fn stream_rows_by_id<'a>(
         &'a self,
         binding: &'a SourceBinding,
         ids: &'a [i64],
     ) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError> {
-        fetch::fetch_by_feature_ids(self.pool.clone(), binding.clone(), ids.to_vec()).await
+        fetch::stream_rows_by_id(self.pool.clone(), binding.clone(), ids.to_vec()).await
     }
 
     async fn stream_feature_ids<'a>(

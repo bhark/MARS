@@ -98,13 +98,13 @@ impl LeaderLock for NeverLeader {
 struct UnusedSource;
 #[async_trait]
 impl Source for UnusedSource {
-    async fn fetch_full_table_streaming<'a>(
+    async fn stream_rows<'a>(
         &'a self,
         _binding: &'a PortBinding,
     ) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError> {
         Ok(Box::pin(stream::empty()))
     }
-    async fn fetch_by_feature_ids<'a>(
+    async fn stream_rows_by_id<'a>(
         &'a self,
         _binding: &'a PortBinding,
         _ids: &'a [i64],
