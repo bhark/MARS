@@ -3,7 +3,7 @@
 //! implementation rather than silently falling through.
 
 mod label;
-mod path;
+pub(crate) mod path;
 
 use mars_render_port::{DrawOp, RenderError};
 use mars_text::Fonts;
@@ -58,21 +58,25 @@ mod tests {
     }
 
     #[test]
-    fn symbol_circle_returns_typed_not_implemented_until_implemented() {
-        // scaffold-only assertion: the circle marker variant has not yet
-        // been wired to a build_path implementation; the typed error names
-        // the specific MarkerSymbol variant so the next commit can flip
-        // this to a positive render assertion at one named site.
+    fn symbol_circle_dispatches_to_renderer() {
         let op = DrawOp::Symbol {
             anchor: (8.0, 8.0),
             rotation_rad: 0.0,
             style: Arc::new(Style {
+                fill: Some(mars_style::FillPaint::Solid(mars_style::Colour {
+                    r: 255,
+                    g: 0,
+                    b: 0,
+                    a: 255,
+                })),
                 marker: Some(MarkerSymbol::Circle { size: 6.0 }),
                 ..Default::default()
             }),
         };
-        let err = renderer().render(canvas(), &[op]).expect_err("must error");
-        assert!(matches!(err, RenderError::NotImplemented { what } if what == "MarkerSymbol::Circle"));
+        // smoke assertion at the DrawOp seam: per-variant pixel coverage
+        // is verified inside symbol::tests; here we only confirm the arm
+        // routes through dispatch and produces a pixmap.
+        let _ = renderer().render(canvas(), &[op]).expect("render ok");
     }
 
     #[test]

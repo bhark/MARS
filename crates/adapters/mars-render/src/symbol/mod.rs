@@ -19,7 +19,7 @@ mod triangle;
 mod vector_shape;
 mod x;
 
-use mars_render_port::RenderError;
+use mars_render_port::{Path as PortPath, RenderError};
 use mars_style::{MarkerSymbol, Style};
 use tiny_skia::Pixmap;
 
@@ -31,9 +31,6 @@ pub(crate) fn dispatch(
     rotation_rad: f32,
     style: &Style,
 ) -> Result<UnimplementedFeatures, RenderError> {
-    let _ = pm;
-    let _ = anchor;
-    let _ = rotation_rad;
     let Some(marker) = &style.marker else {
         return Ok(UnimplementedFeatures::default());
     };
@@ -42,9 +39,7 @@ pub(crate) fn dispatch(
             glyph_marker: true,
             ..Default::default()
         }),
-        MarkerSymbol::Circle { .. } => Err(RenderError::NotImplemented {
-            what: "MarkerSymbol::Circle",
-        }),
+        MarkerSymbol::Circle { size } => render(pm, circle::build_path(*size), anchor, rotation_rad, style),
         MarkerSymbol::Square { .. } => Err(RenderError::NotImplemented {
             what: "MarkerSymbol::Square",
         }),
@@ -71,15 +66,79 @@ pub(crate) fn dispatch(
     }
 }
 
+// rotate each subpath point around the local origin by `rotation_rad`,
+// then translate by `anchor`, and delegate to the path pipeline so fill
+// and stroke flow through the same prepare / resolve / draw chain that
+// DrawOp::Path uses.
+fn render(
+    pm: &mut Pixmap,
+    mut local: PortPath,
+    anchor: (f32, f32),
+    rotation_rad: f32,
+    style: &Style,
+) -> Result<UnimplementedFeatures, RenderError> {
+    let (sin_r, cos_r) = rotation_rad.sin_cos();
+    for sub in &mut local.subpaths {
+        for p in &mut sub.points {
+            let (x, y) = *p;
+            *p = (anchor.0 + cos_r * x - sin_r * y, anchor.1 + sin_r * x + cos_r * y);
+        }
+    }
+    crate::ops::path::draw(pm, &local, style)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
-    use super::*;
-    use mars_style::Style;
+    use std::sync::Arc;
+
+    use mars_render_port::{Canvas, DrawOp, Encoder, ImageFormat, Renderer};
+    use mars_style::{Colour, FillPaint, Style};
     use tiny_skia::Pixmap as SkPixmap;
+
+    use super::*;
+    use crate::{TinySkiaEncoder, TinySkiaRenderer};
 
     fn pm() -> SkPixmap {
         SkPixmap::new(16, 16).unwrap()
+    }
+
+    fn render_marker(marker: MarkerSymbol) -> Vec<u8> {
+        let canvas = Canvas {
+            width: 32,
+            height: 32,
+            background: None,
+        };
+        let op = DrawOp::Symbol {
+            anchor: (16.0, 16.0),
+            rotation_rad: 0.0,
+            style: Arc::new(Style {
+                fill: Some(FillPaint::Solid(Colour {
+                    r: 255,
+                    g: 0,
+                    b: 0,
+                    a: 255,
+                })),
+                marker: Some(marker),
+                ..Default::default()
+            }),
+        };
+        let renderer = TinySkiaRenderer::new(Arc::new(mars_text::Fonts::with_default()));
+        let pm = renderer.render(canvas, &[op]).expect("render ok");
+        TinySkiaEncoder::default()
+            .encode(&pm, ImageFormat::Png)
+            .expect("encode ok")
+    }
+
+    fn red_pixel_count(png: &[u8]) -> usize {
+        let dec = png::Decoder::new(std::io::Cursor::new(png));
+        let mut reader = dec.read_info().unwrap();
+        let mut buf = vec![0; reader.output_buffer_size().unwrap()];
+        let info = reader.next_frame(&mut buf).unwrap();
+        buf.truncate(info.buffer_size());
+        buf.chunks_exact(4)
+            .filter(|p| p[0] > 200 && p[1] < 60 && p[2] < 60 && p[3] > 200)
+            .count()
     }
 
     #[test]
@@ -104,12 +163,14 @@ mod tests {
     }
 
     #[test]
-    fn circle_marker_returns_typed_not_implemented() {
-        let style = Style {
-            marker: Some(MarkerSymbol::Circle { size: 6.0 }),
-            ..Default::default()
-        };
-        let err = dispatch(&mut pm(), (8.0, 8.0), 0.0, &style).expect_err("must error");
-        assert!(matches!(err, RenderError::NotImplemented { what } if what == "MarkerSymbol::Circle"));
+    fn circle_marker_paints_red_pixels() {
+        let png = render_marker(MarkerSymbol::Circle { size: 12.0 });
+        // 12px diameter circle = pi * 6^2 ≈ 113 covered pixels; allow slack
+        // for antialiased edge softening and tiny-skia coverage rounding.
+        let n = red_pixel_count(&png);
+        assert!(
+            n > 90 && n < 140,
+            "expected ~113 fully-red pixels for a 12px circle, got {n}"
+        );
     }
 }
