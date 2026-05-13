@@ -42,12 +42,8 @@ pub(crate) fn dispatch(
         MarkerSymbol::Circle { size } => render(pm, circle::build_path(*size), anchor, rotation_rad, style),
         MarkerSymbol::Square { size } => render(pm, square::build_path(*size), anchor, rotation_rad, style),
         MarkerSymbol::Triangle { size } => render(pm, triangle::build_path(*size), anchor, rotation_rad, style),
-        MarkerSymbol::Cross { .. } => Err(RenderError::NotImplemented {
-            what: "MarkerSymbol::Cross",
-        }),
-        MarkerSymbol::X { .. } => Err(RenderError::NotImplemented {
-            what: "MarkerSymbol::X",
-        }),
+        MarkerSymbol::Cross { size } => render(pm, cross::build_path(*size), anchor, rotation_rad, style),
+        MarkerSymbol::X { size } => render(pm, x::build_path(*size), anchor, rotation_rad, style),
         MarkerSymbol::Pin { .. } => Err(RenderError::NotImplemented {
             what: "MarkerSymbol::Pin",
         }),
@@ -191,6 +187,29 @@ mod tests {
         assert!(
             n > 40 && n < 85,
             "expected ~62 fully-red pixels for a 12px triangle, got {n}"
+        );
+    }
+
+    #[test]
+    fn cross_marker_paints_red_pixels() {
+        let png = render_marker(MarkerSymbol::Cross { size: 12.0 });
+        // + sign with arm length 12 and thickness 4 covers a 12x4 bar plus
+        // a 4x12 bar minus the shared 4x4 centre = 48 + 48 - 16 = 80.
+        let n = red_pixel_count(&png);
+        assert!(
+            n > 60 && n < 100,
+            "expected ~80 fully-red pixels for a 12px cross, got {n}"
+        );
+    }
+
+    #[test]
+    fn x_marker_paints_red_pixels() {
+        let png = render_marker(MarkerSymbol::X { size: 12.0 });
+        // same coverage as cross (it's the same polygon rotated 45°).
+        let n = red_pixel_count(&png);
+        assert!(
+            n > 60 && n < 100,
+            "expected ~80 fully-red pixels for a 12px x, got {n}"
         );
     }
 }
