@@ -132,7 +132,7 @@ crates/adapters/mars-render/src/
   ops/mod.rs                                    principle 2: exhaustive dispatch
   prepare.rs                                    principle 3: normalisation + 5: NotImpl flags
   fill/{solid, hatch}.rs                        principle 4: variant per file
-  stroke/{base, dash}.rs                        principle 4
+  stroke/{mod, dash}.rs                         principle 4 (base in mod.rs, dash helper sibling)
   label/{halo, compose}.rs                      principle 4
   encode/{png, jpeg}.rs                         principle 4
 ```
@@ -152,17 +152,24 @@ Areas of likely growth, ranked by ROI for OGC parity. For each, the principle
 that applies most directly.
 
 - **WMS / WMTS operations** (`crates/interfaces/mars-wms`, `mars-wmts`).
-  Already partly shaped (`capabilities.rs`, `feature_info.rs`, `parse.rs`,
-  `exception.rs`). Apply principle 4 harder: each new operation
-  (`GetLegendGraphic`, `DescribeLayer`, dimensions, vendor params) is one
-  module; `parse.rs` returns a typed `Request` enum dispatched in `lib.rs`.
-  Add a request-side `prepare`-style normalisation when defaults and vendor
-  params start to multiply.
+  Per-operation parse split is done: `parse/{mod,get_map,get_feature_info,
+  get_legend,get_tile,common}.rs`, with `parse_request` dispatching on
+  `request=` inside `parse/mod.rs`. Response formatting still lives at the
+  crate root (`capabilities.rs`, `feature_info.rs`, `exception.rs`). Next
+  operations land one module per request - `DescribeLayer`, WMS dimensions,
+  vendor params - extending the same `WmsRequest` / `WmtsRequest` enums and
+  the `parse_request` match. Add a request-side `prepare`-style
+  normalisation (parsed `Request` -> `ResolvedRequest`) once defaults and
+  vendor params start to multiply; today the per-operation parsers fold
+  defaults inline, which is fine while there are only a handful.
 
 - **Style and filter dialects** (`bin/mars-import-mapfile/`). The shape is
-  scanner -> parser -> translate -> emit. The seam (principle 1) is the
-  canonical `mars-style` vocabulary; never bypass it. SLD/SE, QGIS, CSS-style
-  - each is a parallel bin crate that ends at `mars-style`.
+  scanner -> parser -> translate -> emit, with per-block parse/emit modules
+  under `translate/` and a `translate/resolved.rs` collapsing Option-heavy
+  parsed forms into validated `Resolved*` (mirroring `mars-render`'s
+  `prepare.rs`). The seam (principle 1) is the canonical `mars-style`
+  vocabulary; never bypass it. SLD/SE, QGIS, CSS-style - each is a parallel
+  bin crate that ends at `mars-style`.
 
 - **Source backends** (`crates/ports/mars-source`, `adapters/mars-source-*`).
   Today's port is shaped for postgres. Before the second backend lands,
