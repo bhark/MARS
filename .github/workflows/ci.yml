@@ -55,6 +55,18 @@ jobs:
         with:
           shared-key: workspace
       - run: cargo check --locked --features integration -p mars-source-postgres --tests
+      - run: cargo check --locked --features integration -p mars --tests
+
+  parity-check:
+    name: cargo check (parity gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: parity
+      - run: cargo check --locked --manifest-path tests/parity/Cargo.toml --tests
 
   deps:
     name: dependency rule + cargo-deny
