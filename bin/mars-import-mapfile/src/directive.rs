@@ -116,6 +116,7 @@ pub(crate) enum SymbolDirective<'a> {
     AnchorPoint(&'a Token),
     Font(&'a Token),
     Character(&'a Token),
+    Image(&'a Token),
     Unknown,
 }
 
@@ -131,6 +132,7 @@ impl<'a> SymbolDirective<'a> {
             "ANCHORPOINT" => Self::AnchorPoint(t),
             "FONT" => Self::Font(t),
             "CHARACTER" => Self::Character(t),
+            "IMAGE" => Self::Image(t),
             _ => Self::Unknown,
         }
     }

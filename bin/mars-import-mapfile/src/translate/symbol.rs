@@ -17,6 +17,12 @@ pub(crate) struct ParsedSymbol {
     pub anchor: Option<(f32, f32)>,
     pub font: Option<String>,
     pub character: Option<String>,
+    /// Raw IMAGE directive payload (PIXMAP source path). Captured for
+    /// diagnostics; the importer does not copy or transform the file. The
+    /// operator is expected to place the bitmap under
+    /// `compiler.images_dir/<symbol-name>.<ext>` so the compiler bundles
+    /// it into the manifest's image_artifact.
+    pub image: Option<String>,
 }
 
 pub(crate) fn parse_symbol(body: &[Token]) -> ParsedSymbol {
@@ -66,6 +72,7 @@ pub(crate) fn parse_symbol(body: &[Token]) -> ParsedSymbol {
             }
             SymbolDirective::Font(t) => p.font = parsing::first_unquoted(t),
             SymbolDirective::Character(t) => p.character = parsing::first_unquoted(t),
+            SymbolDirective::Image(t) => p.image = parsing::first_unquoted(t),
             // re-occurrence of NAME / TYPE after the first is ignored; same
             // for any keyword we don't understand inside a SYMBOL block.
             SymbolDirective::Name(_) | SymbolDirective::Type(_) | SymbolDirective::Unknown => {}

@@ -80,10 +80,17 @@ pub(crate) enum SymbolDef {
     /// SYMBOL TYPE TRUETYPE plus FONT + CHARACTER. Maps to
     /// `mars_style::MarkerSymbol::Glyph` at emit time.
     Glyph { font_family: String, character: String },
+    /// SYMBOL TYPE PIXMAP. Resolves at use-site to
+    /// `EmitFill::Image { name }` so styles route through the renderer's
+    /// image registry. The IMAGE source path (when present in the mapfile)
+    /// is captured for diagnostics but not used by the importer; the
+    /// operator is responsible for placing the bitmap under
+    /// `compiler.images_dir/<name>.<ext>` so the compiler bundles it.
+    Pixmap { source_image: Option<String> },
     /// SYMBOL TYPE we recognise as a real mapfile directive but have not yet
-    /// implemented (PIXMAP, CARTOLINE, future TYPE additions). Held as a
-    /// typed signal so the use-site warn carries the actual TYPE string;
-    /// follows principle 5 of `docs/EXTENDING.md`.
+    /// implemented (CARTOLINE, future TYPE additions). Held as a typed
+    /// signal so the use-site warn carries the actual TYPE string; follows
+    /// principle 5 of `docs/EXTENDING.md`.
     NotImplemented { raw_type: String },
 }
 
@@ -112,7 +119,7 @@ pub(crate) struct StyleDef {
     pub(crate) min_distance: Option<f32>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum EmitFill {
     /// Bare hex string: emits as `fill: "#rrggbb"`.
     Hex(Colour),
@@ -123,6 +130,10 @@ pub(crate) enum EmitFill {
         line_width: f32,
         colour: Colour,
     },
+    /// Tagged image-pattern map. `name` references an entry in the
+    /// compiler's images_dir; mapfile importer derives it from the SYMBOL
+    /// name. Emits as `fill: { kind: image, name: "<n>" }`.
+    Image { name: String },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -482,8 +493,8 @@ pub(crate) fn render(skel: &Skeleton, bands: &[(String, u64)]) -> String {
                 if let Some(v) = st.font_size {
                     let _ = writeln!(out, "    font_size: {v}");
                 }
-                if let Some(EmitFill::Hex(c)) = st.fill {
-                    let _ = writeln!(out, "    fill: {}", quote_colour(c));
+                if let Some(EmitFill::Hex(c)) = &st.fill {
+                    let _ = writeln!(out, "    fill: {}", quote_colour(*c));
                 }
                 if let Some(c) = st.halo_color {
                     let w = st.halo_width.unwrap_or(1.0);
@@ -496,9 +507,9 @@ pub(crate) fn render(skel: &Skeleton, bands: &[(String, u64)]) -> String {
                     let _ = writeln!(out, "    min_distance: {d}");
                 }
             } else {
-                match st.fill {
+                match &st.fill {
                     Some(EmitFill::Hex(c)) => {
-                        let _ = writeln!(out, "    fill: {}", quote_colour(c));
+                        let _ = writeln!(out, "    fill: {}", quote_colour(*c));
                     }
                     Some(EmitFill::Hatch {
                         spacing,
@@ -509,8 +520,11 @@ pub(crate) fn render(skel: &Skeleton, bands: &[(String, u64)]) -> String {
                         let _ = writeln!(
                             out,
                             "    fill: {{ kind: hatch, spacing: {spacing}, angle_deg: {angle_deg}, line_width: {line_width}, colour: {} }}",
-                            quote_colour(colour)
+                            quote_colour(*colour)
                         );
+                    }
+                    Some(EmitFill::Image { name }) => {
+                        let _ = writeln!(out, "    fill: {{ kind: image, name: {} }}", yaml_quote(name));
                     }
                     None => {}
                 }

@@ -477,7 +477,7 @@ END
             .iter()
             .find(|s| s.name.starts_with("poly_wetlands_"))
             .expect("polygon style emitted");
-        match style.fill {
+        match &style.fill {
             Some(crate::emitter::EmitFill::Hatch {
                 spacing,
                 angle_deg,
@@ -487,7 +487,7 @@ END
                 assert!((spacing - 4.0).abs() < f32::EPSILON);
                 assert!((angle_deg - 45.0).abs() < f32::EPSILON);
                 assert!((line_width - 0.5).abs() < f32::EPSILON);
-                assert_eq!(colour, mars_style::Colour::rgb(100, 110, 120));
+                assert_eq!(*colour, mars_style::Colour::rgb(100, 110, 120));
             }
             other => panic!("expected hatch fill, got {other:?}"),
         }
@@ -604,13 +604,54 @@ END
     }
 
     #[test]
-    fn symbol_unknown_type_lands_as_typed_not_implemented() {
+    fn symbol_pixmap_type_translates_to_image_fill() {
         let src = r#"
 MAP
   NAME "demo"
   SYMBOL
-    NAME "raster_marker"
+    NAME "brick"
     TYPE PIXMAP
+    IMAGE "/abs/path/brick.png"
+  END
+  LAYER
+    NAME "walls"
+    TYPE POLYGON
+    DATA "geom FROM w"
+    CLASS
+      NAME "default"
+      STYLE
+        SYMBOL "brick"
+      END
+    END
+  END
+END
+"#;
+        let skel = translate(src);
+        match skel.symbols.get("brick") {
+            Some(crate::emitter::SymbolDef::Pixmap { source_image }) => {
+                assert_eq!(source_image.as_deref(), Some("/abs/path/brick.png"));
+            }
+            other => panic!("expected SymbolDef::Pixmap, got {other:?}"),
+        }
+        let style = skel
+            .styles
+            .iter()
+            .find(|s| s.name.starts_with("poly_walls_"))
+            .expect("polygon style emitted");
+        match &style.fill {
+            Some(crate::emitter::EmitFill::Image { name }) => assert_eq!(name, "brick"),
+            other => panic!("expected EmitFill::Image, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn symbol_truly_unknown_type_lands_as_typed_not_implemented() {
+        let src = r#"
+MAP
+  NAME "demo"
+  SYMBOL
+    NAME "weird"
+    TYPE CARTOLINE
   END
   LAYER
     NAME "stations"
@@ -619,7 +660,7 @@ MAP
     CLASS
       NAME "default"
       STYLE
-        SYMBOL "raster_marker"
+        SYMBOL "weird"
         SIZE 8
       END
     END
@@ -627,22 +668,12 @@ MAP
 END
 "#;
         let skel = translate(src);
-        // typed signal is preserved in skel.symbols rather than the symbol
-        // being silently dropped.
-        match skel.symbols.get("raster_marker") {
+        match skel.symbols.get("weird") {
             Some(crate::emitter::SymbolDef::NotImplemented { raw_type }) => {
-                assert_eq!(raw_type, "PIXMAP");
+                assert_eq!(raw_type, "CARTOLINE");
             }
             other => panic!("expected NotImplemented variant, got {other:?}"),
         }
-        // STYLE.SYMBOL reference resolves and warns once at use site; the
-        // resulting style has no marker (the directive was dropped).
-        let style = skel
-            .styles
-            .iter()
-            .find(|s| s.name.starts_with("point_stations_"))
-            .expect("point style emitted");
-        assert!(style.marker.is_none());
     }
 
     #[test]

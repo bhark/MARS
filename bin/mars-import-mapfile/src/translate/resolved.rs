@@ -324,6 +324,7 @@ pub(crate) fn resolve_symbol(p: ParsedSymbol) -> Option<ResolvedSymbol> {
             font_family: p.font.unwrap_or_else(|| "sans-serif".into()),
             character: p.character?,
         },
+        "PIXMAP" => SymbolDef::Pixmap { source_image: p.image },
         other => SymbolDef::NotImplemented {
             raw_type: other.to_string(),
         },

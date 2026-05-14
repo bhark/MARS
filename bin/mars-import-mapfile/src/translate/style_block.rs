@@ -207,11 +207,27 @@ pub(crate) fn collapse_styles(
                         size: s.size.unwrap_or(12.0),
                     });
                 }
+                Some(SymbolDef::Pixmap { source_image }) => {
+                    // PIXMAP styles tile the named bitmap. The compiler
+                    // resolves `name` against `compiler.images_dir` and packs
+                    // the bytes into the manifest's image_artifact; the
+                    // runtime renderer then resolves the same name through
+                    // its `ImageRegistry`. The source_image path on the
+                    // mapfile is preserved as a one-time hint so the
+                    // operator knows which file to copy.
+                    resolved_hatch = Some(EmitFill::Image { name: sym_name.clone() });
+                    if let Some(p) = source_image {
+                        tracing::info!(
+                            symbol = sym_name,
+                            source_image = %p,
+                            "PIXMAP symbol translated to FillPaint::Image; copy the source bitmap into compiler.images_dir as <name>.<ext>"
+                        );
+                    }
+                }
                 Some(SymbolDef::NotImplemented { raw_type }) => {
                     // map known mapfile TYPE keywords to specific bag entries
                     // so the operator sees which kind of symbol was dropped.
                     let name: &'static str = match raw_type.as_str() {
-                        "PIXMAP" => "STYLE.SYMBOL PIXMAP",
                         "SVG" => "STYLE.SYMBOL SVG",
                         "OGR" => "STYLE.SYMBOL OGR",
                         _ => "STYLE.SYMBOL (unimplemented type)",
@@ -287,6 +303,9 @@ pub(crate) fn canonical_signature(
                 colour,
             } => {
                 let _ = write!(s, ",hatch=s{spacing},a{angle_deg},w{line_width},c{colour}");
+            }
+            EmitFill::Image { name } => {
+                let _ = write!(s, ",image={name}");
             }
         }
     }
@@ -479,20 +498,24 @@ mod tests {
     }
 
     #[test]
-    fn collapse_styles_flags_not_implemented_symbol_type_pixmap() {
+    fn collapse_styles_resolves_pixmap_symbol_to_image_fill() {
         let mut symbols = HashMap::new();
         symbols.insert(
-            "pix".into(),
-            SymbolDef::NotImplemented {
-                raw_type: "PIXMAP".into(),
+            "brick".into(),
+            SymbolDef::Pixmap {
+                source_image: Some("/abs/path/to/brick.png".into()),
             },
         );
         let styles = vec![StyleBlock {
-            symbol: Some("pix".into()),
+            symbol: Some("brick".into()),
             ..Default::default()
         }];
         let c = collapse_styles(&styles, 1, &symbols);
-        assert_eq!(c.unimplemented, vec!["STYLE.SYMBOL PIXMAP"]);
+        assert!(c.unimplemented.is_empty(), "PIXMAP no longer surfaces as unimplemented");
+        match c.fill {
+            Some(EmitFill::Image { name }) => assert_eq!(name, "brick"),
+            other => panic!("expected EmitFill::Image, got {other:?}"),
+        }
     }
 
     #[test]
