@@ -1,4 +1,4 @@
-//! CPU rasteriser. tiny-skia rasterisation, PNG and JPEG encoding.
+//! CPU rasteriser. tiny-skia rasterisation, PNG, JPEG and WebP encoding.
 
 #![forbid(unsafe_code)]
 
@@ -134,11 +134,12 @@ impl PngCompression {
     }
 }
 
-/// PNG and JPEG encoder. Lives next to the rasteriser so the in-process
+/// PNG, JPEG and WebP encoder. Lives next to the rasteriser so the in-process
 /// pipeline does not pay an extra copy crossing crate boundaries.
 ///
 /// JPEG quality and PNG deflate level are captured at construction so they
-/// don't have to leak into the [`Encoder::encode`] trait signature.
+/// don't have to leak into the [`Encoder::encode`] trait signature. WebP is
+/// lossless and carries no tuning knob.
 #[derive(Debug, Clone, Copy)]
 pub struct TinySkiaEncoder {
     jpeg_quality: u8,
@@ -170,6 +171,7 @@ impl Encoder for TinySkiaEncoder {
         match format {
             ImageFormat::Png => encode::encode_png(pixmap, self.png_compression),
             ImageFormat::Jpeg => encode::encode_jpeg(pixmap, self.jpeg_quality),
+            ImageFormat::Webp => encode::encode_webp(pixmap),
         }
     }
 }

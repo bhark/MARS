@@ -485,6 +485,7 @@ pub enum ArtifactKeyError {
 pub enum ImageFormat {
     Png,
     Jpeg,
+    Webp,
 }
 
 impl ImageFormat {
@@ -494,6 +495,7 @@ impl ImageFormat {
         match self {
             Self::Png => "image/png",
             Self::Jpeg => "image/jpeg",
+            Self::Webp => "image/webp",
         }
     }
 }
@@ -746,6 +748,7 @@ mod tests {
     fn image_format_mime() {
         assert_eq!(ImageFormat::Png.mime(), "image/png");
         assert_eq!(ImageFormat::Jpeg.mime(), "image/jpeg");
+        assert_eq!(ImageFormat::Webp.mime(), "image/webp");
     }
 
     #[test]

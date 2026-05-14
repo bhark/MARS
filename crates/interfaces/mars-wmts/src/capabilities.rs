@@ -194,6 +194,7 @@ fn rest_ext_for(fmt: ImageFormat) -> &'static str {
     match fmt {
         ImageFormat::Png => "png",
         ImageFormat::Jpeg => "jpg",
+        ImageFormat::Webp => "webp",
     }
 }
 
