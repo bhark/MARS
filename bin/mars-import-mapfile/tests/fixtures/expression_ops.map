@@ -1,0 +1,70 @@
+# EXPRESSION operator coverage beyond the v1 subset:
+# numeric comparisons (<, <=, >, >=), `!=`, MapServer keyword aliases
+# (eq/ne/lt/le/gt/ge), C-style logic (&&, ||, !), LIKE 'pat',
+# and IS [NOT] NULL.
+MAP
+  NAME "expression_ops"
+  TITLE "Expression Operator Coverage"
+
+  LAYER
+    NAME "roads"
+    TYPE LINE
+    STATUS ON
+    DATA "geom FROM roads"
+    PROCESSING "ITEMS=ogc_fid,rank,name,active"
+
+    CLASS
+      NAME "lt"
+      EXPRESSION ([rank] < 5)
+      STYLE
+        COLOR 200 0 0
+        WIDTH 2.0
+      END
+    END
+
+    CLASS
+      NAME "ge_keyword"
+      EXPRESSION ([rank] ge 8)
+      STYLE
+        COLOR 200 100 0
+        WIDTH 2.0
+      END
+    END
+
+    CLASS
+      NAME "like"
+      EXPRESSION ([name] LIKE 'A%')
+      STYLE
+        COLOR 0 200 0
+        WIDTH 1.0
+      END
+    END
+
+    CLASS
+      NAME "csym_logic"
+      EXPRESSION ([active] = TRUE && [rank] != 0)
+      STYLE
+        COLOR 0 0 200
+        WIDTH 1.0
+      END
+    END
+
+    CLASS
+      NAME "negated_in"
+      EXPRESSION (!([rank] IN (1, 2, 3)))
+      STYLE
+        COLOR 50 50 50
+        WIDTH 0.5
+      END
+    END
+
+    CLASS
+      NAME "nameless"
+      EXPRESSION ([name] IS NULL)
+      STYLE
+        COLOR 100 100 100
+        WIDTH 0.5
+      END
+    END
+  END
+END

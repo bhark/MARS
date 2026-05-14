@@ -67,6 +67,11 @@ fn label_line_fixture_matches() {
 }
 
 #[test]
+fn expression_ops_fixture_matches() {
+    assert_fixture_matches("expression_ops");
+}
+
+#[test]
 fn strict_exits_two_on_unsupported() {
     let out = Command::new(bin_path())
         .arg("--strict")

@@ -1,9 +1,16 @@
 //! mapfile-flavoured EXPRESSION parser, lowering to `mars_expr::Expr`.
 #![allow(dead_code)]
 //!
-//! supported v1 subset: =, <>, IN, NOT IN, AND, OR, attribute [name] quoting.
-//! anything outside this set → `ExpressionError::Unsupported` so the caller
-//! can emit a # TODO: hand-translate comment + warning.
+//! supported subset:
+//! - logic: AND/OR/NOT (also && / || / !)
+//! - cmp: `=`, `!=`, `<>`, `<`, `<=`, `>`, `>=` and the MapServer keyword
+//!   aliases eq / ne / lt / le / gt / ge
+//! - postfix predicates: IN (..), NOT IN (..), LIKE 'pat', IS [NOT] NULL
+//! - operands: bracketed attribute refs `[name]`, numeric, string, TRUE/FALSE
+//!
+//! anything outside this set returns `ExpressionError` so the caller can emit
+//! a # TODO: hand-translate comment + warning. notable still-unsupported:
+//! regex (`=~`, `~`, `~*`), arithmetic, function calls.
 
 use mars_expr::{CmpOp, Expr, Literal, LogicOp};
 
@@ -20,7 +27,9 @@ pub(crate) fn parse_mapfile_expression(input: &str, line: usize) -> Result<Expr,
     let mut lexer = Lexer::new(input, line);
     let tokens = lexer.run()?;
     let mut parser = Parser::new(&tokens, line);
-    parser.parse_expr()
+    let expr = parser.parse_expr()?;
+    parser.expect_eof()?;
+    Ok(expr)
 }
 
 // ------------------------------------------------------------------ lexer
@@ -32,6 +41,10 @@ enum Token {
     Number(String),
     Eq,
     Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
     LParen,
     RParen,
     Comma,
@@ -39,6 +52,11 @@ enum Token {
     Or,
     Not,
     In,
+    Like,
+    Is,
+    Null,
+    True,
+    False,
     Eof,
 }
 
@@ -87,22 +105,59 @@ impl<'a> Lexer<'a> {
                 }
                 '<' => {
                     self.chars.next();
-                    if self.chars.peek() == Some(&'>') {
-                        self.chars.next();
-                        out.push(Token::Ne);
-                    } else {
-                        return Err(ExpressionError::Unsupported {
-                            op: "<".to_string(),
-                            line: self.line,
-                        });
+                    match self.chars.peek() {
+                        Some(&'>') => {
+                            self.chars.next();
+                            out.push(Token::Ne);
+                        }
+                        Some(&'=') => {
+                            self.chars.next();
+                            out.push(Token::Le);
+                        }
+                        _ => out.push(Token::Lt),
                     }
                 }
                 '>' => {
                     self.chars.next();
-                    return Err(ExpressionError::Unsupported {
-                        op: ">".to_string(),
-                        line: self.line,
-                    });
+                    if self.chars.peek() == Some(&'=') {
+                        self.chars.next();
+                        out.push(Token::Ge);
+                    } else {
+                        out.push(Token::Gt);
+                    }
+                }
+                '!' => {
+                    self.chars.next();
+                    if self.chars.peek() == Some(&'=') {
+                        self.chars.next();
+                        out.push(Token::Ne);
+                    } else {
+                        out.push(Token::Not);
+                    }
+                }
+                '&' => {
+                    self.chars.next();
+                    if self.chars.peek() == Some(&'&') {
+                        self.chars.next();
+                        out.push(Token::And);
+                    } else {
+                        return Err(ExpressionError::Unsupported {
+                            op: "&".to_string(),
+                            line: self.line,
+                        });
+                    }
+                }
+                '|' => {
+                    self.chars.next();
+                    if self.chars.peek() == Some(&'|') {
+                        self.chars.next();
+                        out.push(Token::Or);
+                    } else {
+                        return Err(ExpressionError::Unsupported {
+                            op: "|".to_string(),
+                            line: self.line,
+                        });
+                    }
                 }
                 '0'..='9' | '-' | '+' => out.push(self.read_number()?),
                 _ if ch.is_alphabetic() => out.push(self.read_word()?),
@@ -206,6 +261,18 @@ impl<'a> Lexer<'a> {
             "OR" => Token::Or,
             "NOT" => Token::Not,
             "IN" => Token::In,
+            "LIKE" => Token::Like,
+            "IS" => Token::Is,
+            "NULL" => Token::Null,
+            "TRUE" => Token::True,
+            "FALSE" => Token::False,
+            // mapserver keyword cmp aliases (case-insensitive)
+            "EQ" => Token::Eq,
+            "NE" => Token::Ne,
+            "LT" => Token::Lt,
+            "LE" => Token::Le,
+            "GT" => Token::Gt,
+            "GE" => Token::Ge,
             _ => {
                 return Err(ExpressionError::Unsupported { op: s, line: self.line });
             }
@@ -274,68 +341,73 @@ impl<'a> Parser<'a> {
             let inner = self.parse_not()?;
             Ok(Expr::Not(Box::new(inner)))
         } else {
-            self.parse_in()
+            self.parse_predicate()
         }
     }
 
-    fn parse_in(&mut self) -> Result<Expr, ExpressionError> {
-        let lhs = self.parse_primary()?;
-        let not = self.eat(&Token::Not);
-        if self.eat(&Token::In) {
-            self.expect(&Token::LParen)?;
-            let mut list = Vec::new();
-            if !self.at(&Token::RParen) {
-                loop {
-                    list.push(self.parse_literal()?);
-                    if !self.eat(&Token::Comma) {
-                        break;
-                    }
-                }
-            }
-            self.expect(&Token::RParen)?;
-            let inner = Expr::In {
-                lhs: Box::new(lhs),
-                list,
-            };
-            if not { Ok(Expr::Not(Box::new(inner))) } else { Ok(inner) }
-        } else if not {
-            Err(ExpressionError::Parse {
-                msg: "NOT without IN".to_string(),
-                line: self.line,
-            })
-        } else {
-            Ok(lhs)
-        }
-    }
-
-    fn parse_primary(&mut self) -> Result<Expr, ExpressionError> {
+    /// one operand plus an optional postfix predicate or comparison.
+    /// no chaining: `a = b = c` is a parse error.
+    fn parse_predicate(&mut self) -> Result<Expr, ExpressionError> {
         if self.eat(&Token::LParen) {
             let e = self.parse_expr()?;
             self.expect(&Token::RParen)?;
-            Ok(e)
-        } else {
-            self.parse_comparison()
+            return Ok(e);
         }
-    }
 
-    fn parse_comparison(&mut self) -> Result<Expr, ExpressionError> {
         let lhs = self.parse_operand()?;
-        if self.eat(&Token::Eq) {
-            let rhs = self.parse_operand()?;
-            Ok(Expr::Cmp {
-                op: CmpOp::Eq,
-                lhs: Box::new(lhs),
-                rhs: Box::new(rhs),
-            })
-        } else if self.eat(&Token::Ne) {
-            let rhs = self.parse_operand()?;
-            Ok(Expr::Cmp {
-                op: CmpOp::Ne,
-                lhs: Box::new(lhs),
-                rhs: Box::new(rhs),
-            })
-        } else {
-            Ok(lhs)
+
+        match self.current().cloned() {
+            Some(Token::Is) => {
+                self.pos += 1;
+                let negate = self.eat(&Token::Not);
+                self.expect(&Token::Null)?;
+                let inner = Box::new(lhs);
+                Ok(if negate {
+                    Expr::IsNotNull(inner)
+                } else {
+                    Expr::IsNull(inner)
+                })
+            }
+            Some(Token::Not) => {
+                // only valid as `NOT IN (...)` here; bare NOT is a prefix and
+                // handled by parse_not before we arrive.
+                self.pos += 1;
+                self.expect(&Token::In)?;
+                let list = self.parse_in_list()?;
+                Ok(Expr::Not(Box::new(Expr::In {
+                    lhs: Box::new(lhs),
+                    list,
+                })))
+            }
+            Some(Token::In) => {
+                self.pos += 1;
+                let list = self.parse_in_list()?;
+                Ok(Expr::In {
+                    lhs: Box::new(lhs),
+                    list,
+                })
+            }
+            Some(Token::Like) => {
+                self.pos += 1;
+                let pattern = self.parse_string_literal()?;
+                Ok(Expr::Like {
+                    lhs: Box::new(lhs),
+                    pattern,
+                })
+            }
+            Some(tok) => match cmp_op_for(&tok) {
+                Some(op) => {
+                    self.pos += 1;
+                    let rhs = self.parse_operand()?;
+                    Ok(Expr::Cmp {
+                        op,
+                        lhs: Box::new(lhs),
+                        rhs: Box::new(rhs),
+                    })
+                }
+                None => Ok(lhs),
+            },
+            None => Ok(lhs),
         }
     }
 
@@ -353,6 +425,14 @@ impl<'a> Parser<'a> {
                 self.pos += 1;
                 Ok(Expr::Literal(number_or_string(&s)))
             }
+            Some(Token::True) => {
+                self.pos += 1;
+                Ok(Expr::Literal(Literal::Bool(true)))
+            }
+            Some(Token::False) => {
+                self.pos += 1;
+                Ok(Expr::Literal(Literal::Bool(false)))
+            }
             Some(ref t) => Err(ExpressionError::Parse {
                 msg: format!("unexpected token {t:?}"),
                 line: self.line,
@@ -362,6 +442,21 @@ impl<'a> Parser<'a> {
                 line: self.line,
             }),
         }
+    }
+
+    fn parse_in_list(&mut self) -> Result<Vec<Literal>, ExpressionError> {
+        self.expect(&Token::LParen)?;
+        let mut list = Vec::new();
+        if !self.at(&Token::RParen) {
+            loop {
+                list.push(self.parse_literal()?);
+                if !self.eat(&Token::Comma) {
+                    break;
+                }
+            }
+        }
+        self.expect(&Token::RParen)?;
+        Ok(list)
     }
 
     fn parse_literal(&mut self) -> Result<Literal, ExpressionError> {
@@ -374,8 +469,33 @@ impl<'a> Parser<'a> {
                 self.pos += 1;
                 Ok(number_or_string(&s))
             }
+            Some(Token::True) => {
+                self.pos += 1;
+                Ok(Literal::Bool(true))
+            }
+            Some(Token::False) => {
+                self.pos += 1;
+                Ok(Literal::Bool(false))
+            }
             Some(ref t) => Err(ExpressionError::Parse {
                 msg: format!("expected literal, got {t:?}"),
+                line: self.line,
+            }),
+            None => Err(ExpressionError::Parse {
+                msg: "unexpected end of expression".to_string(),
+                line: self.line,
+            }),
+        }
+    }
+
+    fn parse_string_literal(&mut self) -> Result<String, ExpressionError> {
+        match self.current().cloned() {
+            Some(Token::String(s)) => {
+                self.pos += 1;
+                Ok(s)
+            }
+            Some(ref t) => Err(ExpressionError::Parse {
+                msg: format!("expected string literal, got {t:?}"),
                 line: self.line,
             }),
             None => Err(ExpressionError::Parse {
@@ -412,6 +532,28 @@ impl<'a> Parser<'a> {
             })
         }
     }
+
+    fn expect_eof(&self) -> Result<(), ExpressionError> {
+        match self.current() {
+            Some(Token::Eof) | None => Ok(()),
+            Some(t) => Err(ExpressionError::Parse {
+                msg: format!("trailing tokens after expression, starting at {t:?}"),
+                line: self.line,
+            }),
+        }
+    }
+}
+
+fn cmp_op_for(tok: &Token) -> Option<CmpOp> {
+    Some(match tok {
+        Token::Eq => CmpOp::Eq,
+        Token::Ne => CmpOp::Ne,
+        Token::Lt => CmpOp::Lt,
+        Token::Le => CmpOp::Le,
+        Token::Gt => CmpOp::Gt,
+        Token::Ge => CmpOp::Ge,
+        _ => return None,
+    })
 }
 
 #[cfg(test)]
@@ -499,18 +641,6 @@ mod tests {
             ExpressionError::Unsupported {
                 op: "func".to_string(),
                 line: 2,
-            }
-        );
-    }
-
-    #[test]
-    fn unsupported_lt_gt() {
-        let err = parse_mapfile_expression("[a] < 5", 1).unwrap_err();
-        assert_eq!(
-            err,
-            ExpressionError::Unsupported {
-                op: "<".to_string(),
-                line: 1,
             }
         );
     }
@@ -623,5 +753,148 @@ mod tests {
             e,
             Expr::In { list, .. } if list.is_empty()
         ));
+    }
+
+    // ----------------------------------------- new ops widening parity
+
+    fn cmp(op: CmpOp, lhs: &str, rhs: Expr) -> Expr {
+        Expr::Cmp {
+            op,
+            lhs: Box::new(Expr::Ident(lhs.into())),
+            rhs: Box::new(rhs),
+        }
+    }
+
+    #[test]
+    fn numeric_cmp_ops() {
+        let lit = |n: i64| Expr::Literal(Literal::Int(n));
+        for (src, op) in [
+            ("[a] < 5", CmpOp::Lt),
+            ("[a] <= 5", CmpOp::Le),
+            ("[a] > 5", CmpOp::Gt),
+            ("[a] >= 5", CmpOp::Ge),
+        ] {
+            let e = parse_mapfile_expression(src, 1).unwrap();
+            assert_eq!(e, cmp(op, "a", lit(5)), "for input {src}");
+        }
+    }
+
+    #[test]
+    fn bang_eq_is_ne() {
+        let e = parse_mapfile_expression("[a] != 5", 1).unwrap();
+        assert_eq!(e, cmp(CmpOp::Ne, "a", Expr::Literal(Literal::Int(5))));
+    }
+
+    #[test]
+    fn keyword_cmp_aliases() {
+        let int = |n: i64| Expr::Literal(Literal::Int(n));
+        let s = |v: &str| Expr::Literal(Literal::String(v.into()));
+        let cases = [
+            ("[a] eq 'x'", CmpOp::Eq, s("x")),
+            ("[a] ne 'x'", CmpOp::Ne, s("x")),
+            ("[a] lt 5", CmpOp::Lt, int(5)),
+            ("[a] le 5", CmpOp::Le, int(5)),
+            ("[a] gt 5", CmpOp::Gt, int(5)),
+            ("[a] ge 5", CmpOp::Ge, int(5)),
+        ];
+        for (src, op, rhs) in cases {
+            let e = parse_mapfile_expression(src, 1).unwrap();
+            assert_eq!(e, cmp(op, "a", rhs.clone()), "for input {src}");
+        }
+    }
+
+    #[test]
+    fn c_style_logic_symbols() {
+        let int = |n: i64| Expr::Literal(Literal::Int(n));
+        let and = parse_mapfile_expression("[a] = 1 && [b] = 2", 1).unwrap();
+        assert_eq!(
+            and,
+            Expr::Logic {
+                op: LogicOp::And,
+                args: vec![cmp(CmpOp::Eq, "a", int(1)), cmp(CmpOp::Eq, "b", int(2))],
+            }
+        );
+        let or = parse_mapfile_expression("[a] = 1 || [b] = 2", 1).unwrap();
+        assert_eq!(
+            or,
+            Expr::Logic {
+                op: LogicOp::Or,
+                args: vec![cmp(CmpOp::Eq, "a", int(1)), cmp(CmpOp::Eq, "b", int(2))],
+            }
+        );
+        let bang = parse_mapfile_expression("!([a] = 1)", 1).unwrap();
+        assert_eq!(bang, Expr::Not(Box::new(cmp(CmpOp::Eq, "a", int(1)))));
+    }
+
+    #[test]
+    fn like_pattern() {
+        let e = parse_mapfile_expression("[a] LIKE 'foo%'", 1).unwrap();
+        assert_eq!(
+            e,
+            Expr::Like {
+                lhs: Box::new(Expr::Ident("a".into())),
+                pattern: "foo%".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn is_null_and_is_not_null() {
+        let e = parse_mapfile_expression("[a] IS NULL", 1).unwrap();
+        assert_eq!(e, Expr::IsNull(Box::new(Expr::Ident("a".into()))));
+        let e = parse_mapfile_expression("[a] IS NOT NULL", 1).unwrap();
+        assert_eq!(e, Expr::IsNotNull(Box::new(Expr::Ident("a".into()))));
+    }
+
+    #[test]
+    fn boolean_literals() {
+        let e = parse_mapfile_expression("[active] = TRUE", 1).unwrap();
+        assert_eq!(e, cmp(CmpOp::Eq, "active", Expr::Literal(Literal::Bool(true))));
+        let e = parse_mapfile_expression("[deleted] = false", 1).unwrap();
+        assert_eq!(e, cmp(CmpOp::Eq, "deleted", Expr::Literal(Literal::Bool(false))));
+    }
+
+    #[test]
+    fn naked_null_literal_rejected() {
+        // mars_expr rejects `a = NULL`; mirror that so we never emit DSL
+        // that fails to recompile downstream.
+        let err = parse_mapfile_expression("[a] = NULL", 1).unwrap_err();
+        assert!(matches!(err, ExpressionError::Parse { .. }), "got {err:?}");
+    }
+
+    #[test]
+    fn no_cmp_chaining() {
+        // `a = b = c` would form invalid DSL on round-trip; reject early.
+        let err = parse_mapfile_expression("[a] = 1 = 2", 1).unwrap_err();
+        assert!(matches!(err, ExpressionError::Parse { .. }), "got {err:?}");
+    }
+
+    #[test]
+    fn roundtrip_through_mars_expr_parse() {
+        // every importer-emitted expression must reparse cleanly through the
+        // mars_expr DSL parser, since that is what the YAML pipeline consumes.
+        let inputs = [
+            "[a] < 5",
+            "[a] >= 5",
+            "[a] != 5",
+            "[a] eq 'x'",
+            "[a] gt 5",
+            "[a] LIKE 'foo%'",
+            "[a] IS NULL",
+            "[a] IS NOT NULL",
+            "[a] = TRUE",
+            "[a] = 1 && [b] = 2",
+            "[a] = 1 || [b] = 2",
+            "!([a] = 1)",
+            "[a] IN (1, 2, 3)",
+            "[a] NOT IN ('x', 'y')",
+        ];
+        for src in inputs {
+            let e = parse_mapfile_expression(src, 1).unwrap_or_else(|err| panic!("parse `{src}`: {err}"));
+            let emitted = format!("{e}");
+            let reparsed = mars_expr::parse(&emitted)
+                .unwrap_or_else(|err| panic!("mars_expr can't reparse `{emitted}` (from `{src}`): {err}"));
+            assert_eq!(e, reparsed, "ast drift `{src}` -> `{emitted}`");
+        }
     }
 }
