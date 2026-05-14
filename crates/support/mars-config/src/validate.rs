@@ -383,6 +383,53 @@ mod tests {
     }
 
     #[test]
+    fn rejects_raster_unsupported_tile_size() {
+        let mut cfg = minimal_config();
+        let mut l = raster_layer("osm");
+        if let Some(spec) = l.raster.as_mut() {
+            spec.source.tile_size = 384;
+        }
+        cfg.layers = vec![l];
+        let err = validate(&mut cfg, Path::new(".")).unwrap_err();
+        assert!(matches!(err, ConfigError::Invalid(ref s) if s.contains("tile_size") && s.contains("384")));
+    }
+
+    #[test]
+    fn accepts_raster_tile_size_512() {
+        let mut cfg = minimal_config();
+        let mut l = raster_layer("osm");
+        if let Some(spec) = l.raster.as_mut() {
+            spec.source.tile_size = 512;
+        }
+        cfg.layers = vec![l];
+        validate(&mut cfg, Path::new(".")).expect("tile_size 512 should validate");
+    }
+
+    #[test]
+    fn rejects_raster_unsupported_source_crs() {
+        let mut cfg = minimal_config();
+        let mut l = raster_layer("osm");
+        if let Some(spec) = l.raster.as_mut() {
+            spec.source.source_crs = CrsCode::new("EPSG:4326");
+        }
+        cfg.layers = vec![l];
+        let err = validate(&mut cfg, Path::new(".")).unwrap_err();
+        assert!(matches!(err, ConfigError::Invalid(ref s) if s.contains("source_crs") && s.contains("EPSG:4326")));
+    }
+
+    #[test]
+    fn rejects_raster_max_level_above_cap() {
+        let mut cfg = minimal_config();
+        let mut l = raster_layer("osm");
+        if let Some(spec) = l.raster.as_mut() {
+            spec.source.max_level = 99;
+        }
+        cfg.layers = vec![l];
+        let err = validate(&mut cfg, Path::new(".")).unwrap_err();
+        assert!(matches!(err, ConfigError::Invalid(ref s) if s.contains("max_level") && s.contains("99")));
+    }
+
+    #[test]
     fn raster_layer_roundtrips_through_yaml() {
         use crate::model::Layer;
         let mut l = raster_layer("osm");

@@ -71,6 +71,22 @@ fn validate_kind_raster_coherence(layer: &Layer) -> Result<(), ConfigError> {
     }
 }
 
+/// CRS codes the render path accepts for raster sources today. Kept here so
+/// the validator can reject misconfigurations at parse time instead of letting
+/// them surface as `NotImplemented` on the first render request.
+const SUPPORTED_RASTER_CRS: &[&str] = &["EPSG:3857"];
+
+/// Tile-edge pixel counts the render path accepts. Web Mercator slippy-map
+/// pyramids are universally 256 or 512; anything else is almost certainly a
+/// configuration mistake worth catching before runtime.
+const SUPPORTED_RASTER_TILE_SIZES: &[u32] = &[256, 512];
+
+/// Upper bound on `max_level`. 2^24 tiles per side covers any practical
+/// pyramid with vast headroom while staying well below the u32 / u64 ranges
+/// the tile-math uses. Caught here so `mars validate` rejects nonsense like
+/// 99 before runtime hits an integer-overflow path.
+const RASTER_MAX_LEVEL_CAP: u32 = 24;
+
 fn validate_raster_spec(layer_name: &mars_types::LayerId, spec: &RasterLayerSpec) -> Result<(), ConfigError> {
     if !spec.opacity.is_finite() || !(0.0..=1.0).contains(&spec.opacity) {
         return Err(ConfigError::Invalid(format!(
@@ -88,14 +104,29 @@ fn validate_raster_spec(layer_name: &mars_types::LayerId, spec: &RasterLayerSpec
             "raster layer {layer_name} source.collection is empty"
         )));
     }
-    if spec.source.source_crs.as_str().is_empty() {
+    // locator placeholder shape (e.g. {z}/{x}/{y} for XYZ) is adapter-specific;
+    // we leave that check to the adapter so the validator stays adapter-agnostic.
+    let crs = spec.source.source_crs.as_str();
+    if crs.is_empty() {
         return Err(ConfigError::Invalid(format!(
             "raster layer {layer_name} source.source_crs is empty"
         )));
     }
-    if spec.source.tile_size == 0 {
+    if !SUPPORTED_RASTER_CRS.contains(&crs) {
         return Err(ConfigError::Invalid(format!(
-            "raster layer {layer_name} source.tile_size must be > 0"
+            "raster layer {layer_name} source.source_crs {crs:?} is not supported (expected one of {SUPPORTED_RASTER_CRS:?})"
+        )));
+    }
+    if !SUPPORTED_RASTER_TILE_SIZES.contains(&spec.source.tile_size) {
+        return Err(ConfigError::Invalid(format!(
+            "raster layer {layer_name} source.tile_size {} is not supported (expected one of {SUPPORTED_RASTER_TILE_SIZES:?})",
+            spec.source.tile_size
+        )));
+    }
+    if spec.source.max_level > RASTER_MAX_LEVEL_CAP {
+        return Err(ConfigError::Invalid(format!(
+            "raster layer {layer_name} source.max_level {} exceeds the cap of {RASTER_MAX_LEVEL_CAP}",
+            spec.source.max_level
         )));
     }
     Ok(())
