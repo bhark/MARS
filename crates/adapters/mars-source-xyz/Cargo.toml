@@ -24,4 +24,6 @@ tokio       = { workspace = true }
 tracing     = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt", "macros", "rt-multi-thread"] }
+tokio    = { workspace = true, features = ["rt", "macros", "rt-multi-thread"] }
+bytes    = { workspace = true }
+wiremock = { workspace = true }

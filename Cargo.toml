@@ -144,6 +144,7 @@ tower               = "0.5.3"
 tower-http          = { version = "0.6.10", features = ["trace", "timeout", "limit"] }
 tracing             = "0.1.44"
 tracing-subscriber  = { version = "0.3.23", features = ["env-filter", "json", "fmt"] }
+wiremock            = "0.6.5"
 zune-jpeg           = "0.5.15"
 rayon               = "1.12.0"
 
