@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
 
 use crate::ConfigError;
@@ -44,6 +46,51 @@ pub struct Render {
     /// cache pressure without affecting determinism. Must be `>= 1`.
     #[serde(default = "default_page_fetch_concurrency")]
     pub page_fetch_concurrency: usize,
+    /// HTTP client knobs for XYZ raster sources. One client is shared across
+    /// every XYZ-backed raster collection in the process.
+    #[serde(default)]
+    pub xyz_client: XyzClient,
+}
+
+/// HTTP client configuration for the XYZ raster source adapter. The adapter
+/// itself imposes no defaults; the bin's composition root reads these values
+/// and feeds them into the `reqwest::ClientBuilder`. Durations are humantime
+/// strings (`"30s"`, `"1min"`); the empty string falls back to the default.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XyzClient {
+    /// End-to-end request timeout (sent -> body received). Defaults to `30s`.
+    #[serde(default = "default_xyz_timeout")]
+    pub timeout: String,
+    /// TCP / TLS connect timeout. Defaults to `10s`.
+    #[serde(default = "default_xyz_connect_timeout")]
+    pub connect_timeout: String,
+    /// User-Agent header sent on every tile request. Public XYZ servers (OSM,
+    /// Stadia, ...) typically require an identifying UA and may 429 / 403 a
+    /// missing one. Defaults to `"mars-tile-fetcher/<crate-version>"`.
+    #[serde(default = "default_xyz_user_agent")]
+    pub user_agent: String,
+}
+
+impl Default for XyzClient {
+    fn default() -> Self {
+        Self {
+            timeout: default_xyz_timeout(),
+            connect_timeout: default_xyz_connect_timeout(),
+            user_agent: default_xyz_user_agent(),
+        }
+    }
+}
+
+impl XyzClient {
+    /// Resolve `timeout` to a `Duration`.
+    pub fn timeout(&self) -> Result<Duration, ConfigError> {
+        units::parse_duration(&self.timeout)
+    }
+
+    /// Resolve `connect_timeout` to a `Duration`.
+    pub fn connect_timeout(&self) -> Result<Duration, ConfigError> {
+        units::parse_duration(&self.connect_timeout)
+    }
 }
 
 impl Default for Render {
@@ -53,6 +100,7 @@ impl Default for Render {
             pixel_budget: default_pixel_budget(),
             png_compression: PngCompression::default(),
             page_fetch_concurrency: default_page_fetch_concurrency(),
+            xyz_client: XyzClient::default(),
         }
     }
 }
@@ -76,4 +124,16 @@ fn default_pixel_budget() -> String {
 
 fn default_page_fetch_concurrency() -> usize {
     16
+}
+
+fn default_xyz_timeout() -> String {
+    "30s".to_owned()
+}
+
+fn default_xyz_connect_timeout() -> String {
+    "10s".to_owned()
+}
+
+fn default_xyz_user_agent() -> String {
+    concat!("mars-tile-fetcher/", env!("CARGO_PKG_VERSION")).to_owned()
 }

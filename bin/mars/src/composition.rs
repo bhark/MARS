@@ -108,11 +108,12 @@ pub(crate) fn validate_change_feed_config(cfg: &Config) -> Result<()> {
 /// Build the per-collection raster source registry the runtime hands to its
 /// raster render path. One shared [`reqwest::Client`] backs every XYZ
 /// collection (connection pooling per upstream host is reqwest's job). The
+/// client honours `render.xyz_client` for timeouts and User-Agent. The
 /// returned map is keyed by `RasterLayerEntry.collection`; an empty config
 /// (no raster layers) yields an empty map and zero adapter allocations.
 pub(crate) fn build_raster_sources(cfg: &Config) -> Result<HashMap<SourceCollectionId, Arc<dyn RasterSource>>> {
     let mut out: HashMap<SourceCollectionId, Arc<dyn RasterSource>> = HashMap::new();
-    let mut xyz_client: Option<Arc<dyn RasterSource>> = None;
+    let mut xyz_source: Option<Arc<dyn RasterSource>> = None;
     for layer in &cfg.layers {
         let Some(raster) = layer.raster.as_ref() else {
             continue;
@@ -123,12 +124,30 @@ pub(crate) fn build_raster_sources(cfg: &Config) -> Result<HashMap<SourceCollect
             // opacities, same upstream tile pyramid); first registration wins.
             continue;
         }
-        let source = xyz_client
-            .get_or_insert_with(|| Arc::new(XyzRasterSource::new(reqwest::Client::new())) as Arc<dyn RasterSource>)
-            .clone();
+        let source = if let Some(existing) = xyz_source.as_ref() {
+            existing.clone()
+        } else {
+            let built =
+                Arc::new(XyzRasterSource::new(build_xyz_client(&cfg.render.xyz_client)?)) as Arc<dyn RasterSource>;
+            xyz_source = Some(built.clone());
+            built
+        };
         out.insert(collection, source);
     }
     Ok(out)
+}
+
+fn build_xyz_client(cfg: &mars_config::XyzClient) -> Result<reqwest::Client> {
+    let timeout = cfg.timeout().map_err(|e| anyhow!("render.xyz_client.timeout: {e}"))?;
+    let connect_timeout = cfg
+        .connect_timeout()
+        .map_err(|e| anyhow!("render.xyz_client.connect_timeout: {e}"))?;
+    reqwest::Client::builder()
+        .timeout(timeout)
+        .connect_timeout(connect_timeout)
+        .user_agent(&cfg.user_agent)
+        .build()
+        .map_err(|e| anyhow!("building XYZ HTTP client: {e}"))
 }
 
 #[cfg(test)]
