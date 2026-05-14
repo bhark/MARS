@@ -328,6 +328,7 @@ mod tests {
         let plan = BootstrapPlan {
             layers: Vec::new(),
             bindings: vec![binding("roads"), binding("buildings")],
+            raster_layers: Vec::new(),
         };
         let ranges = exact_ranges(&[[10.0, 10.0], [20.0, 20.0], [30.0, 30.0], [40.0, 40.0], [50.0, 50.0]]);
         let levels = HashMap::from([

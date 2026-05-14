@@ -240,6 +240,7 @@ async fn boundary_key_row_appears_in_exactly_one_dirty_page() {
     let plan = BootstrapPlan {
         bindings: vec![binding_plan("test")],
         layers: vec![],
+        raster_layers: vec![],
     };
 
     let dirty = DirtyPages {

@@ -201,6 +201,7 @@ async fn surgical_invalidation_rebuilds_only_dirty_pages() {
     let plan = BootstrapPlan {
         bindings: vec![binding_plan("points", 1024)],
         layers: vec![],
+        raster_layers: vec![],
     };
 
     // bootstrap

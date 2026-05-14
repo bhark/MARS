@@ -170,6 +170,7 @@ async fn unified_compile_is_deterministic_across_runs() {
     let plan = BootstrapPlan {
         bindings: vec![binding_plan("points", 4 * 1024)],
         layers: vec![],
+        raster_layers: vec![],
     };
 
     let m_a = run_snapshot_from_plan(
@@ -248,6 +249,7 @@ async fn rows_with_identical_geometry_but_different_attrs_are_slot_equivalent() 
     let plan = BootstrapPlan {
         bindings: vec![binding_plan("points", 64 * 1024)],
         layers: vec![],
+        raster_layers: vec![],
     };
     let manifest = run_snapshot_from_plan(
         &deps,
@@ -275,6 +277,7 @@ async fn unified_compile_against_empty_source_yields_zero_pages() {
     let plan = BootstrapPlan {
         bindings: vec![binding_plan("points", 4 * 1024)],
         layers: vec![],
+        raster_layers: vec![],
     };
     let manifest = run_snapshot_from_plan(
         &deps,

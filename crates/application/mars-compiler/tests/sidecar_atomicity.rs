@@ -378,6 +378,7 @@ async fn rebuild_cycle_is_atomic_under_put_fault_injection() {
         let plan = BootstrapPlan {
             bindings: vec![binding_plan("points", 1024)],
             layers: vec![],
+            raster_layers: vec![],
         };
         let bootstrap = run_snapshot_from_plan(
             &deps,
@@ -418,6 +419,7 @@ async fn rebuild_cycle_is_atomic_under_put_fault_injection() {
         let plan = BootstrapPlan {
             bindings: vec![binding_plan("points", 1024)],
             layers: vec![],
+            raster_layers: vec![],
         };
         let bootstrap = run_snapshot_from_plan(
             &bootstrap_deps,

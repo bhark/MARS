@@ -13,7 +13,7 @@
 use mars_config::{Config, DecimationLevelConfig, LabelStyleAttach, Layer as CfgLayer, SimplifierKind};
 use mars_expr::{Expr, Template, parse, parse_template};
 use mars_style::{LabelStyle, LabelSurvival, Placement, default_placement};
-use mars_types::{BindingId, BindingIdError, CrsCode, DecimationLevel, LayerId};
+use mars_types::{BindingId, BindingIdError, CrsCode, DecimationLevel, LayerId, RasterLayerEntry};
 
 /// Errors emitted while building a [`BootstrapPlan`].
 #[derive(Debug, thiserror::Error)]
@@ -75,14 +75,6 @@ pub enum PlanError {
         /// underlying expr error
         #[source]
         source: mars_expr::ExprError,
-    },
-    /// Raster layers ride a separate pipeline (tile fetch + composite) that
-    /// the compiler has not yet implemented. The vocabulary lands first so
-    /// configs can declare raster layers; concrete bake / publish follows.
-    #[error("layer {layer} is kind=raster; the compiler does not yet emit a raster pipeline plan")]
-    RasterLayerNotImplemented {
-        /// layer name
-        layer: LayerId,
     },
 }
 
@@ -168,11 +160,14 @@ pub struct LayerPlan {
 
 /// Full snapshot work plan: the deduplicated set of bindings the compiler
 /// has to emit, plus the per-layer compile state used to fan out class /
-/// label sidecar emission per page.
+/// label sidecar emission per page. Raster layers are materialised as
+/// metadata-only [`RasterLayerEntry`] rows the publisher copies into the
+/// manifest; the compiler does not fetch or stage raster bytes.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct BootstrapPlan {
     pub bindings: Vec<BindingPlan>,
     pub layers: Vec<LayerPlan>,
+    pub raster_layers: Vec<RasterLayerEntry>,
 }
 
 impl BootstrapPlan {
@@ -192,15 +187,17 @@ pub fn build_bootstrap_plan(cfg: &Config) -> Result<BootstrapPlan, PlanError> {
     let native_crs = cfg.source.native_crs.clone();
     let mut bindings: Vec<BindingPlan> = Vec::new();
     let mut layers: Vec<LayerPlan> = Vec::new();
+    let raster_layers = build_raster_layer_entries(cfg);
 
     for layer in &cfg.layers {
+        // raster layers are metadata-only at compile time; they have no
+        // vector sources / classes / labels to enumerate. their manifest
+        // entries come from build_raster_layer_entries above.
         if matches!(
             mars_style::LayerKind::parse(layer.kind.as_str()),
             Some(mars_style::LayerKind::Raster)
         ) {
-            return Err(PlanError::RasterLayerNotImplemented {
-                layer: layer.name.clone(),
-            });
+            continue;
         }
         for binding in &layer.sources {
             let (source_locator, id) = resolve_binding_source(binding)?;
@@ -251,7 +248,34 @@ pub fn build_bootstrap_plan(cfg: &Config) -> Result<BootstrapPlan, PlanError> {
         }
     }
 
-    Ok(BootstrapPlan { bindings, layers })
+    Ok(BootstrapPlan {
+        bindings,
+        layers,
+        raster_layers,
+    })
+}
+
+/// Translate every `kind: raster` layer in `cfg` into a [`RasterLayerEntry`]
+/// for the manifest. Pure / total: validation has already enforced that
+/// every raster-kind layer carries a well-formed `raster:` block, so this
+/// function does not return an error type. Layers without a raster block
+/// are skipped.
+pub fn build_raster_layer_entries(cfg: &Config) -> Vec<RasterLayerEntry> {
+    cfg.layers
+        .iter()
+        .filter_map(|layer| {
+            let raster = layer.raster.as_ref()?;
+            Some(RasterLayerEntry {
+                layer_id: layer.name.clone(),
+                collection: raster.source.collection.clone(),
+                locator: raster.source.locator.clone(),
+                source_crs: raster.source.source_crs.clone(),
+                tile_size: raster.source.tile_size,
+                max_level: raster.source.max_level,
+                opacity: raster.opacity,
+            })
+        })
+        .collect()
 }
 
 fn build_layer_plan(cfg: &Config, layer: &CfgLayer, binding_id: &BindingId) -> Result<LayerPlan, PlanError> {
@@ -608,12 +632,41 @@ mod tests {
     }
 
     #[test]
-    fn raster_layer_returns_typed_not_implemented() {
-        let mut l = layer("r", vec![binding("dem")]);
+    fn raster_layer_is_skipped_from_bindings_and_emitted_as_manifest_entry() {
+        use mars_config::{RasterLayerSpec, RasterSourceBinding};
+        let mut l = layer("r", vec![]);
         l.kind = "raster".into();
+        l.classes = vec![];
+        l.raster = Some(RasterLayerSpec {
+            source: RasterSourceBinding {
+                collection: mars_types::SourceCollectionId::new("osm"),
+                locator: "https://tile.example/{z}/{x}/{y}.png".into(),
+                source_crs: CrsCode::new("EPSG:3857"),
+                tile_size: 256,
+                max_level: 19,
+            },
+            opacity: 0.75,
+        });
         let cfg = config_with(vec![l]);
-        let err = build_bootstrap_plan(&cfg).expect_err("raster must surface typed error");
-        assert!(matches!(err, PlanError::RasterLayerNotImplemented { layer } if layer.as_str() == "r"));
+        let plan = build_bootstrap_plan(&cfg).expect("raster-only config plans cleanly");
+        assert!(plan.bindings.is_empty(), "no vector bindings expected");
+        assert!(plan.layers.is_empty(), "no vector layer plans expected");
+        assert_eq!(plan.raster_layers.len(), 1);
+        let entry = &plan.raster_layers[0];
+        assert_eq!(entry.layer_id.as_str(), "r");
+        assert_eq!(entry.collection.as_str(), "osm");
+        assert_eq!(entry.locator, "https://tile.example/{z}/{x}/{y}.png");
+        assert_eq!(entry.source_crs.as_str(), "EPSG:3857");
+        assert_eq!(entry.tile_size, 256);
+        assert_eq!(entry.max_level, 19);
+        assert!((entry.opacity - 0.75).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn build_raster_layer_entries_skips_vector_layers() {
+        let cfg = config_with(vec![layer("v", vec![binding("buildings")])]);
+        let entries = build_raster_layer_entries(&cfg);
+        assert!(entries.is_empty());
     }
 
     #[test]

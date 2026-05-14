@@ -169,6 +169,7 @@ async fn build_fixture(n_features: usize, page_size: u64) -> Fixture {
     let plan = BootstrapPlan {
         bindings: vec![binding_plan("points", page_size)],
         layers: vec![],
+        raster_layers: vec![],
     };
     let prior = run_snapshot_from_plan(
         &deps,

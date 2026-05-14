@@ -173,6 +173,7 @@ async fn rebalance_candidates_flags_oversize_page() {
     let plan = BootstrapPlan {
         bindings: vec![binding_plan("points", 100 * 1024 * 1024)],
         layers: vec![],
+        raster_layers: vec![],
     };
     let manifest = run_snapshot_from_plan(
         &deps,
@@ -225,6 +226,7 @@ async fn execute_rebalance_split_preserves_feature_ids_and_balances_sizes() {
     let plan = BootstrapPlan {
         bindings: vec![binding_plan("points", 100 * 1024 * 1024)],
         layers: vec![],
+        raster_layers: vec![],
     };
     let manifest = run_snapshot_from_plan(
         &deps,

@@ -203,6 +203,7 @@ async fn duplicate_feature_id_routes_distinct_rows() {
     let plan = BootstrapPlan {
         bindings: vec![bp.clone()],
         layers: vec![],
+        raster_layers: vec![],
     };
     let mut session = ScriptedSession { rows };
 
@@ -240,6 +241,7 @@ async fn unrelated_rows_in_stream_are_skipped() {
     let plan = BootstrapPlan {
         bindings: vec![bp.clone()],
         layers: vec![],
+        raster_layers: vec![],
     };
     let mut session = ScriptedSession {
         rows: vec![routed, unrelated],
@@ -278,6 +280,7 @@ async fn short_stream_trips_invariant_violation() {
     let plan = BootstrapPlan {
         bindings: vec![bp.clone()],
         layers: vec![],
+        raster_layers: vec![],
     };
     // emit r1 only.
     let mut session = ScriptedSession { rows: vec![r1] };
@@ -318,6 +321,7 @@ async fn budget_overrun_spills_and_completes() {
     let plan = BootstrapPlan {
         bindings: vec![bp.clone()],
         layers: vec![],
+        raster_layers: vec![],
     };
     let mut session = ScriptedSession { rows: vec![r1, r2] };
 
@@ -355,6 +359,7 @@ async fn spilled_path_emits_identical_artifacts_to_in_memory() {
     let plan = BootstrapPlan {
         bindings: vec![bp.clone()],
         layers: vec![],
+        raster_layers: vec![],
     };
 
     // baseline: in-memory only.
