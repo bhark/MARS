@@ -232,6 +232,7 @@ async fn boundary_key_row_appears_in_exactly_one_dirty_page() {
         label_sidecars: vec![],
         style_artifact: None,
         image_artifact: None,
+        raster_layers: Vec::new(),
         source_version: None,
         epoch: 0,
     };

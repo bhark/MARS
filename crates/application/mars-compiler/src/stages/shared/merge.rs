@@ -107,6 +107,7 @@ pub(crate) fn merge_manifest(
         label_sidecars,
         style_artifact: prior.style_artifact.clone(),
         image_artifact: prior.image_artifact.clone(),
+        raster_layers: prior.raster_layers.clone(),
         source_version,
         epoch: next_version,
     }

@@ -230,6 +230,7 @@ mod tests {
             label_sidecars: vec![],
             style_artifact: None,
             image_artifact: None,
+            raster_layers: Vec::new(),
             source_version: None,
             epoch: 0,
         };

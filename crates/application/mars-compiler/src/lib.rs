@@ -616,6 +616,7 @@ pub async fn run_snapshot_from_plan(
         label_sidecars,
         style_artifact: None,
         image_artifact: None,
+        raster_layers: Vec::new(),
         source_version: None,
         epoch: manifest_version,
     })

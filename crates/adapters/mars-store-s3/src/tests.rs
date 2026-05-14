@@ -150,8 +150,8 @@ async fn current_rejects_v1_manifest() {
     let pub_ = S3Publisher::from_store(&s);
     let err = pub_.current().await.unwrap_err();
     assert!(
-        matches!(err, StoreError::UnsupportedManifestVersion { found: 1, supported: 5 }),
-        "expected UnsupportedManifestVersion {{ found: 1, supported: 5 }}, got {err:?}"
+        matches!(err, StoreError::UnsupportedManifestVersion { found: 1, supported: 6 }),
+        "expected UnsupportedManifestVersion {{ found: 1, supported: 6 }}, got {err:?}"
     );
 }
 
@@ -169,8 +169,8 @@ async fn current_rejects_v2_manifest() {
     let pub_ = S3Publisher::from_store(&s);
     let err = pub_.current().await.unwrap_err();
     assert!(
-        matches!(err, StoreError::UnsupportedManifestVersion { found: 2, supported: 5 }),
-        "expected UnsupportedManifestVersion {{ found: 2, supported: 5 }}, got {err:?}"
+        matches!(err, StoreError::UnsupportedManifestVersion { found: 2, supported: 6 }),
+        "expected UnsupportedManifestVersion {{ found: 2, supported: 6 }}, got {err:?}"
     );
 }
 
@@ -190,8 +190,8 @@ async fn current_rejects_v3_manifest() {
     let pub_ = S3Publisher::from_store(&s);
     let err = pub_.current().await.unwrap_err();
     assert!(
-        matches!(err, StoreError::UnsupportedManifestVersion { found: 3, supported: 5 }),
-        "expected UnsupportedManifestVersion {{ found: 3, supported: 5 }}, got {err:?}"
+        matches!(err, StoreError::UnsupportedManifestVersion { found: 3, supported: 6 }),
+        "expected UnsupportedManifestVersion {{ found: 3, supported: 6 }}, got {err:?}"
     );
 }
 
@@ -211,8 +211,29 @@ async fn current_rejects_v4_manifest() {
     let pub_ = S3Publisher::from_store(&s);
     let err = pub_.current().await.unwrap_err();
     assert!(
-        matches!(err, StoreError::UnsupportedManifestVersion { found: 4, supported: 5 }),
-        "expected UnsupportedManifestVersion {{ found: 4, supported: 5 }}, got {err:?}"
+        matches!(err, StoreError::UnsupportedManifestVersion { found: 4, supported: 6 }),
+        "expected UnsupportedManifestVersion {{ found: 4, supported: 6 }}, got {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn current_rejects_v5_manifest() {
+    let backend = Arc::new(InMemory::new());
+    let s = store_with("", backend);
+    // v5 predates `raster_layers`; v6 expects every field including
+    // raster_layers. exact-match rejects v5.
+    write_legacy_manifest(
+        &s,
+        5,
+        r#"{"format_version":5,"version":5,"service":"svc","created_at":{"secs_since_epoch":0,"nanos_since_epoch":0},"bindings":[],"pages":[],"class_sidecars":[],"label_sidecars":[],"style_artifact":null,"image_artifact":null,"source_version":null,"epoch":0}"#,
+    )
+    .await;
+
+    let pub_ = S3Publisher::from_store(&s);
+    let err = pub_.current().await.unwrap_err();
+    assert!(
+        matches!(err, StoreError::UnsupportedManifestVersion { found: 5, supported: 6 }),
+        "expected UnsupportedManifestVersion {{ found: 5, supported: 6 }}, got {err:?}"
     );
 }
 
@@ -220,20 +241,20 @@ async fn current_rejects_v4_manifest() {
 async fn current_rejects_future_manifest_version() {
     let backend = Arc::new(InMemory::new());
     let s = store_with("", backend);
-    // forwards-incompatibility: a v6 body must also be rejected, not silently
+    // forwards-incompatibility: a v7 body must also be rejected, not silently
     // accepted as "newer therefore probably ok".
     write_legacy_manifest(
         &s,
         1,
-        r#"{"format_version":6,"version":1,"service":"svc","created_at":{"secs_since_epoch":0,"nanos_since_epoch":0},"bindings":[],"pages":[],"class_sidecars":[],"label_sidecars":[],"style_artifact":null,"image_artifact":null,"source_version":null,"epoch":0}"#,
+        r#"{"format_version":7,"version":1,"service":"svc","created_at":{"secs_since_epoch":0,"nanos_since_epoch":0},"bindings":[],"pages":[],"class_sidecars":[],"label_sidecars":[],"style_artifact":null,"image_artifact":null,"raster_layers":[],"source_version":null,"epoch":0}"#,
     )
     .await;
 
     let pub_ = S3Publisher::from_store(&s);
     let err = pub_.current().await.unwrap_err();
     assert!(
-        matches!(err, StoreError::UnsupportedManifestVersion { found: 6, supported: 5 }),
-        "expected UnsupportedManifestVersion {{ found: 6, supported: 5 }}, got {err:?}"
+        matches!(err, StoreError::UnsupportedManifestVersion { found: 7, supported: 6 }),
+        "expected UnsupportedManifestVersion {{ found: 7, supported: 6 }}, got {err:?}"
     );
 }
 

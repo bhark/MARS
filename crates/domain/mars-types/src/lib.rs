@@ -6,12 +6,13 @@ use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
-/// current `Manifest::format_version`. Bumped to 5 when `image_artifact`
-/// joined the envelope so a manifest can advertise a bundled bitmap pack
-/// for `FillPaint::Image { name }` resolution. Readers reject anything
+/// current `Manifest::format_version`. Bumped to 6 when `raster_layers`
+/// joined the envelope so a manifest can advertise metadata-only raster
+/// layer bindings (locator / CRS / tile_size / max_level) read at request
+/// time by the runtime tile-fetch orchestrator. Readers reject anything
 /// other than this exact value (no floor, no "accept `<= max`" - see
 /// `mars-store-fs` / `mars-store-s3` manifest readers).
-pub const MANIFEST_FORMAT_VERSION: u32 = 5;
+pub const MANIFEST_FORMAT_VERSION: u32 = 6;
 
 /// upper bound on the on-disk pointer string. Versions are `v\d+` so 32 chars
 /// (`v` + 31 decimal digits) covers anything `u64` can represent comfortably.
@@ -528,6 +529,12 @@ pub struct Manifest {
     /// `None` when no style references an image resource.
     #[serde(default)]
     pub image_artifact: Option<ArtifactEntry>,
+    /// raster layer entries: metadata-only bindings (no published bytes).
+    /// runtime reads these to dispatch tile fetches through the appropriate
+    /// `RasterSource` adapter at render time. one entry per `kind: raster`
+    /// layer in the source config; empty when no raster layers are declared.
+    #[serde(default)]
+    pub raster_layers: Vec<RasterLayerEntry>,
     /// opaque source-side cursor at which this manifest's state was captured
     /// (e.g. WAL position, change-stream token). snapshot compiles set this
     /// to `None`.
@@ -554,10 +561,36 @@ impl Manifest {
             label_sidecars: Vec::new(),
             style_artifact: None,
             image_artifact: None,
+            raster_layers: Vec::new(),
             source_version: None,
             epoch: 0,
         }
     }
+}
+
+/// raster layer manifest entry. metadata-only: the runtime fans this out to
+/// the `RasterSource` adapter registered for `collection` and composites the
+/// returned tiles into the render canvas. no bytes are published with the
+/// manifest; the upstream tile endpoint (or COG, or PostGIS raster) is the
+/// payload.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RasterLayerEntry {
+    /// layer this entry binds. matches `Layer.name` in the source config.
+    pub layer_id: LayerId,
+    /// logical collection the runtime uses to pick a `RasterSource` impl.
+    pub collection: SourceCollectionId,
+    /// opaque backend locator (URL template, COG key, etc.). interpreted by
+    /// the chosen adapter, not by core.
+    pub locator: String,
+    /// native CRS of the source tiles. the runtime first cut rejects requests
+    /// whose plan CRS differs (reprojection is its own follow-up arc).
+    pub source_crs: CrsCode,
+    /// tile edge length in pixels (e.g. 256).
+    pub tile_size: u32,
+    /// inclusive maximum zoom level the source publishes.
+    pub max_level: u32,
+    /// per-layer opacity multiplier in `[0,1]`. clamped at draw time.
+    pub opacity: f32,
 }
 
 /// pointer to one object-store-resident artifact carrying ancillary data
@@ -662,6 +695,35 @@ mod tests {
         let back: Manifest = serde_json::from_str(&s).unwrap();
         assert_eq!(m, back);
         assert!(back.image_artifact.is_some());
+    }
+
+    #[test]
+    fn manifest_roundtrip_with_raster_layers() {
+        let mut m = Manifest::empty(8, "demo");
+        m.raster_layers.push(RasterLayerEntry {
+            layer_id: LayerId::new("osm"),
+            collection: SourceCollectionId::new("osm"),
+            locator: "https://tile.example/{z}/{x}/{y}.png".into(),
+            source_crs: CrsCode::new("EPSG:3857"),
+            tile_size: 256,
+            max_level: 19,
+            opacity: 1.0,
+        });
+        let s = serde_json::to_string(&m).unwrap();
+        let back: Manifest = serde_json::from_str(&s).unwrap();
+        assert_eq!(m, back);
+        assert_eq!(back.raster_layers.len(), 1);
+    }
+
+    #[test]
+    fn manifest_default_raster_layers_when_field_missing() {
+        // older serialised manifests (before raster_layers landed) may omit
+        // the field; serde defaults it to an empty vec rather than failing.
+        let m = Manifest::empty(1, "x");
+        let s = serde_json::to_string(&m).unwrap();
+        let stripped = s.replacen(r#""raster_layers":[],"#, "", 1);
+        let back: Manifest = serde_json::from_str(&stripped).expect("default applies");
+        assert!(back.raster_layers.is_empty());
     }
 
     #[test]
