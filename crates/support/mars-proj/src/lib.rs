@@ -86,6 +86,81 @@ impl Drop for ContextHandle {
     }
 }
 
+/// Wire axis order of a CRS. Used by interfaces (WMS 1.3.0) to decide whether
+/// a `BBOX=` slice is `minx,miny,maxx,maxy` (east/north) or
+/// `miny,minx,maxy,maxx` (north/east).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AxisOrder {
+    /// First axis east (x), second axis north (y). The "natural" order most
+    /// CRSes use; matches the WMS 1.1.1 wire format.
+    EastNorth,
+    /// First axis north (lat), second axis east (lon). EPSG geographic 2D
+    /// CRSes (4326, 4258, ...) advertise this and WMS 1.3.0 honours it.
+    NorthEast,
+}
+
+/// Resolve the wire axis order for `code` via PROJ introspection.
+///
+/// Reads the first axis direction (`north` / `east` / etc.) off the CRS's
+/// coordinate system and maps it to [`AxisOrder`]. Backed by the same
+/// per-thread `PJ_CONTEXT` as the rest of this crate; no PROJ state escapes.
+pub fn axis_order(code: &CrsCode) -> Result<AxisOrder, ProjError> {
+    let definition =
+        CString::new(code.as_str()).map_err(|e| ProjError::UnknownCrs(format!("invalid CRS string: {e}")))?;
+
+    PROJ_CTX.with(|ctx| {
+        let ctx_ptr = ctx.as_ptr();
+        if ctx_ptr.is_null() {
+            return Err(ProjError::Transform("failed to create PROJ context".into()));
+        }
+        // SAFETY: ctx_ptr is a live thread-local context; definition is a valid
+        // NUL-terminated C string. proj_create returns null on failure. The
+        // intermediate PJ handles (crs, cs) are destroyed before return.
+        unsafe {
+            let crs = proj_sys::proj_create(ctx_ptr, definition.as_ptr());
+            if crs.is_null() {
+                return Err(ProjError::UnknownCrs(format!("{code}: {}", proj_ctx_error(ctx_ptr))));
+            }
+            let cs = proj_sys::proj_crs_get_coordinate_system(ctx_ptr, crs);
+            proj_sys::proj_destroy(crs);
+            if cs.is_null() {
+                return Err(ProjError::Transform(format!(
+                    "no coordinate system for {code}: {}",
+                    proj_ctx_error(ctx_ptr)
+                )));
+            }
+            let mut direction: *const std::os::raw::c_char = std::ptr::null();
+            let ok = proj_sys::proj_cs_get_axis_info(
+                ctx_ptr,
+                cs,
+                0,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut direction,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+            proj_sys::proj_destroy(cs);
+            if ok == 0 || direction.is_null() {
+                return Err(ProjError::Transform(format!(
+                    "axis info unavailable for {code}: {}",
+                    proj_ctx_error(ctx_ptr)
+                )));
+            }
+            let dir = CStr::from_ptr(direction).to_string_lossy().to_ascii_lowercase();
+            match dir.as_str() {
+                "north" | "south" => Ok(AxisOrder::NorthEast),
+                "east" | "west" => Ok(AxisOrder::EastNorth),
+                other => Err(ProjError::Transform(format!(
+                    "unexpected first-axis direction `{other}` for {code}"
+                ))),
+            }
+        }
+    })
+}
+
 /// Returns `true` when `code` is a projected (metric) CRS.
 ///
 /// Uses PROJ introspection so any authority code known to the local PROJ
@@ -505,6 +580,34 @@ mod tests {
             assert!((batch[i][0] - sx).abs() < 1e-9, "x mismatch at {i}");
             assert!((batch[i][1] - sy).abs() < 1e-9, "y mismatch at {i}");
         }
+    }
+
+    #[test]
+    fn axis_order_geographic_crses_are_north_east() {
+        for code in ["EPSG:4326", "EPSG:4258"] {
+            let order = axis_order(&CrsCode::new(code)).unwrap();
+            assert_eq!(order, AxisOrder::NorthEast, "{code}");
+        }
+    }
+
+    #[test]
+    fn axis_order_projected_crses_are_east_north() {
+        for code in ["EPSG:3857", "EPSG:25832"] {
+            let order = axis_order(&CrsCode::new(code)).unwrap();
+            assert_eq!(order, AxisOrder::EastNorth, "{code}");
+        }
+    }
+
+    #[test]
+    fn axis_order_urn_form_resolves() {
+        let order = axis_order(&CrsCode::new("urn:ogc:def:crs:EPSG::4326")).unwrap();
+        assert_eq!(order, AxisOrder::NorthEast);
+    }
+
+    #[test]
+    fn axis_order_unknown_crs_errors() {
+        let err = axis_order(&CrsCode::new("EPSG:9999999")).unwrap_err();
+        assert!(matches!(err, ProjError::UnknownCrs(_)), "got {err:?}");
     }
 
     #[test]
