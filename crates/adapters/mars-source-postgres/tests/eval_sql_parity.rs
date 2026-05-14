@@ -154,19 +154,69 @@ fn lit_float(f: f64) -> Expr {
 /// matching ids.
 fn cases() -> Vec<(&'static str, Expr)> {
     vec![
-        ("cmp_eq", Expr::Cmp { op: CmpOp::Eq, lhs: Box::new(ident("kind")), rhs: Box::new(lit_str("a")) }),
-        ("cmp_ne", Expr::Cmp { op: CmpOp::Ne, lhs: Box::new(ident("kind")), rhs: Box::new(lit_str("a")) }),
-        ("cmp_lt", Expr::Cmp { op: CmpOp::Lt, lhs: Box::new(ident("qty")), rhs: Box::new(lit_int(25)) }),
-        ("cmp_le", Expr::Cmp { op: CmpOp::Le, lhs: Box::new(ident("qty")), rhs: Box::new(lit_int(20)) }),
-        ("cmp_gt", Expr::Cmp { op: CmpOp::Gt, lhs: Box::new(ident("weight")), rhs: Box::new(lit_float(2.0)) }),
-        ("cmp_ge", Expr::Cmp { op: CmpOp::Ge, lhs: Box::new(ident("weight")), rhs: Box::new(lit_float(3.5)) }),
+        (
+            "cmp_eq",
+            Expr::Cmp {
+                op: CmpOp::Eq,
+                lhs: Box::new(ident("kind")),
+                rhs: Box::new(lit_str("a")),
+            },
+        ),
+        (
+            "cmp_ne",
+            Expr::Cmp {
+                op: CmpOp::Ne,
+                lhs: Box::new(ident("kind")),
+                rhs: Box::new(lit_str("a")),
+            },
+        ),
+        (
+            "cmp_lt",
+            Expr::Cmp {
+                op: CmpOp::Lt,
+                lhs: Box::new(ident("qty")),
+                rhs: Box::new(lit_int(25)),
+            },
+        ),
+        (
+            "cmp_le",
+            Expr::Cmp {
+                op: CmpOp::Le,
+                lhs: Box::new(ident("qty")),
+                rhs: Box::new(lit_int(20)),
+            },
+        ),
+        (
+            "cmp_gt",
+            Expr::Cmp {
+                op: CmpOp::Gt,
+                lhs: Box::new(ident("weight")),
+                rhs: Box::new(lit_float(2.0)),
+            },
+        ),
+        (
+            "cmp_ge",
+            Expr::Cmp {
+                op: CmpOp::Ge,
+                lhs: Box::new(ident("weight")),
+                rhs: Box::new(lit_float(3.5)),
+            },
+        ),
         (
             "logic_and",
             Expr::Logic {
                 op: LogicOp::And,
                 args: vec![
-                    Expr::Cmp { op: CmpOp::Eq, lhs: Box::new(ident("kind")), rhs: Box::new(lit_str("a")) },
-                    Expr::Cmp { op: CmpOp::Ge, lhs: Box::new(ident("qty")), rhs: Box::new(lit_int(20)) },
+                    Expr::Cmp {
+                        op: CmpOp::Eq,
+                        lhs: Box::new(ident("kind")),
+                        rhs: Box::new(lit_str("a")),
+                    },
+                    Expr::Cmp {
+                        op: CmpOp::Ge,
+                        lhs: Box::new(ident("qty")),
+                        rhs: Box::new(lit_int(20)),
+                    },
                 ],
             },
         ),
@@ -175,8 +225,16 @@ fn cases() -> Vec<(&'static str, Expr)> {
             Expr::Logic {
                 op: LogicOp::Or,
                 args: vec![
-                    Expr::Cmp { op: CmpOp::Eq, lhs: Box::new(ident("kind")), rhs: Box::new(lit_str("c")) },
-                    Expr::Cmp { op: CmpOp::Lt, lhs: Box::new(ident("qty")), rhs: Box::new(lit_int(15)) },
+                    Expr::Cmp {
+                        op: CmpOp::Eq,
+                        lhs: Box::new(ident("kind")),
+                        rhs: Box::new(lit_str("c")),
+                    },
+                    Expr::Cmp {
+                        op: CmpOp::Lt,
+                        lhs: Box::new(ident("qty")),
+                        rhs: Box::new(lit_int(15)),
+                    },
                 ],
             },
         ),
@@ -202,7 +260,13 @@ fn cases() -> Vec<(&'static str, Expr)> {
                 list: vec![],
             },
         ),
-        ("like", Expr::Like { lhs: Box::new(ident("label")), pattern: "alpha%".into() }),
+        (
+            "like",
+            Expr::Like {
+                lhs: Box::new(ident("label")),
+                pattern: "alpha%".into(),
+            },
+        ),
         ("is_null", Expr::IsNull(Box::new(ident("optstr")))),
         ("is_not_null", Expr::IsNotNull(Box::new(ident("optstr")))),
     ]
@@ -278,6 +342,9 @@ async fn eval_and_sql_lowering_agree_across_every_operator() {
     for (name, expr) in cases() {
         let e_set = eval_matches(&expr);
         let s_set = sql_matches(&client, &expr).await;
-        assert_eq!(e_set, s_set, "parity violation for case `{name}`: eval={e_set:?} sql={s_set:?}");
+        assert_eq!(
+            e_set, s_set,
+            "parity violation for case `{name}`: eval={e_set:?} sql={s_set:?}"
+        );
     }
 }
