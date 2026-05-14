@@ -67,12 +67,10 @@ mod tests {
         Colour::rgba(255, 0, 0, 255)
     }
 
-    /// drives the same `jpeg_encoder` / `jpeg_decoder` pair the diff harness
-    /// uses (`bin/mars-diff-capture/src/coverage.rs::coverage_jpeg`). exercised
-    /// at three sizes so an mcu-boundary regression in the encoder cannot
-    /// hide behind the 16x16 single-mcu degenerate case: 16 = 1 mcu per side,
-    /// 512 = exactly 32 mcus per side (matches the `composite-urban-detail-jpeg`
-    /// case dimensions), 510 = non-multiple-of-16 chroma-upsampling boundary.
+    /// exercises the encoder at three sizes so an mcu-boundary regression
+    /// cannot hide behind the 16x16 single-mcu degenerate case: 16 = 1 mcu
+    /// per side, 512 = exactly 32 mcus per side, 510 = non-multiple-of-16
+    /// chroma-upsampling boundary.
     #[test]
     fn jpeg_roundtrip_decodes_to_expected_dimensions() {
         for &dim in &[16u32, 510, 512] {
@@ -91,13 +89,12 @@ mod tests {
             let pixels = dec.decode().unwrap();
             let info = dec.info().unwrap();
             assert_eq!((info.width, info.height), (dim as u16, dim as u16), "dim {dim}");
-            // harness coverage_jpeg only accepts RGB24 / L8; if jpeg_encoder
-            // ever changes default colour space the harness silently regresses
-            // to coverage=None. assert here so the test fails first.
+            // pin the encoder's output colour space; downstream decoders
+            // (and any tooling that reads back pixels) assume RGB24.
             assert_eq!(
                 info.pixel_format,
                 jpeg_decoder::PixelFormat::RGB24,
-                "harness coverage path expects RGB24 at {dim}x{dim}"
+                "expected RGB24 output at {dim}x{dim}"
             );
 
             // mid-image sample (not corner) so chroma-upsampling artefacts at

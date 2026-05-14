@@ -6,10 +6,8 @@
 //!     under load + p50/p95/p99
 //!   * gfi phase: N sequential `get_feature_info` calls → p50/p95
 //!
-//! parcels-mini is small; the absolute numbers will be optimistic vs a
-//! production-class fixture, but the methodology
-//! is the methodology. operator-driven cluster captures land via
-//! `mars-diff-capture --load`; this harness keeps the host-side ratchet
+//! parcels-mini is small; absolute numbers are optimistic vs a production
+//! fixture, but the methodology holds. keeps a host-side perf ratchet
 //! honest under integration CI.
 //!
 //! invoke: `MARS_INTEGRATION=1 cargo test -p mars --features integration --test perf_harness -- --nocapture`

@@ -3,6 +3,4 @@ target/
 fuzz/
 dev/
 tests/
-.cargo-diff-capture/
-diff-runs/
 *.sql.gz
