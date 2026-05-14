@@ -299,6 +299,7 @@ mod tests {
             encoder: Arc::new(PassthroughEncoder),
             metrics,
             fonts: Arc::new(Fonts::with_default()),
+            images: Arc::new(crate::images::MutableImageRegistry::new()),
         }
     }
 

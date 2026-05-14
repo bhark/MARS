@@ -198,17 +198,19 @@ async fn run_runtime(cfg: Arc<Config>, shutdown: CancellationToken) -> Result<()
         .render
         .pixel_budget_permits()
         .context("resolve render.pixel_budget")?;
+    let images = Arc::new(mars_runtime::images::MutableImageRegistry::new());
     let runtime = Arc::new(Runtime::with_pixel_budget(
         RuntimeDeps {
             store,
             cache,
-            renderer: Arc::new(TinySkiaRenderer::new(fonts.clone())),
+            renderer: Arc::new(TinySkiaRenderer::with_images(fonts.clone(), images.clone())),
             encoder: Arc::new(TinySkiaEncoder::new(
                 cfg.render.jpeg_quality,
                 map_png_compression(cfg.render.png_compression),
             )),
             metrics: metrics.clone(),
             fonts,
+            images,
         },
         pixel_budget,
         None,
@@ -223,10 +225,22 @@ async fn run_runtime(cfg: Arc<Config>, shutdown: CancellationToken) -> Result<()
     };
 
     match &manifest_opt {
-        Some(manifest) => match RuntimeState::from_config_and_manifest(&cfg, stylesheet.clone(), manifest.clone()) {
-            Ok(state) => runtime.swap_state(Arc::new(state)),
-            Err(e) => tracing::warn!(error = %e, "initial manifest rejected"),
-        },
+        Some(manifest) => {
+            match mars_runtime::images::load_from_manifest(
+                manifest.image_artifact.as_ref(),
+                &runtime.deps().cache,
+                &runtime.deps().store,
+            )
+            .await
+            {
+                Ok(map) => runtime.deps().images.set(map),
+                Err(e) => tracing::warn!(error = %e, "initial image_artifact load failed"),
+            }
+            match RuntimeState::from_config_and_manifest(&cfg, stylesheet.clone(), manifest.clone()) {
+                Ok(state) => runtime.swap_state(Arc::new(state)),
+                Err(e) => tracing::warn!(error = %e, "initial manifest rejected"),
+            }
+        }
         None => {
             tracing::warn!("no manifest published yet; readyz will return 503");
         }

@@ -226,6 +226,7 @@ mod tests {
             encoder: Arc::new(NoopEncoder),
             metrics: metrics.clone(),
             fonts: Arc::new(mars_runtime::Fonts::with_default()),
+            images: Arc::new(mars_runtime::images::MutableImageRegistry::new()),
         }))
     }
 

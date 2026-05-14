@@ -2700,6 +2700,7 @@ dependencies = [
  "mars-text",
  "mars-types",
  "parking_lot",
+ "png",
  "rayon",
  "rstar",
  "serde_yaml_ng",

@@ -35,6 +35,7 @@ futures-util       = { workspace = true }
 hashbrown          = { workspace = true }
 hashlink           = { workspace = true }
 parking_lot        = { workspace = true }
+png                = { workspace = true }
 rayon              = { workspace = true }
 
 [dev-dependencies]

@@ -23,6 +23,7 @@ use tokio::sync::Semaphore;
 
 mod fetch;
 mod gfi;
+pub mod images;
 mod legend;
 mod plan;
 mod render;
@@ -120,6 +121,11 @@ pub struct Deps {
     pub metrics: Metrics,
     /// Font registry.
     pub fonts: Arc<Fonts>,
+    /// Image registry shared with the renderer. The runtime refreshes its
+    /// contents on every manifest swap that carries a bundled image
+    /// artifact; the renderer reads through `Arc<dyn ImageRegistry>` and
+    /// sees the new entries without being rebuilt.
+    pub images: Arc<images::MutableImageRegistry>,
 }
 
 /// The render plan as produced by the interface adapter (WMS / WMTS).
@@ -205,6 +211,14 @@ impl Runtime {
     #[must_use]
     pub fn current_state(&self) -> Option<Arc<RuntimeState>> {
         self.state.load_full()
+    }
+
+    /// Borrow the dep set. Useful for sites that need to refresh
+    /// per-manifest registries (e.g. images) before calling
+    /// [`Self::swap_state`].
+    #[must_use]
+    pub fn deps(&self) -> &Deps {
+        &self.deps
     }
 
     /// Atomically replace the active state snapshot.
@@ -353,8 +367,23 @@ pub async fn run_manifest_reload_loop(
         }
 
         let new_version = manifest.version;
+        let image_artifact = manifest.image_artifact.clone();
         match RuntimeState::from_config_and_manifest(&config, stylesheet.clone(), manifest) {
             Ok(state) => {
+                match images::load_from_manifest(image_artifact.as_ref(), &runtime.deps.cache, &runtime.deps.store)
+                    .await
+                {
+                    Ok(map) => runtime.deps.images.set(map),
+                    Err(e) => {
+                        let reason = format!("manifest v{new_version} image_artifact load failed: {e}");
+                        runtime
+                            .deps
+                            .metrics
+                            .inc_manifest_reject(reject_reason::VALIDATION_ERROR);
+                        runtime.record_reject(reason);
+                        continue;
+                    }
+                }
                 runtime.swap_state(Arc::new(state));
                 tracing::info!(version = new_version, "runtime: manifest swapped");
             }

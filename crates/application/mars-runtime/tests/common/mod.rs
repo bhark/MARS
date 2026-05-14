@@ -346,6 +346,7 @@ pub async fn build_fixture_with(opts: FixtureOptions) -> Fixture {
         encoder,
         metrics: metrics.clone(),
         fonts,
+        images: Arc::new(mars_runtime::images::MutableImageRegistry::new()),
     };
 
     let runtime = Arc::new(Runtime::from_state(Arc::new(state), deps));
@@ -713,6 +714,7 @@ where
         encoder,
         metrics,
         fonts,
+        images: Arc::new(mars_runtime::images::MutableImageRegistry::new()),
     };
     let runtime = Arc::new(Runtime::from_state(Arc::new(state), deps));
 
