@@ -89,6 +89,14 @@ pub enum PlanError {
         /// truncated SQL or other source descriptor for diagnostics
         descriptor: String,
     },
+    /// Raster layers ride a separate pipeline (tile fetch + composite) that
+    /// the compiler has not yet implemented. The vocabulary lands first so
+    /// configs can declare raster layers; concrete bake / publish follows.
+    #[error("layer {layer} is kind=raster; the compiler does not yet emit a raster pipeline plan")]
+    RasterLayerNotImplemented {
+        /// layer name
+        layer: LayerId,
+    },
 }
 
 /// One (level, decimation rules) entry on a [`BindingPlan`].
@@ -194,6 +202,14 @@ pub fn build_bootstrap_plan(cfg: &Config) -> Result<BootstrapPlan, PlanError> {
     let mut layers: Vec<LayerPlan> = Vec::new();
 
     for layer in &cfg.layers {
+        if matches!(
+            mars_style::LayerKind::parse(layer.kind.as_str()),
+            Some(mars_style::LayerKind::Raster)
+        ) {
+            return Err(PlanError::RasterLayerNotImplemented {
+                layer: layer.name.clone(),
+            });
+        }
         for binding in &layer.sources {
             let Some(from) = binding.from.as_deref() else {
                 return Err(PlanError::SqlBindingNotImplemented {
@@ -570,6 +586,15 @@ mod tests {
         let cfg = config_with(vec![]);
         let plan = build_bootstrap_plan(&cfg).unwrap();
         assert!(plan.bindings.is_empty());
+    }
+
+    #[test]
+    fn raster_layer_returns_typed_not_implemented() {
+        let mut l = layer("r", vec![binding("dem")]);
+        l.kind = "raster".into();
+        let cfg = config_with(vec![l]);
+        let err = build_bootstrap_plan(&cfg).expect_err("raster must surface typed error");
+        assert!(matches!(err, PlanError::RasterLayerNotImplemented { layer } if layer.as_str() == "r"));
     }
 
     #[test]
