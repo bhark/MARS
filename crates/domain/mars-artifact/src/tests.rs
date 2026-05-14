@@ -417,6 +417,32 @@ fn writer_rejects_duplicate_section_kinds() {
     assert!(matches!(err, ArtifactError::DuplicateSection(_)), "got {err:?}");
 }
 
+// new section kinds are additive: a reader built today must open an artifact
+// that carries a section kind it has never heard of and surface the known
+// sections unchanged. additive section kinds therefore do not require a
+// FORMAT_VERSION bump.
+#[test]
+fn reader_tolerates_unknown_section_kind() {
+    let features = vec![FeatureGeom {
+        user_id: 1,
+        bbox: [0.0, 0.0, 1.0, 1.0],
+        geom: GeomKind::Point((0.0, 0.0)),
+    }];
+    const UNKNOWN_KIND: u16 = 0xFF;
+    let mut w = ArtifactWriter::new(ArtifactKind::Source);
+    w.add_geometry_payload(features)
+        .add_raw_section(UNKNOWN_KIND, Bytes::from_static(b"future-payload"))
+        .set_bbox(Bbox::new(0.0, 0.0, 1.0, 1.0))
+        .set_feature_count(1);
+    let bytes = w.finish().unwrap();
+
+    let r = ArtifactReader::open(bytes).unwrap();
+    assert_eq!(r.feature_count(), 1);
+    let geom = r.section(SectionKind::GeometryPayload).unwrap();
+    let back = decode_geometry_payload(&geom).unwrap();
+    assert_eq!(back.len(), 1);
+}
+
 #[test]
 fn rejects_compressed_section_flag() {
     // synthesize an artifact whose lone section header has FLAG_COMPRESSED set,

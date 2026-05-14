@@ -24,7 +24,10 @@ pub struct SourceRef {
 #[derive(Debug)]
 pub struct ArtifactWriter {
     kind: ArtifactKind,
-    sections: Vec<(SectionKind, Bytes)>,
+    // sections are stored as raw u16 kinds so additive forward-compat tests
+    // (and any future codec extension) can inject section kinds the current
+    // SectionKind enum does not yet name. typed add_* helpers convert.
+    sections: Vec<(u16, Bytes)>,
     bbox: Option<Bbox>,
     feature_count: Option<u64>,
     source_ref: Option<SourceRef>,
@@ -56,6 +59,15 @@ impl ArtifactWriter {
     /// against the typed staging helpers for geometry/class/label) run in
     /// `finish()`; the builder API stays infallible here.
     pub fn add_section(&mut self, kind: SectionKind, payload: Bytes) -> &mut Self {
+        self.sections.push((kind.as_u16(), payload));
+        self
+    }
+
+    /// Append a section with a raw `u16` kind. Used by forward-compat tests
+    /// that exercise readers' tolerance of section kinds the enum does not
+    /// yet name. Production code goes through [`Self::add_section`].
+    #[cfg(test)]
+    pub(crate) fn add_raw_section(&mut self, kind: u16, payload: Bytes) -> &mut Self {
         self.sections.push((kind, payload));
         self
     }
@@ -145,20 +157,20 @@ impl ArtifactWriter {
                 _ => {}
             }
             let bytes = geometry::encode_geometry_payload(&features)?;
-            self.sections.push((SectionKind::GeometryPayload, bytes));
+            self.sections.push((SectionKind::GeometryPayload.as_u16(), bytes));
         }
         if let Some(items) = self.pending_class_assignment.take() {
             let bytes = class_assignment::encode_class_assignment(&items)?;
-            self.sections.push((SectionKind::ClassAssignment, bytes));
+            self.sections.push((SectionKind::ClassAssignment.as_u16(), bytes));
         }
         if let Some(items) = self.pending_label_candidates.take() {
             let bytes = label_candidates::encode_label_candidates(&items)?;
-            self.sections.push((SectionKind::LabelCandidates, bytes));
+            self.sections.push((SectionKind::LabelCandidates.as_u16(), bytes));
         }
         if let Some(rows) = self.pending_attributes.take() {
             let refs: Vec<(u32, &[u8])> = rows.iter().map(|(idx, p)| (*idx, p.as_slice())).collect();
             let bytes = attrs::encode_attributes_section(&refs)?;
-            self.sections.push((SectionKind::Attributes, bytes));
+            self.sections.push((SectionKind::Attributes.as_u16(), bytes));
         }
 
         // reject duplicate sections (e.g. caller staged geometry via
@@ -169,7 +181,7 @@ impl ArtifactWriter {
         for i in 0..self.sections.len() {
             for j in (i + 1)..self.sections.len() {
                 if self.sections[i].0 == self.sections[j].0 {
-                    return Err(ArtifactError::DuplicateSection(self.sections[i].0.as_u16()));
+                    return Err(ArtifactError::DuplicateSection(self.sections[i].0));
                 }
             }
         }
@@ -177,7 +189,7 @@ impl ArtifactWriter {
         // a geometry section without a known feature_count would silently lie
         // in the footer (zero features, body has them). require it explicitly
         // when geometry is present and could not be derived from staged input.
-        let has_geometry = self.sections.iter().any(|(k, _)| *k == SectionKind::GeometryPayload);
+        let has_geometry = self.sections.iter().any(|(k, _)| *k == SectionKind::GeometryPayload.as_u16());
         let feature_count = match self.feature_count {
             Some(n) => n,
             None if has_geometry => {
@@ -198,13 +210,13 @@ impl ArtifactWriter {
         let mut entries: Vec<(u16, u64, u64)> = Vec::with_capacity(self.sections.len());
         for (kind, payload) in &self.sections {
             let header = SectionHeader {
-                kind: kind.as_u16(),
+                kind: *kind,
                 flags: 0,
                 length: payload.len() as u64,
             };
             let payload_offset = (out.len() + crate::section::SECTION_HEADER_LEN) as u64;
             header.write(&mut out);
-            entries.push((kind.as_u16(), payload_offset, payload.len() as u64));
+            entries.push((*kind, payload_offset, payload.len() as u64));
             out.extend_from_slice(payload);
         }
 

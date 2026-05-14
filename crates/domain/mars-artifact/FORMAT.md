@@ -16,6 +16,15 @@ All multi-byte integers are little-endian.
 - 0x06 StyleRefs
 - 0x07 SpatialIndex
 
+### Forward-compatibility policy
+Section kinds are additive. Adding a new `SectionKind` variant does NOT
+require a `format_version` bump: the footer stores kinds as raw `u16`, and
+readers iterate the footer's section index without enum-coercing the kinds.
+A reader that does not know the new kind silently skips it; lookups by
+typed `SectionKind` (`reader.section(...)`) target only kinds the reader's
+enum names. `format_version` is reserved for wire-layout breakage (header,
+section framing, footer schema).
+
 ## Substrate primary key
 The per-page primary key for joining sidecars (attributes / class / label) to
 geometry is `feature_idx`: the positional slot index of the feature in the
