@@ -7,16 +7,13 @@ repository.workspace  = true
 authors.workspace     = true
 publish.workspace     = true
 rust-version.workspace = true
-description = "PostgreSQL adapter for mars-source: pgoutput logical decoding plus a polling fallback. Owns SQL lowering for mars-expr ASTs."
+description = "PostgreSQL adapter for mars-source: pgoutput logical decoding. Owns SQL lowering for mars-expr ASTs."
 
 [lints]
 workspace = true
 
 [features]
 default = []
-# Polling-mode fallback for sources where logical decoding cannot be enabled.
-# SPEC §8.2.2 - second-class but supported.
-polling = []
 # Integration tests that spin up a postgis container via testcontainers.
 # Optional because docker is not always available; default `cargo test` skips
 # them.

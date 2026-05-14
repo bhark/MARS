@@ -1,8 +1,6 @@
 //! PostgreSQL adapter for `mars-source`.
 //!
-//! Two strategies behind the same `ChangeFeed` trait:
-//! - `pgoutput` logical decoding (default).
-//! - Polling fallback under the `polling` feature (second-class).
+//! Change feed via `pgoutput` logical decoding.
 //!
 //! This crate also owns the lowering of `mars-expr::Expr` to a parameterised
 //! SQL `WHERE` clause. The lowering lives here, not in `mars-expr`, because
