@@ -96,6 +96,8 @@ pub(crate) async fn run(
         applied_tx,
         cancel,
         join: Some(join),
+        slot: cfg.slot.clone(),
+        shutdown_called: false,
     }))
 }
 
@@ -104,6 +106,8 @@ struct PgOutputSubscription {
     applied_tx: watch::Sender<u64>,
     cancel: CancellationToken,
     join: Option<JoinHandle<()>>,
+    slot: String,
+    shutdown_called: bool,
 }
 
 #[async_trait]
@@ -131,6 +135,9 @@ impl ChangeSubscription for PgOutputSubscription {
         // call; awaiting the worker guarantees the final feedback message is
         // on the wire before we return.
         self.cancel.cancel();
+        // mark before the await: callers reached the graceful path, so drop
+        // should stay silent even if the join below surfaces a worker error.
+        self.shutdown_called = true;
         if let Some(handle) = self.join.take()
             && let Err(e) = handle.await
             && !e.is_cancelled()
@@ -146,6 +153,13 @@ impl Drop for PgOutputSubscription {
         // fallback for callers that did not invoke `shutdown` first: cancel and
         // abort. ack durability is only guaranteed on the explicit shutdown
         // path; aborting here may drop an in-flight feedback message.
+        if !self.shutdown_called {
+            tracing::warn!(
+                slot = %self.slot,
+                "pgoutput subscription dropped without shutdown; in-flight ack may be lost \
+                 and the next subscribe could replay an already-persisted window",
+            );
+        }
         self.cancel.cancel();
         if let Some(handle) = self.join.take() {
             handle.abort();
