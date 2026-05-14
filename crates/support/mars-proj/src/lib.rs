@@ -104,7 +104,17 @@ pub enum AxisOrder {
 /// Reads the first axis direction (`north` / `east` / etc.) off the CRS's
 /// coordinate system and maps it to [`AxisOrder`]. Backed by the same
 /// per-thread `PJ_CONTEXT` as the rest of this crate; no PROJ state escapes.
+///
+/// `CRS:84` (OGC) is defined as WGS 84 with longitude/latitude axis order,
+/// so it short-circuits to [`AxisOrder::EastNorth`] without consulting PROJ.
 pub fn axis_order(code: &CrsCode) -> Result<AxisOrder, ProjError> {
+    // ogc crs:84 is wgs84 with explicit lon/lat axis order. proj treats it as
+    // a synonym of epsg:4326 in some database revisions and returns north/east,
+    // which would lie about the wire order. pin it here.
+    if code.as_str().eq_ignore_ascii_case("CRS:84") {
+        return Ok(AxisOrder::EastNorth);
+    }
+
     let definition =
         CString::new(code.as_str()).map_err(|e| ProjError::UnknownCrs(format!("invalid CRS string: {e}")))?;
 
@@ -602,6 +612,14 @@ mod tests {
     fn axis_order_urn_form_resolves() {
         let order = axis_order(&CrsCode::new("urn:ogc:def:crs:EPSG::4326")).unwrap();
         assert_eq!(order, AxisOrder::NorthEast);
+    }
+
+    #[test]
+    fn axis_order_crs84_is_east_north() {
+        for code in ["CRS:84", "crs:84"] {
+            let order = axis_order(&CrsCode::new(code)).unwrap();
+            assert_eq!(order, AxisOrder::EastNorth, "{code}");
+        }
     }
 
     #[test]
