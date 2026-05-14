@@ -602,6 +602,7 @@ pub async fn run_snapshot_from_plan(
         class_sidecars,
         label_sidecars,
         style_artifact: None,
+        image_artifact: None,
         source_version: None,
         epoch: manifest_version,
     })

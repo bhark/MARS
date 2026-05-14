@@ -322,6 +322,7 @@ pub async fn build_fixture_with(opts: FixtureOptions) -> Fixture {
         class_sidecars: vec![class_entry],
         label_sidecars: vec![label_entry],
         style_artifact: None,
+        image_artifact: None,
         source_version: None,
         epoch: 0,
     };
@@ -685,6 +686,7 @@ where
         class_sidecars,
         label_sidecars: Vec::new(),
         style_artifact: None,
+        image_artifact: None,
         source_version: None,
         epoch: 0,
     };

@@ -231,6 +231,7 @@ async fn boundary_key_row_appears_in_exactly_one_dirty_page() {
         class_sidecars: vec![],
         label_sidecars: vec![],
         style_artifact: None,
+        image_artifact: None,
         source_version: None,
         epoch: 0,
     };

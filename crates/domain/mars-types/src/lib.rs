@@ -6,13 +6,12 @@ use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
-/// current `Manifest::format_version`. Bumped to 4 when
-/// `LevelMetadata.hilbert_range_table` started carrying the per-entry
-/// `PageId` so dirty-page lookup stays correct after rebalance allocates
-/// fresh ids. Readers reject anything other than this exact value (no
-/// "accept `<= max`" - see `mars-store-fs` / `mars-store-s3` manifest
-/// readers).
-pub const MANIFEST_FORMAT_VERSION: u32 = 4;
+/// current `Manifest::format_version`. Bumped to 5 when `image_artifact`
+/// joined the envelope so a manifest can advertise a bundled bitmap pack
+/// for `FillPaint::Image { name }` resolution. Readers reject anything
+/// other than this exact value (no floor, no "accept `<= max`" - see
+/// `mars-store-fs` / `mars-store-s3` manifest readers).
+pub const MANIFEST_FORMAT_VERSION: u32 = 5;
 
 /// upper bound on the on-disk pointer string. Versions are `v\d+` so 32 chars
 /// (`v` + 31 decimal digits) covers anything `u64` can represent comfortably.
@@ -523,6 +522,12 @@ pub struct Manifest {
     pub class_sidecars: Vec<LayerSidecarEntry>,
     pub label_sidecars: Vec<LayerSidecarEntry>,
     pub style_artifact: Option<ArtifactEntry>,
+    /// optional bundled image-resources artifact, parallel to `style_artifact`.
+    /// carries the bitmap pack referenced by `FillPaint::Image { name }` so
+    /// runtime renderers resolve names without out-of-band coordination.
+    /// `None` when no style references an image resource.
+    #[serde(default)]
+    pub image_artifact: Option<ArtifactEntry>,
     /// opaque source-side cursor at which this manifest's state was captured
     /// (e.g. WAL position, change-stream token). snapshot compiles set this
     /// to `None`.
@@ -548,6 +553,7 @@ impl Manifest {
             class_sidecars: Vec::new(),
             label_sidecars: Vec::new(),
             style_artifact: None,
+            image_artifact: None,
             source_version: None,
             epoch: 0,
         }
@@ -642,6 +648,20 @@ mod tests {
         let s = serde_json::to_string(&m).unwrap();
         let back: Manifest = serde_json::from_str(&s).unwrap();
         assert_eq!(m, back);
+    }
+
+    #[test]
+    fn manifest_roundtrip_with_image_artifact() {
+        let mut m = Manifest::empty(7, "demo");
+        m.image_artifact = Some(ArtifactEntry {
+            key: ArtifactKey::new("images/pack.bin"),
+            hash: ContentHash::zero(),
+            size_bytes: 1234,
+        });
+        let s = serde_json::to_string(&m).unwrap();
+        let back: Manifest = serde_json::from_str(&s).unwrap();
+        assert_eq!(m, back);
+        assert!(back.image_artifact.is_some());
     }
 
     #[test]

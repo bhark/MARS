@@ -388,6 +388,7 @@ mod tests {
             class_sidecars: vec![],
             label_sidecars: vec![],
             style_artifact: None,
+            image_artifact: None,
             source_version: None,
             epoch: 0,
         }

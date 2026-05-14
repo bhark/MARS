@@ -315,6 +315,7 @@ fn merge(prior: &Manifest, outcome: &mars_compiler::render::RebuildOutcome, next
         class_sidecars,
         label_sidecars,
         style_artifact: prior.style_artifact.clone(),
+        image_artifact: prior.image_artifact.clone(),
         source_version: prior.source_version.clone(),
         epoch: next_version,
     }
