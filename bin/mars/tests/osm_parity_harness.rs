@@ -8,9 +8,10 @@
 //! prerequisites:
 //!   target/parity-fixtures/osm-parity.sql.gz  - the seed dump, not committed.
 //!
-//! regenerate goldens by setting `MARS_GOLDEN_REGENERATE=1`. failing diffs
-//! drop actual/golden bytes into `target/parity-output/<case>/` so the
-//! divergence is inspectable.
+//! the goldens are one-shot captures from an independent reference renderer;
+//! the harness deliberately offers no in-process regeneration path so a green
+//! run cannot mean "MARS agrees with MARS". failing diffs drop actual/golden
+//! bytes into `target/parity-output/<case>/` so the divergence is inspectable.
 
 #![cfg(feature = "integration")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -470,11 +471,6 @@ async fn osm_parity_matrix() -> Result<()> {
         },
     );
 
-    let regenerate = std::env::var_os("MARS_GOLDEN_REGENERATE").is_some();
-    if regenerate {
-        std::fs::create_dir_all(&goldens_dir).context("create goldens dir")?;
-    }
-
     let mut failures = Vec::new();
     for case in cases() {
         let golden_path = goldens_dir.join(format!("{}.{}", case.name, case.ext));
@@ -486,23 +482,7 @@ async fn osm_parity_matrix() -> Result<()> {
             }
         };
 
-        if regenerate {
-            std::fs::write(&golden_path, &bytes).with_context(|| format!("write golden {}", case.name))?;
-            eprintln!(
-                "MARS_GOLDEN_REGENERATE: case={} wrote {} bytes to {}",
-                case.name,
-                bytes.len(),
-                golden_path.display()
-            );
-            continue;
-        }
-
-        let golden = std::fs::read(&golden_path).with_context(|| {
-            format!(
-                "read golden {} (run with MARS_GOLDEN_REGENERATE=1 only when refreshing from a reference renderer)",
-                golden_path.display()
-            )
-        })?;
+        let golden = std::fs::read(&golden_path).with_context(|| format!("read golden {}", golden_path.display()))?;
 
         match diff_pngs_with_radius(&bytes, &golden, case.tolerance, PARITY_DIFF_RADIUS) {
             Ok(report) => {
