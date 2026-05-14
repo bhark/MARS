@@ -1,5 +1,5 @@
 //! perf harness: host-side measurements against the parcels-mini
-//! fixture. mirrors `image_diff_harness.rs` for setup, then runs:
+//! fixture. spins a postgis testcontainer, compiles, then runs:
 //!
 //!   * latency phase: N warm sequential renders per case → p50/p95/max ms
 //!   * throughput phase: M concurrent renders for a fixed window → ops/s
