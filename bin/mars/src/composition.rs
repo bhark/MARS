@@ -219,6 +219,7 @@ mod tests {
             }],
             label: None,
             label_survival: mars_config::LabelSurvival::Independent,
+            raster: None,
         }
     }
 
@@ -360,6 +361,7 @@ mod tests {
             }],
             label: None,
             label_survival: mars_config::LabelSurvival::Independent,
+            raster: None,
         }]);
         let topo = build_replication_topology(&cfg).unwrap();
         assert_eq!(topo.collections.len(), 3);

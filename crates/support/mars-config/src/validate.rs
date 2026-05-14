@@ -269,4 +269,152 @@ mod tests {
         let err = validate(&mut cfg, Path::new("."));
         assert!(err.is_err());
     }
+
+    // raster layer coherence ------------------------------------------------
+
+    fn raster_layer(name: &str) -> crate::model::Layer {
+        use crate::model::{RasterLayerSpec, RasterSourceBinding};
+        let mut l = layer(name);
+        l.kind = "raster".into();
+        l.raster = Some(RasterLayerSpec {
+            source: RasterSourceBinding {
+                collection: mars_types::SourceCollectionId::new("osm"),
+                locator: "https://tile.example/{z}/{x}/{y}.png".into(),
+                source_crs: CrsCode::new("EPSG:3857"),
+                tile_size: 256,
+                max_level: 19,
+            },
+            opacity: 1.0,
+        });
+        l
+    }
+
+    #[test]
+    fn accepts_minimal_raster_layer() {
+        let mut cfg = minimal_config();
+        cfg.layers = vec![raster_layer("osm")];
+        validate(&mut cfg, Path::new(".")).expect("raster layer should validate");
+    }
+
+    #[test]
+    fn rejects_raster_kind_without_raster_block() {
+        let mut cfg = minimal_config();
+        let mut l = raster_layer("osm");
+        l.raster = None;
+        cfg.layers = vec![l];
+        let err = validate(&mut cfg, Path::new(".")).unwrap_err();
+        assert!(matches!(err, ConfigError::Invalid(ref s) if s.contains("no raster: block")));
+    }
+
+    #[test]
+    fn rejects_raster_block_on_vector_kind() {
+        let mut cfg = minimal_config();
+        let mut l = raster_layer("osm");
+        l.kind = "polygon".into();
+        cfg.layers = vec![l];
+        let err = validate(&mut cfg, Path::new(".")).unwrap_err();
+        assert!(matches!(err, ConfigError::Invalid(ref s) if s.contains("raster: block but type")));
+    }
+
+    #[test]
+    fn rejects_raster_layer_with_vector_sources() {
+        let mut cfg = minimal_config();
+        let mut l = raster_layer("osm");
+        l.sources = vec![binding("ignored")];
+        cfg.layers = vec![l];
+        let err = validate(&mut cfg, Path::new(".")).unwrap_err();
+        assert!(matches!(err, ConfigError::Invalid(ref s) if s.contains("vector sources")));
+    }
+
+    #[test]
+    fn rejects_raster_layer_with_classes() {
+        let mut cfg = minimal_config();
+        let mut l = raster_layer("osm");
+        l.classes = vec![class_inline("c", None)];
+        cfg.layers = vec![l];
+        let err = validate(&mut cfg, Path::new(".")).unwrap_err();
+        assert!(matches!(err, ConfigError::Invalid(ref s) if s.contains("classes")));
+    }
+
+    #[test]
+    fn rejects_raster_layer_with_label() {
+        let mut cfg = minimal_config();
+        let mut l = raster_layer("osm");
+        l.label = Some(inline_label("{name}", None));
+        cfg.layers = vec![l];
+        let err = validate(&mut cfg, Path::new(".")).unwrap_err();
+        assert!(matches!(err, ConfigError::Invalid(ref s) if s.contains("label")));
+    }
+
+    #[test]
+    fn rejects_raster_opacity_out_of_range() {
+        let mut cfg = minimal_config();
+        let mut l = raster_layer("osm");
+        if let Some(spec) = l.raster.as_mut() {
+            spec.opacity = 1.5;
+        }
+        cfg.layers = vec![l];
+        let err = validate(&mut cfg, Path::new(".")).unwrap_err();
+        assert!(matches!(err, ConfigError::Invalid(ref s) if s.contains("opacity")));
+    }
+
+    #[test]
+    fn rejects_raster_empty_locator() {
+        let mut cfg = minimal_config();
+        let mut l = raster_layer("osm");
+        if let Some(spec) = l.raster.as_mut() {
+            spec.source.locator = "  ".into();
+        }
+        cfg.layers = vec![l];
+        let err = validate(&mut cfg, Path::new(".")).unwrap_err();
+        assert!(matches!(err, ConfigError::Invalid(ref s) if s.contains("locator")));
+    }
+
+    #[test]
+    fn rejects_raster_zero_tile_size() {
+        let mut cfg = minimal_config();
+        let mut l = raster_layer("osm");
+        if let Some(spec) = l.raster.as_mut() {
+            spec.source.tile_size = 0;
+        }
+        cfg.layers = vec![l];
+        let err = validate(&mut cfg, Path::new(".")).unwrap_err();
+        assert!(matches!(err, ConfigError::Invalid(ref s) if s.contains("tile_size")));
+    }
+
+    #[test]
+    fn raster_layer_roundtrips_through_yaml() {
+        use crate::model::Layer;
+        let mut l = raster_layer("osm");
+        l.title = "OSM".into();
+        let yaml = serde_yaml_ng::to_string(&l).unwrap();
+        let back: Layer = serde_yaml_ng::from_str(&yaml).unwrap();
+        assert_eq!(back.kind, "raster");
+        let r = back.raster.as_ref().unwrap();
+        assert_eq!(r.source.locator, "https://tile.example/{z}/{x}/{y}.png");
+        assert_eq!(r.source.collection.as_str(), "osm");
+        assert_eq!(r.source.source_crs.as_str(), "EPSG:3857");
+        assert_eq!(r.source.tile_size, 256);
+        assert_eq!(r.source.max_level, 19);
+        assert!((r.opacity - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn raster_layer_yaml_applies_defaults() {
+        use crate::model::Layer;
+        let yaml = r#"
+name: osm
+type: raster
+raster:
+  source:
+    collection: osm
+    locator: "https://tile/{z}/{x}/{y}.png"
+    source_crs: "EPSG:3857"
+    max_level: 19
+"#;
+        let l: Layer = serde_yaml_ng::from_str(yaml).unwrap();
+        let r = l.raster.expect("raster present");
+        assert_eq!(r.source.tile_size, 256, "tile_size default");
+        assert!((r.opacity - 1.0).abs() < f32::EPSILON, "opacity default");
+    }
 }

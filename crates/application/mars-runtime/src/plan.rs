@@ -256,6 +256,7 @@ mod tests {
             classes: Vec::<Class>::new(),
             label: None,
             label_survival: LabelSurvival::default(),
+            raster: None,
         }
     }
 

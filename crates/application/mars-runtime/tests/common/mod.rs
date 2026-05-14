@@ -447,6 +447,7 @@ fn build_minimal_config(layer_id: &LayerId, binding_id: &BindingId, label_surviv
             }],
             label: None,
             label_survival,
+            raster: None,
         }],
         observability: Observability::default(),
         render: Render::default(),
@@ -767,6 +768,7 @@ fn build_multi_layer_config(layer_ids: &[LayerId], binding_ids: &[BindingId]) ->
             }],
             label: None,
             label_survival: LabelSurvival::Independent,
+            raster: None,
         })
         .collect();
     Config {

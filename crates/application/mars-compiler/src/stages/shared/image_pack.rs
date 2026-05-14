@@ -230,6 +230,7 @@ mod tests {
             ],
             label: None,
             label_survival: mars_config::LabelSurvival::Independent,
+            raster: None,
         };
 
         let refs = collect_from_layers_and_styles(&[layer], &std::collections::BTreeMap::new());

@@ -95,6 +95,7 @@ pub(crate) fn layer(name: &str) -> Layer {
         classes: vec![],
         label: None,
         label_survival: mars_style::LabelSurvival::Independent,
+        raster: None,
     }
 }
 
@@ -164,5 +165,6 @@ pub(crate) fn tiered_layer(sources: Vec<SourceBinding>) -> Layer {
         classes: vec![],
         label: None,
         label_survival: mars_style::LabelSurvival::Independent,
+        raster: None,
     }
 }

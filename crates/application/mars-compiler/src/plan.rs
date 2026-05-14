@@ -596,6 +596,7 @@ mod tests {
             }],
             label: None,
             label_survival: mars_config::LabelSurvival::Independent,
+            raster: None,
         }
     }
 
@@ -705,6 +706,7 @@ mod tests {
             ],
             label: None,
             label_survival: mars_config::LabelSurvival::Independent,
+            raster: None,
         };
         let cfg = config_with(vec![l]);
         let plan = build_bootstrap_plan(&cfg).unwrap();
