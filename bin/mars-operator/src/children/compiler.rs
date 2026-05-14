@@ -359,12 +359,7 @@ mod tests {
         cr.spec.compiler.images_config_map = Some("mars-images".into());
         let kids = build(&cr, "deadbeef", None, test_support::owner_ref()).unwrap();
         let pod = kids.deployment.spec.unwrap().template.spec.unwrap();
-        let vol = pod
-            .volumes
-            .unwrap()
-            .into_iter()
-            .find(|v| v.name == "images")
-            .unwrap();
+        let vol = pod.volumes.unwrap().into_iter().find(|v| v.name == "images").unwrap();
         let cm = vol.config_map.unwrap();
         assert_eq!(cm.name, "mars-images");
         let mount = pod.containers[0]
