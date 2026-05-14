@@ -2452,23 +2452,18 @@ dependencies = [
  "mars-source-xyz",
  "mars-store",
  "mars-store-fs",
- "mars-test-support",
  "mars-types",
  "mars-wms",
  "mars-wmts",
- "png",
  "rand 0.10.1",
  "reqwest 0.13.3",
- "serde",
  "serde_json",
- "serde_yaml_ng",
  "tempfile",
  "testcontainers",
  "tokio",
  "tokio-postgres",
  "tokio-util",
  "tracing",
- "zune-jpeg",
 ]
 
 [[package]]

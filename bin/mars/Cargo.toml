@@ -54,14 +54,8 @@ futures-util = { workspace = true }
 reqwest      = { workspace = true, default-features = true, features = ["blocking"] }
 
 [dev-dependencies]
-mars-test-support = { workspace = true }
+async-trait    = { workspace = true }
+rand           = { workspace = true }
+tempfile       = { workspace = true }
 testcontainers = { workspace = true }
 tokio-postgres = { workspace = true }
-png = { workspace = true }
-zune-jpeg = { workspace = true }
-tempfile = { workspace = true }
-serde_yaml_ng = { workspace = true }
-rand = { workspace = true }
-serde      = { workspace = true }
-serde_json = { workspace = true }
-async-trait  = { workspace = true }
