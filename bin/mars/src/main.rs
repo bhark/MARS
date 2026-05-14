@@ -199,6 +199,7 @@ async fn run_runtime(cfg: Arc<Config>, shutdown: CancellationToken) -> Result<()
         .pixel_budget_permits()
         .context("resolve render.pixel_budget")?;
     let images = Arc::new(mars_runtime::images::MutableImageRegistry::new());
+    let raster_sources = composition::build_raster_sources(&cfg).context("build raster source registry")?;
     let runtime = Arc::new(Runtime::with_pixel_budget(
         RuntimeDeps {
             store,
@@ -211,7 +212,7 @@ async fn run_runtime(cfg: Arc<Config>, shutdown: CancellationToken) -> Result<()
             metrics: metrics.clone(),
             fonts,
             images,
-            raster_sources: std::collections::HashMap::new(),
+            raster_sources,
         },
         pixel_budget,
         None,

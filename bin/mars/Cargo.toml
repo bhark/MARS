@@ -33,7 +33,9 @@ mars-http           = { workspace = true }
 mars-wms            = { workspace = true }
 mars-wmts           = { workspace = true }
 mars-store-fs       = { workspace = true }
+mars-source         = { workspace = true }
 mars-source-postgres = { workspace = true }
+mars-source-xyz     = { workspace = true }
 mars-render         = { workspace = true }
 mars-artifact       = { workspace = true }
 mars-store          = { workspace = true }
@@ -62,5 +64,4 @@ serde_yaml_ng = { workspace = true }
 rand = { workspace = true }
 serde      = { workspace = true }
 serde_json = { workspace = true }
-mars-source  = { workspace = true }
 async-trait  = { workspace = true }

@@ -4,11 +4,14 @@
 //! `mars_source_postgres::ReplicationTopology`) are concrete; library crates
 //! must not name them directly per the hexagonal-architecture rules.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use mars_config::Config;
+use mars_source::RasterSource;
 use mars_source_postgres::{CollectionTopology, ReplicationTopology, SourceCollectionId};
+use mars_source_xyz::XyzRasterSource;
 
 /// Build the replication topology from configuration. Deduplicates source
 /// bindings on `(schema, table)` so the same physical table appearing in
@@ -100,6 +103,32 @@ pub(crate) fn validate_change_feed_config(cfg: &Config) -> Result<()> {
             "source.change_feed.type='{other}' unsupported; only 'pgoutput' is wired"
         )),
     }
+}
+
+/// Build the per-collection raster source registry the runtime hands to its
+/// raster render path. One shared [`reqwest::Client`] backs every XYZ
+/// collection (connection pooling per upstream host is reqwest's job). The
+/// returned map is keyed by `RasterLayerEntry.collection`; an empty config
+/// (no raster layers) yields an empty map and zero adapter allocations.
+pub(crate) fn build_raster_sources(cfg: &Config) -> Result<HashMap<SourceCollectionId, Arc<dyn RasterSource>>> {
+    let mut out: HashMap<SourceCollectionId, Arc<dyn RasterSource>> = HashMap::new();
+    let mut xyz_client: Option<Arc<dyn RasterSource>> = None;
+    for layer in &cfg.layers {
+        let Some(raster) = layer.raster.as_ref() else {
+            continue;
+        };
+        let collection = SourceCollectionId::new(raster.source.collection.as_str().to_owned());
+        if out.contains_key(&collection) {
+            // multiple layers may share the same collection (different
+            // opacities, same upstream tile pyramid); first registration wins.
+            continue;
+        }
+        let source = xyz_client
+            .get_or_insert_with(|| Arc::new(XyzRasterSource::new(reqwest::Client::new())) as Arc<dyn RasterSource>)
+            .clone();
+        out.insert(collection, source);
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -403,5 +432,65 @@ mod tests {
         let mut cfg = cfg_with_layers(vec![]);
         cfg.source.change_feed.as_mut().unwrap().slot = Some(String::new());
         assert!(validate_change_feed_config(&cfg).is_err());
+    }
+
+    // raster source wiring --------------------------------------------------
+
+    fn raster_layer(name: &str, collection: &str) -> Layer {
+        use mars_config::{RasterLayerSpec, RasterSourceBinding};
+        Layer {
+            name: LayerId::new(name),
+            title: String::new(),
+            abstract_: String::new(),
+            kind: "raster".into(),
+            scale: None,
+            group: None,
+            enable_get_feature_info: false,
+            bbox: None,
+            sources: vec![],
+            classes: vec![],
+            label: None,
+            label_survival: mars_config::LabelSurvival::Independent,
+            raster: Some(RasterLayerSpec {
+                source: RasterSourceBinding {
+                    collection: SourceCollectionId::new(collection),
+                    locator: "https://tile.example/{z}/{x}/{y}.png".into(),
+                    source_crs: CrsCode::new("EPSG:3857"),
+                    tile_size: 256,
+                    max_level: 19,
+                },
+                opacity: 1.0,
+            }),
+        }
+    }
+
+    #[test]
+    fn build_raster_sources_empty_when_no_raster_layers() {
+        let cfg = cfg_with_layers(vec![]);
+        let sources = build_raster_sources(&cfg).unwrap();
+        assert!(sources.is_empty());
+    }
+
+    #[test]
+    fn build_raster_sources_keys_by_collection() {
+        let cfg = cfg_with_layers(vec![raster_layer("a", "osm"), raster_layer("b", "stamen")]);
+        let sources = build_raster_sources(&cfg).unwrap();
+        assert_eq!(sources.len(), 2);
+        assert!(sources.contains_key(&SourceCollectionId::new("osm")));
+        assert!(sources.contains_key(&SourceCollectionId::new("stamen")));
+    }
+
+    #[test]
+    fn build_raster_sources_dedupes_shared_collection_across_layers() {
+        // two layers may share the same upstream collection (e.g. an opacity
+        // overlay of the same OSM pyramid); the registry should still carry
+        // exactly one entry per collection id.
+        let cfg = cfg_with_layers(vec![
+            raster_layer("a", "osm"),
+            raster_layer("b", "osm"),
+            raster_layer("c", "stamen"),
+        ]);
+        let sources = build_raster_sources(&cfg).unwrap();
+        assert_eq!(sources.len(), 2);
     }
 }
