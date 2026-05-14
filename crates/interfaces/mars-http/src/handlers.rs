@@ -27,7 +27,7 @@ pub async fn handle_wms(State(state): State<AppState>, headers: HeaderMap, raw_q
         };
 
         match parsed {
-            WmsRequest::GetCapabilities => serve_capabilities(&state.wms_capabilities, &headers),
+            WmsRequest::GetCapabilities => serve_capabilities(state.wms_capabilities.for_version(version), &headers),
             WmsRequest::GetMap(mars_wms::ResolvedGetMap { plan, exceptions }) => {
                 let mime = plan.format.mime();
                 match state.runtime.render(&plan).await {

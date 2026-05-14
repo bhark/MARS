@@ -24,7 +24,7 @@ use axum::http::StatusCode;
 use axum::routing::get;
 use mars_observability::Metrics;
 use mars_runtime::Runtime;
-use mars_wms::WmsConfig;
+use mars_wms::{WmsConfig, WmsVersion};
 use mars_wmts::WmtsConfig;
 use tokio_util::sync::CancellationToken;
 use tower_http::limit::RequestBodyLimitLayer;
@@ -82,11 +82,32 @@ pub fn capabilities_handle(body: String) -> CapabilitiesHandle {
     Arc::new(ArcSwap::from(Arc::new(CapabilitiesDoc::new(body))))
 }
 
+/// Per-version WMS capabilities handles. The HTTP edge serves the document
+/// matching the negotiated [`WmsVersion`]; both are atomically swappable on
+/// manifest changes so a 1.1.1 client and a 1.3.0 client never observe a
+/// stale half-update.
+#[derive(Clone)]
+pub struct WmsCapabilitiesHandles {
+    pub v111: CapabilitiesHandle,
+    pub v130: CapabilitiesHandle,
+}
+
+impl WmsCapabilitiesHandles {
+    /// Look up the cached capabilities document for the negotiated version.
+    #[must_use]
+    pub fn for_version(&self, version: WmsVersion) -> &CapabilitiesHandle {
+        match version {
+            WmsVersion::V111 => &self.v111,
+            WmsVersion::V130 => &self.v130,
+        }
+    }
+}
+
 /// Bundle of per-interface capabilities handles. Travel together through
 /// `router` / `serve` so the signature stays narrow as more interfaces land.
 #[derive(Clone)]
 pub struct CapabilitiesBundle {
-    pub wms: CapabilitiesHandle,
+    pub wms: WmsCapabilitiesHandles,
     pub wmts: CapabilitiesHandle,
 }
 
@@ -94,7 +115,7 @@ pub struct CapabilitiesBundle {
 #[derive(Clone)]
 pub struct AppState {
     runtime: Arc<Runtime>,
-    wms_capabilities: CapabilitiesHandle,
+    wms_capabilities: WmsCapabilitiesHandles,
     wmts_capabilities: CapabilitiesHandle,
     wms_cfg: Arc<WmsConfig>,
     wmts_cfg: Arc<WmtsConfig>,
@@ -236,7 +257,10 @@ mod tests {
         router(
             empty_runtime(&metrics),
             CapabilitiesBundle {
-                wms: capabilities_handle("<wmscaps/>".into()),
+                wms: WmsCapabilitiesHandles {
+                    v111: capabilities_handle("<wmscaps111/>".into()),
+                    v130: capabilities_handle("<wmscaps/>".into()),
+                },
                 wmts: capabilities_handle("<wmtscaps/>".into()),
             },
             test_wms_cfg(),
@@ -502,7 +526,10 @@ mod tests {
         let app = router(
             runtime.clone(),
             CapabilitiesBundle {
-                wms: capabilities_handle("<wmscaps/>".into()),
+                wms: WmsCapabilitiesHandles {
+                    v111: capabilities_handle("<wmscaps111/>".into()),
+                    v130: capabilities_handle("<wmscaps/>".into()),
+                },
                 wmts: capabilities_handle("<wmtscaps/>".into()),
             },
             test_wms_cfg(),
@@ -572,7 +599,10 @@ mod tests {
         let app = router(
             empty_runtime(&metrics),
             CapabilitiesBundle {
-                wms: caps.clone(),
+                wms: WmsCapabilitiesHandles {
+                    v111: capabilities_handle("<caps111>v1</caps111>".into()),
+                    v130: caps.clone(),
+                },
                 wmts: capabilities_handle("<wmtscaps/>".into()),
             },
             test_wms_cfg(),
@@ -613,6 +643,25 @@ mod tests {
         assert!(body.contains(r#"code="MissingParameterValue""#));
         // default version tag when the client did not pin one
         assert!(body.contains(r#"version="1.3.0""#));
+    }
+
+    #[tokio::test]
+    async fn wms_111_capabilities_served_separately() {
+        // negotiate version=1.1.1 and confirm we get the v111-tagged stub
+        // rather than the 1.3.0 document.
+        let app = empty_router();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/wms?service=WMS&version=1.1.1&request=GetCapabilities")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = body_str(resp).await;
+        assert!(body.contains("<wmscaps111/>"), "got: {body}");
     }
 
     #[tokio::test]

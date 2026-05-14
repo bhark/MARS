@@ -1,30 +1,17 @@
 //! WMS 1.3.0 GetCapabilities document.
-//!
-//! Renders a minimal, valid 1.3.0 capabilities body; format conformance is a
-//! future concern. The output is built per manifest swap so newly published
-//! layer bboxes show up without restarting.
 
-use std::collections::HashMap;
 use std::io::Cursor;
 
 use mars_config::Config;
-use mars_types::{Bbox, ImageFormat, LayerId, Manifest};
+use mars_types::{Bbox, ImageFormat, Manifest};
 use quick_xml::Writer;
-use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
+use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
 
+use super::{INFO_FORMATS, configured_formats, derive_layer_bboxes, text_element, union_bbox, xml_err};
 use crate::WmsError;
 
-/// INFO_FORMAT MIME strings advertised in the GetFeatureInfo capability block.
-/// Mirrors the set [`crate::feature_info::info_format_mime`] accepts on the
-/// request path so capabilities and runtime stay in agreement.
-const INFO_FORMATS: &[&str] = &["text/plain", "text/html", "application/json"];
-
-/// Render the capabilities XML. Per-layer bboxes are taken from the union of
-/// materialised artifact cells in the manifest, falling back to the layer's
-/// configured `bbox` when no artifacts exist yet. Per-layer scale ranges are
-/// derived from the layer scale window. The root `BoundingBox` is the union
-/// of layer bboxes; the element is omitted if neither source produces one.
-pub fn capabilities_xml(cfg: &Config, manifest: &Manifest) -> Result<String, WmsError> {
+/// Render the WMS 1.3.0 capabilities XML.
+pub(super) fn capabilities_xml(cfg: &Config, manifest: &Manifest) -> Result<String, WmsError> {
     let layer_bboxes = derive_layer_bboxes(cfg, manifest);
     let root_bbox = layer_bboxes.values().copied().reduce(union_bbox);
 
@@ -145,48 +132,6 @@ pub fn capabilities_xml(cfg: &Config, manifest: &Manifest) -> Result<String, Wms
     })
 }
 
-/// per-layer bbox from config. bboxes are derived from the per-binding
-/// `combined_bbox` summary plus the layer-to-binding mapping.
-fn derive_layer_bboxes(cfg: &Config, _manifest: &Manifest) -> HashMap<LayerId, Bbox> {
-    let mut out: HashMap<LayerId, Bbox> = HashMap::new();
-    for layer in &cfg.layers {
-        if let Some(bbox) = layer.bbox {
-            out.entry(layer.name.clone()).or_insert(bbox);
-        }
-    }
-    out
-}
-
-fn union_bbox(a: Bbox, b: Bbox) -> Bbox {
-    Bbox::new(
-        a.min_x.min(b.min_x),
-        a.min_y.min(b.min_y),
-        a.max_x.max(b.max_x),
-        a.max_y.max(b.max_y),
-    )
-}
-
-/// Resolve the format set the runtime advertises. Falls back to PNG when
-/// `interfaces.wms.formats` is omitted, matching `WmsConfig::from_config`.
-fn configured_formats(cfg: &Config) -> Vec<ImageFormat> {
-    let configured: Vec<ImageFormat> = cfg
-        .interfaces
-        .wms
-        .as_ref()
-        .map(|w| {
-            w.formats
-                .iter()
-                .filter_map(|f| ImageFormat::from_mime(f.as_str()))
-                .collect()
-        })
-        .unwrap_or_default();
-    if configured.is_empty() {
-        vec![ImageFormat::Png]
-    } else {
-        configured
-    }
-}
-
 /// Emit a single default `<Style>` block per layer including a relative
 /// LegendURL. Path matches the runtime route; clients ground it on the
 /// request URL they reached the service on.
@@ -238,28 +183,14 @@ fn write_bbox<W: std::io::Write>(w: &mut Writer<W>, crs: &str, bbox: Bbox) -> Re
     w.write_event(Event::Empty(bb)).map_err(xml_err)
 }
 
-fn text_element<W: std::io::Write>(w: &mut Writer<W>, name: &str, text: &str) -> Result<(), WmsError> {
-    w.write_event(Event::Start(BytesStart::new(name))).map_err(xml_err)?;
-    w.write_event(Event::Text(BytesText::new(text))).map_err(xml_err)?;
-    w.write_event(Event::End(BytesEnd::new(name))).map_err(xml_err)?;
-    Ok(())
-}
-
-fn xml_err(e: std::io::Error) -> WmsError {
-    WmsError::InvalidParam {
-        name: "capabilities",
-        reason: e.to_string(),
-    }
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use super::*;
     use quick_xml::Reader;
 
+    use super::*;
+
     fn minimal_cfg() -> Config {
-        // build via yaml so we don't have to hand-roll every field
         let yaml = r#"
 service: { name: t, title: "T", abstract: "A", contact_email: ops@x }
 source: { type: postgis, dsn: "postgres://x", native_crs: EPSG:25832 }
@@ -294,7 +225,6 @@ layers:
         assert!(xml.contains("EPSG:25832"));
         assert!(xml.contains("<Name>a</Name>"));
 
-        // structural validation
         let mut r = Reader::from_str(&xml);
         let mut depth: i32 = 0;
         let mut buf = Vec::new();
@@ -316,7 +246,6 @@ layers:
         cfg.layers[0].title = "A & B <C>".into();
         let m = Manifest::empty(1, cfg.service.name.clone());
         let xml = capabilities_xml(&cfg, &m).unwrap();
-        // special chars must be escaped, not raw
         assert!(!xml.contains("A & B <C>"), "raw unescaped special chars found");
         assert!(xml.contains("A &amp; B &lt;C&gt;"), "expected escaped entities");
     }
@@ -382,8 +311,6 @@ layers:
         let cfg = minimal_cfg();
         let m = Manifest::empty(1, cfg.service.name.clone());
         let xml = capabilities_xml(&cfg, &m).unwrap();
-        // only values in the canonical crs are emitted, so the advertised CRS
-        // list and BoundingBox CRS must reflect only that.
         assert!(xml.contains("<CRS>EPSG:25832</CRS>"));
         assert!(!xml.contains("<CRS>EPSG:4326</CRS>"));
         assert!(!xml.contains(r#"CRS="EPSG:4326""#));
@@ -431,8 +358,4 @@ layers:
         assert!(xml.contains("<Format>image/jpeg</Format>"));
         assert!(xml.contains("<Format>image/webp</Format>"));
     }
-
-    // phase-d: re-add `emits_canonical_bbox_only` and `derives_layer_bbox_from_manifest_cells`
-    // once the v3 page entries surface per-binding bboxes that the wms builder
-    // can union by binding-to-layer mapping.
 }

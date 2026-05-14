@@ -263,12 +263,17 @@ async fn run_runtime(cfg: Arc<Config>, shutdown: CancellationToken) -> Result<()
     });
 
     let initial_manifest_for_caps = manifest_opt.clone().unwrap_or_else(|| empty_manifest(&cfg));
-    let initial_wms_caps =
-        mars_wms::capabilities_xml(&cfg, &initial_manifest_for_caps).map_err(|e| anyhow!("wms capabilities: {e}"))?;
+    let initial_wms_caps_130 = mars_wms::capabilities_xml(&cfg, &initial_manifest_for_caps, mars_wms::WmsVersion::V130)
+        .map_err(|e| anyhow!("wms 1.3.0 capabilities: {e}"))?;
+    let initial_wms_caps_111 = mars_wms::capabilities_xml(&cfg, &initial_manifest_for_caps, mars_wms::WmsVersion::V111)
+        .map_err(|e| anyhow!("wms 1.1.1 capabilities: {e}"))?;
     let initial_wmts_caps =
         mars_wmts::capabilities_xml(&cfg, &initial_manifest_for_caps).map_err(|e| anyhow!("wmts capabilities: {e}"))?;
     let caps_bundle = mars_http::CapabilitiesBundle {
-        wms: mars_http::capabilities_handle(initial_wms_caps),
+        wms: mars_http::WmsCapabilitiesHandles {
+            v111: mars_http::capabilities_handle(initial_wms_caps_111),
+            v130: mars_http::capabilities_handle(initial_wms_caps_130),
+        },
         wmts: mars_http::capabilities_handle(initial_wmts_caps),
     };
 
@@ -344,11 +349,18 @@ async fn rebuild_capabilities_loop(
                 continue;
             }
         };
-        match mars_wms::capabilities_xml(&cfg, &manifest) {
-            Ok(body) => handles.wms.store(Arc::new(mars_http::CapabilitiesDoc::new(body))),
+        match mars_wms::capabilities_xml(&cfg, &manifest, mars_wms::WmsVersion::V130) {
+            Ok(body) => handles.wms.v130.store(Arc::new(mars_http::CapabilitiesDoc::new(body))),
             Err(e) => {
                 metrics.inc_capabilities_rebuild_failures();
-                tracing::error!(error = %e, "capabilities: wms rebuild failed");
+                tracing::error!(error = %e, "capabilities: wms 1.3.0 rebuild failed");
+            }
+        }
+        match mars_wms::capabilities_xml(&cfg, &manifest, mars_wms::WmsVersion::V111) {
+            Ok(body) => handles.wms.v111.store(Arc::new(mars_http::CapabilitiesDoc::new(body))),
+            Err(e) => {
+                metrics.inc_capabilities_rebuild_failures();
+                tracing::error!(error = %e, "capabilities: wms 1.1.1 rebuild failed");
             }
         }
         match mars_wmts::capabilities_xml(&cfg, &manifest) {
