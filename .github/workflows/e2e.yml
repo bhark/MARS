@@ -68,7 +68,7 @@ jobs:
         run: scripts/run-e2e.sh
       - name: upload diagnostics on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e2e-output-${{ github.run_id }}
           path: target/e2e-output/
