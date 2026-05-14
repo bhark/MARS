@@ -4,7 +4,7 @@
 //! adding a new `Style` field touches `resolve` in one place; downstream code
 //! reads from `Resolved*` instead of re-doing the Option dance per call site.
 
-use mars_style::{FillPaint, MarkerSymbol, Style};
+use mars_style::{FillPaint, Style};
 use tiny_skia::{LineCap, LineJoin, StrokeDash};
 
 use crate::canvas::{map_cap, map_join};
@@ -23,26 +23,19 @@ pub(crate) struct Resolved {
 
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct UnimplementedFeatures {
-    pub glyph_marker: bool,
     pub stroke_gap: bool,
 }
 
 impl UnimplementedFeatures {
     pub(crate) fn any(self) -> bool {
-        self.glyph_marker || self.stroke_gap
+        self.stroke_gap
     }
 
     pub(crate) fn names(self) -> impl Iterator<Item = &'static str> {
-        [
-            self.glyph_marker.then_some("Style::marker (Glyph)"),
-            self.stroke_gap.then_some("Style::stroke_gap"),
-        ]
-        .into_iter()
-        .flatten()
+        [self.stroke_gap.then_some("Style::stroke_gap")].into_iter().flatten()
     }
 
     pub(crate) fn merge(&mut self, other: Self) {
-        self.glyph_marker |= other.glyph_marker;
         self.stroke_gap |= other.stroke_gap;
     }
 }
@@ -78,7 +71,6 @@ pub(crate) fn resolve(style: &Style) -> Resolved {
     let opacity = style.opacity.unwrap_or(1.0).clamp(0.0, 1.0);
 
     let unimplemented = UnimplementedFeatures {
-        glyph_marker: matches!(style.marker, Some(MarkerSymbol::Glyph { .. })),
         stroke_gap: style.stroke_gap.is_some(),
     };
 
@@ -215,23 +207,6 @@ mod tests {
     }
 
     #[test]
-    fn unimplemented_flags_glyph_marker() {
-        let s = Style {
-            marker: Some(MarkerSymbol::Glyph {
-                font_family: "x".into(),
-                ch: "a".into(),
-                size: 6.0,
-            }),
-            ..Default::default()
-        };
-        let r = resolve(&s);
-        assert!(r.unimplemented.glyph_marker);
-        assert!(!r.unimplemented.stroke_gap);
-        let names: Vec<_> = r.unimplemented.names().collect();
-        assert_eq!(names, vec!["Style::marker (Glyph)"]);
-    }
-
-    #[test]
     fn unimplemented_flags_stroke_gap() {
         let s = Style {
             stroke: Some(Colour::rgba(0, 0, 0, 255)),
@@ -244,8 +219,9 @@ mod tests {
         };
         let r = resolve(&s);
         assert!(r.unimplemented.stroke_gap);
-        assert!(!r.unimplemented.glyph_marker);
         assert!(r.unimplemented.any());
+        let names: Vec<_> = r.unimplemented.names().collect();
+        assert_eq!(names, vec!["Style::stroke_gap"]);
     }
 
     #[test]

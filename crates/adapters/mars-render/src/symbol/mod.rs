@@ -4,15 +4,13 @@
 //! variant in `mars-style` breaks the build here, forcing the conversation
 //! about whether the new marker is wired or staged.
 //!
-//! `Glyph` continues to surface through `UnimplementedFeatures::glyph_marker`
-//! (the existing flag); the warn-but-continue contract in the renderer
-//! entry point already covers it. A `None` marker on a `Symbol` op is a
-//! runtime contract slip; rendering no-ops rather than aborting the batch,
-//! consistent with how empty paths and zero-width strokes are tolerated
-//! elsewhere in the pipeline.
+//! A `None` marker on a `Symbol` op is a runtime contract slip; rendering
+//! no-ops rather than aborting the batch, consistent with how empty paths
+//! and zero-width strokes are tolerated elsewhere in the pipeline.
 
 mod circle;
 mod cross;
+mod glyph;
 mod pin;
 mod square;
 mod triangle;
@@ -21,6 +19,7 @@ mod x;
 
 use mars_render_port::{Path as PortPath, RenderError};
 use mars_style::{MarkerSymbol, Style};
+use mars_text::Fonts;
 use tiny_skia::Pixmap;
 
 use crate::prepare::UnimplementedFeatures;
@@ -30,15 +29,16 @@ pub(crate) fn dispatch(
     anchor: (f32, f32),
     rotation_rad: f32,
     style: &Style,
+    fonts: &Fonts,
 ) -> Result<UnimplementedFeatures, RenderError> {
     let Some(marker) = &style.marker else {
         return Ok(UnimplementedFeatures::default());
     };
     match marker {
-        MarkerSymbol::Glyph { .. } => Ok(UnimplementedFeatures {
-            glyph_marker: true,
-            ..Default::default()
-        }),
+        MarkerSymbol::Glyph { font_family, ch, size } => {
+            glyph::draw(pm, anchor, rotation_rad, font_family, ch, *size, style, fonts)
+                .map(|()| UnimplementedFeatures::default())
+        }
         MarkerSymbol::Circle { size } => render(pm, circle::build_path(*size), anchor, rotation_rad, style),
         MarkerSymbol::Square { size } => render(pm, square::build_path(*size), anchor, rotation_rad, style),
         MarkerSymbol::Triangle { size } => render(pm, triangle::build_path(*size), anchor, rotation_rad, style),
@@ -104,14 +104,18 @@ mod tests {
     }
 
     fn render_marker(marker: MarkerSymbol) -> Vec<u8> {
+        render_marker_at(marker, 32, 0.0)
+    }
+
+    fn render_marker_at(marker: MarkerSymbol, side: u32, rotation_rad: f32) -> Vec<u8> {
         let canvas = Canvas {
-            width: 32,
-            height: 32,
+            width: side,
+            height: side,
             background: None,
         };
         let op = DrawOp::Symbol {
-            anchor: (16.0, 16.0),
-            rotation_rad: 0.0,
+            anchor: (side as f32 / 2.0, side as f32 / 2.0),
+            rotation_rad,
             style: Arc::new(Style {
                 fill: Some(FillPaint::Solid(Colour {
                     r: 255,
@@ -141,25 +145,110 @@ mod tests {
             .count()
     }
 
+    // (width, height) of the bbox of any non-transparent pixel.
+    fn painted_extents(png: &[u8]) -> (i32, i32) {
+        let dec = png::Decoder::new(std::io::Cursor::new(png));
+        let mut reader = dec.read_info().unwrap();
+        let mut buf = vec![0; reader.output_buffer_size().unwrap()];
+        let info = reader.next_frame(&mut buf).unwrap();
+        buf.truncate(info.buffer_size());
+        let w = info.width as usize;
+        let mut minx = i32::MAX;
+        let mut maxx = i32::MIN;
+        let mut miny = i32::MAX;
+        let mut maxy = i32::MIN;
+        for (i, p) in buf.chunks_exact(4).enumerate() {
+            if p[3] == 0 {
+                continue;
+            }
+            let x = (i % w) as i32;
+            let y = (i / w) as i32;
+            minx = minx.min(x);
+            maxx = maxx.max(x);
+            miny = miny.min(y);
+            maxy = maxy.max(y);
+        }
+        (maxx - minx, maxy - miny)
+    }
+
     #[test]
     fn none_marker_is_silent_no_op() {
         let style = Style::default();
-        let flags = dispatch(&mut pm(), (8.0, 8.0), 0.0, &style).expect("ok");
+        let fonts = mars_text::Fonts::with_default();
+        let flags = dispatch(&mut pm(), (8.0, 8.0), 0.0, &style, &fonts).expect("ok");
         assert!(!flags.any(), "no-op must not flag");
     }
 
     #[test]
-    fn glyph_marker_surfaces_flag_without_error() {
+    fn glyph_marker_paints_pixels_at_anchor() {
+        let png = render_marker(MarkerSymbol::Glyph {
+            font_family: "DejaVu Sans".into(),
+            ch: "A".into(),
+            size: 18.0,
+        });
+        let n = red_pixel_count(&png);
+        // exact glyph coverage depends on the bundled font; loose bounds
+        // confirm the glyph rasterises at the requested colour without
+        // being blank or overflowing the canvas.
+        assert!(n > 20 && n < 250, "expected non-trivial 'A' coverage, got {n}");
+    }
+
+    #[test]
+    fn glyph_marker_rotation_changes_painted_aspect() {
+        let upright = render_marker_at(
+            MarkerSymbol::Glyph {
+                font_family: "DejaVu Sans".into(),
+                ch: "I".into(),
+                size: 18.0,
+            },
+            32,
+            0.0,
+        );
+        let rotated = render_marker_at(
+            MarkerSymbol::Glyph {
+                font_family: "DejaVu Sans".into(),
+                ch: "I".into(),
+                size: 18.0,
+            },
+            32,
+            std::f32::consts::FRAC_PI_2,
+        );
+        let (uw, uh) = painted_extents(&upright);
+        let (rw, rh) = painted_extents(&rotated);
+        assert!(uh > uw, "upright 'I' must be taller than wide: {uw}x{uh}");
+        assert!(rw > rh, "rotated 'I' must be wider than tall: {rw}x{rh}");
+    }
+
+    #[test]
+    fn glyph_marker_empty_string_is_typed_error() {
         let style = Style {
+            fill: Some(FillPaint::Solid(Colour::rgba(255, 0, 0, 255))),
             marker: Some(MarkerSymbol::Glyph {
-                font_family: "x".into(),
-                ch: "a".into(),
-                size: 6.0,
+                font_family: "DejaVu Sans".into(),
+                ch: String::new(),
+                size: 12.0,
             }),
             ..Default::default()
         };
-        let flags = dispatch(&mut pm(), (8.0, 8.0), 0.0, &style).expect("ok");
-        assert!(flags.glyph_marker, "glyph_marker must propagate");
+        let fonts = mars_text::Fonts::with_default();
+        let err = dispatch(&mut pm(), (8.0, 8.0), 0.0, &style, &fonts).expect_err("must error");
+        assert!(matches!(err, RenderError::Backend(msg) if msg.contains("empty ch")));
+    }
+
+    #[test]
+    fn glyph_marker_rejects_non_solid_fill() {
+        let style = Style {
+            fill: Some(FillPaint::Image { name: "brick".into() }),
+            marker: Some(MarkerSymbol::Glyph {
+                font_family: "DejaVu Sans".into(),
+                ch: "A".into(),
+                size: 12.0,
+            }),
+            ..Default::default()
+        };
+        let fonts = mars_text::Fonts::with_default();
+        let err = dispatch(&mut pm(), (8.0, 8.0), 0.0, &style, &fonts).expect_err("must error");
+        assert!(matches!(err, RenderError::Backend(msg) if msg.contains("solid fill")));
     }
 
     #[test]

@@ -13,7 +13,7 @@ use crate::canvas::div255;
 
 /// axis-aligned mask stamp at `anchor + mask.origin + offset`. clips the dst
 /// rect to canvas bounds so the `AxisSampler` can skip its OOB check.
-pub(super) fn stamp_axis(pm: &mut Pixmap, mask: &GlyphMask, anchor: (f32, f32), colour: Colour, offset: (f32, f32)) {
+pub(crate) fn stamp_axis(pm: &mut Pixmap, mask: &GlyphMask, anchor: (f32, f32), colour: Colour, offset: (f32, f32)) {
     if mask.width == 0 || mask.height == 0 {
         return;
     }
@@ -41,7 +41,7 @@ pub(super) fn stamp_axis(pm: &mut Pixmap, mask: &GlyphMask, anchor: (f32, f32), 
 /// `offset` is applied in the mask's local (pre-rotation) frame so halo
 /// stamps rotate with the glyph rather than smearing outwards in canvas
 /// space.
-pub(super) fn stamp_rotated(
+pub(crate) fn stamp_rotated(
     pm: &mut Pixmap,
     mask: &GlyphMask,
     anchor: (f32, f32),

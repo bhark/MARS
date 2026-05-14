@@ -26,7 +26,7 @@ pub(crate) fn dispatch(pm: &mut Pixmap, op: &DrawOp, fonts: &Fonts) -> Result<Un
             anchor,
             rotation_rad,
             style,
-        } => symbol::dispatch(pm, *anchor, *rotation_rad, style),
+        } => symbol::dispatch(pm, *anchor, *rotation_rad, style, fonts),
         DrawOp::Pattern { path, style } => pattern::draw(pm, path, style),
     }
 }
@@ -120,56 +120,33 @@ mod tests {
     }
 
     #[test]
-    fn symbol_with_glyph_marker_surfaces_unimplemented_flag() {
+    fn symbol_with_glyph_marker_dispatches_through_glyph_path() {
         use tiny_skia::Pixmap as SkPixmap;
 
-        let mut pm = SkPixmap::new(16, 16).unwrap();
+        let mut pm = SkPixmap::new(32, 32).unwrap();
         let fonts = mars_text::Fonts::with_default();
         let op = DrawOp::Symbol {
-            anchor: (8.0, 8.0),
+            anchor: (16.0, 16.0),
             rotation_rad: 0.0,
             style: Arc::new(Style {
+                fill: Some(mars_style::FillPaint::Solid(mars_style::Colour::rgba(255, 0, 0, 255))),
                 marker: Some(MarkerSymbol::Glyph {
-                    font_family: "x".into(),
-                    ch: "a".into(),
-                    size: 6.0,
+                    font_family: "DejaVu Sans".into(),
+                    ch: "A".into(),
+                    size: 18.0,
                 }),
                 ..Default::default()
             }),
         };
         let flags = dispatch(&mut pm, &op, &fonts).expect("dispatch ok");
         assert!(
-            flags.glyph_marker,
-            "glyph_marker flag must propagate from symbol dispatch"
+            !flags.any(),
+            "glyph implementation must not surface unimplemented flags"
         );
-    }
-
-    #[test]
-    fn path_with_glyph_marker_surfaces_unimplemented_flag() {
-        use tiny_skia::Pixmap as SkPixmap;
-
-        let mut pm = SkPixmap::new(16, 16).unwrap();
-        let fonts = mars_text::Fonts::with_default();
-        let op = DrawOp::Path {
-            path: PortPath {
-                subpaths: vec![Subpath {
-                    points: vec![(2.0, 2.0), (12.0, 12.0)],
-                    closed: false,
-                }],
-            },
-            style: Arc::new(Style {
-                marker: Some(MarkerSymbol::Glyph {
-                    font_family: "x".into(),
-                    ch: "a".into(),
-                    size: 6.0,
-                }),
-                ..Default::default()
-            }),
-        };
-        let flags = dispatch(&mut pm, &op, &fonts).expect("dispatch ok");
+        // verify pixels actually moved - at least one painted alpha byte.
         assert!(
-            flags.glyph_marker,
-            "glyph_marker flag must propagate from path dispatch"
+            pm.data().chunks_exact(4).any(|p| p[3] > 0),
+            "glyph dispatch must paint at least one pixel"
         );
     }
 }
