@@ -92,8 +92,21 @@ fn classify_content_type(response: &reqwest::Response) -> Result<&'static str, S
         .get(reqwest::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .ok_or_else(|| SourceError::backend_msg("xyz.tile.content_type", "missing or non-ascii Content-Type header"))?;
+    classify_media_type(raw)
+}
+
+/// Inner content-type matcher operating on a raw header string. Split out so
+/// the empty / malformed / unsupported cases can be unit-tested without
+/// constructing a `reqwest::Response`.
+fn classify_media_type(raw: &str) -> Result<&'static str, SourceError> {
     // strip parameters: "image/png; charset=binary" -> "image/png"
-    let main = raw.split(';').next().unwrap_or("").trim();
+    let main = raw.split(';').next().unwrap_or(raw).trim();
+    if main.is_empty() {
+        return Err(SourceError::backend_msg(
+            "xyz.tile.content_type",
+            "empty Content-Type header",
+        ));
+    }
     match main {
         "image/png" => Ok("image/png"),
         "image/jpeg" | "image/jpg" => Ok("image/jpeg"),
@@ -125,6 +138,37 @@ mod tests {
     fn substitute_locator_rejects_missing_placeholder() {
         let err = substitute_locator("https://t/{z}/{x}.png", 0, 0, 0).expect_err("missing {y}");
         assert!(matches!(err, SourceError::InvalidBinding(ref m) if m.contains("{y}")));
+    }
+
+    #[test]
+    fn classify_media_type_accepts_png_and_jpeg() {
+        assert_eq!(classify_media_type("image/png").unwrap(), "image/png");
+        assert_eq!(classify_media_type("image/jpeg").unwrap(), "image/jpeg");
+        assert_eq!(classify_media_type("image/jpg").unwrap(), "image/jpeg");
+    }
+
+    #[test]
+    fn classify_media_type_strips_parameters() {
+        assert_eq!(classify_media_type("image/png; charset=binary").unwrap(), "image/png");
+        assert_eq!(classify_media_type("  image/jpeg ; q=0.8 ").unwrap(), "image/jpeg");
+    }
+
+    #[test]
+    fn classify_media_type_reports_empty_header_distinctly() {
+        let err = classify_media_type("").expect_err("empty");
+        let msg = err.to_string();
+        // SourceError::Backend stringifies as the static label; the cause walks
+        // through Display. assert on both.
+        assert!(msg.contains("xyz.tile.content_type"), "got: {msg}");
+        let cause = std::error::Error::source(&err).unwrap().to_string();
+        assert!(cause.contains("empty Content-Type"), "cause: {cause}");
+    }
+
+    #[test]
+    fn classify_media_type_reports_unsupported_with_value() {
+        let err = classify_media_type("text/html").expect_err("html");
+        let cause = std::error::Error::source(&err).unwrap().to_string();
+        assert!(cause.contains("text/html"), "cause: {cause}");
     }
 
     /// Asserts the adapter remains thread-safe / object-safe per the port
