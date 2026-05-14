@@ -1,0 +1,188 @@
+# osm-parity: MARS service config for the OSM-parity image-diff harness.
+# placeholders {{DSN}} / {{STORE}} / {{CACHE}} are substituted at test runtime.
+#
+# layer sources reference per-layer views (`parity_*`) materialised by the
+# postgres init scripts. each view fans out one layer's predicate over the
+# raw planet_osm_* tables and remaps `osm_id` (which can be negative for
+# multipolygons) to a positive feature id (`fid`). see fixtures/osm-parity/
+# 02-views.sql.
+service:
+  name: osm-parity
+  title: "OSM parity"
+  abstract: "Image-diff harness fixture sourced from a Liechtenstein OSM extract."
+  contact_email: ops@example.org
+
+source:
+  type: postgis
+  dsn: "{{DSN}}"
+  native_crs: EPSG:3857
+
+artifacts:
+  store:
+    type: fs
+    path: {{STORE}}
+  cache:
+    path: {{CACHE}}
+    max_size: 256MiB
+    eviction: lru
+
+# single broad band; per-layer `scale:` windows reproduce the MAXSCALEDENOM
+# gates of the reference renderer.
+scales:
+  bands:
+    - { name: hi, max_denom_exclusive: 1000000 }
+
+cells:
+  grid: regular
+  origin: [1040000, 5930000]
+  size_per_band:
+    hi: 16384m
+  extent:
+    min_x: 1040000
+    min_y: 5930000
+    max_x: 1090000
+    max_y: 6000000
+
+interfaces:
+  wms:
+    enabled: true
+    versions: ["1.3.0"]
+    formats: ["image/png", "image/jpeg"]
+    max_image_dimension: 2048
+    max_pixels: 4194304
+
+reprojection:
+  allowlist: [EPSG:3857, EPSG:25832, EPSG:4326]
+
+styles:
+  lu_forest:        { type: polygon, fill: "#add19e" }
+  lu_residential:   { type: polygon, fill: "#e0d3c5" }
+  lu_meadow:        { type: polygon, fill: "#cfe2bb" }
+  lu_default:       { type: polygon, fill: "#e6e2d5" }
+  water_fill:       { type: polygon, fill: "#a4c8ea" }
+  waterway_river:   { type: line,    stroke: "#a4c8ea", stroke_width: 3.0 }
+  waterway_canal:   { type: line,    stroke: "#a4c8ea", stroke_width: 2.0 }
+  waterway_stream:  { type: line,    stroke: "#a4c8ea", stroke_width: 1.0 }
+  road_minor:       { type: line,    stroke: "#d5b891", stroke_width: 1.5 }
+  road_motorway:    { type: line,    stroke: "#e8925c", stroke_width: 4.0 }
+  road_trunk:       { type: line,    stroke: "#f0b46e", stroke_width: 3.5 }
+  road_primary:     { type: line,    stroke: "#f5c882", stroke_width: 3.0 }
+  road_secondary:   { type: line,    stroke: "#f8d7a0", stroke_width: 2.5 }
+  building_fill:    { type: polygon, fill: "#c6bcaf", stroke: "#968c7d", stroke_width: 0.4 }
+  boundary_admin:   { type: line,    stroke: "#b25050", stroke_width: 1.5, stroke_dasharray: [6, 4] }
+  place_town:       { type: point,   fill: "#3c3c3c", marker: { kind: circle, size: 6.0 } }
+  place_village:    { type: point,   fill: "#505050", marker: { kind: circle, size: 4.0 } }
+  place_hamlet:     { type: point,   fill: "#646464", marker: { kind: circle, size: 3.0 } }
+
+layers:
+  - name: landuse
+    title: "Landuse"
+    type: polygon
+    sources:
+      - band: hi
+        scale: { max: 250000 }
+        from: parity_landuse
+        geometry_column: way
+        id_column: fid
+        attributes: [landuse]
+    classes:
+      - { name: forest,      when: "landuse = 'forest'",      style: { type: ref, name: lu_forest } }
+      - { name: residential, when: "landuse = 'residential'", style: { type: ref, name: lu_residential } }
+      - { name: meadow,      when: "landuse = 'meadow'",      style: { type: ref, name: lu_meadow } }
+      - { name: default,     style: { type: ref, name: lu_default } }
+
+  - name: water
+    title: "Water"
+    type: polygon
+    sources:
+      - band: hi
+        scale: { max: 250000 }
+        from: parity_water
+        geometry_column: way
+        id_column: fid
+    classes:
+      - { name: default, style: { type: ref, name: water_fill } }
+
+  - name: waterways
+    title: "Waterways"
+    type: line
+    sources:
+      - band: hi
+        scale: { max: 100000 }
+        from: parity_waterways
+        geometry_column: way
+        id_column: fid
+        attributes: [waterway]
+    classes:
+      - { name: river,  when: "waterway = 'river'",  style: { type: ref, name: waterway_river } }
+      - { name: canal,  when: "waterway = 'canal'",  style: { type: ref, name: waterway_canal } }
+      - { name: stream, when: "waterway = 'stream'", style: { type: ref, name: waterway_stream } }
+
+  - name: roads_minor
+    title: "Minor roads"
+    type: line
+    sources:
+      - band: hi
+        scale: { max: 50000 }
+        from: parity_roads_minor
+        geometry_column: way
+        id_column: fid
+    classes:
+      - { name: default, style: { type: ref, name: road_minor } }
+
+  - name: roads_major
+    title: "Major roads"
+    type: line
+    sources:
+      - band: hi
+        from: parity_roads_major
+        geometry_column: way
+        id_column: fid
+        attributes: [highway]
+    classes:
+      - { name: motorway,  when: "highway IN ('motorway','motorway_link')",  style: { type: ref, name: road_motorway } }
+      - { name: trunk,     when: "highway IN ('trunk','trunk_link')",        style: { type: ref, name: road_trunk } }
+      - { name: primary,   when: "highway IN ('primary','primary_link')",    style: { type: ref, name: road_primary } }
+      - { name: secondary, when: "highway IN ('secondary','secondary_link')",style: { type: ref, name: road_secondary } }
+
+  - name: buildings
+    title: "Buildings"
+    type: polygon
+    sources:
+      - band: hi
+        scale: { max: 25000 }
+        from: parity_buildings
+        geometry_column: way
+        id_column: fid
+    classes:
+      - { name: default, style: { type: ref, name: building_fill } }
+
+  - name: boundary
+    title: "Country boundary"
+    type: line
+    sources:
+      - band: hi
+        from: parity_boundary
+        geometry_column: way
+        id_column: fid
+    classes:
+      - { name: default, style: { type: ref, name: boundary_admin } }
+
+  - name: places
+    title: "Places"
+    type: point
+    sources:
+      - band: hi
+        scale: { max: 100000 }
+        from: parity_places
+        geometry_column: way
+        id_column: fid
+        attributes: [place]
+    classes:
+      - { name: town,    when: "place = 'town'",    style: { type: ref, name: place_town } }
+      - { name: village, when: "place = 'village'", style: { type: ref, name: place_village } }
+      - { name: hamlet,  when: "place = 'hamlet'",  style: { type: ref, name: place_hamlet } }
+
+observability:
+  log_level: warn
+  log_format: text
