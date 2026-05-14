@@ -37,10 +37,10 @@ fn parse_get_map_kvp(kvp: &Kvp) -> Result<ParsedGetMap, WmsError> {
 
 /// Shared viewport-KVP extractor used by GetMap (here) and reused by the
 /// other ops once they migrate to prepare. Currently `pub(crate)` so the
-/// per-op parsers can compose it.
+/// per-op parsers can compose it. Version negotiation happens upstream in
+/// [`super::parse_request`]; this extractor is version-agnostic.
 pub(crate) fn parse_viewport(kvp: &Kvp) -> Result<ParsedViewport, WmsError> {
     Ok(ParsedViewport {
-        version: nonempty(kvp, "version"),
         layers: parse_layers(kvp),
         crs: nonempty(kvp, "crs"),
         bbox: nonempty(kvp, "bbox"),
@@ -160,7 +160,7 @@ mod tests {
     fn exceptions_default_is_xml() {
         let q = "request=GetMap&version=1.3.0&layers=a&crs=EPSG:25832&\
                  bbox=0,0,1,1&width=1&height=1&format=image/png";
-        let req = parse_request(q, &cfg()).unwrap();
+        let (_, req) = parse_request(q, &cfg()).unwrap();
         match req {
             crate::WmsRequest::GetMap(r) => assert_eq!(r.exceptions, ExceptionsFormat::Xml),
             _ => panic!("expected GetMap"),
@@ -174,7 +174,7 @@ mod tests {
                 "request=GetMap&version=1.3.0&layers=a&crs=EPSG:25832&\
                  bbox=0,0,1,1&width=1&height=1&format=image/png&exceptions={kw}"
             );
-            let req = parse_request(&q, &cfg()).unwrap();
+            let (_, req) = parse_request(&q, &cfg()).unwrap();
             match req {
                 crate::WmsRequest::GetMap(r) => {
                     assert_eq!(r.exceptions, ExceptionsFormat::Blank, "kw={kw}")
@@ -191,7 +191,7 @@ mod tests {
                 "request=GetMap&version=1.3.0&layers=a&crs=EPSG:25832&\
                  bbox=0,0,1,1&width=1&height=1&format=image/png&exceptions={kw}"
             );
-            let req = parse_request(&q, &cfg()).unwrap();
+            let (_, req) = parse_request(&q, &cfg()).unwrap();
             match req {
                 crate::WmsRequest::GetMap(r) => {
                     assert_eq!(r.exceptions, ExceptionsFormat::Xml, "kw={kw}")

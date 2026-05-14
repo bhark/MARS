@@ -71,7 +71,6 @@ mod tests {
 
     fn happy_viewport() -> ParsedViewport {
         ParsedViewport {
-            version: Some("1.3.0".into()),
             layers: Some(vec![LayerId::new("a")]),
             crs: Some("EPSG:25832".into()),
             bbox: Some("0,0,1,1".into()),

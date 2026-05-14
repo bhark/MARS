@@ -19,7 +19,10 @@ pub async fn handle_wms(State(state): State<AppState>, headers: HeaderMap, raw_q
     async move {
         let raw = raw_query.0.unwrap_or_default();
 
-        let parsed = match mars_wms::parse_request(&raw, &state.wms_cfg) {
+        // version is currently advisory at this layer; subsequent commits
+        // wire it through to error-response formatting and capabilities
+        // routing.
+        let (_version, parsed) = match mars_wms::parse_request(&raw, &state.wms_cfg) {
             Ok(r) => r,
             Err(e) => return wms_error_response(e),
         };

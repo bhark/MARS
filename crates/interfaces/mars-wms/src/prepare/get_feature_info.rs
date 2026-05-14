@@ -127,7 +127,6 @@ mod tests {
     ) -> ParsedGetFeatureInfo {
         ParsedGetFeatureInfo {
             viewport: ParsedViewport {
-                version: Some("1.3.0".into()),
                 layers: Some(vec![LayerId::new("a"), LayerId::new("b")]),
                 crs: Some("EPSG:25832".into()),
                 bbox: Some("0,0,100,100".into()),

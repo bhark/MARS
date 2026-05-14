@@ -1,4 +1,4 @@
-//! WMS 1.3.0 interface adapter.
+//! WMS 1.1.1 and 1.3.0 interface adapter.
 //!
 //! Covers `GetMap`, `GetCapabilities`, `GetFeatureInfo`, and
 //! `GetLegendGraphic`. SLD / SLD_BODY remain deferred.
@@ -155,6 +155,43 @@ pub enum WmsRequest {
     GetLegendGraphic(ResolvedGetLegend),
     /// `request=GetCapabilities`.
     GetCapabilities,
+}
+
+/// WMS protocol version negotiated for a single request. Drives the
+/// version-dependent wire forks (parameter names, BBOX axis order,
+/// Capabilities XML shape, ServiceExceptionReport root attribute).
+///
+/// 1.1.1 is the legacy form QGIS / ArcGIS / OpenLayers clients still default
+/// to in many configurations; 1.3.0 is the current OGC spec. The protocol
+/// difference is purely wire-format: the internal `RenderPlan` consumed by
+/// the runtime is version-agnostic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum WmsVersion {
+    /// WMS 1.1.1. SRS parameter, BBOX always east/north on the wire,
+    /// `<WMT_MS_Capabilities>` root, X/Y for GetFeatureInfo.
+    V111,
+    /// WMS 1.3.0. CRS parameter, BBOX axis order obeys the CRS declaration,
+    /// `<WMS_Capabilities>` root, I/J for GetFeatureInfo.
+    V130,
+}
+
+impl Default for WmsVersion {
+    /// Defaults to 1.3.0 when the wire omits a version (per OGC convention:
+    /// servers pick their highest supported version on bare GetCapabilities).
+    fn default() -> Self {
+        Self::V130
+    }
+}
+
+impl WmsVersion {
+    /// Wire-format version string (`"1.1.1"` / `"1.3.0"`).
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::V111 => "1.1.1",
+            Self::V130 => "1.3.0",
+        }
+    }
 }
 
 /// Layer IDs the WMS interface considers queryable. Used by the dispatcher to

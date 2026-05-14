@@ -17,7 +17,6 @@ use crate::{WmsConfig, WmsError};
 /// option-heavy viewport slice produced by the parse layer.
 #[derive(Debug, Default, Clone)]
 pub(crate) struct ParsedViewport {
-    pub version: Option<String>,
     pub layers: Option<Vec<LayerId>>,
     pub crs: Option<String>,
     pub bbox: Option<String>,
@@ -30,15 +29,6 @@ pub(crate) struct ParsedViewport {
 }
 
 pub(crate) fn resolve_viewport(p: &ParsedViewport, cfg: &WmsConfig) -> Result<RenderPlan, WmsError> {
-    if let Some(v) = &p.version
-        && v != "1.3.0"
-    {
-        return Err(WmsError::InvalidParam {
-            name: "version",
-            reason: format!("only 1.3.0 supported, got {v}"),
-        });
-    }
-
     let layers = p.layers.as_ref().ok_or(WmsError::MissingParam("layers"))?.clone();
     if layers.is_empty() {
         return Err(WmsError::InvalidParam {
