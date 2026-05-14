@@ -193,3 +193,41 @@ pub(crate) fn build(
 
     Ok(deployment)
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use crate::children::test_support;
+
+    #[test]
+    fn build_sets_replicas_and_selector() {
+        let cr = test_support::cr("demo", "svc-ns");
+        let dep = build(&cr, "abc123", None, test_support::owner_ref()).unwrap();
+        let spec = dep.spec.unwrap();
+        assert_eq!(spec.replicas, Some(2));
+        let match_labels = spec.selector.match_labels.unwrap();
+        assert_eq!(
+            match_labels.get("app.kubernetes.io/component").map(String::as_str),
+            Some(COMPONENT_RUNTIME)
+        );
+        assert_eq!(
+            match_labels.get("app.kubernetes.io/instance").map(String::as_str),
+            Some("demo")
+        );
+        assert_eq!(dep.metadata.name.as_deref(), Some("demo-runtime"));
+        assert_eq!(dep.metadata.namespace.as_deref(), Some("svc-ns"));
+    }
+
+    #[test]
+    fn build_propagates_config_checksum_to_pod_template_annotation() {
+        let cr = test_support::cr("demo", "svc-ns");
+        let dep = build(&cr, "deadbeef", None, test_support::owner_ref()).unwrap();
+        let template = dep.spec.unwrap().template;
+        let annotations = template.metadata.unwrap().annotations.unwrap();
+        assert_eq!(
+            annotations.get(CONFIG_CHECKSUM_ANNOTATION).map(String::as_str),
+            Some("deadbeef")
+        );
+    }
+}

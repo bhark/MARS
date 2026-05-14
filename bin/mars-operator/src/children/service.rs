@@ -40,3 +40,33 @@ pub(crate) fn build(cr: &MarsService, owner_ref: OwnerReference) -> Result<Servi
         ..Default::default()
     })
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use crate::children::test_support;
+
+    #[test]
+    fn build_targets_runtime_pods_only() {
+        let cr = test_support::cr("demo", "svc-ns");
+        let svc = build(&cr, test_support::owner_ref()).unwrap();
+        let spec = svc.spec.unwrap();
+        let selector = spec.selector.unwrap();
+        assert_eq!(
+            selector.get("app.kubernetes.io/component").map(String::as_str),
+            Some(COMPONENT_RUNTIME)
+        );
+        assert_eq!(
+            selector.get("app.kubernetes.io/instance").map(String::as_str),
+            Some("demo")
+        );
+        let ports = spec.ports.unwrap();
+        assert_eq!(ports.len(), 1);
+        assert_eq!(ports[0].name.as_deref(), Some("http"));
+        assert_eq!(ports[0].port, 8080);
+        // target_port must reference the container port by name so the runtime
+        // container can rename its port without breaking the service.
+        assert!(matches!(&ports[0].target_port, Some(IntOrString::String(s)) if s == "http"));
+    }
+}

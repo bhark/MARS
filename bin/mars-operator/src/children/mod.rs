@@ -7,3 +7,6 @@ pub(crate) mod labels;
 pub(crate) mod pvc;
 pub(crate) mod runtime;
 pub(crate) mod service;
+
+#[cfg(test)]
+pub(crate) mod test_support;

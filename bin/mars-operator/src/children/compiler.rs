@@ -278,3 +278,51 @@ pub(crate) fn env_from(specs: &[EnvFromSourceSpec]) -> Vec<EnvFromSource> {
         })
         .collect()
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::panic)]
+mod tests {
+    use super::*;
+    use crate::children::test_support;
+
+    #[test]
+    fn build_yields_three_children_named_per_instance() {
+        let cr = test_support::cr("demo", "svc-ns");
+        let kids = build(&cr, "deadbeef", None, test_support::owner_ref()).unwrap();
+        assert_eq!(kids.deployment.metadata.name.as_deref(), Some("demo-compiler"));
+        assert_eq!(kids.cache_pvc.metadata.name.as_deref(), Some("demo-compiler-cache"));
+        assert_eq!(kids.work_pvc.metadata.name.as_deref(), Some("demo-compiler-work"));
+        // every child is in the CR's namespace
+        for ns in [
+            kids.deployment.metadata.namespace.as_deref(),
+            kids.cache_pvc.metadata.namespace.as_deref(),
+            kids.work_pvc.metadata.namespace.as_deref(),
+        ] {
+            assert_eq!(ns, Some("svc-ns"));
+        }
+    }
+
+    #[test]
+    fn build_propagates_config_checksum_to_pod_template_annotation() {
+        let cr = test_support::cr("demo", "svc-ns");
+        let kids = build(&cr, "abc123", None, test_support::owner_ref()).unwrap();
+        let template = kids.deployment.spec.unwrap().template;
+        let annotations = template.metadata.unwrap().annotations.unwrap();
+        assert_eq!(
+            annotations.get(CONFIG_CHECKSUM_ANNOTATION).map(String::as_str),
+            Some("abc123")
+        );
+    }
+
+    #[test]
+    fn build_missing_metadata_name_errors() {
+        let mut cr = test_support::cr("demo", "svc-ns");
+        cr.metadata.name = None;
+        // CompilerChildren is intentionally not Debug; use match to extract the err.
+        match build(&cr, "abc123", None, test_support::owner_ref()) {
+            Err(crate::error::OperatorError::MissingField(f)) => assert_eq!(f, "metadata.name"),
+            Err(other) => panic!("expected MissingField, got {other:?}"),
+            Ok(_) => panic!("expected error, got Ok"),
+        }
+    }
+}
