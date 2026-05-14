@@ -1,0 +1,27 @@
+[package]
+name        = "mars-source-xyz"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish.workspace = true
+rust-version.workspace = true
+description = "HTTP XYZ-template raster source adapter for mars-source. Substitutes {z}/{x}/{y} into an opaque URL template; returns encoded tile bytes."
+
+[lints]
+workspace = true
+
+[dependencies]
+mars-source = { workspace = true }
+mars-types  = { workspace = true }
+
+async-trait = { workspace = true }
+bytes       = { workspace = true }
+reqwest     = { workspace = true, features = ["default-tls"] }
+thiserror   = { workspace = true }
+tokio       = { workspace = true }
+tracing     = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros", "rt-multi-thread"] }

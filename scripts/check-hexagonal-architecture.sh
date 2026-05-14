@@ -34,7 +34,7 @@ warn() {
 # workspace crate membership
 is_domain()   { [[ "$1" == "mars-types" || "$1" == "mars-grid" || "$1" == "mars-expr" || "$1" == "mars-style" || "$1" == "mars-artifact" ]]; }
 is_port()     { [[ "$1" == "mars-source" || "$1" == "mars-store" || "$1" == "mars-render-port" ]]; }
-is_adapter()  { [[ "$1" == "mars-source-postgres" || "$1" == "mars-store-s3" || "$1" == "mars-store-fs" || "$1" == "mars-render" ]]; }
+is_adapter()  { [[ "$1" == "mars-source-postgres" || "$1" == "mars-source-xyz" || "$1" == "mars-store-s3" || "$1" == "mars-store-fs" || "$1" == "mars-render" ]]; }
 is_app()      { [[ "$1" == "mars-compiler" || "$1" == "mars-runtime" ]]; }
 is_interface(){ [[ "$1" == "mars-wms" || "$1" == "mars-wmts" || "$1" == "mars-http" ]]; }
 is_support()  { [[ "$1" == "mars-config" || "$1" == "mars-observability" || "$1" == "mars-proj" || "$1" == "mars-text" ]]; }

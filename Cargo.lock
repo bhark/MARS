@@ -2752,6 +2752,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "mars-source-xyz"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "mars-source",
+ "mars-types",
+ "reqwest 0.13.3",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "mars-store"
 version = "0.0.1"
 dependencies = [
