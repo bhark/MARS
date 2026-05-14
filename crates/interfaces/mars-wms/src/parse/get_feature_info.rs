@@ -30,11 +30,20 @@ pub(super) fn resolve_get_feature_info_from_kvp(
 }
 
 fn parse_get_feature_info_kvp(kvp: &Kvp, version: WmsVersion) -> Result<ParsedGetFeatureInfo, WmsError> {
+    let (i_key, j_key, i_fallback, j_fallback) = match version {
+        // 1.3.0 uses I/J; allow legacy X/Y as a fallback so clients that
+        // mix conventions still work.
+        WmsVersion::V130 => ("i", "j", "x", "y"),
+        // 1.1.1 uses X/Y; allow I/J as a fallback for the same reason.
+        WmsVersion::V111 => ("x", "y", "i", "j"),
+    };
+    let i = parse_optional_u32(kvp, i_key)?.or(parse_optional_u32(kvp, i_fallback)?);
+    let j = parse_optional_u32(kvp, j_key)?.or(parse_optional_u32(kvp, j_fallback)?);
     Ok(ParsedGetFeatureInfo {
         viewport: parse_viewport(kvp, version)?,
         query_layers: parse_query_layers(kvp),
-        i: parse_optional_u32(kvp, "i")?,
-        j: parse_optional_u32(kvp, "j")?,
+        i,
+        j,
         info_format: nonempty(kvp, "info_format"),
         feature_count: parse_optional_u32(kvp, "feature_count")?,
     })
@@ -144,5 +153,29 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn gfi_111_accepts_xy_with_srs_and_east_north_bbox() {
+        // 1.1.1: SRS=, X/Y=, BBOX always east/north on the wire.
+        let q = "request=GetFeatureInfo&version=1.1.1&layers=a&styles=&srs=EPSG:25832&\
+                 bbox=0,0,100,100&width=10&height=10&format=image/png&\
+                 query_layers=a&info_format=text/plain&x=5&y=7";
+        let gfi = parse_get_feature_info(q, &cfg()).unwrap();
+        assert_eq!(gfi.i, 5);
+        assert_eq!(gfi.j, 7);
+        assert_eq!(gfi.plan.layers[0].as_str(), "a");
+    }
+
+    #[test]
+    fn gfi_130_falls_back_to_xy_when_ij_missing() {
+        // permissive fallback: a 1.3.0 client that mistakenly sends X/Y
+        // still gets a useful answer rather than a Missing error.
+        let q = "request=GetFeatureInfo&version=1.3.0&layers=a&styles=&crs=EPSG:25832&\
+                 bbox=0,0,100,100&width=10&height=10&format=image/png&\
+                 query_layers=a&info_format=text/plain&x=3&y=4";
+        let gfi = parse_get_feature_info(q, &cfg()).unwrap();
+        assert_eq!(gfi.i, 3);
+        assert_eq!(gfi.j, 4);
     }
 }
