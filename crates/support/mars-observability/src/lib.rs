@@ -55,6 +55,21 @@ pub mod metrics {
     /// would otherwise bloat the geometry payload and increment
     /// `mars_render_feature_unstyled_total` on every render pass.
     pub const COMPILER_FEATURES_UNMATCHED: &str = "mars_compiler_features_unmatched_total";
+
+    /// Counter labelled by `adapter` (e.g. "postgres", "store_fs", "store_s3",
+    /// "render") and `kind` (a stable, short, adapter-defined label - typically
+    /// the `what` field of the adapter's `Backend` error variant).
+    pub const ADAPTER_ERROR_TOTAL: &str = "mars_adapter_error_total";
+}
+
+/// Bounded label values for `mars_adapter_error_total{adapter}`. Adapter
+/// crates should reference these constants rather than free-form strings so
+/// label cardinality stays bounded.
+pub mod adapter {
+    pub const POSTGRES: &str = "postgres";
+    pub const STORE_FS: &str = "store_fs";
+    pub const STORE_S3: &str = "store_s3";
+    pub const RENDER: &str = "render";
 }
 
 /// Initialise the global tracing subscriber.
@@ -144,6 +159,7 @@ struct MetricsInner {
     label_seconds: Histogram,
     render_feature_unstyled: IntCounterVec,
     compiler_features_unmatched: IntCounterVec,
+    adapter_error_total: IntCounterVec,
 }
 
 impl std::fmt::Debug for Metrics {
@@ -236,6 +252,13 @@ impl Metrics {
             ),
             &["binding"],
         )?;
+        let adapter_error_total = IntCounterVec::new(
+            Opts::new(
+                metrics::ADAPTER_ERROR_TOTAL,
+                "total errors surfaced by adapter Backend variants, labelled by adapter and kind",
+            ),
+            &["adapter", "kind"],
+        )?;
 
         registry.register(Box::new(request_total.clone()))?;
         registry.register(Box::new(request_duration.clone()))?;
@@ -252,6 +275,7 @@ impl Metrics {
         registry.register(Box::new(label_seconds.clone()))?;
         registry.register(Box::new(render_feature_unstyled.clone()))?;
         registry.register(Box::new(compiler_features_unmatched.clone()))?;
+        registry.register(Box::new(adapter_error_total.clone()))?;
 
         Ok(Self {
             inner: Arc::new(MetricsInner {
@@ -271,6 +295,7 @@ impl Metrics {
                 label_seconds,
                 render_feature_unstyled,
                 compiler_features_unmatched,
+                adapter_error_total,
             }),
         })
     }
@@ -372,6 +397,15 @@ impl Metrics {
             .inc_by(n);
     }
 
+    /// Increment the adapter error counter. `adapter` is a stable short label
+    /// from [`adapter`]; `kind` is a stable adapter-defined short string,
+    /// typically the `what` carried by the adapter's `Backend` error variant.
+    /// Both labels MUST be bounded-cardinality strings - never raw error
+    /// messages or anything sourced from user input.
+    pub fn inc_adapter_error(&self, adapter: &str, kind: &str) {
+        self.inner.adapter_error_total.with_label_values(&[adapter, kind]).inc();
+    }
+
     /// Encode the current registry as Prometheus text exposition format.
     pub fn encode_text(&self) -> Result<String, ObservabilityError> {
         let encoder = TextEncoder::new();
@@ -398,6 +432,8 @@ mod tests {
         m.set_compiler_window_lag(Duration::from_secs_f64(0.5));
         m.inc_render_feature_unstyled("Bygning", 3);
         m.inc_compiler_features_unmatched("buildings_live", 5);
+        m.inc_adapter_error(adapter::POSTGRES, "fetch_cells");
+        m.inc_adapter_error(adapter::STORE_FS, "open");
         let text = m.encode_text().unwrap();
         assert!(text.contains("mars_request_total"));
         assert!(text.contains("interface=\"wms\""));
@@ -414,5 +450,9 @@ mod tests {
         assert!(text.contains("layer=\"Bygning\""));
         assert!(text.contains("mars_compiler_features_unmatched_total"));
         assert!(text.contains("binding=\"buildings_live\""));
+        assert!(text.contains("mars_adapter_error_total"));
+        assert!(text.contains("adapter=\"postgres\""));
+        assert!(text.contains("kind=\"fetch_cells\""));
+        assert!(text.contains("adapter=\"store_fs\""));
     }
 }
