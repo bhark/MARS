@@ -68,9 +68,7 @@ pub(crate) fn decode_png_to_rgba(bytes: &[u8]) -> Result<DecodedImage, String> {
 /// composite alongside PNG without alpha drift.
 pub(crate) fn decode_jpeg_to_rgba(bytes: &[u8]) -> Result<DecodedImage, String> {
     let mut decoder = zune_jpeg::JpegDecoder::new(zune_jpeg::zune_core::bytestream::ZCursor::new(bytes));
-    decoder
-        .decode_headers()
-        .map_err(|e| format!("jpeg headers: {e}"))?;
+    decoder.decode_headers().map_err(|e| format!("jpeg headers: {e}"))?;
     let (width, height) = decoder
         .dimensions()
         .ok_or_else(|| "jpeg dimensions unavailable".to_string())?;

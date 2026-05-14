@@ -42,13 +42,11 @@ pub(crate) async fn render_raster_layer(
         let entry = lookup_entry(state, layer_id)?;
         ensure_supported_crs(&plan.crs, &entry.source_crs)?;
 
-        let source =
-            deps.raster_sources
-                .get(&entry.collection)
-                .cloned()
-                .ok_or_else(|| RuntimeError::RasterSourceNotRegistered {
-                    collection: entry.collection.clone(),
-                })?;
+        let source = deps.raster_sources.get(&entry.collection).cloned().ok_or_else(|| {
+            RuntimeError::RasterSourceNotRegistered {
+                collection: entry.collection.clone(),
+            }
+        })?;
 
         let plan_m_per_pixel = plan.bbox.width() / f64::from(plan.width.max(1));
         let zoom = pick_zoom(plan_m_per_pixel, entry.tile_size, entry.max_level);
@@ -74,11 +72,10 @@ pub(crate) async fn render_raster_layer(
             let binding = binding.clone();
             async move {
                 let bytes = source.read_tile(&binding, zoom, x, y).await?;
-                let decoded = decode_to_rgba(&bytes.bytes, bytes.content_type).map_err(|e| {
-                    RuntimeError::InvalidManifest {
+                let decoded =
+                    decode_to_rgba(&bytes.bytes, bytes.content_type).map_err(|e| RuntimeError::InvalidManifest {
                         reason: format!("raster tile z={zoom} x={x} y={y} decode: {e}"),
-                    }
-                })?;
+                    })?;
                 Ok::<_, RuntimeError>((x, y, decoded))
             }
         });
@@ -492,9 +489,7 @@ mod tests {
         let err = render_raster_layer(&state, &deps, &plan, &layer, 4)
             .await
             .expect_err("missing collection");
-        assert!(
-            matches!(err, RuntimeError::RasterSourceNotRegistered { collection } if collection.as_str() == "osm")
-        );
+        assert!(matches!(err, RuntimeError::RasterSourceNotRegistered { collection } if collection.as_str() == "osm"));
     }
 
     #[tokio::test]

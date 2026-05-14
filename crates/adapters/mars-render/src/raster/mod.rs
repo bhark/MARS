@@ -11,12 +11,7 @@ use tiny_skia::{BlendMode, FilterQuality, Pixmap, PixmapPaint, Transform};
 
 use crate::decoded_image::build_premultiplied;
 
-pub(crate) fn draw(
-    pm: &mut Pixmap,
-    tile: &Arc<DecodedImage>,
-    dst: PixelRect,
-    opacity: f32,
-) -> Result<(), RenderError> {
+pub(crate) fn draw(pm: &mut Pixmap, tile: &Arc<DecodedImage>, dst: PixelRect, opacity: f32) -> Result<(), RenderError> {
     if dst.w <= 0.0 || dst.h <= 0.0 {
         return Err(RenderError::Backend(format!(
             "DrawOp::Raster dst has non-positive dimensions w={} h={}",

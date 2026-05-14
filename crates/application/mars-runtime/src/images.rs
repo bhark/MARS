@@ -91,7 +91,6 @@ pub async fn load_from_manifest(
     Ok(out)
 }
 
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
