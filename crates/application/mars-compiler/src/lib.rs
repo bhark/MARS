@@ -237,6 +237,19 @@ pub enum CompilerError {
         /// Class-assignment slot count.
         class: usize,
     },
+    /// Bitmap pack assembly failed - either the configured `images_dir` is
+    /// missing while a style references an image, the file for a named
+    /// image is missing or unreadable, or the artifact codec rejected the
+    /// pack.
+    #[error("image_pack: {what}: {detail}")]
+    ImagePack {
+        /// Stable short label naming the failure (e.g. "images_dir missing",
+        /// "image file read", "section encode").
+        what: &'static str,
+        /// Human-readable detail. For file errors this is the path; for
+        /// codec errors this is the underlying message.
+        detail: String,
+    },
 }
 
 /// All ports the compiler depends on, bundled for easy composition by the bin.

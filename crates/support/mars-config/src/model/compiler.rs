@@ -91,6 +91,13 @@ pub struct Compiler {
     /// bbox-dilation drift).
     #[serde(default)]
     pub rebalance: Rebalance,
+    /// Optional directory that supplies bitmap files referenced from styles
+    /// as `FillPaint::Image { name }`. The compiler bundles them into the
+    /// manifest's `image_artifact` so the runtime resolves the names
+    /// without out-of-band coordination. When unset, configs that reference
+    /// image fills fail compile with a typed error.
+    #[serde(default)]
+    pub images_dir: Option<String>,
 }
 
 impl Default for Compiler {
@@ -107,6 +114,7 @@ impl Default for Compiler {
             compile_spill_dir: None,
             compile_spill_open_file_limit: default_compile_spill_open_file_limit(),
             rebalance: Rebalance::default(),
+            images_dir: None,
         }
     }
 }
