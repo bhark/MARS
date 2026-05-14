@@ -1,0 +1,59 @@
+# Excluded from the root [workspace] (see /Cargo.toml `exclude`). The parity
+# suite anchors MARS rendering against external reference goldens (currently
+# MapServer, captured one-shot). It needs a docker daemon for the postgis
+# testcontainer plus a local copy of the OSM extract dump. Run via
+# `scripts/run-parity.sh` from the repo root.
+[workspace]
+members = []
+
+[package]
+name        = "mars-parity"
+version     = "0.0.1"
+edition     = "2024"
+license     = "MIT OR Apache-2.0"
+publish     = false
+autotests   = false
+description = "render parity suite for MARS. anchors output against external reference renderers; no in-process golden regeneration by design."
+
+[lib]
+path = "src/lib.rs"
+
+[[test]]
+name = "osm"
+path = "tests/osm.rs"
+
+[dependencies]
+mars-test-support = { path = "../../crates/testing/mars-test-support" }
+
+[dev-dependencies]
+mars-bin-shared     = { path = "../../bin/mars-bin-shared" }
+mars-compiler       = { path = "../../crates/application/mars-compiler" }
+mars-config         = { path = "../../crates/support/mars-config" }
+mars-observability  = { path = "../../crates/support/mars-observability" }
+mars-render         = { path = "../../crates/adapters/mars-render" }
+mars-runtime        = { path = "../../crates/application/mars-runtime" }
+mars-source-postgres = { path = "../../crates/adapters/mars-source-postgres" }
+mars-store          = { path = "../../crates/ports/mars-store" }
+mars-store-fs       = { path = "../../crates/adapters/mars-store-fs" }
+mars-types          = { path = "../../crates/domain/mars-types" }
+
+anyhow         = "1.0.102"
+rand           = { version = "0.10.1", features = ["std_rng"] }
+tempfile       = "3.27.0"
+testcontainers = "0.27.3"
+tokio          = { version = "1.52.3", features = ["rt-multi-thread", "macros", "time", "sync"] }
+tokio-postgres = "0.7.17"
+tokio-util     = { version = "0.7.18", features = ["rt"] }
+tracing        = "0.1.44"
+
+[lints.rust]
+unsafe_code     = "deny"
+unreachable_pub = "warn"
+
+[lints.clippy]
+all         = { level = "warn", priority = -1 }
+unwrap_used = "warn"
+expect_used = "warn"
+panic       = "warn"
+todo        = "warn"
+dbg_macro   = "warn"

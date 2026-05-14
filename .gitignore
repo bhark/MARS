@@ -43,6 +43,12 @@ tests/e2e/fixtures
 target/e2e-fixtures
 target/e2e-output
 
+# parity suite has its own [workspace] and target/ dir; the OSM extract dump
+# lives under target/parity-fixtures/ and diff artefacts under target/parity-output/
+tests/parity/target
+target/parity-fixtures
+target/parity-output
+
 # OS junk
 .DS_Store
 Thumbs.db

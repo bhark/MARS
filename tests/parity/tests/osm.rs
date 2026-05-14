@@ -1,9 +1,9 @@
-//! osm-parity harness: renders the osm-parity fixture against a real
+//! OSM parity matrix: renders the Liechtenstein OSM extract against a real
 //! postgis container and compares the output against checked-in goldens
-//! captured one-shot from a reference WMS.
+//! captured one-shot from an external reference renderer (MapServer).
 //!
-//! gated on the `integration` cargo feature. one shared container hosts one
-//! compile; each case is a single render call against the resulting runtime.
+//! one shared container hosts one compile; each case is a single render call
+//! against the resulting runtime.
 //!
 //! prerequisites:
 //!   target/parity-fixtures/osm-parity.sql.gz  - the seed dump, not committed.
@@ -13,7 +13,6 @@
 //! run cannot mean "MARS agrees with MARS". failing diffs drop actual/golden
 //! bytes into `target/parity-output/<case>/` so the divergence is inspectable.
 
-#![cfg(feature = "integration")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::collections::HashMap;
@@ -25,6 +24,7 @@ use anyhow::{Context, Result};
 use mars_bin_shared::build_stylesheet;
 use mars_compiler::{Compiler, Deps as CompilerDeps};
 use mars_config::{Config, config_dir};
+use mars_parity::diff_pngs_with_radius;
 use mars_render::{TinySkiaEncoder, TinySkiaRenderer};
 use mars_runtime::{Deps as RuntimeDeps, RenderPlan, Runtime, RuntimeState};
 use mars_source_postgres::{PgConfig, PgSource};
@@ -40,9 +40,6 @@ use testcontainers::{
 };
 use tokio_postgres::NoTls;
 use tokio_util::sync::CancellationToken;
-
-mod common;
-use common::diff_pngs_with_radius;
 
 // neighborhood radius used by the parity diff. one-renderer-vs-another differs
 // at the pixel level by sub-pixel AA edges plus minor positional drift; r=2
@@ -343,12 +340,12 @@ fn cases() -> Vec<Case> {
 }
 
 fn fixture_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/osm-parity")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/osm")
 }
 
 fn dump_path() -> PathBuf {
-    // workspace target/parity-fixtures/. bin/mars's CARGO_MANIFEST_DIR is
-    // bin/mars; the workspace target lives two levels up.
+    // workspace target/parity-fixtures/. tests/parity's CARGO_MANIFEST_DIR is
+    // tests/parity; the workspace target lives two levels up.
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../target/parity-fixtures/osm-parity.sql.gz")
         .canonicalize()

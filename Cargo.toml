@@ -35,9 +35,12 @@ members = [
 # linker flags. Run via `cargo +nightly fuzz run <target>`; see fuzz/README.md.
 # tests/e2e is the kind-based e2e suite; pulls in kube + k8s-openapi which we
 # don't want in default `cargo test --workspace`. invoked via scripts/run-e2e.sh.
+# tests/parity anchors rendering against external reference goldens; needs a
+# docker daemon plus a local dump. invoked via scripts/run-parity.sh.
 exclude = [
     "fuzz",
     "tests/e2e",
+    "tests/parity",
 ]
 
 [workspace.package]

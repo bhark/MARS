@@ -1,8 +1,8 @@
-# osm-parity
+# osm
 
-Image-diff fixture for `tests/osm_parity_harness.rs`. Verifies MARS renders an
-OpenStreetMap-derived Liechtenstein subset within tolerance of a reference
-renderer's output.
+Fixture for the OSM parity scenario (`tests/parity/tests/osm.rs`). Verifies
+MARS renders an OpenStreetMap-derived Liechtenstein subset within tolerance of
+an external reference renderer's output.
 
 ## Contents
 
@@ -14,8 +14,8 @@ renderer's output.
 - `service.yaml` - MARS service config. Single broad scale band; per-layer
   `scale:` windows reproduce the reference renderer's `MAXSCALEDENOM` gates.
   Placeholders `{{DSN}}` / `{{STORE}}` / `{{CACHE}}` substituted at runtime.
-- `goldens/*.png` (and `*.jpg`) - one reference image per case in the harness
-  matrix. Filenames match the `Case::name` in `osm_parity_harness.rs`.
+- `goldens/*.png` (and `*.jpg`) - one reference image per case in the matrix.
+  Filenames match the `Case::name` in `tests/parity/tests/osm.rs`.
 
 ## Required fixture (not committed)
 
@@ -44,7 +44,7 @@ layer definitions in `service.yaml`.
 
 The harness drives a sequential matrix against a single shared runtime. Each
 case declares a render plan, a per-channel pixel tolerance, and a max
-differing-pixel ratio. See `osm_parity_harness.rs` for the full matrix.
+differing-pixel ratio. See `tests/parity/tests/osm.rs` for the full matrix.
 
 The matrix spans:
 
