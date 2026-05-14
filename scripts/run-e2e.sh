@@ -13,8 +13,6 @@ set -euo pipefail
 # - on exit: deletes the cluster unless MARS_E2E_KEEP=1
 #
 # usage: scripts/run-e2e.sh [--skip-image-build] [--no-fetch] [--test FILTER]
-#
-# the fast docker-compose smoke lives at scripts/run-integration.sh.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CLUSTER="${MARS_E2E_CLUSTER:-mars-e2e}"

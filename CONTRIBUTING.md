@@ -31,17 +31,17 @@ Releases are automated from these commit messages by `release-plz`; non-conformi
 ## Running tests
 
 ```sh
-# unit + integration
+# unit + per-crate integration that runs without docker
 cargo test --workspace --locked --all-targets
 
 # in-process integration (testcontainers; requires docker)
-MARS_INTEGRATION=1 cargo test -p mars --features integration -- --nocapture
+cargo test -p mars --features integration -- --nocapture
 
-# docker compose integration (postgis + compiler + runtime against a fixture dump)
-./scripts/run-integration.sh
+# render parity against external reference goldens (workspace-external)
+./scripts/run-parity.sh
 ```
 
-CI runs the quick tier (`fmt`, `clippy`, `test`, `cargo-deny`, hex-arch) on every push and PR. The integration tier runs on PRs and on release tags. The kind-based e2e suite lives under `tests/e2e/` and is gated separately.
+CI runs the quick tier (`fmt`, `clippy`, `test`, `cargo-deny`, hex-arch) on every push and PR. The integration tier runs on PRs and on release tags. The parity suite (`tests/parity/`) and the kind-based e2e suite (`tests/e2e/`) are gated separately.
 
 ## Releases
 

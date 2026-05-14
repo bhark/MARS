@@ -77,19 +77,19 @@ cargo test --workspace --locked --all-targets
 cargo deny check
 ```
 
-The integration harness drives a docker compose stack (postgis + compiler +
-runtime), loads the local-map-subset fixture into PostGIS, and exercises
-WMS GetCapabilities + GetMap. Fast smoke for the dev loop:
+The in-process integration suite (`bin/mars/tests/integration_*.rs` plus the
+per-crate `tests/` dirs gated on the `integration` cargo feature) uses
+`testcontainers` and needs Docker:
 
 ```sh
-./scripts/run-integration.sh
+cargo test -p mars --features integration -- --nocapture
 ```
 
-A separate in-process integration suite (`bin/mars/tests/integration_render.rs`)
-uses `testcontainers` and needs Docker:
+Render correctness against external reference goldens lives in the parity
+suite (`tests/parity/`, workspace-external):
 
 ```sh
-MARS_INTEGRATION=1 cargo test -p mars --features integration -- --nocapture
+./scripts/run-parity.sh
 ```
 
 The true end-to-end suite lives under `tests/e2e/`. It builds the `mars` and

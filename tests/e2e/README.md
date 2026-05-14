@@ -5,9 +5,6 @@ builds the `mars` and `mars-operator` images locally, helm-installs the
 operator chart, then asserts production-equivalent behaviour through a real
 `MarsService` CR pointing at an in-cluster SeaweedFS (S3-compatible) and PostGIS.
 
-The faster docker-compose smoke lives at `scripts/run-integration.sh` and is
-intentionally narrower in scope (no operator, no S3, no kind).
-
 ## Prerequisites
 
 - `docker`, `kind`, `helm`, `kubectl`, `cargo`
