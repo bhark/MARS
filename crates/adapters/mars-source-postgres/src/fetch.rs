@@ -16,7 +16,7 @@ use tokio_postgres::types::{ToSql, Type};
 
 use crate::SqlParam;
 use crate::lower::lower_to_sql;
-use crate::quote::{quote_ident, split_from};
+use crate::quote::{quote_ident, render_from_target};
 
 const PG_ID_BATCH: usize = 16_384;
 
@@ -194,11 +194,9 @@ pub(crate) async fn stream_feature_ids(
 }
 
 fn build_feature_ids_only_query(binding: &SourceBinding) -> Result<(String, Vec<SqlParam>), SourceError> {
-    let (schema, table) = split_from(&binding.from);
+    let from_q = render_from_target(&binding.from)?;
     let id_q = quote_ident(&binding.id_field)?;
-    let schema_q = quote_ident(schema)?;
-    let table_q = quote_ident(table)?;
-    let mut sql = format!("SELECT {id_q} FROM {schema_q}.{table_q}");
+    let mut sql = format!("SELECT {id_q} FROM {from_q}");
     let mut params: Vec<SqlParam> = Vec::new();
     if binding.filter.is_some() {
         // no other WHERE on this query, so insert the keyword before the AND
@@ -216,11 +214,9 @@ fn build_feature_ids_only_query(binding: &SourceBinding) -> Result<(String, Vec<
 /// the non-Option Vec<u8> decoder cannot represent, and a row with no
 /// geometry has nothing to render anyway.
 fn build_full_table_query(binding: &SourceBinding) -> Result<(String, Vec<SqlParam>), SourceError> {
-    let (schema, table) = split_from(&binding.from);
+    let from_q = render_from_target(&binding.from)?;
     let id_q = quote_ident(&binding.id_field)?;
     let geom_q = quote_ident(&binding.geometry_field)?;
-    let schema_q = quote_ident(schema)?;
-    let table_q = quote_ident(table)?;
 
     let mut select = format!("{id_q}, ST_AsBinary({geom_q}) AS geom");
     for a in &binding.attributes {
@@ -228,18 +224,16 @@ fn build_full_table_query(binding: &SourceBinding) -> Result<(String, Vec<SqlPar
         select.push_str(", ");
         select.push_str(&q);
     }
-    let mut sql = format!("SELECT {select} FROM {schema_q}.{table_q} WHERE {geom_q} IS NOT NULL");
+    let mut sql = format!("SELECT {select} FROM {from_q} WHERE {geom_q} IS NOT NULL");
     let mut params: Vec<SqlParam> = Vec::new();
     append_binding_filter(&mut sql, &mut params, binding, 0)?;
     Ok((sql, params))
 }
 
 fn build_feature_ids_query(binding: &SourceBinding) -> Result<(String, Vec<SqlParam>), SourceError> {
-    let (schema, table) = split_from(&binding.from);
+    let from_q = render_from_target(&binding.from)?;
     let id_q = quote_ident(&binding.id_field)?;
     let geom_q = quote_ident(&binding.geometry_field)?;
-    let schema_q = quote_ident(schema)?;
-    let table_q = quote_ident(table)?;
 
     let mut select = format!("{id_q}, ST_AsBinary({geom_q}) AS geom");
     for a in &binding.attributes {
@@ -249,8 +243,7 @@ fn build_feature_ids_query(binding: &SourceBinding) -> Result<(String, Vec<SqlPa
     }
     // mirror build_full_table_query: NULL geoms have no rendering surface and
     // would crash the non-Option Vec<u8> decoder.
-    let mut sql =
-        format!("SELECT {select} FROM {schema_q}.{table_q} WHERE {id_q} = ANY($1::bigint[]) AND {geom_q} IS NOT NULL");
+    let mut sql = format!("SELECT {select} FROM {from_q} WHERE {id_q} = ANY($1::bigint[]) AND {geom_q} IS NOT NULL");
     // id-array sits at $1, so the binding filter's placeholders start at $2.
     let mut params: Vec<SqlParam> = Vec::new();
     append_binding_filter(&mut sql, &mut params, binding, 1)?;
@@ -294,11 +287,9 @@ pub(crate) fn build_query(
     srid: i32,
     filter: Option<&Expr>,
 ) -> Result<(String, Vec<SqlParam>), SourceError> {
-    let (schema, table) = split_from(&binding.from);
+    let from_q = render_from_target(&binding.from)?;
     let id_q = quote_ident(&binding.id_field)?;
     let geom_q = quote_ident(&binding.geometry_field)?;
-    let schema_q = quote_ident(schema)?;
-    let table_q = quote_ident(table)?;
 
     let mut select = format!("{id_q}, ST_AsBinary({geom_q}) AS geom");
     for a in &binding.attributes {
@@ -316,9 +307,8 @@ pub(crate) fn build_query(
         SqlParam::Int(srid as i64),
     ];
 
-    let mut sql = format!(
-        "SELECT {select} FROM {schema_q}.{table_q} WHERE ST_Intersects({geom_q}, ST_MakeEnvelope($1, $2, $3, $4, $5))"
-    );
+    let mut sql =
+        format!("SELECT {select} FROM {from_q} WHERE ST_Intersects({geom_q}, ST_MakeEnvelope($1, $2, $3, $4, $5))");
 
     // bind-level filter first, caller filter second. deterministic ordering
     // keeps placeholder numbering stable; both go through `lower_to_sql`.

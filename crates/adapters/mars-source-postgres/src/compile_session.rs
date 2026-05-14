@@ -13,6 +13,16 @@
 //! rows into planned pages by joining on it. A single sequential scan avoids
 //! per-page `WHERE id = ANY($1)` round-trips, whose heap-walk cost dominated
 //! compile time on large bindings.
+//!
+//! View-shaped (`sql:`) bindings carry a parenthesised inline `SELECT` as
+//! their `from` locator. `tableoid` / `ctid` are only valid on heap-backed
+//! relations - on a derived table the outer query cannot reference them.
+//! The session materialises such bindings into a per-session `TEMP TABLE …
+//! ON COMMIT DROP` so pass-1 / pass-2 run against a real heap with the
+//! standard identity columns; the table dies with the session's transaction
+//! (commit drops; rollback never persisted it). Cost is one extra
+//! server-side scan to populate the temp table; the snapshot pipeline was
+//! going to enumerate every row anyway.
 
 use async_trait::async_trait;
 use deadpool_postgres::Object;
@@ -22,7 +32,13 @@ use mars_source::{CompileSession, RowBytes, RowSummary, SourceBinding, SourceErr
 
 use crate::SqlParam;
 use crate::fetch::{append_binding_filter, decode_row_pub};
-use crate::quote::{quote_ident, split_from};
+use crate::quote::{quote_ident, render_from_target};
+
+/// Per-session temp table that materialises a `sql:` binding's inline SELECT
+/// so pass-1 / pass-2 can reference `tableoid` / `ctid`. Lives in the
+/// session-private `pg_temp` schema; ON COMMIT DROP makes the lifecycle a
+/// no-op for the caller.
+const TEMP_TABLE_NAME: &str = "_mars_compile_src";
 
 /// One compile-time session against a single binding. Owns a pooled
 /// connection in `REPEATABLE READ` until the caller invokes `commit` or
@@ -40,8 +56,21 @@ pub(crate) struct PgCompileSession {
 
 impl PgCompileSession {
     pub(crate) async fn open(pool: deadpool_postgres::Pool, binding: SourceBinding) -> Result<Self, SourceError> {
-        let (summary_sql, summary_params) = build_summary_query(&binding)?;
-        let (full_sql, full_params) = build_full_table_query(&binding)?;
+        // sql: binding -- the locator is `(SELECT …)`. point queries at a
+        // per-session temp table populated from that SELECT; pass-1 / pass-2
+        // then see a real heap with tableoid / ctid available.
+        let sql_binding_select = binding.from.starts_with('(').then(|| binding.from.clone());
+        let effective_binding = if sql_binding_select.is_some() {
+            SourceBinding {
+                from: format!("pg_temp.{TEMP_TABLE_NAME}"),
+                ..binding.clone()
+            }
+        } else {
+            binding.clone()
+        };
+
+        let (summary_sql, summary_params) = build_summary_query(&effective_binding)?;
+        let (full_sql, full_params) = build_full_table_query(&effective_binding)?;
 
         let object = pool.get().await.map_err(|e| SourceError::backend("pool checkout", e))?;
         // snapshot isolation across pass-1 + pass-2 scans. pass-2 is a single
@@ -64,9 +93,21 @@ impl PgCompileSession {
             .await
             .map_err(|e| SourceError::backend("begin compile session", e))?;
 
+        if let Some(select) = sql_binding_select {
+            // ON COMMIT DROP ties the temp table's lifetime to this
+            // transaction; ROLLBACK never persists the relation in the first
+            // place. select is already a parenthesised SELECT so it splices
+            // directly into CREATE TABLE AS.
+            let stmt = format!("CREATE TEMP TABLE {TEMP_TABLE_NAME} ON COMMIT DROP AS {select}");
+            object
+                .batch_execute(&stmt)
+                .await
+                .map_err(|e| SourceError::backend("materialise sql binding", e))?;
+        }
+
         Ok(Self {
             object: Some(object),
-            binding,
+            binding: effective_binding,
             summary_sql,
             summary_params,
             full_sql,
@@ -231,11 +272,9 @@ fn pack_row_key(tableoid: u32, block: u32, offset: u16) -> SourceRowKey {
 /// the same predicate runs in pass-2 so the two scans stay row-set aligned
 /// under the shared snapshot.
 fn build_summary_query(binding: &SourceBinding) -> Result<(String, Vec<SqlParam>), SourceError> {
-    let (schema, table) = split_from(&binding.from);
+    let from_q = render_from_target(&binding.from)?;
     let id_q = quote_ident(&binding.id_field)?;
     let geom_q = quote_ident(&binding.geometry_field)?;
-    let schema_q = quote_ident(schema)?;
-    let table_q = quote_ident(table)?;
     let mut sql = format!(
         "SELECT {id_q}::int8, \
                 tableoid::oid, \
@@ -245,7 +284,7 @@ fn build_summary_query(binding: &SourceBinding) -> Result<(String, Vec<SqlParam>
                 ST_XMax({geom_q})::float4, \
                 ST_YMax({geom_q})::float4, \
                 octet_length(ST_AsBinary({geom_q}))::int4 \
-         FROM {schema_q}.{table_q} \
+         FROM {from_q} \
          WHERE {geom_q} IS NOT NULL"
     );
     let mut params: Vec<SqlParam> = Vec::new();
@@ -261,11 +300,9 @@ fn build_summary_query(binding: &SourceBinding) -> Result<(String, Vec<SqlParam>
 /// tables. The NULL-geom predicate mirrors pass-1 so the two scans see the
 /// same row set under the shared snapshot.
 fn build_full_table_query(binding: &SourceBinding) -> Result<(String, Vec<SqlParam>), SourceError> {
-    let (schema, table) = split_from(&binding.from);
+    let from_q = render_from_target(&binding.from)?;
     let id_q = quote_ident(&binding.id_field)?;
     let geom_q = quote_ident(&binding.geometry_field)?;
-    let schema_q = quote_ident(schema)?;
-    let table_q = quote_ident(table)?;
 
     let mut select = format!("{id_q}, ST_AsBinary({geom_q}) AS geom");
     for a in &binding.attributes {
@@ -276,7 +313,7 @@ fn build_full_table_query(binding: &SourceBinding) -> Result<(String, Vec<SqlPar
     // tableoid + ctid land at fixed trailing offsets so decode_compile_row
     // can locate them without re-deriving the attribute count.
     select.push_str(", tableoid::oid, ctid::text");
-    let mut sql = format!("SELECT {select} FROM {schema_q}.{table_q} WHERE {geom_q} IS NOT NULL");
+    let mut sql = format!("SELECT {select} FROM {from_q} WHERE {geom_q} IS NOT NULL");
     let mut params: Vec<SqlParam> = Vec::new();
     append_binding_filter(&mut sql, &mut params, binding, 0)?;
     Ok((sql, params))

@@ -76,19 +76,6 @@ pub enum PlanError {
         #[source]
         source: mars_expr::ExprError,
     },
-    /// A binding uses `sql:` (inline SELECT) but the compiler does not yet
-    /// build a plan for snapshot execution of view-shaped bindings.
-    /// Config validation accepts the binding; the limitation surfaces here
-    /// so operators get a clear message instead of a downstream SQL error.
-    #[error(
-        "layer {layer} source binding {descriptor} uses sql: inline SELECT; the compiler does not yet execute view-shaped bindings"
-    )]
-    SqlBindingNotImplemented {
-        /// layer name
-        layer: LayerId,
-        /// truncated SQL or other source descriptor for diagnostics
-        descriptor: String,
-    },
     /// Raster layers ride a separate pipeline (tile fetch + composite) that
     /// the compiler has not yet implemented. The vocabulary lands first so
     /// configs can declare raster layers; concrete bake / publish follows.
@@ -112,6 +99,11 @@ pub struct LevelPlan {
 #[derive(Debug, Clone, PartialEq)]
 pub struct BindingPlan {
     pub binding_id: BindingId,
+    /// Opaque backend-side locator passed verbatim to the source adapter via
+    /// `port::SourceBinding.from`. For `from:` bindings this is the table
+    /// reference (`"schema.table"` or just `"table"`); for `sql:` bindings it
+    /// is the parenthesised inline SELECT (`"(SELECT … FROM …)"`). The
+    /// postgres adapter dispatches on the leading `(`.
     pub source_table: String,
     pub geometry_field: String,
     pub id_field: Option<String>,
@@ -211,13 +203,7 @@ pub fn build_bootstrap_plan(cfg: &Config) -> Result<BootstrapPlan, PlanError> {
             });
         }
         for binding in &layer.sources {
-            let Some(from) = binding.from.as_deref() else {
-                return Err(PlanError::SqlBindingNotImplemented {
-                    layer: layer.name.clone(),
-                    descriptor: binding.source_descriptor(),
-                });
-            };
-            let id = binding_id_for(from)?;
+            let (source_locator, id) = resolve_binding_source(binding)?;
             let sidecar_warn =
                 binding
                     .resolved_sidecar_size_warn_bytes()
@@ -234,7 +220,7 @@ pub fn build_bootstrap_plan(cfg: &Config) -> Result<BootstrapPlan, PlanError> {
             };
             let plan = BindingPlan {
                 binding_id: id.clone(),
-                source_table: from.to_owned(),
+                source_table: source_locator,
                 geometry_field: binding.geometry_column.clone(),
                 id_field: binding.id_column.clone(),
                 attributes: binding.attributes.clone(),
@@ -380,6 +366,31 @@ fn binding_id_for(from: &str) -> Result<BindingId, PlanError> {
     BindingId::try_new(from).map_err(|source| PlanError::InvalidBindingId {
         from: from.to_owned(),
         source,
+    })
+}
+
+/// Resolve a config binding to its (locator, id) pair. Table form passes the
+/// `from:` string through unchanged; sql form wraps the inline SELECT in parens
+/// (so the postgres adapter can splice it into `FROM (...) AS s`) and derives a
+/// stable, hash-prefixed `BindingId` so equal SELECTs across layers dedupe.
+fn resolve_binding_source(binding: &mars_config::SourceBinding) -> Result<(String, BindingId), PlanError> {
+    if let Some(from) = binding.from.as_deref() {
+        let id = binding_id_for(from)?;
+        return Ok((from.to_owned(), id));
+    }
+    if let Some(sql) = binding.sql.as_deref() {
+        let hash = blake3::hash(sql.as_bytes()).to_hex();
+        let id_str = format!("sql_{}", &hash.as_str()[..16]);
+        let id = binding_id_for(&id_str)?;
+        return Ok((format!("({sql})"), id));
+    }
+    // config validation rejects bindings with neither from: nor sql:; surface
+    // a typed error in case a config bypasses validate.
+    Err(PlanError::InvalidBindingId {
+        from: binding.source_descriptor(),
+        source: BindingIdError::Malformed {
+            id: binding.source_descriptor(),
+        },
     })
 }
 
@@ -556,6 +567,13 @@ mod tests {
             sidecar_size_warn_bytes: None,
             simplifier: None,
         }
+    }
+
+    fn sql_binding(sql: &str) -> SourceBinding {
+        let mut b = binding("ignored");
+        b.from = None;
+        b.sql = Some(sql.into());
+        b
     }
 
     fn layer(name: &str, sources: Vec<SourceBinding>) -> mars_config::Layer {
@@ -860,5 +878,55 @@ mod tests {
             matches!(err, PlanError::ConflictingLayer { detail: "classes", .. }),
             "unexpected error: {err:?}"
         );
+    }
+
+    /// sql: bindings (inline SELECT) land as parenthesised locators with a
+    /// content-derived BindingId so the adapter can splice them into
+    /// `FROM (...) AS s` and equal SELECTs across layers dedupe.
+    #[test]
+    fn sql_binding_yields_subquery_locator() {
+        let cfg = config_with(vec![layer(
+            "v",
+            vec![sql_binding("SELECT id, geom, name FROM public.points WHERE active")],
+        )]);
+        let plan = build_bootstrap_plan(&cfg).unwrap();
+        assert_eq!(plan.bindings.len(), 1);
+        let b = &plan.bindings[0];
+        assert!(
+            b.source_table.starts_with("(SELECT") && b.source_table.ends_with(')'),
+            "expected parenthesised SELECT, got {:?}",
+            b.source_table
+        );
+        assert!(
+            b.binding_id.as_str().starts_with("sql_"),
+            "expected sql_-prefixed binding id, got {:?}",
+            b.binding_id.as_str()
+        );
+    }
+
+    #[test]
+    fn two_layers_share_sql_binding_dedupe() {
+        let sql = "SELECT id, geom, name FROM public.points";
+        let cfg = config_with(vec![
+            layer("a", vec![sql_binding(sql)]),
+            layer("b", vec![sql_binding(sql)]),
+        ]);
+        let plan = build_bootstrap_plan(&cfg).unwrap();
+        assert_eq!(plan.bindings.len(), 1, "equal sql bodies must dedupe");
+        assert_eq!(plan.layers.len(), 2);
+    }
+
+    #[test]
+    fn distinct_sql_bodies_produce_distinct_bindings() {
+        let cfg = config_with(vec![layer(
+            "v",
+            vec![
+                sql_binding("SELECT id, geom, name FROM public.a"),
+                sql_binding("SELECT id, geom, name FROM public.b"),
+            ],
+        )]);
+        let plan = build_bootstrap_plan(&cfg).unwrap();
+        assert_eq!(plan.bindings.len(), 2);
+        assert_ne!(plan.bindings[0].binding_id, plan.bindings[1].binding_id);
     }
 }
