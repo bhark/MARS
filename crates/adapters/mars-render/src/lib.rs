@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 mod canvas;
+mod decoded_image;
 mod encode;
 mod fill;
 mod label;

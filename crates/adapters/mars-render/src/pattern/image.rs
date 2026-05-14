@@ -4,10 +4,10 @@
 //! [`RenderError::ImageNotFound`] so the runtime can distinguish "asset
 //! missing" from "feature not implemented".
 
-use mars_render_port::{DecodedImage, ImageRegistry, RenderError};
-use tiny_skia::{
-    FillRule, FilterQuality, Paint, Pattern as SkPattern, Pixmap, PremultipliedColorU8, SpreadMode, Transform,
-};
+use mars_render_port::{ImageRegistry, RenderError};
+use tiny_skia::{FillRule, FilterQuality, Paint, Pattern as SkPattern, Pixmap, SpreadMode, Transform};
+
+use crate::decoded_image::build_premultiplied;
 
 pub(crate) fn draw(
     pm: &mut Pixmap,
@@ -19,7 +19,7 @@ pub(crate) fn draw(
     let image = images
         .get(name)
         .ok_or_else(|| RenderError::ImageNotFound { name: name.into() })?;
-    let tile = build_tile(&image)?;
+    let tile = build_premultiplied(&image)?;
     let pattern = SkPattern::new(
         tile.as_ref(),
         SpreadMode::Repeat,
@@ -34,36 +34,6 @@ pub(crate) fn draw(
     };
     pm.fill_path(path, &paint, FillRule::EvenOdd, Transform::identity(), None);
     Ok(())
-}
-
-// turn the straight-RGBA registry payload into a tiny-skia Pixmap with
-// premultiplied alpha. tiny-skia stores RGBA premultiplied for the shader.
-fn build_tile(image: &DecodedImage) -> Result<Pixmap, RenderError> {
-    let mut tile = Pixmap::new(image.width, image.height)
-        .ok_or_else(|| RenderError::Backend(format!("image tile alloc {}x{} failed", image.width, image.height)))?;
-    let expected = (image.width as usize) * (image.height as usize) * 4;
-    if image.rgba.len() != expected {
-        return Err(RenderError::Backend(format!(
-            "image rgba length {} does not match {}x{}",
-            image.rgba.len(),
-            image.width,
-            image.height
-        )));
-    }
-    let dst = tile.pixels_mut();
-    for (i, src) in image.rgba.chunks_exact(4).enumerate() {
-        let r = src[0];
-        let g = src[1];
-        let b = src[2];
-        let a = src[3];
-        // premultiply straight RGBA -> premultiplied.
-        let pr = ((u16::from(r) * u16::from(a) + 127) / 255) as u8;
-        let pg = ((u16::from(g) * u16::from(a) + 127) / 255) as u8;
-        let pb = ((u16::from(b) * u16::from(a) + 127) / 255) as u8;
-        dst[i] = PremultipliedColorU8::from_rgba(pr, pg, pb, a)
-            .ok_or_else(|| RenderError::Backend("invalid premultiplied tile pixel".into()))?;
-    }
-    Ok(tile)
 }
 
 #[cfg(test)]
