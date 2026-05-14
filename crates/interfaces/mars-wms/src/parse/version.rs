@@ -10,18 +10,14 @@
 //! parse forks. Until then the strict path keeps the prior single-version
 //! behaviour intact.
 
-use super::common::Kvp;
+use super::common::{Kvp, parse_kvp};
 use crate::{WmsError, WmsVersion};
 
 /// Strict negotiation used on the request path. Reads `version` / `wmtver`
 /// from `kvp` and returns the matching [`WmsVersion`]. Missing or empty
 /// resolves to the default version.
 pub(super) fn negotiate_version(kvp: &Kvp) -> Result<WmsVersion, WmsError> {
-    let raw = kvp
-        .get("version")
-        .or_else(|| kvp.get("wmtver"))
-        .map(String::as_str)
-        .filter(|s| !s.is_empty());
+    let raw = lookup_version(kvp);
     let Some(raw) = raw else {
         return Ok(WmsVersion::default());
     };
@@ -32,6 +28,29 @@ pub(super) fn negotiate_version(kvp: &Kvp) -> Result<WmsVersion, WmsError> {
             reason: format!("unsupported `{other}` (server speaks 1.3.0)"),
         }),
     }
+}
+
+/// Lenient negotiation used by error-response formatting. Never fails:
+/// returns the closest supported version for the requested wire string,
+/// falling back to [`WmsVersion::default`] for missing / unknown / malformed
+/// inputs. Used by the HTTP edge so a request that fails to parse can still
+/// be answered in the version the client appears to have asked for.
+#[must_use]
+pub fn version_for_error_response(query: &str) -> WmsVersion {
+    let kvp = parse_kvp(query);
+    lookup_version(&kvp)
+        .and_then(|raw| match raw {
+            "1.3.0" => Some(WmsVersion::V130),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
+fn lookup_version(kvp: &Kvp) -> Option<&str> {
+    kvp.get("version")
+        .or_else(|| kvp.get("wmtver"))
+        .map(String::as_str)
+        .filter(|s| !s.is_empty())
 }
 
 #[cfg(test)]
@@ -71,5 +90,25 @@ mod tests {
     fn wmtver_alias_accepted() {
         let kvp = parse_kvp("request=GetCapabilities&wmtver=1.3.0");
         assert_eq!(negotiate_version(&kvp).unwrap(), WmsVersion::V130);
+    }
+
+    #[test]
+    fn lenient_returns_default_on_unknown() {
+        // strict path would reject; lenient path silently picks the default
+        // so the error response carries the server's preferred version.
+        assert_eq!(
+            version_for_error_response("request=GetMap&version=garbage"),
+            WmsVersion::default()
+        );
+    }
+
+    #[test]
+    fn lenient_returns_explicit_130() {
+        assert_eq!(version_for_error_response("version=1.3.0"), WmsVersion::V130);
+    }
+
+    #[test]
+    fn lenient_handles_missing() {
+        assert_eq!(version_for_error_response("request=GetMap"), WmsVersion::default());
     }
 }

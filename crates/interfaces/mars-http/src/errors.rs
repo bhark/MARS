@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use mars_runtime::{RenderPlan, Runtime, RuntimeError};
-use mars_wms::{ExceptionsFormat, WmsError};
+use mars_wms::{ExceptionsFormat, WmsError, WmsVersion};
 use mars_wmts::WmtsError;
 
 /// Service-agnostic exception payload. The same fields drive both the WMS
@@ -20,8 +20,8 @@ struct EdgeException {
     message: String,
 }
 
-fn wms_exception_response(exc: EdgeException) -> Response {
-    let xml = mars_wms::service_exception_report(exc.code, &exc.message);
+fn wms_exception_response(version: WmsVersion, exc: EdgeException) -> Response {
+    let xml = mars_wms::service_exception_report(version, exc.code, &exc.message);
     let mut resp = (exc.status, xml).into_response();
     resp.headers_mut().insert(
         header::CONTENT_TYPE,
@@ -30,7 +30,7 @@ fn wms_exception_response(exc: EdgeException) -> Response {
     resp
 }
 
-pub fn wms_error_response(e: WmsError) -> Response {
+pub fn wms_error_response(version: WmsVersion, e: WmsError) -> Response {
     let exc = match e {
         WmsError::MissingParam(name) => EdgeException {
             status: StatusCode::BAD_REQUEST,
@@ -51,28 +51,29 @@ pub fn wms_error_response(e: WmsError) -> Response {
             message: format!("Operation not supported: {what}"),
         },
     };
-    wms_exception_response(exc)
+    wms_exception_response(version, exc)
 }
 
 /// XML-only WMS error response for paths that have no EXCEPTIONS= contract
 /// (GetFeatureInfo, GetLegendGraphic). Mirrors `runtime_error_response` but
 /// without the BLANK image branch.
-pub fn wms_runtime_xml_response(e: RuntimeError, plan: &RenderPlan) -> Response {
+pub fn wms_runtime_xml_response(version: WmsVersion, e: RuntimeError, plan: &RenderPlan) -> Response {
     log_render_failure(&e, plan);
-    wms_exception_response(map_runtime_error(&e))
+    wms_exception_response(version, map_runtime_error(&e))
 }
 
 /// Plan-less XML error response. Used by GetLegendGraphic, which has no
 /// RenderPlan; logs the op name instead of layer/bbox.
-pub fn wms_runtime_xml_response_plain(e: RuntimeError, op: &'static str) -> Response {
+pub fn wms_runtime_xml_response_plain(version: WmsVersion, e: RuntimeError, op: &'static str) -> Response {
     match &e {
         RuntimeError::NotReady => tracing::warn!(error = %e, op, "wms op failed"),
         _ => tracing::error!(error = %e, op, "wms op failed"),
     }
-    wms_exception_response(map_runtime_error(&e))
+    wms_exception_response(version, map_runtime_error(&e))
 }
 
 pub fn runtime_error_response(
+    version: WmsVersion,
     e: RuntimeError,
     plan: &RenderPlan,
     exceptions: ExceptionsFormat,
@@ -80,7 +81,7 @@ pub fn runtime_error_response(
 ) -> Response {
     log_render_failure(&e, plan);
     match exceptions {
-        ExceptionsFormat::Xml => wms_exception_response(map_runtime_error(&e)),
+        ExceptionsFormat::Xml => wms_exception_response(version, map_runtime_error(&e)),
         ExceptionsFormat::Blank => match runtime.blank_image(plan) {
             Ok(bytes) => {
                 let mut h = axum::http::HeaderMap::new();
@@ -90,7 +91,7 @@ pub fn runtime_error_response(
             // last-resort fallback: if the encoder fails for some bizarre
             // reason, surface as XML rather than a zero-byte image. the
             // operator gets a proper signal.
-            Err(encode_err) => wms_exception_response(map_runtime_error(&encode_err)),
+            Err(encode_err) => wms_exception_response(version, map_runtime_error(&encode_err)),
         },
     }
 }

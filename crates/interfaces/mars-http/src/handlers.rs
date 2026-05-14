@@ -19,12 +19,11 @@ pub async fn handle_wms(State(state): State<AppState>, headers: HeaderMap, raw_q
     async move {
         let raw = raw_query.0.unwrap_or_default();
 
-        // version is currently advisory at this layer; subsequent commits
-        // wire it through to error-response formatting and capabilities
-        // routing.
-        let (_version, parsed) = match mars_wms::parse_request(&raw, &state.wms_cfg) {
+        let (version, parsed) = match mars_wms::parse_request(&raw, &state.wms_cfg) {
             Ok(r) => r,
-            Err(e) => return wms_error_response(e),
+            // recover the version from the raw query so the error response
+            // is tagged with the version the client appeared to request.
+            Err(e) => return wms_error_response(mars_wms::version_for_error_response(&raw), e),
         };
 
         match parsed {
@@ -37,7 +36,7 @@ pub async fn handle_wms(State(state): State<AppState>, headers: HeaderMap, raw_q
                         h.insert(header::CONTENT_TYPE, HeaderValue::from_static(mime));
                         (StatusCode::OK, h, bytes).into_response()
                     }
-                    Err(e) => runtime_error_response(e, &plan, exceptions, &state.runtime),
+                    Err(e) => runtime_error_response(version, e, &plan, exceptions, &state.runtime),
                 }
             }
             WmsRequest::GetLegendGraphic(mars_wms::ResolvedGetLegend { plan }) => {
@@ -48,7 +47,7 @@ pub async fn handle_wms(State(state): State<AppState>, headers: HeaderMap, raw_q
                         h.insert(header::CONTENT_TYPE, HeaderValue::from_static(mime));
                         (StatusCode::OK, h, bytes).into_response()
                     }
-                    Err(e) => wms_runtime_xml_response_plain(e, "GetLegendGraphic"),
+                    Err(e) => wms_runtime_xml_response_plain(version, e, "GetLegendGraphic"),
                 }
             }
             WmsRequest::GetFeatureInfo(gfi) => {
@@ -69,7 +68,7 @@ pub async fn handle_wms(State(state): State<AppState>, headers: HeaderMap, raw_q
                         }
                         (StatusCode::OK, h, body).into_response()
                     }
-                    Err(e) => wms_runtime_xml_response(e, &gfi.plan),
+                    Err(e) => wms_runtime_xml_response(version, e, &gfi.plan),
                 }
             }
         }

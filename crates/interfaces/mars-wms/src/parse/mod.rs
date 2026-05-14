@@ -25,6 +25,7 @@ use version::negotiate_version;
 pub use get_feature_info::parse_get_feature_info;
 pub use get_legend::parse_get_legend_graphic;
 pub use get_map::parse_get_map;
+pub use version::version_for_error_response;
 
 use crate::{WmsConfig, WmsError, WmsRequest, WmsVersion};
 

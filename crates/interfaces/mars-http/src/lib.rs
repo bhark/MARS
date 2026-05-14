@@ -611,6 +611,26 @@ mod tests {
         let body = body_str(resp).await;
         assert!(body.contains("ServiceExceptionReport"));
         assert!(body.contains(r#"code="MissingParameterValue""#));
+        // default version tag when the client did not pin one
+        assert!(body.contains(r#"version="1.3.0""#));
+    }
+
+    #[tokio::test]
+    async fn wms_error_tags_requested_version() {
+        // explicit version=1.3.0 must round-trip into the exception envelope.
+        let app = empty_router();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/wms?service=WMS&version=1.3.0&request=GetMap")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let body = body_str(resp).await;
+        assert!(body.contains(r#"version="1.3.0""#));
     }
 
     #[tokio::test]
