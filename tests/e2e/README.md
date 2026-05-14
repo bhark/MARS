@@ -46,9 +46,8 @@ tests/e2e/
 │   └── e2e_suite/
 │       ├── scenario.rs           # shared per-test setup
 │       ├── a_bootstrap.rs        # cluster boots, health green, manifest published
-│       └── c_rendering.rs        # WMS/WMTS golden image-diff
+│       └── c_rendering.rs        # WMS smoke (200 + PNG magic + body size)
 ├── manifests/                    # hand-rolled YAML, simple `{{KEY}}` templating
-├── goldens/                      # checked-in golden PNGs (linux/amd64)
 └── scripts/fetch-fixture.sh      # downloads the dataset to target/e2e-fixtures/
 ```
 
@@ -79,23 +78,6 @@ MARS_E2E_FIXTURE_PATH=/path/to/dump.sql.gz scripts/run-e2e.sh --no-fetch
 The kind cluster mounts `target/e2e-fixtures/` into the control-plane node;
 the in-namespace fixture-loader Job reads the dump from there.
 
-## Goldens
-
-`tests/e2e/goldens/*.png` are linux/amd64 only - PROJ + tiny-skia + font
-subpixel rendering can jitter across architectures. The neighborhood-tolerant
-`diff_pngs` (radius=1, max channel delta ≤ 8, ratio ≤ 2%) absorbs sub-pixel
-jitter within an architecture but cannot bridge arch differences.
-
-To regenerate goldens on a linux/amd64 host:
-
-```sh
-MARS_E2E_GOLDEN_REGENERATE=1 scripts/run-e2e.sh --test rendering
-```
-
-On aarch64 / macOS, the rendering test currently has no skip switch; either
-regenerate locally without committing, or expect failures and look at the
-diff outputs in `target/e2e-output/<run-id>/`.
-
 ## Cost
 
 ~3-5 minutes per test (PostGIS extension install + fixture load + compiler
@@ -105,8 +87,10 @@ not on every PR.
 ## Scope discipline
 
 The kind suite earns its keep on end-to-end glue (chart → operator → deployed
-pods → S3 → rendered pixels). Component-level concerns belong elsewhere:
+pods → S3 → "the binary serves a tile"). Component-level concerns belong
+elsewhere:
 
+- Pixel-level render correctness → `tests/parity/` (MapServer-anchored).
 - S3 publish/read semantics → `mars-store-s3` integration test (with a Garage
   testcontainer) — not in this suite.
 - Operator reconcile logic on individual fields → `kube::Client` fake-api
