@@ -56,11 +56,7 @@ impl WmtsConfig {
             .map(|w| {
                 w.formats
                     .iter()
-                    .filter_map(|f| match f.as_str() {
-                        "image/png" => Some(ImageFormat::Png),
-                        "image/jpeg" | "image/jpg" => Some(ImageFormat::Jpeg),
-                        _ => None,
-                    })
+                    .filter_map(|f| ImageFormat::from_mime(f.as_str()))
                     .collect::<Vec<_>>()
             })
             .filter(|v| !v.is_empty())

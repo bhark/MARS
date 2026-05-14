@@ -118,16 +118,10 @@ pub(crate) fn resolve_viewport(p: &ParsedViewport, cfg: &WmsConfig) -> Result<Re
 }
 
 fn resolve_format(raw: &str, cfg: &WmsConfig) -> Result<ImageFormat, WmsError> {
-    let format = match raw {
-        "image/png" => ImageFormat::Png,
-        "image/jpeg" | "image/jpg" => ImageFormat::Jpeg,
-        other => {
-            return Err(WmsError::InvalidParam {
-                name: "format",
-                reason: format!("unsupported {other}"),
-            });
-        }
-    };
+    let format = ImageFormat::from_mime(raw).ok_or_else(|| WmsError::InvalidParam {
+        name: "format",
+        reason: format!("unsupported {raw}"),
+    })?;
     if !cfg.formats.is_empty() && !cfg.formats.contains(&format) {
         return Err(WmsError::InvalidParam {
             name: "format",

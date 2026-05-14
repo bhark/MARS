@@ -498,6 +498,31 @@ impl ImageFormat {
             Self::Webp => "image/webp",
         }
     }
+
+    /// Parse from a wire MIME string. Returns `None` for anything outside
+    /// the supported set. Case-sensitive (OGC wire convention) but accepts
+    /// the `image/jpg` alias for JPEG.
+    #[must_use]
+    pub fn from_mime(mime: &str) -> Option<Self> {
+        match mime {
+            "image/png" => Some(Self::Png),
+            "image/jpeg" | "image/jpg" => Some(Self::Jpeg),
+            "image/webp" => Some(Self::Webp),
+            _ => None,
+        }
+    }
+
+    /// Parse from a file extension (no leading dot). Returns `None` for
+    /// anything outside the supported set. Case-insensitive.
+    #[must_use]
+    pub fn from_extension(ext: &str) -> Option<Self> {
+        match ext.to_ascii_lowercase().as_str() {
+            "png" => Some(Self::Png),
+            "jpg" | "jpeg" => Some(Self::Jpeg),
+            "webp" => Some(Self::Webp),
+            _ => None,
+        }
+    }
 }
 
 /// manifest v3 data-transfer object.
@@ -749,6 +774,26 @@ mod tests {
         assert_eq!(ImageFormat::Png.mime(), "image/png");
         assert_eq!(ImageFormat::Jpeg.mime(), "image/jpeg");
         assert_eq!(ImageFormat::Webp.mime(), "image/webp");
+    }
+
+    #[test]
+    fn image_format_from_mime_round_trips() {
+        for fmt in [ImageFormat::Png, ImageFormat::Jpeg, ImageFormat::Webp] {
+            assert_eq!(ImageFormat::from_mime(fmt.mime()), Some(fmt));
+        }
+        // jpg alias for jpeg
+        assert_eq!(ImageFormat::from_mime("image/jpg"), Some(ImageFormat::Jpeg));
+        assert_eq!(ImageFormat::from_mime("image/tiff"), None);
+    }
+
+    #[test]
+    fn image_format_from_extension_is_case_insensitive() {
+        assert_eq!(ImageFormat::from_extension("png"), Some(ImageFormat::Png));
+        assert_eq!(ImageFormat::from_extension("PNG"), Some(ImageFormat::Png));
+        assert_eq!(ImageFormat::from_extension("jpg"), Some(ImageFormat::Jpeg));
+        assert_eq!(ImageFormat::from_extension("jpeg"), Some(ImageFormat::Jpeg));
+        assert_eq!(ImageFormat::from_extension("webp"), Some(ImageFormat::Webp));
+        assert_eq!(ImageFormat::from_extension("tiff"), None);
     }
 
     #[test]

@@ -98,26 +98,18 @@ fn parse_rest(
 }
 
 fn parse_format_mime(raw: &str) -> Result<ImageFormat, WmtsError> {
-    match raw {
-        "image/png" => Ok(ImageFormat::Png),
-        "image/jpeg" | "image/jpg" => Ok(ImageFormat::Jpeg),
-        other => Err(WmtsError::InvalidParam {
-            name: "format",
-            reason: format!("unsupported {other}"),
-        }),
-    }
+    ImageFormat::from_mime(raw).ok_or_else(|| WmtsError::InvalidParam {
+        name: "format",
+        reason: format!("unsupported {raw}"),
+    })
 }
 
 /// Map a REST URL file extension to an [`ImageFormat`].
 fn parse_format_ext(ext: &str) -> Result<ImageFormat, WmtsError> {
-    match ext.to_ascii_lowercase().as_str() {
-        "png" => Ok(ImageFormat::Png),
-        "jpg" | "jpeg" => Ok(ImageFormat::Jpeg),
-        other => Err(WmtsError::InvalidParam {
-            name: "format",
-            reason: format!("unsupported extension `.{other}`"),
-        }),
-    }
+    ImageFormat::from_extension(ext).ok_or_else(|| WmtsError::InvalidParam {
+        name: "format",
+        reason: format!("unsupported extension `.{ext}`"),
+    })
 }
 
 #[cfg(test)]

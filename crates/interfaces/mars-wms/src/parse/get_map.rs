@@ -282,4 +282,14 @@ mod tests {
         let err = parse_get_map(q, &cfg()).unwrap_err();
         assert!(matches!(err, WmsError::InvalidParam { name: "crs", .. }));
     }
+
+    #[test]
+    fn webp_accepted_when_configured() {
+        let mut c = cfg();
+        c.formats = vec![ImageFormat::Png, ImageFormat::Webp];
+        let q = "request=GetMap&version=1.3.0&layers=a&crs=EPSG:25832&\
+                 bbox=0,0,1,1&width=1&height=1&format=image/webp";
+        let plan = parse_get_map(q, &c).unwrap();
+        assert_eq!(plan.format, ImageFormat::Webp);
+    }
 }

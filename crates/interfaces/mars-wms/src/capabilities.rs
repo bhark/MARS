@@ -176,11 +176,7 @@ fn configured_formats(cfg: &Config) -> Vec<ImageFormat> {
         .map(|w| {
             w.formats
                 .iter()
-                .filter_map(|f| match f.as_str() {
-                    "image/png" => Some(ImageFormat::Png),
-                    "image/jpeg" | "image/jpg" => Some(ImageFormat::Jpeg),
-                    _ => None,
-                })
+                .filter_map(|f| ImageFormat::from_mime(f.as_str()))
                 .collect()
         })
         .unwrap_or_default();
@@ -422,7 +418,7 @@ cells:
 interfaces:
   wms:
     enabled: true
-    formats: ["image/png", "image/jpeg"]
+    formats: ["image/png", "image/jpeg", "image/webp"]
 reprojection:
   allowlist: [EPSG:25832]
 layers:
@@ -433,6 +429,7 @@ layers:
         let xml = capabilities_xml(&cfg, &m).unwrap();
         assert!(xml.contains("<Format>image/png</Format>"));
         assert!(xml.contains("<Format>image/jpeg</Format>"));
+        assert!(xml.contains("<Format>image/webp</Format>"));
     }
 
     // phase-d: re-add `emits_canonical_bbox_only` and `derives_layer_bbox_from_manifest_cells`
