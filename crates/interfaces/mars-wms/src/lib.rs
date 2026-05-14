@@ -107,8 +107,8 @@ impl WmsConfig {
 /// WMS `EXCEPTIONS=` selection. Drives the error-response format when a
 /// GetMap request fails after parsing succeeds. `Xml` is the spec default;
 /// `Blank` suppresses XML and returns a transparent image of the requested
-/// dimensions. `INIMAGE` is intentionally not modelled - it requires
-/// drawing error text via the renderer and is deferred.
+/// dimensions; `Inimage` draws the error message onto a transparent image
+/// at the requested dimensions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ExceptionsFormat {
     /// `EXCEPTIONS=XML` (default). ServiceExceptionReport XML payload.
@@ -116,6 +116,9 @@ pub enum ExceptionsFormat {
     Xml,
     /// `EXCEPTIONS=BLANK`. Empty image at the requested dimensions, 200 OK.
     Blank,
+    /// `EXCEPTIONS=INIMAGE`. Error message rendered as text onto a
+    /// transparent image at the requested dimensions, 200 OK.
+    Inimage,
 }
 
 /// INFO_FORMAT= selection for GetFeatureInfo responses.

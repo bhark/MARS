@@ -83,17 +83,26 @@ pub fn runtime_error_response(
     match exceptions {
         ExceptionsFormat::Xml => wms_exception_response(version, map_runtime_error(&e)),
         ExceptionsFormat::Blank => match runtime.blank_image(plan) {
-            Ok(bytes) => {
-                let mut h = axum::http::HeaderMap::new();
-                h.insert(header::CONTENT_TYPE, HeaderValue::from_static(plan.format.mime()));
-                (StatusCode::OK, h, bytes).into_response()
-            }
+            Ok(bytes) => image_response(plan.format.mime(), bytes),
             // last-resort fallback: if the encoder fails for some bizarre
             // reason, surface as XML rather than a zero-byte image. the
             // operator gets a proper signal.
             Err(encode_err) => wms_exception_response(version, map_runtime_error(&encode_err)),
         },
+        ExceptionsFormat::Inimage => {
+            let message = map_runtime_error(&e).message;
+            match runtime.inimage_error(plan, &message) {
+                Ok(bytes) => image_response(plan.format.mime(), bytes),
+                Err(render_err) => wms_exception_response(version, map_runtime_error(&render_err)),
+            }
+        }
     }
+}
+
+fn image_response(mime: &'static str, bytes: Vec<u8>) -> Response {
+    let mut h = axum::http::HeaderMap::new();
+    h.insert(header::CONTENT_TYPE, HeaderValue::from_static(mime));
+    (StatusCode::OK, h, bytes).into_response()
 }
 
 fn wmts_exception_response(exc: EdgeException) -> Response {

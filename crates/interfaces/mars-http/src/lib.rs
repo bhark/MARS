@@ -785,6 +785,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn wms_exceptions_inimage_returns_200_image_on_runtime_error() {
+        // exceptions=INIMAGE renders the error message onto a transparent
+        // image of the requested dimensions instead of XML.
+        let app = empty_router();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(
+                        "/wms?service=WMS&version=1.3.0&request=GetMap&layers=a&styles=&\
+                         crs=EPSG:25832&bbox=0,0,10,10&width=64&height=64&format=image/png&exceptions=INIMAGE",
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let ct = resp.headers().get(header::CONTENT_TYPE).cloned().unwrap();
+        assert_eq!(ct, "image/png");
+        let body = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+        assert!(body.starts_with(b"BLANK"), "expected encoder fallthrough");
+        let mut w = [0u8; 4];
+        w.copy_from_slice(&body[5..9]);
+        assert_eq!(u32::from_le_bytes(w), 64);
+    }
+
+    #[tokio::test]
     async fn wms_exceptions_blank_returns_200_image_on_runtime_error() {
         // exceptions=BLANK suppresses the XML error report; the runtime's
         // NotReady error must be converted into a 200 OK image of the

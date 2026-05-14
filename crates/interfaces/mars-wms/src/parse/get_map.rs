@@ -219,11 +219,20 @@ mod tests {
     }
 
     #[test]
-    fn exceptions_inimage_rejected_as_not_implemented() {
-        let q = "request=GetMap&version=1.3.0&layers=a&crs=EPSG:25832&\
-                 bbox=0,0,1,1&width=1&height=1&format=image/png&exceptions=INIMAGE";
-        let err = parse_request(q, &cfg()).unwrap_err();
-        assert!(matches!(err, WmsError::NotImplemented { .. }));
+    fn exceptions_inimage_keyword_accepted() {
+        for kw in ["INIMAGE", "inimage", "application/vnd.ogc.se_inimage"] {
+            let q = format!(
+                "request=GetMap&version=1.3.0&layers=a&crs=EPSG:25832&\
+                 bbox=0,0,1,1&width=1&height=1&format=image/png&exceptions={kw}"
+            );
+            let (_, req) = parse_request(&q, &cfg()).unwrap();
+            match req {
+                crate::WmsRequest::GetMap(r) => {
+                    assert_eq!(r.exceptions, ExceptionsFormat::Inimage, "kw={kw}")
+                }
+                _ => panic!("expected GetMap"),
+            }
+        }
     }
 
     #[test]

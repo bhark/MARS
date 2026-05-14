@@ -27,11 +27,10 @@ pub(crate) fn resolve_get_map(
     Ok(ResolvedGetMap { plan, exceptions })
 }
 
-/// `&EXCEPTIONS=` per OGC 1.3.0. Optional; defaults to XML when absent.
-/// Accepts the bare keyword forms most clients send (`XML`, `BLANK`,
-/// `application/vnd.ogc.se_xml`, `application/vnd.ogc.se_blank`). `INIMAGE`
-/// is recognised but rejected as `NotImplemented` so the wire error stays
-/// faithful to spec instead of silently coercing.
+/// `&EXCEPTIONS=` per OGC. Optional; defaults to XML when absent. Accepts
+/// the bare keyword forms 1.3.0 servers emit (`XML`, `BLANK`, `INIMAGE`)
+/// alongside the longer 1.1.1 MIME forms (`application/vnd.ogc.se_*`) so
+/// clients of either era round-trip.
 fn resolve_exceptions(raw: Option<&str>) -> Result<ExceptionsFormat, WmsError> {
     let raw = match raw {
         Some(s) if !s.is_empty() => s,
@@ -42,9 +41,7 @@ fn resolve_exceptions(raw: Option<&str>) -> Result<ExceptionsFormat, WmsError> {
     } else if raw.eq_ignore_ascii_case("BLANK") || raw.eq_ignore_ascii_case("application/vnd.ogc.se_blank") {
         Ok(ExceptionsFormat::Blank)
     } else if raw.eq_ignore_ascii_case("INIMAGE") || raw.eq_ignore_ascii_case("application/vnd.ogc.se_inimage") {
-        Err(WmsError::NotImplemented {
-            what: "EXCEPTIONS=INIMAGE".into(),
-        })
+        Ok(ExceptionsFormat::Inimage)
     } else {
         Err(WmsError::InvalidParam {
             name: "exceptions",
@@ -108,13 +105,15 @@ mod tests {
     }
 
     #[test]
-    fn exceptions_inimage_not_implemented() {
-        let parsed = ParsedGetMap {
-            viewport: happy_viewport(),
-            exceptions: Some("INIMAGE".into()),
-        };
-        let err = resolve_get_map(parsed, &cfg(), WmsVersion::V130).unwrap_err();
-        assert!(matches!(err, WmsError::NotImplemented { .. }));
+    fn exceptions_inimage_accepted() {
+        for kw in ["INIMAGE", "inimage", "application/vnd.ogc.se_inimage"] {
+            let parsed = ParsedGetMap {
+                viewport: happy_viewport(),
+                exceptions: Some(kw.into()),
+            };
+            let r = resolve_get_map(parsed, &cfg(), WmsVersion::V130).unwrap();
+            assert_eq!(r.exceptions, ExceptionsFormat::Inimage, "kw={kw}");
+        }
     }
 
     #[test]
