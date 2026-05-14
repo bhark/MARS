@@ -23,7 +23,7 @@ use mars_source_postgres::{CollectionTopology, PgConfig, PgSource, ReplicationTo
 use mars_store_fs::{FsPublisher, FsStore};
 use rand::distr::{Alphanumeric, SampleString};
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use tempfile::TempDir;
 use testcontainers::{
     GenericImage, ImageExt,
@@ -208,8 +208,8 @@ async fn setup_database(dsn: &str) -> Result<()> {
     let mut rng = StdRng::seed_from_u64(0xC1_5A_71_D5);
     let mut sink_unpinned = sink;
     for i in 0..FIXTURE_ROWS {
-        let x = rng.gen_range(0.0..1_000_000.0);
-        let y = rng.gen_range(0.0..1_000_000.0);
+        let x = rng.random_range(0.0..1_000_000.0);
+        let y = rng.random_range(0.0..1_000_000.0);
         let ewkb = ewkb_point_hex(25832, x, y);
         buf.push_str(&format!("{i},name-{i},{ewkb}\n"));
         if buf.len() > 32 * 1024 {
@@ -251,22 +251,22 @@ async fn apply_edit_batch(dsn: &str) -> Result<()> {
     let mut sql = String::with_capacity(256 * 1024);
     let mut event_count = 0i64;
     while event_count < EDIT_BATCH {
-        let r: f64 = rng.r#gen();
+        let r: f64 = rng.random();
         if r < 0.1 {
             let new_id = FIXTURE_ROWS + event_count;
-            let x = rng.gen_range(0.0..1_000_000.0);
-            let y = rng.gen_range(0.0..1_000_000.0);
+            let x = rng.random_range(0.0..1_000_000.0);
+            let y = rng.random_range(0.0..1_000_000.0);
             sql.push_str(&format!(
                 "INSERT INTO mars_timing.points (gid, name, geom) VALUES ({new_id}, 'ins-{new_id}', \
                  ST_GeomFromText('POINT({x} {y})', 25832));\n"
             ));
         } else if r < 0.2 {
-            let target_id = rng.gen_range(0..FIXTURE_ROWS);
+            let target_id = rng.random_range(0..FIXTURE_ROWS);
             sql.push_str(&format!("DELETE FROM mars_timing.points WHERE gid = {target_id};\n"));
         } else {
-            let target_id = rng.gen_range(0..FIXTURE_ROWS);
-            let x = rng.gen_range(0.0..1_000_000.0);
-            let y = rng.gen_range(0.0..1_000_000.0);
+            let target_id = rng.random_range(0..FIXTURE_ROWS);
+            let x = rng.random_range(0.0..1_000_000.0);
+            let y = rng.random_range(0.0..1_000_000.0);
             sql.push_str(&format!(
                 "UPDATE mars_timing.points SET name = 'upd-{target_id}', \
                  geom = ST_GeomFromText('POINT({x} {y})', 25832) WHERE gid = {target_id};\n"

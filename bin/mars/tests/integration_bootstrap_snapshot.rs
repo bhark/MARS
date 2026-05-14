@@ -137,7 +137,7 @@ async fn snapshot_bootstrap_e2e() -> Result<()> {
     // (page slice scan) -> page artifact -> (SpatialIndex hit + attributes).
     let mut rng = StdRng::seed_from_u64(0xC1_5A_71_D5);
     let sample_ids: Vec<u64> = (0..100)
-        .map(|_| rand::Rng::gen_range(&mut rng, 0..FEATURE_COUNT) as u64)
+        .map(|_| rand::RngExt::random_range(&mut rng, 0..FEATURE_COUNT) as u64)
         .collect();
 
     // Verify the page-membership sidecar resolves each sampled id.
@@ -255,14 +255,14 @@ async fn seed_database(dsn: &str) -> Result<()> {
     futures_util::pin_mut!(sink);
     let mut buf = String::with_capacity(64 * 1024);
     let mut rng = StdRng::seed_from_u64(0xC1_5A_71_D5);
-    use rand::Rng;
+    use rand::RngExt;
     let mut sink_unpinned = sink;
     for i in 0..FEATURE_COUNT {
         // random x, y in [0, 1_000_000) m; CSV-ready WKT-shaped EWKB hex would be
         // overkill -- pgsql parses ST_GeomFromText embedded in COPY would not, so
         // emit hex EWKB for a 2D point in EPSG:25832 directly.
-        let x: f64 = rng.gen_range(0.0..1_000_000.0);
-        let y: f64 = rng.gen_range(0.0..1_000_000.0);
+        let x: f64 = rng.random_range(0.0..1_000_000.0);
+        let y: f64 = rng.random_range(0.0..1_000_000.0);
         let ewkb = ewkb_point_hex(25832, x, y);
         buf.push_str(&format!("{i},name-{i},{ewkb}\n"));
         if buf.len() > 32 * 1024 {
