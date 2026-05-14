@@ -30,6 +30,7 @@ pub mod attrs;
 mod class_assignment;
 mod geometry;
 mod hash;
+mod image_resources;
 mod label_candidates;
 mod reader;
 mod section;
@@ -49,6 +50,7 @@ pub use geometry::{
     encode_geometry_payload, iter_feature_index, visit_one_geom,
 };
 pub use hash::compute_content_hash;
+pub use image_resources::{ImageResource, decode_image_resources, encode_image_resources};
 pub use label_candidates::{LabelCandidate, LabelShape, decode_label_candidates, encode_label_candidates};
 pub use reader::ArtifactReader;
 pub use spatial_index::{DEFAULT_NODE_SIZE, SpatialIndex, SpatialIndexBuilder};
@@ -91,6 +93,7 @@ pub enum SectionKind {
     ClassAssignment = 0x05,
     StyleRefs = 0x06,
     SpatialIndex = 0x07,
+    ImageResources = 0x08,
 }
 
 /// artifact role at the container level. mirrors the planus enum but lives in

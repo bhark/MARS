@@ -15,6 +15,7 @@ All multi-byte integers are little-endian.
 - 0x05 ClassAssignment
 - 0x06 StyleRefs
 - 0x07 SpatialIndex
+- 0x08 ImageResources
 
 ### Forward-compatibility policy
 Section kinds are additive. Adding a new `SectionKind` variant does NOT
@@ -93,6 +94,11 @@ and to precede any slotless entries.
 
 ## style_refs section (layer artifacts)
 u32 count, then `count` entries each as (u32 length, length UTF-8 bytes) - style_id strings, indexed by class_index.
+
+## image_resources section (image artifacts)
+Bundles raster bitmap assets referenced by `FillPaint::Image { name }` styles so the runtime renderer can resolve `name -> bytes` without out-of-band coordination.
+
+Wire format: u32 count, then `count` entries each as `(u16 name_len, name_len UTF-8 bytes, u32 image_byte_len, image_byte_len bytes)`. Names are non-empty, unique, and byte-sorted ascending so readers can `binary_search` by name in `O(log n)`. Image payload is the encoded image (PNG / JPEG / WebP); the decoder downstream sniffs the format from the bytes.
 
 ## Content hash
 ContentHash = BLAKE3 of the entire file bytes. Used as the store key. The footer carries no self-hash.
