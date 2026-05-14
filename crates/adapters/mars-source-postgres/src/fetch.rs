@@ -3,15 +3,11 @@
 //! Page-keyed entry points (`stream_rows` for bootstrap, `stream_rows_by_id`
 //! for incremental rebuild) on top of the same SQL builder + row decoder.
 
-#![allow(dead_code)]
-
 use bytes::Bytes;
 use deadpool_postgres::Pool;
 use futures_core::stream::BoxStream;
 use futures_util::StreamExt;
-use mars_expr::Expr;
 use mars_source::{AttrValue, RowBytes, SourceBinding, SourceError, SourceRowKey};
-use mars_types::Bbox;
 use tokio_postgres::types::{ToSql, Type};
 
 use crate::SqlParam;
@@ -271,63 +267,6 @@ pub(crate) fn append_binding_filter(
     Ok(())
 }
 
-/// SRID extraction: only EPSG codes are supported in v1.
-fn parse_srid(crs: &str) -> Result<i32, SourceError> {
-    let rest = crs
-        .strip_prefix("EPSG:")
-        .ok_or_else(|| SourceError::backend_msg("parse_srid", format!("unsupported CRS: {crs}")))?;
-    rest.parse::<i32>()
-        .map_err(|_| SourceError::backend_msg("parse_srid", format!("unsupported CRS: {crs}")))
-}
-
-/// Compose `SELECT id, ST_AsBinary(geom), attrs... FROM s.t WHERE ST_Intersects(...) [AND filter]`.
-pub(crate) fn build_query(
-    binding: &SourceBinding,
-    bbox: Bbox,
-    srid: i32,
-    filter: Option<&Expr>,
-) -> Result<(String, Vec<SqlParam>), SourceError> {
-    let from_q = render_from_target(&binding.from)?;
-    let id_q = quote_ident(&binding.id_field)?;
-    let geom_q = quote_ident(&binding.geometry_field)?;
-
-    let mut select = format!("{id_q}, ST_AsBinary({geom_q}) AS geom");
-    for a in &binding.attributes {
-        let q = quote_ident(a)?;
-        select.push_str(", ");
-        select.push_str(&q);
-    }
-
-    // spatial params land on $1..$5 first
-    let mut params: Vec<SqlParam> = vec![
-        SqlParam::Float(bbox.min_x),
-        SqlParam::Float(bbox.min_y),
-        SqlParam::Float(bbox.max_x),
-        SqlParam::Float(bbox.max_y),
-        SqlParam::Int(srid as i64),
-    ];
-
-    let mut sql =
-        format!("SELECT {select} FROM {from_q} WHERE ST_Intersects({geom_q}, ST_MakeEnvelope($1, $2, $3, $4, $5))");
-
-    // bind-level filter first, caller filter second. deterministic ordering
-    // keeps placeholder numbering stable; both go through `lower_to_sql`.
-    let prior = params.len();
-    let mut tail: Vec<SqlParam> = Vec::new();
-    append_binding_filter(&mut sql, &mut tail, binding, prior)?;
-    if let Some(expr) = filter {
-        let start = prior + tail.len() + 1;
-        let (frag, fparams) = lower_to_sql(expr, binding, start)?;
-        sql.push_str(" AND (");
-        sql.push_str(&frag);
-        sql.push(')');
-        tail.extend(fparams);
-    }
-    params.extend(tail);
-
-    Ok((sql, params))
-}
-
 /// pub-crate alias so the compile-session module can reuse the row decoder
 /// without re-deriving it.
 pub(crate) fn decode_row_pub(row: &tokio_postgres::Row, binding: &SourceBinding) -> Result<RowBytes, SourceError> {
@@ -526,23 +465,6 @@ mod tests {
     }
 
     #[test]
-    fn srid_parsing() {
-        assert_eq!(parse_srid("EPSG:25832").unwrap(), 25832);
-        assert!(parse_srid("CRS84").is_err());
-        assert!(parse_srid("EPSG:abc").is_err());
-    }
-
-    #[test]
-    fn query_no_filter() {
-        let bbox = Bbox::new(0.0, 0.0, 100.0, 100.0);
-        let (sql, params) = build_query(&b(), bbox, 25832, None).unwrap();
-        assert!(sql.contains("ST_AsBinary(\"geom\")"));
-        assert!(sql.contains("FROM \"public\".\"t\""));
-        assert!(sql.contains("ST_MakeEnvelope($1, $2, $3, $4, $5)"));
-        assert_eq!(params.len(), 5);
-    }
-
-    #[test]
     fn feature_ids_query_quotes_identifiers() {
         let (sql, params) = build_feature_ids_query(&b()).unwrap();
         assert_eq!(
@@ -568,68 +490,5 @@ mod tests {
         let (sql, params) = build_feature_ids_query(&b).unwrap();
         assert!(sql.ends_with(" AND (\"name\" = $2)"), "{sql}");
         assert_eq!(params.len(), 1);
-    }
-
-    #[test]
-    fn binding_filter_composes_with_caller_filter_in_build_query() {
-        let bbox = Bbox::new(0.0, 0.0, 100.0, 100.0);
-        let mut b = b();
-        b.filter = Some(parse("name = 'x'").unwrap());
-        let caller = parse("kind = 1").unwrap();
-        let (sql, params) = build_query(&b, bbox, 25832, Some(&caller)).unwrap();
-        // bind filter at $6, caller filter at $7
-        assert!(sql.contains("AND (\"name\" = $6)"), "{sql}");
-        assert!(sql.contains("AND (\"kind\" = $7)"), "{sql}");
-        assert_eq!(params.len(), 7);
-    }
-
-    #[test]
-    fn query_with_filter_renumbers() {
-        let bbox = Bbox::new(0.0, 0.0, 100.0, 100.0);
-        let e = parse("name = 'x' AND kind = 1").unwrap();
-        let (sql, params) = build_query(&b(), bbox, 25832, Some(&e)).unwrap();
-        assert!(sql.contains("AND (\"name\" = $6 AND \"kind\" = $7)"));
-        assert_eq!(params.len(), 7);
-    }
-
-    #[test]
-    fn id_field_only_attrs() {
-        let binding = SourceBinding::new(
-            SourceCollectionId::new("c"),
-            "public.t",
-            "geom",
-            "gid",
-            vec![],
-            CrsCode::new("EPSG:25832"),
-        )
-        .unwrap();
-        let e = parse("gid > 0").unwrap();
-        let bbox = Bbox::new(0.0, 0.0, 1.0, 1.0);
-        let (sql, params) = build_query(&binding, bbox, 25832, Some(&e)).unwrap();
-        assert!(sql.contains("AND (\"gid\" > $6)"));
-        assert_eq!(params.len(), 6);
-    }
-
-    #[test]
-    fn lowerer_emits_correct_placeholders_for_multi_segment_filter() {
-        // multi-clause filter must be numbered contiguously, starting after
-        // the spatial params ($1..$5).
-        let bbox = Bbox::new(0.0, 0.0, 1.0, 1.0);
-        let e = parse("name = 'a' AND kind IN (1, 2, 3) AND area >= 10").unwrap();
-        let binding = SourceBinding::new(
-            SourceCollectionId::new("c"),
-            "public.t",
-            "geom",
-            "gid",
-            vec!["name".into(), "kind".into(), "area".into()],
-            CrsCode::new("EPSG:25832"),
-        )
-        .unwrap();
-        let (sql, params) = build_query(&binding, bbox, 25832, Some(&e)).unwrap();
-        assert!(
-            sql.contains("AND (\"name\" = $6 AND \"kind\" IN ($7, $8, $9) AND \"area\" >= $10)"),
-            "{sql}"
-        );
-        assert_eq!(params.len(), 10);
     }
 }
