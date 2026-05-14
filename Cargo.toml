@@ -145,7 +145,7 @@ tokio-postgres      = "0.7.17"
 tokio-postgres-rustls = "0.13.0"
 tokio-util          = { version = "0.7.18", features = ["rt"] }
 tower               = "0.5.3"
-tower-http          = { version = "0.6.10", features = ["trace", "timeout", "limit"] }
+tower-http          = { version = "0.6.10", features = ["trace", "timeout", "limit", "cors"] }
 tracing             = "0.1.44"
 tracing-subscriber  = { version = "0.3.23", features = ["env-filter", "json", "fmt"] }
 wiremock            = "0.6.5"

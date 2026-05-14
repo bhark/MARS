@@ -22,11 +22,13 @@ use arc_swap::ArcSwap;
 use axum::Router;
 use axum::http::StatusCode;
 use axum::routing::get;
+use mars_config::CorsConfig;
 use mars_observability::Metrics;
 use mars_runtime::Runtime;
 use mars_wms::{WmsConfig, WmsVersion};
 use mars_wmts::WmtsConfig;
 use tokio_util::sync::CancellationToken;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
 
@@ -51,6 +53,15 @@ pub enum HttpError {
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
     pub listen: SocketAddr,
+}
+
+/// Per-interface configuration bundle threaded into [`router`] and
+/// [`serve`]. Grouping the WMS / WMTS / CORS knobs keeps both entry-point
+/// signatures bounded as more interfaces land.
+pub struct InterfacesConfig {
+    pub wms: WmsConfig,
+    pub wmts: WmtsConfig,
+    pub cors: Option<CorsConfig>,
 }
 
 /// Capabilities document with a precomputed strong ETag. `body` is held as
@@ -124,13 +135,20 @@ pub struct AppState {
 }
 
 /// Build the router. Exposed for in-process testing via `tower::ServiceExt`.
+/// When `interfaces.cors` is `Some`, a [`CorsLayer`] is mounted on every
+/// route; when `None` no CORS headers are emitted (matches the prior
+/// default).
 pub fn router(
     runtime: Arc<Runtime>,
     capabilities: CapabilitiesBundle,
-    wms_cfg: WmsConfig,
-    wmts_cfg: WmtsConfig,
+    interfaces: InterfacesConfig,
     metrics: Metrics,
 ) -> Router {
+    let InterfacesConfig {
+        wms: wms_cfg,
+        wmts: wmts_cfg,
+        cors,
+    } = interfaces;
     let state = AppState {
         runtime,
         wms_capabilities: capabilities.wms,
@@ -140,7 +158,7 @@ pub fn router(
         metrics,
         request_counter: Arc::new(AtomicU64::new(0)),
     };
-    Router::new()
+    let mut router = Router::new()
         .route("/wms", get(handle_wms))
         .route("/wmts", get(handle_wmts))
         .route("/wmts/{layer}/{style}/{tms}/{z}/{y}/{x_ext}", get(handle_wmts_rest))
@@ -153,7 +171,46 @@ pub fn router(
         .layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
             REQUEST_TIMEOUT,
-        ))
+        ));
+    if let Some(layer) = cors.and_then(build_cors_layer) {
+        router = router.layer(layer);
+    }
+    router
+}
+
+/// Translate a [`CorsConfig`] into a [`CorsLayer`]. Returns `None` when the
+/// allowlist is empty (no policy worth applying); the bin treats this as a
+/// validation error elsewhere.
+fn build_cors_layer(cfg: CorsConfig) -> Option<CorsLayer> {
+    if cfg.allow_origins.is_empty() {
+        return None;
+    }
+    let mut layer = CorsLayer::new();
+    if cfg.allow_origins.iter().any(|o| o == "*") {
+        layer = layer.allow_origin(AllowOrigin::any());
+    } else {
+        let parsed: Vec<axum::http::HeaderValue> = cfg
+            .allow_origins
+            .iter()
+            .filter_map(|o| axum::http::HeaderValue::from_str(o).ok())
+            .collect();
+        if parsed.is_empty() {
+            return None;
+        }
+        layer = layer.allow_origin(AllowOrigin::list(parsed));
+    }
+    let methods: Vec<axum::http::Method> = cfg
+        .allow_methods
+        .iter()
+        .filter_map(|m| axum::http::Method::from_bytes(m.as_bytes()).ok())
+        .collect();
+    if !methods.is_empty() {
+        layer = layer.allow_methods(methods);
+    }
+    if let Some(secs) = cfg.max_age_seconds {
+        layer = layer.max_age(Duration::from_secs(secs));
+    }
+    Some(layer)
 }
 
 /// Run the HTTP server until `shutdown` is cancelled. The caller is
@@ -162,12 +219,11 @@ pub async fn serve(
     cfg: ServerConfig,
     runtime: Arc<Runtime>,
     capabilities: CapabilitiesBundle,
-    wms_cfg: WmsConfig,
-    wmts_cfg: WmtsConfig,
+    interfaces: InterfacesConfig,
     metrics: Metrics,
     shutdown: CancellationToken,
 ) -> Result<(), HttpError> {
-    let app = router(runtime, capabilities, wms_cfg, wmts_cfg, metrics);
+    let app = router(runtime, capabilities, interfaces, metrics);
     let listener = tokio::net::TcpListener::bind(cfg.listen)
         .await
         .map_err(|e| HttpError::Listen(format!("bind {}: {e}", cfg.listen)))?;
@@ -253,6 +309,10 @@ mod tests {
     }
 
     fn empty_router() -> Router {
+        router_with_cors(None)
+    }
+
+    fn router_with_cors(cors: Option<CorsConfig>) -> Router {
         let metrics = Metrics::new().unwrap();
         router(
             empty_runtime(&metrics),
@@ -263,8 +323,11 @@ mod tests {
                 },
                 wmts: capabilities_handle("<wmtscaps/>".into()),
             },
-            test_wms_cfg(),
-            test_wmts_cfg(),
+            InterfacesConfig {
+                wms: test_wms_cfg(),
+                wmts: test_wmts_cfg(),
+                cors,
+            },
             metrics,
         )
     }
@@ -532,8 +595,11 @@ mod tests {
                 },
                 wmts: capabilities_handle("<wmtscaps/>".into()),
             },
-            test_wms_cfg(),
-            test_wmts_cfg(),
+            InterfacesConfig {
+                wms: test_wms_cfg(),
+                wmts: test_wmts_cfg(),
+                cors: None,
+            },
             metrics,
         );
         runtime.swap_state(Arc::new(ready_state()));
@@ -605,8 +671,11 @@ mod tests {
                 },
                 wmts: capabilities_handle("<wmtscaps/>".into()),
             },
-            test_wms_cfg(),
-            test_wmts_cfg(),
+            InterfacesConfig {
+                wms: test_wms_cfg(),
+                wmts: test_wmts_cfg(),
+                cors: None,
+            },
             metrics,
         );
         caps.store(Arc::new(CapabilitiesDoc::new("<caps>v2</caps>".to_owned())));
@@ -643,6 +712,67 @@ mod tests {
         assert!(body.contains(r#"code="MissingParameterValue""#));
         // default version tag when the client did not pin one
         assert!(body.contains(r#"version="1.3.0""#));
+    }
+
+    #[tokio::test]
+    async fn cors_absent_means_no_header() {
+        let app = empty_router();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/healthz")
+                    .header("Origin", "https://example.org")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(resp.headers().get("access-control-allow-origin").is_none());
+    }
+
+    #[tokio::test]
+    async fn cors_wildcard_reflects_any_origin() {
+        let app = router_with_cors(Some(CorsConfig {
+            allow_origins: vec!["*".to_owned()],
+            allow_methods: vec!["GET".to_owned(), "HEAD".to_owned()],
+            max_age_seconds: Some(600),
+        }));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/healthz")
+                    .header("Origin", "https://example.org")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let allow = resp.headers().get("access-control-allow-origin").cloned();
+        assert_eq!(allow.as_ref().map(|v| v.to_str().unwrap()), Some("*"));
+    }
+
+    #[tokio::test]
+    async fn cors_explicit_origin_reflects_match() {
+        let app = router_with_cors(Some(CorsConfig {
+            allow_origins: vec!["https://maps.example.org".to_owned()],
+            allow_methods: vec!["GET".to_owned()],
+            max_age_seconds: None,
+        }));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/healthz")
+                    .header("Origin", "https://maps.example.org")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let allow = resp.headers().get("access-control-allow-origin").cloned();
+        assert_eq!(
+            allow.as_ref().map(|v| v.to_str().unwrap()),
+            Some("https://maps.example.org")
+        );
     }
 
     #[tokio::test]

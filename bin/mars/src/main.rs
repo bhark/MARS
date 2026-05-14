@@ -289,8 +289,11 @@ async fn run_runtime(cfg: Arc<Config>, shutdown: CancellationToken) -> Result<()
         mars_http::ServerConfig { listen },
         runtime,
         caps_bundle,
-        wms_cfg,
-        wmts_cfg,
+        mars_http::InterfacesConfig {
+            wms: wms_cfg,
+            wmts: wmts_cfg,
+            cors: cfg.interfaces.cors.clone(),
+        },
         metrics,
         shutdown.clone(),
     )

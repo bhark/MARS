@@ -13,6 +13,7 @@ description = "axum HTTP edge: /wms /wmts /healthz /readyz /metrics /debug/*."
 workspace = true
 
 [dependencies]
+mars-config        = { workspace = true }
 mars-grid          = { workspace = true }
 mars-proj          = { workspace = true }
 mars-runtime       = { workspace = true }
@@ -35,5 +36,4 @@ thiserror          = { workspace = true }
 tower              = { workspace = true, features = ["util"] }
 mars-render-port   = { workspace = true }
 mars-store         = { workspace = true }
-mars-config        = { workspace = true }
 mars-style         = { workspace = true }

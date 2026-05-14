@@ -15,6 +15,34 @@ pub struct Interfaces {
     /// Final tile cache config.
     #[serde(default)]
     pub tile_cache: Option<TileCacheConfig>,
+    /// HTTP CORS policy. Absent disables CORS (today's behaviour); present
+    /// mounts the configured origin / method allowlist on every route.
+    #[serde(default)]
+    pub cors: Option<CorsConfig>,
+}
+
+/// CORS policy. `allow_origins = ["*"]` advertises a wildcard origin;
+/// otherwise the listed exact origins are reflected when the request
+/// `Origin` header matches.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CorsConfig {
+    /// Permitted origins. Use `["*"]` for a wildcard policy or an explicit
+    /// list of `scheme://host[:port]` strings. Empty = effectively no
+    /// origins allowed; configure `interfaces.cors: null` to disable
+    /// instead.
+    pub allow_origins: Vec<String>,
+    /// HTTP methods exposed to cross-origin requests. Defaults to GET and
+    /// HEAD which is what WMS / WMTS need.
+    #[serde(default = "default_cors_methods")]
+    pub allow_methods: Vec<String>,
+    /// `Access-Control-Max-Age` value in seconds. `None` omits the header
+    /// (browsers fall back to their own default, typically 5 seconds).
+    #[serde(default)]
+    pub max_age_seconds: Option<u64>,
+}
+
+fn default_cors_methods() -> Vec<String> {
+    vec!["GET".to_owned(), "HEAD".to_owned()]
 }
 
 /// WMS endpoint configuration.
