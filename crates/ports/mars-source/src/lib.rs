@@ -405,10 +405,55 @@ pub struct RowBytes {
     pub row_key: SourceRowKey,
 }
 
+/// Raster-side binding: identifies a pyramidal tile source and its native
+/// addressing. Concrete adapters extend the locator semantics (XYZ URL
+/// template, COG byte ranges, WMTS endpoint) - the port keeps the field
+/// set minimal so the dispatch can remain backend-agnostic.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RasterBinding {
+    /// Logical collection name.
+    pub collection: SourceCollectionId,
+    /// Opaque backend-side locator (e.g. URL template, object-store prefix,
+    /// COG key). Format is defined by the adapter.
+    pub locator: String,
+    /// Native source CRS of the underlying pyramid.
+    pub source_crs: CrsCode,
+    /// Native tile edge in pixels (typically 256 or 512). Adapters that
+    /// produce variable-size tiles report their advertised default here.
+    pub tile_size: u32,
+    /// Maximum zoom level published by the source (inclusive).
+    pub max_level: u32,
+}
+
+/// One raster tile pulled from a raster source. `bytes` carries the encoded
+/// payload as the source delivered it (typically PNG / JPEG / WebP); the
+/// renderer decodes lazily based on `content_type`.
+#[derive(Debug, Clone)]
+pub struct TileBytes {
+    /// Encoded tile bytes.
+    pub bytes: Bytes,
+    /// IANA media type of the encoded payload, e.g. `"image/png"`.
+    pub content_type: &'static str,
+}
+
+/// Read-side port for raster pyramids. Sits beside [`Source`] so each
+/// adapter advertises the kind of data it produces without one trait
+/// pretending to cover both.
+#[async_trait]
+pub trait RasterSource: Send + Sync + 'static {
+    /// Read one tile from the bound pyramid. Coordinates are
+    /// `(zoom, x, y)` in the source's native tiling scheme; the caller is
+    /// responsible for mapping the request CRS / TMS to the source pyramid.
+    async fn read_tile(&self, binding: &RasterBinding, z: u32, x: u32, y: u32) -> Result<TileBytes, SourceError>;
+}
+
 /// Phase-0 stub adapters that satisfy the port traits with `NotImplemented`.
 /// Lets bins and tests compose the surface without naming a real backend.
 pub mod stub {
-    use super::{BoxStream, ChangeFeed, ChangeSubscription, RowBytes, Source, SourceBinding, SourceError};
+    use super::{
+        BoxStream, ChangeFeed, ChangeSubscription, RasterBinding, RasterSource, RowBytes, Source, SourceBinding,
+        SourceError, TileBytes,
+    };
     use async_trait::async_trait;
 
     /// `Source` + `ChangeFeed` impl that always returns `NotImplemented`.
@@ -449,6 +494,27 @@ pub mod stub {
         async fn subscribe(&self) -> Result<Box<dyn ChangeSubscription>, SourceError> {
             Err(SourceError::NotImplemented {
                 what: "mars-source::stub::NotImplementedSource::subscribe",
+            })
+        }
+    }
+
+    /// `RasterSource` impl that always returns `NotImplemented`. Lets the
+    /// runtime / compiler wire the raster dispatch surface without a real
+    /// raster backend in scope.
+    #[derive(Debug, Default)]
+    pub struct NotImplementedRasterSource;
+
+    #[async_trait]
+    impl RasterSource for NotImplementedRasterSource {
+        async fn read_tile(
+            &self,
+            _binding: &RasterBinding,
+            _z: u32,
+            _x: u32,
+            _y: u32,
+        ) -> Result<TileBytes, SourceError> {
+            Err(SourceError::NotImplemented {
+                what: "RasterSource::read_tile",
             })
         }
     }
@@ -565,4 +631,18 @@ mod tests {
     }
 
     // phase-c will reintroduce page-keyed Source surface and its tests.
+
+    #[tokio::test]
+    async fn stub_raster_source_returns_typed_not_implemented() {
+        let s = stub::NotImplementedRasterSource;
+        let binding = RasterBinding {
+            collection: SourceCollectionId::new("dem"),
+            locator: "https://example.test/{z}/{x}/{y}.png".into(),
+            source_crs: CrsCode::new("EPSG:3857"),
+            tile_size: 256,
+            max_level: 18,
+        };
+        let err = s.read_tile(&binding, 0, 0, 0).await.expect_err("stub");
+        assert!(matches!(err, SourceError::NotImplemented { what } if what == "RasterSource::read_tile"));
+    }
 }
