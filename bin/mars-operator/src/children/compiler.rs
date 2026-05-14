@@ -364,8 +364,8 @@ mod tests {
             .unwrap()
             .into_iter()
             .find(|v| v.name == "images")
-            .expect("images volume present");
-        let cm = vol.config_map.expect("images volume backed by configmap");
+            .unwrap();
+        let cm = vol.config_map.unwrap();
         assert_eq!(cm.name, "mars-images");
         let mount = pod.containers[0]
             .volume_mounts
@@ -373,7 +373,7 @@ mod tests {
             .unwrap()
             .iter()
             .find(|m| m.name == "images")
-            .expect("images mount present");
+            .unwrap();
         assert_eq!(mount.mount_path, "/var/lib/mars/images");
         assert_eq!(mount.read_only, Some(true));
     }
