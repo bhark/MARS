@@ -49,6 +49,18 @@ pub enum SourceError {
     /// Invalid binding configuration.
     #[error("invalid binding: {0}")]
     InvalidBinding(String),
+    /// The upstream confirmed no tile exists at this position (e.g. HTTP 404 /
+    /// 204 from an XYZ pyramid). Distinct from `Backend` so callers can treat
+    /// absence as a normal sparse-coverage signal rather than a hard failure.
+    #[error("tile absent at z={z} x={x} y={y}")]
+    TileAbsent {
+        /// Zoom level.
+        z: u32,
+        /// Tile column index.
+        x: u32,
+        /// Tile row index.
+        y: u32,
+    },
     /// A filter expression referenced an identifier outside the binding's
     /// allowlist (`binding.attributes ∪ {binding.id_field}`). The adapter's
     /// filter lowering refuses to inject unknown identifiers.

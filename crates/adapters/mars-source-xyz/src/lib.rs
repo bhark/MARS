@@ -45,6 +45,11 @@ impl RasterSource for XyzRasterSource {
             .await
             .map_err(|e| SourceError::backend("xyz.tile.http_send", e))?;
         let status = response.status();
+        // 404 and 204 are the canonical sparse-coverage signals on XYZ pyramids;
+        // surface them as TileAbsent so the render path can skip rather than fail.
+        if status == reqwest::StatusCode::NOT_FOUND || status == reqwest::StatusCode::NO_CONTENT {
+            return Err(SourceError::TileAbsent { z, x, y });
+        }
         if !status.is_success() {
             return Err(SourceError::backend_msg(
                 "xyz.tile.http_status",

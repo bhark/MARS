@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use futures_util::StreamExt;
 use mars_render_port::{DrawOp, PixelRect};
-use mars_source::RasterBinding;
+use mars_source::{RasterBinding, SourceError};
 use mars_types::{LayerId, RasterLayerEntry};
 use tracing::{Instrument, info_span};
 
@@ -71,19 +71,29 @@ pub(crate) async fn render_raster_layer(
             let source = source.clone();
             let binding = binding.clone();
             async move {
-                let bytes = source.read_tile(&binding, zoom, x, y).await?;
-                let decoded =
-                    decode_to_rgba(&bytes.bytes, bytes.content_type).map_err(|e| RuntimeError::InvalidManifest {
-                        reason: format!("raster tile z={zoom} x={x} y={y} decode: {e}"),
-                    })?;
-                Ok::<_, RuntimeError>((x, y, decoded))
+                // TileAbsent is a normal sparse-coverage signal; drop the slot
+                // and continue. Any other source error is fatal for the page.
+                match source.read_tile(&binding, zoom, x, y).await {
+                    Ok(bytes) => {
+                        let decoded = decode_to_rgba(&bytes.bytes, bytes.content_type).map_err(|e| {
+                            RuntimeError::InvalidManifest {
+                                reason: format!("raster tile z={zoom} x={x} y={y} decode: {e}"),
+                            }
+                        })?;
+                        Ok::<_, RuntimeError>(Some((x, y, decoded)))
+                    }
+                    Err(SourceError::TileAbsent { .. }) => Ok(None),
+                    Err(e) => Err(RuntimeError::RasterSource(e)),
+                }
             }
         });
         let mut stream = futures_util::stream::iter(fetches).buffered(page_fetch_concurrency.max(1));
 
         let mut ordered: Vec<(u32, u32, mars_render_port::DecodedImage)> = Vec::new();
         while let Some(res) = stream.next().await {
-            ordered.push(res?);
+            if let Some(tile) = res? {
+                ordered.push(tile);
+            }
         }
         // deterministic stacking: y ascending, then x ascending.
         ordered.sort_by_key(|(x, y, _)| (*y, *x));
@@ -510,6 +520,30 @@ mod tests {
             .await
             .expect_err("crs mismatch");
         assert!(matches!(err, RuntimeError::NotImplemented { what } if what.contains("CRS")));
+    }
+
+    #[derive(Debug)]
+    struct AbsentRasterSource;
+
+    #[async_trait]
+    impl RasterSource for AbsentRasterSource {
+        async fn read_tile(&self, _b: &RasterBinding, z: u32, x: u32, y: u32) -> Result<TileBytes, SourceError> {
+            Err(SourceError::TileAbsent { z, x, y })
+        }
+    }
+
+    #[tokio::test]
+    async fn absent_tiles_are_skipped_not_propagated() {
+        let layer = LayerId::new("r");
+        let entry = raster_entry("r", "osm");
+        let state = state_with_raster_entry(entry);
+        let plan = webmercator_plan();
+        let src: Arc<dyn RasterSource> = Arc::new(AbsentRasterSource);
+        let mut srcs: HashMap<SourceCollectionId, Arc<dyn RasterSource>> = HashMap::new();
+        srcs.insert(SourceCollectionId::new("osm"), src);
+        let deps = fake_deps(srcs);
+        let ops = render_raster_layer(&state, &deps, &plan, &layer, 4).await.unwrap();
+        assert!(ops.is_empty(), "absent tiles must be skipped, not produce ops");
     }
 
     #[tokio::test]
