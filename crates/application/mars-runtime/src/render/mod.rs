@@ -106,6 +106,14 @@ async fn render_one_layer(
     let layer_span = info_span!("render.layer", name = %layer_id);
     async move {
         let layer_cfg = lookup_layer(config, layer_id)?;
+        if matches!(
+            mars_style::LayerKind::parse(layer_cfg.kind.as_str()),
+            Some(mars_style::LayerKind::Raster)
+        ) {
+            return Err(RuntimeError::NotImplemented {
+                what: "raster layer rendering",
+            });
+        }
         let denom = crate::denom_from_plan(plan.bbox.width(), plan.width, plan.scale_pixel_size_m);
         let Some((binding_id, level)) =
             planning::pick_binding_and_level(layer_cfg, denom, plan.scale_pixel_size_m, state)
