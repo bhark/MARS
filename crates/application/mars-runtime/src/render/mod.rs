@@ -16,6 +16,7 @@ mod decode;
 mod labels;
 mod marker;
 mod project;
+mod raster;
 
 use futures_util::StreamExt;
 use futures_util::stream::FuturesUnordered;
@@ -110,9 +111,17 @@ async fn render_one_layer(
             mars_style::LayerKind::parse(layer_cfg.kind.as_str()),
             Some(mars_style::LayerKind::Raster)
         ) {
-            return Err(RuntimeError::NotImplemented {
-                what: "raster layer rendering",
-            });
+            let ops = raster::render_raster_layer(state, deps, plan, layer_id, page_fetch_concurrency).await?;
+            if ops.is_empty() {
+                return Ok((idx, None));
+            }
+            return Ok((
+                idx,
+                Some(LayerOutput {
+                    ops,
+                    labels: Vec::new(),
+                }),
+            ));
         }
         let denom = crate::denom_from_plan(plan.bbox.width(), plan.width, plan.scale_pixel_size_m);
         let Some((binding_id, level)) =

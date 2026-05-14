@@ -8,6 +8,7 @@
 
 #![forbid(unsafe_code)]
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -15,12 +16,14 @@ use arc_swap::ArcSwapOption;
 use futures_util::StreamExt;
 use mars_observability::{Metrics, reject_reason};
 use mars_render_port::{Encoder, Pixmap, Renderer};
+use mars_source::RasterSource;
 use mars_store::{LocalCache, ManifestStore, ObjectStore, StoreError};
 use mars_style::Stylesheet;
 pub use mars_text::Fonts;
-use mars_types::{Bbox, CrsCode, ImageFormat, LayerId};
+use mars_types::{Bbox, CrsCode, ImageFormat, LayerId, SourceCollectionId};
 use tokio::sync::Semaphore;
 
+mod decode;
 mod fetch;
 mod gfi;
 pub mod images;
@@ -104,6 +107,17 @@ pub enum RuntimeError {
         /// Stylesheet entry name that was not found.
         name: String,
     },
+    /// A raster layer's manifest entry referenced a `collection` the bin
+    /// did not register a `RasterSource` adapter for. Surfaces drift between
+    /// the manifest and the composition wiring.
+    #[error("raster source not registered for collection '{collection}'")]
+    RasterSourceNotRegistered {
+        /// Collection id named by the raster layer entry.
+        collection: SourceCollectionId,
+    },
+    /// Underlying raster source failed.
+    #[error(transparent)]
+    RasterSource(#[from] mars_source::SourceError),
 }
 
 /// All ports the runtime needs.
@@ -126,6 +140,10 @@ pub struct Deps {
     /// artifact; the renderer reads through `Arc<dyn ImageRegistry>` and
     /// sees the new entries without being rebuilt.
     pub images: Arc<images::MutableImageRegistry>,
+    /// Raster source registry keyed by collection id. Looked up per
+    /// `RasterLayerEntry` to dispatch tile fetches. Empty when no raster
+    /// layers are declared.
+    pub raster_sources: HashMap<SourceCollectionId, Arc<dyn RasterSource>>,
 }
 
 /// The render plan as produced by the interface adapter (WMS / WMTS).

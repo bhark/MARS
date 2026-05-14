@@ -17,6 +17,7 @@ mars-types         = { workspace = true }
 mars-grid          = { workspace = true }
 mars-style         = { workspace = true }
 mars-artifact      = { workspace = true }
+mars-source        = { workspace = true }
 mars-store         = { workspace = true }
 mars-render-port   = { workspace = true }
 mars-config        = { workspace = true }
@@ -37,6 +38,7 @@ hashlink           = { workspace = true }
 parking_lot        = { workspace = true }
 png                = { workspace = true }
 rayon              = { workspace = true }
+zune-jpeg          = { workspace = true }
 
 [dev-dependencies]
 mars-store         = { workspace = true, features = ["test-utils"] }

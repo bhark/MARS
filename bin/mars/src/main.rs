@@ -211,6 +211,7 @@ async fn run_runtime(cfg: Arc<Config>, shutdown: CancellationToken) -> Result<()
             metrics: metrics.clone(),
             fonts,
             images,
+            raster_sources: std::collections::HashMap::new(),
         },
         pixel_budget,
         None,

@@ -177,7 +177,9 @@ fn map_runtime_error(e: &RuntimeError) -> EdgeException {
         | RuntimeError::Encode(_)
         | RuntimeError::InvalidManifest { .. }
         | RuntimeError::ConfigManifestMismatch { .. }
-        | RuntimeError::StylesheetDrift { .. } => internal_error(),
+        | RuntimeError::StylesheetDrift { .. }
+        | RuntimeError::RasterSourceNotRegistered { .. }
+        | RuntimeError::RasterSource(_) => internal_error(),
     }
 }
 

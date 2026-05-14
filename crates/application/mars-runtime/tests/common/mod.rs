@@ -348,6 +348,7 @@ pub async fn build_fixture_with(opts: FixtureOptions) -> Fixture {
         metrics: metrics.clone(),
         fonts,
         images: Arc::new(mars_runtime::images::MutableImageRegistry::new()),
+        raster_sources: std::collections::HashMap::new(),
     };
 
     let runtime = Arc::new(Runtime::from_state(Arc::new(state), deps));
@@ -718,6 +719,7 @@ where
         metrics,
         fonts,
         images: Arc::new(mars_runtime::images::MutableImageRegistry::new()),
+        raster_sources: std::collections::HashMap::new(),
     };
     let runtime = Arc::new(Runtime::from_state(Arc::new(state), deps));
 

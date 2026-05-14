@@ -227,6 +227,7 @@ mod tests {
             metrics: metrics.clone(),
             fonts: Arc::new(mars_runtime::Fonts::with_default()),
             images: Arc::new(mars_runtime::images::MutableImageRegistry::new()),
+            raster_sources: std::collections::HashMap::new(),
         }))
     }
 

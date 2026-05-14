@@ -17,6 +17,7 @@ use mars_store::{LocalCache, ObjectStore};
 use mars_types::ArtifactEntry;
 
 use crate::RuntimeError;
+use crate::decode::decode_png_to_rgba;
 
 /// Mutable image registry. The renderer holds an `Arc<MutableImageRegistry>`
 /// (cast to `dyn ImageRegistry`); the runtime calls [`Self::set`] from its
@@ -90,46 +91,6 @@ pub async fn load_from_manifest(
     Ok(out)
 }
 
-fn decode_png_to_rgba(bytes: &[u8]) -> Result<DecodedImage, String> {
-    let dec = png::Decoder::new(std::io::Cursor::new(bytes));
-    let mut reader = dec.read_info().map_err(|e| format!("png header: {e}"))?;
-    let buf_size = reader
-        .output_buffer_size()
-        .ok_or_else(|| "png buffer size unknown".to_string())?;
-    let mut buf = vec![0u8; buf_size];
-    let info = reader.next_frame(&mut buf).map_err(|e| format!("png frame: {e}"))?;
-    buf.truncate(info.buffer_size());
-    let rgba = match info.color_type {
-        png::ColorType::Rgba => buf,
-        png::ColorType::Rgb => {
-            let mut out = Vec::with_capacity(buf.len() / 3 * 4);
-            for px in buf.chunks_exact(3) {
-                out.extend_from_slice(&[px[0], px[1], px[2], 255]);
-            }
-            out
-        }
-        png::ColorType::Grayscale => {
-            let mut out = Vec::with_capacity(buf.len() * 4);
-            for &g in &buf {
-                out.extend_from_slice(&[g, g, g, 255]);
-            }
-            out
-        }
-        png::ColorType::GrayscaleAlpha => {
-            let mut out = Vec::with_capacity(buf.len() * 2);
-            for px in buf.chunks_exact(2) {
-                out.extend_from_slice(&[px[0], px[0], px[0], px[1]]);
-            }
-            out
-        }
-        other => return Err(format!("unsupported png colour type {other:?}")),
-    };
-    Ok(DecodedImage {
-        width: info.width,
-        height: info.height,
-        rgba: Arc::new(rgba),
-    })
-}
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
