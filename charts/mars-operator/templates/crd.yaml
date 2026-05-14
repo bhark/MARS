@@ -138,6 +138,15 @@ spec:
                           type: object
                       type: object
                     type: array
+                  imagesConfigMap:
+                    description: |-
+                      Optional ConfigMap (in the same namespace) carrying bitmap files
+                      referenced from styles via `FillPaint::Image { name }`. When set,
+                      the operator mounts it read-only at `/var/lib/mars/images`; the
+                      MARS config must point `compiler.images_dir` at the same path so
+                      the compiler resolves the names during pack.
+                    nullable: true
+                    type: string
                   resources:
                     description: |-
                       Resource requests/limits. Mirrors k8s ResourceRequirements but kept

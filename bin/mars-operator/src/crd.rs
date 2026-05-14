@@ -72,6 +72,14 @@ pub(crate) struct CompilerSpec {
 
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) env_from: Vec<EnvFromSourceSpec>,
+
+    /// Optional ConfigMap (in the same namespace) carrying bitmap files
+    /// referenced from styles via `FillPaint::Image { name }`. When set,
+    /// the operator mounts it read-only at `/var/lib/mars/images`; the
+    /// MARS config must point `compiler.images_dir` at the same path so
+    /// the compiler resolves the names during pack.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) images_config_map: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]

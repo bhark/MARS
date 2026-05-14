@@ -42,6 +42,7 @@ pub(crate) fn cr(name: &str, namespace: &str) -> MarsService {
                 },
                 env: Vec::new(),
                 env_from: Vec::new(),
+                images_config_map: None,
             },
             runtime: RuntimeSpec {
                 replicas: 2,
