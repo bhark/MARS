@@ -24,6 +24,14 @@ pub enum RenderError {
     /// Backend rasterisation error.
     #[error("backend error: {0}")]
     Backend(String),
+    /// A style referenced an image resource by name, but the renderer's
+    /// [`ImageRegistry`] has no entry for that name. Distinct from
+    /// `NotImplemented` because the surface exists; the asset is missing.
+    #[error("image resource not found: {name}")]
+    ImageNotFound {
+        /// Resource name as stored in the style.
+        name: String,
+    },
 }
 
 /// Errors produced by the encoder.
@@ -83,6 +91,32 @@ pub struct DecodedImage {
     pub height: u32,
     /// Straight (non-premultiplied) RGBA bytes, row-major.
     pub rgba: Arc<Vec<u8>>,
+}
+
+/// Renderer-side registry resolving bitmap names to decoded RGBA. Mirrors
+/// the `Fonts` registry's role: the runtime builds one at manifest load
+/// from a bundled image artifact and hands it to the renderer.
+///
+/// `get` is hot-path; concrete impls back it by an `Arc<Vec<u8>>` clone so
+/// the renderer holds a cheap reference for the duration of one render.
+pub trait ImageRegistry: Send + Sync + 'static {
+    /// Look up an image by its registered name. `None` means the manifest
+    /// did not bundle this name; callers surface
+    /// [`RenderError::ImageNotFound`] from the relevant dispatch.
+    fn get(&self, name: &str) -> Option<Arc<DecodedImage>>;
+}
+
+/// A registry that knows about no images. Used as the safe default in
+/// renderer construction sites that do not (yet) thread a bundled image
+/// artifact - styles referencing an image then surface
+/// [`RenderError::ImageNotFound`] from the dispatch hub.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct EmptyImageRegistry;
+
+impl ImageRegistry for EmptyImageRegistry {
+    fn get(&self, _name: &str) -> Option<Arc<DecodedImage>> {
+        None
+    }
 }
 
 /// One draw operation. Intentionally narrow - adding shapes goes through this
