@@ -17,24 +17,42 @@ mod symbol;
 
 use std::sync::Arc;
 
-use mars_render_port::{Canvas, DrawOp, EncodeError, Encoder, ImageFormat, Pixmap, RenderError, Renderer, TextMetrics};
+use mars_render_port::{
+    Canvas, DrawOp, EmptyImageRegistry, EncodeError, Encoder, ImageFormat, ImageRegistry, Pixmap, RenderError,
+    Renderer, TextMetrics,
+};
 use mars_style::LabelStyle;
 use mars_text::{FontError, Fonts};
 use tiny_skia::Pixmap as SkPixmap;
 
 /// CPU rasteriser. Stamps geometry via tiny-skia and shapes / rasterises
 /// label runs via [`mars_text`]. The font registry is shared with the
-/// runtime collision pass so both agree on glyph metrics.
+/// runtime collision pass so both agree on glyph metrics. The image
+/// registry resolves `FillPaint::Image { name }` and `DrawOp::Raster`
+/// references when the manifest bundled an image pack.
 #[derive(Debug)]
 pub struct TinySkiaRenderer {
     fonts: Arc<Fonts>,
+    images: Arc<dyn ImageRegistry>,
 }
 
 impl TinySkiaRenderer {
-    /// Construct with the supplied font registry.
+    /// Construct with the supplied font registry. Image resolution falls
+    /// through to [`EmptyImageRegistry`]; styles referencing an image will
+    /// surface [`RenderError::ImageNotFound`].
     #[must_use]
     pub fn new(fonts: Arc<Fonts>) -> Self {
-        Self { fonts }
+        Self {
+            fonts,
+            images: Arc::new(EmptyImageRegistry),
+        }
+    }
+
+    /// Construct with both registries. Production wiring uses this; tests
+    /// and call sites with no image pack can keep using [`Self::new`].
+    #[must_use]
+    pub fn with_images(fonts: Arc<Fonts>, images: Arc<dyn ImageRegistry>) -> Self {
+        Self { fonts, images }
     }
 }
 
@@ -53,7 +71,7 @@ impl Renderer for TinySkiaRenderer {
 
         let mut unimplemented = crate::prepare::UnimplementedFeatures::default();
         for op in ops {
-            unimplemented.merge(ops::dispatch(&mut pm, op, &self.fonts)?);
+            unimplemented.merge(ops::dispatch(&mut pm, op, &self.fonts, self.images.as_ref())?);
         }
         if unimplemented.any() {
             for what in unimplemented.names() {

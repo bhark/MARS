@@ -99,7 +99,7 @@ pub struct DecodedImage {
 ///
 /// `get` is hot-path; concrete impls back it by an `Arc<Vec<u8>>` clone so
 /// the renderer holds a cheap reference for the duration of one render.
-pub trait ImageRegistry: Send + Sync + 'static {
+pub trait ImageRegistry: std::fmt::Debug + Send + Sync + 'static {
     /// Look up an image by its registered name. `None` means the manifest
     /// did not bundle this name; callers surface
     /// [`RenderError::ImageNotFound`] from the relevant dispatch.

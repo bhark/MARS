@@ -6,14 +6,19 @@ mod label;
 pub(crate) mod path;
 mod pattern;
 
-use mars_render_port::{DrawOp, RenderError};
+use mars_render_port::{DrawOp, ImageRegistry, RenderError};
 use mars_text::Fonts;
 use tiny_skia::Pixmap;
 
 use crate::prepare::UnimplementedFeatures;
 use crate::{raster, symbol};
 
-pub(crate) fn dispatch(pm: &mut Pixmap, op: &DrawOp, fonts: &Fonts) -> Result<UnimplementedFeatures, RenderError> {
+pub(crate) fn dispatch(
+    pm: &mut Pixmap,
+    op: &DrawOp,
+    fonts: &Fonts,
+    images: &dyn ImageRegistry,
+) -> Result<UnimplementedFeatures, RenderError> {
     match op {
         DrawOp::Path { path, style } => path::draw(pm, path, style),
         DrawOp::Label {
@@ -27,7 +32,7 @@ pub(crate) fn dispatch(pm: &mut Pixmap, op: &DrawOp, fonts: &Fonts) -> Result<Un
             rotation_rad,
             style,
         } => symbol::dispatch(pm, *anchor, *rotation_rad, style, fonts),
-        DrawOp::Pattern { path, style } => pattern::draw(pm, path, style),
+        DrawOp::Pattern { path, style } => pattern::draw(pm, path, style, images),
         DrawOp::Raster { tile, dst, opacity } => {
             raster::draw(pm, tile, *dst, *opacity).map(|()| UnimplementedFeatures::default())
         }
@@ -80,7 +85,7 @@ mod tests {
     }
 
     #[test]
-    fn pattern_image_routes_to_pattern_dispatch() {
+    fn pattern_image_with_empty_registry_returns_image_not_found() {
         let op = DrawOp::Pattern {
             path: PortPath {
                 subpaths: vec![Subpath {
@@ -93,8 +98,8 @@ mod tests {
                 ..Default::default()
             }),
         };
-        let err = renderer().render(canvas(), &[op]).expect_err("image stub");
-        assert!(matches!(err, RenderError::NotImplemented { what } if what == "FillPaint::Image"));
+        let err = renderer().render(canvas(), &[op]).expect_err("missing image");
+        assert!(matches!(err, RenderError::ImageNotFound { ref name } if name == "brick"));
     }
 
     #[test]
@@ -163,7 +168,7 @@ mod tests {
                 ..Default::default()
             }),
         };
-        let flags = dispatch(&mut pm, &op, &fonts).expect("dispatch ok");
+        let flags = dispatch(&mut pm, &op, &fonts, &mars_render_port::EmptyImageRegistry).expect("dispatch ok");
         assert!(
             !flags.any(),
             "glyph implementation must not surface unimplemented flags"
