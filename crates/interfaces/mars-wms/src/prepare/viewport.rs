@@ -12,7 +12,7 @@ use mars_proj::{AxisOrder, axis_order};
 use mars_runtime::RenderPlan;
 use mars_types::{Bbox, CrsCode, ImageFormat, LayerId};
 
-use crate::{WmsConfig, WmsError};
+use crate::{WmsConfig, WmsError, WmsVersion};
 
 /// option-heavy viewport slice produced by the parse layer.
 #[derive(Debug, Default, Clone)]
@@ -28,7 +28,11 @@ pub(crate) struct ParsedViewport {
     pub dpi: Option<f64>,
 }
 
-pub(crate) fn resolve_viewport(p: &ParsedViewport, cfg: &WmsConfig) -> Result<RenderPlan, WmsError> {
+pub(crate) fn resolve_viewport(
+    p: &ParsedViewport,
+    cfg: &WmsConfig,
+    version: WmsVersion,
+) -> Result<RenderPlan, WmsError> {
     let layers = p.layers.as_ref().ok_or(WmsError::MissingParam("layers"))?.clone();
     if layers.is_empty() {
         return Err(WmsError::InvalidParam {
@@ -53,7 +57,7 @@ pub(crate) fn resolve_viewport(p: &ParsedViewport, cfg: &WmsConfig) -> Result<Re
     let crs = CrsCode::new(crs_raw);
 
     let bbox_raw = p.bbox.as_deref().ok_or(WmsError::MissingParam("bbox"))?;
-    let bbox = resolve_bbox(bbox_raw, &crs, cfg.max_bbox_coord)?;
+    let bbox = resolve_bbox(bbox_raw, &crs, version, cfg.max_bbox_coord)?;
 
     let width = p.width.ok_or(WmsError::MissingParam("width"))?;
     let height = p.height.ok_or(WmsError::MissingParam("height"))?;
@@ -121,11 +125,14 @@ fn resolve_format(raw: &str, cfg: &WmsConfig) -> Result<ImageFormat, WmsError> {
     Ok(format)
 }
 
-/// WMS 1.3.0 axis-order rule: for CRSes with lat/lon (north/east) axis order
-/// the wire is `miny,minx,maxy,maxx`; for east/north it is the natural
-/// `minx,miny,maxx,maxy`. only meaningful once the CRS is known, so this
-/// lives in prepare rather than parse.
-fn resolve_bbox(raw: &str, crs: &CrsCode, max_coord: f64) -> Result<Bbox, WmsError> {
+/// Axis-order rule:
+/// - WMS 1.3.0: obey the CRS-declared axis order via [`axis_order`].
+///   Geographic CRSes (EPSG:4326, EPSG:4258, ...) advertise north/east, so
+///   the wire is `miny,minx,maxy,maxx`; projected CRSes use east/north and
+///   the natural `minx,miny,maxx,maxy`.
+/// - WMS 1.1.1: always east/north on the wire regardless of CRS, matching
+///   pre-1.3.0 OGC convention and what legacy clients still send.
+fn resolve_bbox(raw: &str, crs: &CrsCode, version: WmsVersion, max_coord: f64) -> Result<Bbox, WmsError> {
     let parts: Vec<&str> = raw.split(',').collect();
     if parts.len() != 4 {
         return Err(WmsError::InvalidParam {
@@ -141,10 +148,13 @@ fn resolve_bbox(raw: &str, crs: &CrsCode, max_coord: f64) -> Result<Bbox, WmsErr
             name: "bbox",
             reason: e.to_string(),
         })?;
-    let order = axis_order(crs).map_err(|e| WmsError::InvalidParam {
-        name: "crs",
-        reason: format!("axis order lookup failed: {e}"),
-    })?;
+    let order = match version {
+        WmsVersion::V111 => AxisOrder::EastNorth,
+        WmsVersion::V130 => axis_order(crs).map_err(|e| WmsError::InvalidParam {
+            name: "crs",
+            reason: format!("axis order lookup failed: {e}"),
+        })?,
+    };
     let (min_x, min_y, max_x, max_y) = match order {
         AxisOrder::NorthEast => (nums[1], nums[0], nums[3], nums[2]),
         AxisOrder::EastNorth => (nums[0], nums[1], nums[2], nums[3]),

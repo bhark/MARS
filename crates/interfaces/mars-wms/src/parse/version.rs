@@ -22,10 +22,11 @@ pub(super) fn negotiate_version(kvp: &Kvp) -> Result<WmsVersion, WmsError> {
         return Ok(WmsVersion::default());
     };
     match raw {
+        "1.1.1" => Ok(WmsVersion::V111),
         "1.3.0" => Ok(WmsVersion::V130),
         other => Err(WmsError::InvalidParam {
             name: "version",
-            reason: format!("unsupported `{other}` (server speaks 1.3.0)"),
+            reason: format!("unsupported `{other}` (server speaks 1.1.1 and 1.3.0)"),
         }),
     }
 }
@@ -40,6 +41,7 @@ pub fn version_for_error_response(query: &str) -> WmsVersion {
     let kvp = parse_kvp(query);
     lookup_version(&kvp)
         .and_then(|raw| match raw {
+            "1.1.1" => Some(WmsVersion::V111),
             "1.3.0" => Some(WmsVersion::V130),
             _ => None,
         })
@@ -78,8 +80,14 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_111_rejected_for_now() {
+    fn explicit_111_resolves() {
         let kvp = parse_kvp("request=GetCapabilities&version=1.1.1");
+        assert_eq!(negotiate_version(&kvp).unwrap(), WmsVersion::V111);
+    }
+
+    #[test]
+    fn unsupported_version_rejected() {
+        let kvp = parse_kvp("request=GetCapabilities&version=1.0.0");
         assert!(matches!(
             negotiate_version(&kvp).unwrap_err(),
             WmsError::InvalidParam { name: "version", .. }

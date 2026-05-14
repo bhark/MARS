@@ -37,10 +37,10 @@ pub fn parse_request(query: &str, cfg: &WmsConfig) -> Result<(WmsVersion, WmsReq
     let version = negotiate_version(&kvp)?;
     let request = require(&kvp, "request")?;
     let request = match request.as_str() {
-        s if s.eq_ignore_ascii_case("GetMap") => WmsRequest::GetMap(resolve_get_map_from_kvp(&kvp, cfg)?),
+        s if s.eq_ignore_ascii_case("GetMap") => WmsRequest::GetMap(resolve_get_map_from_kvp(&kvp, cfg, version)?),
         s if s.eq_ignore_ascii_case("GetCapabilities") => WmsRequest::GetCapabilities,
         s if s.eq_ignore_ascii_case("GetFeatureInfo") => {
-            WmsRequest::GetFeatureInfo(resolve_get_feature_info_from_kvp(&kvp, cfg)?)
+            WmsRequest::GetFeatureInfo(resolve_get_feature_info_from_kvp(&kvp, cfg, version)?)
         }
         s if s.eq_ignore_ascii_case("GetLegendGraphic") => {
             WmsRequest::GetLegendGraphic(resolve_get_legend_from_kvp(&kvp, cfg)?)

@@ -14,7 +14,7 @@ use mars_types::LayerId;
 use super::ParsedGetFeatureInfo;
 use super::viewport::resolve_viewport;
 use crate::feature_info::info_format_mime;
-use crate::{InfoFormat, MAX_FEATURE_COUNT, WmsConfig, WmsError};
+use crate::{InfoFormat, MAX_FEATURE_COUNT, WmsConfig, WmsError, WmsVersion};
 
 /// Fully-validated GetFeatureInfo request. `plan.layers` has been swapped
 /// to QUERY_LAYERS so the runtime walks only those bindings.
@@ -36,8 +36,9 @@ pub struct ResolvedGetFeatureInfo {
 pub(crate) fn resolve_get_feature_info(
     p: ParsedGetFeatureInfo,
     cfg: &WmsConfig,
+    version: WmsVersion,
 ) -> Result<ResolvedGetFeatureInfo, WmsError> {
-    let mut plan = resolve_viewport(&p.viewport, cfg)?;
+    let mut plan = resolve_viewport(&p.viewport, cfg, version)?;
 
     let query_layers = resolve_query_layers(p.query_layers, &plan.layers)?;
     plan.layers = query_layers;
@@ -149,7 +150,7 @@ mod tests {
         // not the original LAYERS list, so the runtime walks only the
         // query subset.
         let p = parsed(vec!["a"], 5, 7, "text/plain", None);
-        let r = resolve_get_feature_info(p, &cfg()).unwrap();
+        let r = resolve_get_feature_info(p, &cfg(), WmsVersion::V130).unwrap();
         assert_eq!(r.plan.layers.len(), 1);
         assert_eq!(r.plan.layers[0].as_str(), "a");
         assert_eq!(r.i, 5);
@@ -161,7 +162,7 @@ mod tests {
     #[test]
     fn query_layers_must_be_subset_of_layers() {
         let p = parsed(vec!["z"], 0, 0, "text/plain", None);
-        let err = resolve_get_feature_info(p, &cfg()).unwrap_err();
+        let err = resolve_get_feature_info(p, &cfg(), WmsVersion::V130).unwrap_err();
         assert!(matches!(
             err,
             WmsError::InvalidParam {
@@ -175,21 +176,21 @@ mod tests {
     fn missing_query_layers_reports_missing() {
         let mut p = parsed(vec!["a"], 0, 0, "text/plain", None);
         p.query_layers = None;
-        let err = resolve_get_feature_info(p, &cfg()).unwrap_err();
+        let err = resolve_get_feature_info(p, &cfg(), WmsVersion::V130).unwrap_err();
         assert!(matches!(err, WmsError::MissingParam("query_layers")));
     }
 
     #[test]
     fn pixel_out_of_viewport_rejected() {
         let p = parsed(vec!["a"], 10, 0, "text/plain", None);
-        let err = resolve_get_feature_info(p, &cfg()).unwrap_err();
+        let err = resolve_get_feature_info(p, &cfg(), WmsVersion::V130).unwrap_err();
         assert!(matches!(err, WmsError::InvalidParam { name: "i|j", .. }));
     }
 
     #[test]
     fn unsupported_info_format_rejected() {
         let p = parsed(vec!["a"], 0, 0, "application/vnd.ogc.gml", None);
-        let err = resolve_get_feature_info(p, &cfg()).unwrap_err();
+        let err = resolve_get_feature_info(p, &cfg(), WmsVersion::V130).unwrap_err();
         assert!(matches!(
             err,
             WmsError::InvalidParam {
@@ -202,21 +203,21 @@ mod tests {
     #[test]
     fn feature_count_default_is_one() {
         let p = parsed(vec!["a"], 0, 0, "text/plain", None);
-        let r = resolve_get_feature_info(p, &cfg()).unwrap();
+        let r = resolve_get_feature_info(p, &cfg(), WmsVersion::V130).unwrap();
         assert_eq!(r.feature_count, 1);
     }
 
     #[test]
     fn feature_count_clamped_to_max() {
         let p = parsed(vec!["a"], 0, 0, "text/plain", Some(MAX_FEATURE_COUNT + 100));
-        let r = resolve_get_feature_info(p, &cfg()).unwrap();
+        let r = resolve_get_feature_info(p, &cfg(), WmsVersion::V130).unwrap();
         assert_eq!(r.feature_count, MAX_FEATURE_COUNT);
     }
 
     #[test]
     fn feature_count_zero_rejected() {
         let p = parsed(vec!["a"], 0, 0, "text/plain", Some(0));
-        let err = resolve_get_feature_info(p, &cfg()).unwrap_err();
+        let err = resolve_get_feature_info(p, &cfg(), WmsVersion::V130).unwrap_err();
         assert!(matches!(
             err,
             WmsError::InvalidParam {

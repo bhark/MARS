@@ -6,7 +6,7 @@ use mars_runtime::RenderPlan;
 
 use super::ParsedGetMap;
 use super::viewport::resolve_viewport;
-use crate::{ExceptionsFormat, WmsConfig, WmsError};
+use crate::{ExceptionsFormat, WmsConfig, WmsError, WmsVersion};
 
 /// Fully-validated GetMap request. The dispatcher in
 /// [`crate::parse::parse_request`] hands this to the handler, which reads
@@ -17,8 +17,12 @@ pub struct ResolvedGetMap {
     pub exceptions: ExceptionsFormat,
 }
 
-pub(crate) fn resolve_get_map(p: ParsedGetMap, cfg: &WmsConfig) -> Result<ResolvedGetMap, WmsError> {
-    let plan = resolve_viewport(&p.viewport, cfg)?;
+pub(crate) fn resolve_get_map(
+    p: ParsedGetMap,
+    cfg: &WmsConfig,
+    version: WmsVersion,
+) -> Result<ResolvedGetMap, WmsError> {
+    let plan = resolve_viewport(&p.viewport, cfg, version)?;
     let exceptions = resolve_exceptions(p.exceptions.as_deref())?;
     Ok(ResolvedGetMap { plan, exceptions })
 }
@@ -87,7 +91,7 @@ mod tests {
             viewport: happy_viewport(),
             exceptions: None,
         };
-        let r = resolve_get_map(parsed, &cfg()).unwrap();
+        let r = resolve_get_map(parsed, &cfg(), WmsVersion::V130).unwrap();
         assert_eq!(r.exceptions, ExceptionsFormat::Xml);
     }
 
@@ -98,7 +102,7 @@ mod tests {
                 viewport: happy_viewport(),
                 exceptions: Some(kw.into()),
             };
-            let r = resolve_get_map(parsed, &cfg()).unwrap();
+            let r = resolve_get_map(parsed, &cfg(), WmsVersion::V130).unwrap();
             assert_eq!(r.exceptions, ExceptionsFormat::Blank, "kw={kw}");
         }
     }
@@ -109,7 +113,7 @@ mod tests {
             viewport: happy_viewport(),
             exceptions: Some("INIMAGE".into()),
         };
-        let err = resolve_get_map(parsed, &cfg()).unwrap_err();
+        let err = resolve_get_map(parsed, &cfg(), WmsVersion::V130).unwrap_err();
         assert!(matches!(err, WmsError::NotImplemented { .. }));
     }
 
@@ -119,7 +123,7 @@ mod tests {
             viewport: happy_viewport(),
             exceptions: Some("GARBAGE".into()),
         };
-        let err = resolve_get_map(parsed, &cfg()).unwrap_err();
+        let err = resolve_get_map(parsed, &cfg(), WmsVersion::V130).unwrap_err();
         assert!(matches!(err, WmsError::InvalidParam { name: "exceptions", .. }));
     }
 
@@ -131,7 +135,7 @@ mod tests {
             viewport: vp,
             exceptions: None,
         };
-        let r = resolve_get_map(parsed, &cfg()).unwrap();
+        let r = resolve_get_map(parsed, &cfg(), WmsVersion::V130).unwrap();
         assert!((r.plan.scale_pixel_size_m - 0.0254 / 72.0).abs() < 1e-12);
     }
 
@@ -143,7 +147,7 @@ mod tests {
             viewport: vp,
             exceptions: None,
         };
-        let err = resolve_get_map(parsed, &cfg()).unwrap_err();
+        let err = resolve_get_map(parsed, &cfg(), WmsVersion::V130).unwrap_err();
         assert!(matches!(err, WmsError::MissingParam("layers")));
     }
 
@@ -155,7 +159,7 @@ mod tests {
             viewport: vp,
             exceptions: None,
         };
-        let err = resolve_get_map(parsed, &cfg()).unwrap_err();
+        let err = resolve_get_map(parsed, &cfg(), WmsVersion::V130).unwrap_err();
         assert!(matches!(err, WmsError::InvalidParam { name: "crs", .. }));
     }
 }

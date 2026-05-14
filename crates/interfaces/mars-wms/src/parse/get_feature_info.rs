@@ -8,27 +8,30 @@ use mars_types::LayerId;
 
 use super::common::{Kvp, nonempty, parse_kvp, parse_optional_u32};
 use super::get_map::parse_viewport;
+use super::version::negotiate_version;
 use crate::prepare::{ParsedGetFeatureInfo, ResolvedGetFeatureInfo, resolve_get_feature_info};
-use crate::{WmsConfig, WmsError};
+use crate::{WmsConfig, WmsError, WmsVersion};
 
 /// Parse a `GetFeatureInfo` query-string into a [`ResolvedGetFeatureInfo`].
 pub fn parse_get_feature_info(query: &str, cfg: &WmsConfig) -> Result<ResolvedGetFeatureInfo, WmsError> {
     let kvp = parse_kvp(query);
-    let parsed = parse_get_feature_info_kvp(&kvp)?;
-    resolve_get_feature_info(parsed, cfg)
+    let version = negotiate_version(&kvp)?;
+    let parsed = parse_get_feature_info_kvp(&kvp, version)?;
+    resolve_get_feature_info(parsed, cfg, version)
 }
 
 pub(super) fn resolve_get_feature_info_from_kvp(
     kvp: &Kvp,
     cfg: &WmsConfig,
+    version: WmsVersion,
 ) -> Result<ResolvedGetFeatureInfo, WmsError> {
-    let parsed = parse_get_feature_info_kvp(kvp)?;
-    resolve_get_feature_info(parsed, cfg)
+    let parsed = parse_get_feature_info_kvp(kvp, version)?;
+    resolve_get_feature_info(parsed, cfg, version)
 }
 
-fn parse_get_feature_info_kvp(kvp: &Kvp) -> Result<ParsedGetFeatureInfo, WmsError> {
+fn parse_get_feature_info_kvp(kvp: &Kvp, version: WmsVersion) -> Result<ParsedGetFeatureInfo, WmsError> {
     Ok(ParsedGetFeatureInfo {
-        viewport: parse_viewport(kvp)?,
+        viewport: parse_viewport(kvp, version)?,
         query_layers: parse_query_layers(kvp),
         i: parse_optional_u32(kvp, "i")?,
         j: parse_optional_u32(kvp, "j")?,
