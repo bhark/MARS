@@ -18,6 +18,10 @@ spec:
       cacheSize: 512Mi
       workSize: 1Gi
       storageClass: ""
+    # bitmap fixtures live in this configmap; the operator mounts it read-only
+    # at /var/lib/mars/images. config.compiler.images_dir below points at the
+    # same path so the compiler resolves FillPaint::Image names during pack.
+    imagesConfigMap: mars-images
     env:
       - { name: AWS_REGION, value: us-east-1 }
       # the s3 sdk otherwise stalls on http://169.254.169.254/latest/api/token
@@ -81,6 +85,7 @@ spec:
       compile_binding_parallelism: 2
       compile_in_flight_pages_budget_bytes: 256MiB
       compile_spill_dir: /work/spill
+      images_dir: /var/lib/mars/images
     scales:
       bands:
         - { name: detail, max_denom_exclusive: 12500 }
@@ -114,6 +119,7 @@ spec:
       allowlist: [EPSG:25832]
     styles:
       poly_land:           { type: polygon, fill: "#ffffff" }
+      poly_pattern:        { type: polygon, fill: { kind: image, name: stripe } }
       poly_water:          { type: polygon, fill: "#dcf0ff", stroke: "#2896e6", stroke_width: 0.15 }
       poly_settlement:     { type: polygon, fill: "#f2f2f2" }
       poly_building:       { type: polygon, fill: "#d2d2d2", stroke: "#a0a0a0", stroke_width: 0.6 }
@@ -181,6 +187,13 @@ spec:
         classes:
           - { name: wide, title: "Wide waterways", when: "width_class = 'wide'", style: { type: ref, name: line_waterway_wide } }
           - { name: narrow, title: "Waterways", style: { type: ref, name: line_waterway_narrow } }
+      - name: pattern_zone
+        title: "Pattern zone"
+        type: polygon
+        sources:
+          - { band: lo, from: e2e_source.pattern_zone, geometry_column: geom, id_column: id }
+        classes:
+          - { name: default, title: "Pattern zone", style: { type: ref, name: poly_pattern } }
       - name: poi
         title: "Points of interest"
         type: point

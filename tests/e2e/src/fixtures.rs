@@ -8,6 +8,7 @@
 //!     by the loader Job's hostPath volume.
 
 use anyhow::{Context, Result, anyhow};
+use k8s_openapi::ByteString;
 use k8s_openapi::api::core::v1::ConfigMap;
 use kube::api::{ObjectMeta, Patch, PatchParams};
 use kube::{Api, Client};
@@ -64,6 +65,9 @@ pub async fn apply_sql_configmap(client: Arc<Client>, ns: &str) -> Result<()> {
     let synthetic_poi = fs::read_to_string(e2e_sql.join("synthetic-poi.sql"))
         .await
         .with_context(|| format!("read {}/synthetic-poi.sql", e2e_sql.display()))?;
+    let synthetic_pattern = fs::read_to_string(e2e_sql.join("synthetic-pattern.sql"))
+        .await
+        .with_context(|| format!("read {}/synthetic-pattern.sql", e2e_sql.display()))?;
     let mutate_source = fs::read_to_string(e2e_sql.join("mutate-source.sql"))
         .await
         .with_context(|| format!("read {}/mutate-source.sql", e2e_sql.display()))?;
@@ -72,6 +76,7 @@ pub async fn apply_sql_configmap(client: Arc<Client>, ns: &str) -> Result<()> {
     data.insert("assert-fixture.sql".to_string(), assert);
     data.insert("create-replication.sql".to_string(), replication);
     data.insert("synthetic-poi.sql".to_string(), synthetic_poi);
+    data.insert("synthetic-pattern.sql".to_string(), synthetic_pattern);
     data.insert("mutate-source.sql".to_string(), mutate_source);
 
     let cm = ConfigMap {
@@ -93,6 +98,60 @@ pub async fn apply_sql_configmap(client: Arc<Client>, ns: &str) -> Result<()> {
     .await
     .with_context(|| format!("apply fixture-sql configmap in {ns}"))?;
     info!(namespace = %ns, "applied fixture-sql configmap");
+    Ok(())
+}
+
+/// create the `mars-images` ConfigMap from every file under
+/// `tests/e2e/images/`. operator-side, the MarsService spec
+/// `compiler.imagesConfigMap: mars-images` mounts this read-only at
+/// `/var/lib/mars/images`; the MARS config's `compiler.images_dir` resolves
+/// the names from there during pack. server-side apply so reruns inside the
+/// same namespace are idempotent.
+pub async fn apply_images_configmap(client: Arc<Client>, ns: &str) -> Result<()> {
+    let repo = repo_root()?;
+    let dir = repo.join("tests/e2e/images");
+    let mut entries = fs::read_dir(&dir)
+        .await
+        .with_context(|| format!("read {}", dir.display()))?;
+    let mut binary = BTreeMap::new();
+    while let Some(entry) = entries.next_entry().await? {
+        let path = entry.path();
+        if !entry.file_type().await?.is_file() {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .map(str::to_string)
+            .ok_or_else(|| anyhow!("image fixture {} has no filename", path.display()))?;
+        let bytes = fs::read(&path)
+            .await
+            .with_context(|| format!("read {}", path.display()))?;
+        binary.insert(name, ByteString(bytes));
+    }
+    if binary.is_empty() {
+        return Err(anyhow!("no image fixtures found under {}", dir.display()));
+    }
+
+    let cm = ConfigMap {
+        metadata: ObjectMeta {
+            name: Some("mars-images".to_string()),
+            namespace: Some(ns.to_string()),
+            ..Default::default()
+        },
+        binary_data: Some(binary),
+        ..Default::default()
+    };
+
+    let api: Api<ConfigMap> = Api::namespaced((*client).clone(), ns);
+    api.patch(
+        "mars-images",
+        &PatchParams::apply("mars-e2e-kind").force(),
+        &Patch::Apply(&cm),
+    )
+    .await
+    .with_context(|| format!("apply mars-images configmap in {ns}"))?;
+    info!(namespace = %ns, "applied mars-images configmap");
     Ok(())
 }
 

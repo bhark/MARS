@@ -84,6 +84,7 @@ impl Scenario {
         let dump = fixtures::host_fixture_path()?;
         let dump_filename = fixtures::fixture_filename(&dump)?;
         fixtures::apply_sql_configmap(client.clone(), &ns.name).await?;
+        fixtures::apply_images_configmap(client.clone(), &ns.name).await?;
         let mut loader_vars = HashMap::new();
         loader_vars.insert("FIXTURE_FILENAME", dump_filename.as_str());
         deploy::apply_template(

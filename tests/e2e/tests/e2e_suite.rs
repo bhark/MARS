@@ -25,3 +25,6 @@ mod d_wmts;
 
 #[path = "e2e_suite/e_resilience.rs"]
 mod e_resilience;
+
+#[path = "e2e_suite/f_image_pattern.rs"]
+mod f_image_pattern;
