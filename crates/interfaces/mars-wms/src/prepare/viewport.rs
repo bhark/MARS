@@ -8,6 +8,7 @@
 //! where allowlist, bound, axis-order, and bbox-shape checks live so
 //! downstream consumers never re-validate.
 
+use mars_proj::{AxisOrder, axis_order};
 use mars_runtime::RenderPlan;
 use mars_types::{Bbox, CrsCode, ImageFormat, LayerId};
 
@@ -62,7 +63,7 @@ pub(crate) fn resolve_viewport(p: &ParsedViewport, cfg: &WmsConfig) -> Result<Re
     let crs = CrsCode::new(crs_raw);
 
     let bbox_raw = p.bbox.as_deref().ok_or(WmsError::MissingParam("bbox"))?;
-    let bbox = resolve_bbox(bbox_raw, crs_raw, cfg.max_bbox_coord)?;
+    let bbox = resolve_bbox(bbox_raw, &crs, cfg.max_bbox_coord)?;
 
     let width = p.width.ok_or(WmsError::MissingParam("width"))?;
     let height = p.height.ok_or(WmsError::MissingParam("height"))?;
@@ -140,7 +141,7 @@ fn resolve_format(raw: &str, cfg: &WmsConfig) -> Result<ImageFormat, WmsError> {
 /// the wire is `miny,minx,maxy,maxx`; for east/north it is the natural
 /// `minx,miny,maxx,maxy`. only meaningful once the CRS is known, so this
 /// lives in prepare rather than parse.
-fn resolve_bbox(raw: &str, crs: &str, max_coord: f64) -> Result<Bbox, WmsError> {
+fn resolve_bbox(raw: &str, crs: &CrsCode, max_coord: f64) -> Result<Bbox, WmsError> {
     let parts: Vec<&str> = raw.split(',').collect();
     if parts.len() != 4 {
         return Err(WmsError::InvalidParam {
@@ -156,10 +157,13 @@ fn resolve_bbox(raw: &str, crs: &str, max_coord: f64) -> Result<Bbox, WmsError> 
             name: "bbox",
             reason: e.to_string(),
         })?;
-    let (min_x, min_y, max_x, max_y) = if is_lat_lon_order(crs) {
-        (nums[1], nums[0], nums[3], nums[2])
-    } else {
-        (nums[0], nums[1], nums[2], nums[3])
+    let order = axis_order(crs).map_err(|e| WmsError::InvalidParam {
+        name: "crs",
+        reason: format!("axis order lookup failed: {e}"),
+    })?;
+    let (min_x, min_y, max_x, max_y) = match order {
+        AxisOrder::NorthEast => (nums[1], nums[0], nums[3], nums[2]),
+        AxisOrder::EastNorth => (nums[0], nums[1], nums[2], nums[3]),
     };
     for v in [min_x, min_y, max_x, max_y] {
         if !v.is_finite() {
@@ -182,8 +186,4 @@ fn resolve_bbox(raw: &str, crs: &str, max_coord: f64) -> Result<Bbox, WmsError> 
         });
     }
     Ok(Bbox::new(min_x, min_y, max_x, max_y))
-}
-
-fn is_lat_lon_order(crs: &str) -> bool {
-    matches!(crs, "EPSG:4326" | "urn:ogc:def:crs:EPSG::4326")
 }

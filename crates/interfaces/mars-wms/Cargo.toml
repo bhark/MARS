@@ -16,6 +16,7 @@ workspace = true
 mars-runtime  = { workspace = true }
 mars-config   = { workspace = true }
 mars-types    = { workspace = true }
+mars-proj     = { workspace = true }
 quick-xml     = "0.39"
 thiserror     = { workspace = true }
 percent-encoding = "2"

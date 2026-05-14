@@ -2848,6 +2848,7 @@ name = "mars-wms"
 version = "0.0.1"
 dependencies = [
  "mars-config",
+ "mars-proj",
  "mars-runtime",
  "mars-types",
  "percent-encoding",
