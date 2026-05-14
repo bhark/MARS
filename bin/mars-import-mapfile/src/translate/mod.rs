@@ -254,13 +254,38 @@ END
     }
 
     #[test]
-    fn translate_skips_raster_layer() {
+    fn translate_emits_raster_layer_as_kind_raster_scaffold() {
         let src = r#"
 MAP
   NAME "demo"
   LAYER
     NAME "ortho"
     TYPE RASTER
+    DATA "ortho.tif"
+  END
+  LAYER
+    NAME "roads"
+    TYPE LINE
+  END
+END
+"#;
+        let skel = translate(src);
+        assert_eq!(skel.layers.len(), 2);
+        let ortho = skel.layers.iter().find(|l| l.name == "ortho").expect("ortho layer");
+        assert_eq!(ortho.geom_kind.as_deref(), Some("raster"));
+        assert!(ortho.sources.is_empty(), "raster scaffold has no vector sources");
+        let roads = skel.layers.iter().find(|l| l.name == "roads").expect("roads layer");
+        assert_eq!(roads.geom_kind.as_deref(), Some("line"));
+    }
+
+    #[test]
+    fn translate_still_skips_query_layer() {
+        let src = r#"
+MAP
+  NAME "demo"
+  LAYER
+    NAME "phantom"
+    TYPE QUERY
   END
   LAYER
     NAME "roads"

@@ -85,9 +85,30 @@ pub(crate) fn resolve_layer(
 
     if let Some(ref t) = p.layer_type {
         let up = t.to_ascii_uppercase();
-        if up == "RASTER" || up == "QUERY" {
-            warn!(line = layer_line, layer = %name, "skipping RASTER/QUERY layer");
+        if up == "QUERY" {
+            warn!(line = layer_line, layer = %name, "skipping QUERY layer (no MARS equivalent)");
             return None;
+        }
+        if up == "RASTER" {
+            // emit a raster-kind config skeleton: the surface flows through
+            // emit -> compiler -> runtime so each layer surfaces a typed
+            // NotImplemented until the raster pipeline lands.
+            warn!(
+                line = layer_line,
+                layer = %name,
+                data = ?p.data,
+                "raster layer translated as kind: raster scaffold; compile and runtime will return typed NotImplemented",
+            );
+            return Some(ResolvedLayer {
+                name,
+                title: p.title,
+                geom_kind: Some("raster".into()),
+                sources: Vec::new(),
+                classes: Vec::new(),
+                label: None,
+                attributes: Vec::new(),
+                unimplemented: vec!["LAYER TYPE RASTER (compiler / runtime pipeline not yet implemented)"],
+            });
         }
     }
 
