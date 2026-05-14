@@ -128,12 +128,13 @@ mod tests {
     }
 
     #[test]
-    fn raster_op_routes_to_typed_not_implemented() {
+    fn raster_op_paints_tile_pixels_into_canvas() {
         use mars_render_port::{DecodedImage, PixelRect};
+        // 1x1 opaque red tile blown up to fill the entire 16x16 canvas.
         let tile = Arc::new(DecodedImage {
-            width: 2,
-            height: 2,
-            rgba: Arc::new(vec![0u8; 16]),
+            width: 1,
+            height: 1,
+            rgba: Arc::new(vec![255, 0, 0, 255]),
         });
         let op = DrawOp::Raster {
             tile,
@@ -145,8 +146,15 @@ mod tests {
             },
             opacity: 1.0,
         };
-        let err = renderer().render(canvas(), &[op]).expect_err("raster stub");
-        assert!(matches!(err, RenderError::NotImplemented { what } if what == "DrawOp::Raster"));
+        let pm = renderer().render(canvas(), &[op]).expect("raster paints");
+        // rendered output is premultiplied RGBA. opaque red premultiplies to
+        // itself (255,0,0,255), so every pixel should match exactly.
+        let red_count = pm
+            .premultiplied_rgba
+            .chunks_exact(4)
+            .filter(|p| p[0] > 250 && p[1] < 10 && p[2] < 10 && p[3] == 255)
+            .count();
+        assert_eq!(red_count, 16 * 16, "every pixel should be opaque red");
     }
 
     #[test]

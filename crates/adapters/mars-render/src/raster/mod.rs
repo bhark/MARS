@@ -1,20 +1,50 @@
-//! raster-tile compositor. scaffold today: returns a typed `NotImplemented`
-//! so the surface flows end to end without any pixels painted. concrete
-//! impl will sample the decoded tile into the destination rect using
-//! tiny-skia (or a successor adapter when the scope grows).
+//! Raster-tile compositor. Decodes a tile (passed in as straight RGBA) to
+//! premultiplied alpha and blits it into the destination rectangle with
+//! bilinear filtering. Mirrors the image-fill pattern shader; the only
+//! difference is that raster tiles paint a rectangle (`draw_pixmap`) rather
+//! than fill a path with a tiled shader.
 
 use std::sync::Arc;
 
 use mars_render_port::{DecodedImage, PixelRect, RenderError};
-use tiny_skia::Pixmap;
+use tiny_skia::{BlendMode, FilterQuality, Pixmap, PixmapPaint, Transform};
+
+use crate::decoded_image::build_premultiplied;
 
 pub(crate) fn draw(
-    _pm: &mut Pixmap,
-    _tile: &Arc<DecodedImage>,
-    _dst: PixelRect,
-    _opacity: f32,
+    pm: &mut Pixmap,
+    tile: &Arc<DecodedImage>,
+    dst: PixelRect,
+    opacity: f32,
 ) -> Result<(), RenderError> {
-    Err(RenderError::NotImplemented { what: "DrawOp::Raster" })
+    if dst.w <= 0.0 || dst.h <= 0.0 {
+        return Err(RenderError::Backend(format!(
+            "DrawOp::Raster dst has non-positive dimensions w={} h={}",
+            dst.w, dst.h
+        )));
+    }
+    if !dst.x.is_finite() || !dst.y.is_finite() || !dst.w.is_finite() || !dst.h.is_finite() {
+        return Err(RenderError::Backend(
+            "DrawOp::Raster dst carries non-finite coordinates".into(),
+        ));
+    }
+    if tile.width == 0 || tile.height == 0 {
+        return Err(RenderError::Backend("DrawOp::Raster tile is zero-sized".into()));
+    }
+
+    let tile_pm = build_premultiplied(tile)?;
+    let sx = dst.w / tile.width as f32;
+    let sy = dst.h / tile.height as f32;
+    // pre_scale composes the scale onto the input space so points run
+    // tile-space -> scale -> translate -> canvas-space.
+    let transform = Transform::from_translate(dst.x, dst.y).pre_scale(sx, sy);
+    let paint = PixmapPaint {
+        opacity: opacity.clamp(0.0, 1.0),
+        blend_mode: BlendMode::SourceOver,
+        quality: FilterQuality::Bilinear,
+    };
+    pm.draw_pixmap(0, 0, tile_pm.as_ref(), &paint, transform, None);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -22,15 +52,23 @@ pub(crate) fn draw(
 mod tests {
     use super::*;
 
+    fn solid_tile(w: u32, h: u32, r: u8, g: u8, b: u8, a: u8) -> Arc<DecodedImage> {
+        let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+        for _ in 0..(w * h) {
+            rgba.extend_from_slice(&[r, g, b, a]);
+        }
+        Arc::new(DecodedImage {
+            width: w,
+            height: h,
+            rgba: Arc::new(rgba),
+        })
+    }
+
     #[test]
-    fn raster_dispatch_is_not_implemented() {
+    fn solid_red_tile_paints_red_pixels_at_dst() {
         let mut pm = Pixmap::new(8, 8).unwrap();
-        let tile = Arc::new(DecodedImage {
-            width: 2,
-            height: 2,
-            rgba: Arc::new(vec![0; 16]),
-        });
-        let err = draw(
+        let tile = solid_tile(2, 2, 255, 0, 0, 255);
+        draw(
             &mut pm,
             &tile,
             PixelRect {
@@ -41,7 +79,108 @@ mod tests {
             },
             1.0,
         )
-        .expect_err("must be NotImplemented");
-        assert!(matches!(err, RenderError::NotImplemented { what } if what == "DrawOp::Raster"));
+        .unwrap();
+        // every pixel of the 8x8 canvas should be opaque red after the blit
+        // (a 2x2 red tile scaled to 8x8 with source-over against transparent
+        // black). bilinear at the edges still leaves >=99% red at the centre.
+        let centre = pm.pixel(4, 4).unwrap();
+        assert!(
+            centre.red() > 250 && centre.green() < 10 && centre.blue() < 10 && centre.alpha() == 255,
+            "centre pixel should be opaque red, got {centre:?}"
+        );
+    }
+
+    #[test]
+    fn opacity_half_attenuates_alpha() {
+        let mut pm = Pixmap::new(4, 4).unwrap();
+        let tile = solid_tile(1, 1, 255, 0, 0, 255);
+        draw(
+            &mut pm,
+            &tile,
+            PixelRect {
+                x: 0.0,
+                y: 0.0,
+                w: 4.0,
+                h: 4.0,
+            },
+            0.5,
+        )
+        .unwrap();
+        let p = pm.pixel(2, 2).unwrap();
+        // source-over of (red, alpha=0.5) onto (transparent black) gives
+        // alpha ~= 128 (within rounding).
+        assert!(
+            (120..=135).contains(&p.alpha()),
+            "expected alpha ~128 with opacity 0.5, got {}",
+            p.alpha()
+        );
+    }
+
+    #[test]
+    fn dst_offset_paints_only_inside_rect() {
+        let mut pm = Pixmap::new(8, 8).unwrap();
+        let tile = solid_tile(2, 2, 0, 255, 0, 255);
+        draw(
+            &mut pm,
+            &tile,
+            PixelRect {
+                x: 4.0,
+                y: 4.0,
+                w: 4.0,
+                h: 4.0,
+            },
+            1.0,
+        )
+        .unwrap();
+        // outside the dst rect: transparent. inside: green.
+        let outside = pm.pixel(1, 1).unwrap();
+        assert_eq!(outside.alpha(), 0, "outside rect must remain transparent");
+        let inside = pm.pixel(6, 6).unwrap();
+        assert!(
+            inside.green() > 250 && inside.red() < 10 && inside.blue() < 10,
+            "inside rect must be green, got {inside:?}"
+        );
+    }
+
+    #[test]
+    fn zero_dimension_dst_is_typed_backend_error() {
+        let mut pm = Pixmap::new(8, 8).unwrap();
+        let tile = solid_tile(2, 2, 255, 0, 0, 255);
+        let err = draw(
+            &mut pm,
+            &tile,
+            PixelRect {
+                x: 0.0,
+                y: 0.0,
+                w: 0.0,
+                h: 4.0,
+            },
+            1.0,
+        )
+        .expect_err("zero-width dst must error");
+        assert!(matches!(err, RenderError::Backend(msg) if msg.contains("non-positive")));
+    }
+
+    #[test]
+    fn zero_sized_tile_is_typed_backend_error() {
+        let mut pm = Pixmap::new(8, 8).unwrap();
+        let tile = Arc::new(DecodedImage {
+            width: 0,
+            height: 4,
+            rgba: Arc::new(vec![]),
+        });
+        let err = draw(
+            &mut pm,
+            &tile,
+            PixelRect {
+                x: 0.0,
+                y: 0.0,
+                w: 4.0,
+                h: 4.0,
+            },
+            1.0,
+        )
+        .expect_err("zero-sized tile must error");
+        assert!(matches!(err, RenderError::Backend(msg) if msg.contains("zero-sized")));
     }
 }
