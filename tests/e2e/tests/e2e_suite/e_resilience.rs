@@ -21,11 +21,7 @@ const MAX_DIFF_RATIO: f32 = 0.02;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn runtime_survives_pod_restart() -> Result<()> {
-    let scenario = Scenario::up_with(
-        "resilience",
-        ScenarioOptions { runtime_replicas: 2 },
-    )
-    .await?;
+    let scenario = Scenario::up_with("resilience", ScenarioOptions { runtime_replicas: 2 }).await?;
     let client = scenario.client.clone();
     let ns = &scenario.ns.name;
 
@@ -46,9 +42,7 @@ async fn runtime_survives_pod_restart() -> Result<()> {
     // one; the new pod loads the manifest from the artifact store (its cache
     // PVC is ephemeral per pod).
     let pods: Api<Pod> = Api::namespaced((*client).clone(), ns);
-    let listed = pods
-        .list(&ListParams::default().labels(RUNTIME_SELECTOR))
-        .await?;
+    let listed = pods.list(&ListParams::default().labels(RUNTIME_SELECTOR)).await?;
     let victim = listed
         .items
         .into_iter()
@@ -59,10 +53,14 @@ async fn runtime_survives_pod_restart() -> Result<()> {
     // wait for the Deployment to settle back to 2 ready replicas. the
     // ephemeral cache means cold S3 fetch; tolerate a generous deadline.
     wait::deployment_ready(client.clone(), ns, "mars-e2e-runtime", Duration::from_secs(300)).await?;
-    wait::until("runtime /readyz returns 200 post-restart", Duration::from_secs(300), || async {
-        let r = http::get(client.clone(), ns, "mars-e2e-runtime", 8080, "/readyz").await?;
-        if r.status == 200 { Ok(Some(())) } else { Ok(None) }
-    })
+    wait::until(
+        "runtime /readyz returns 200 post-restart",
+        Duration::from_secs(300),
+        || async {
+            let r = http::get(client.clone(), ns, "mars-e2e-runtime", 8080, "/readyz").await?;
+            if r.status == 200 { Ok(Some(())) } else { Ok(None) }
+        },
+    )
     .await?;
 
     // re-render via the Service (load-balanced across both pods). both serve
@@ -72,8 +70,7 @@ async fn runtime_survives_pod_restart() -> Result<()> {
     if after.status != 200 {
         return Err(anyhow!("post-restart render status {}", after.status));
     }
-    let report = diff::diff_pngs(&after.body, &baseline_bytes, MAX_CHANNEL_DELTA)
-        .map_err(|e| anyhow!("diff: {e}"))?;
+    let report = diff::diff_pngs(&after.body, &baseline_bytes, MAX_CHANNEL_DELTA).map_err(|e| anyhow!("diff: {e}"))?;
     if report.diff_ratio() > MAX_DIFF_RATIO {
         return Err(anyhow!(
             "post-restart render diverges from baseline: {} (max_ratio={MAX_DIFF_RATIO})",

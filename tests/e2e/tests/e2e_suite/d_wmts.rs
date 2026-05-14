@@ -9,15 +9,7 @@ use std::time::Duration;
 
 use super::scenario::Scenario;
 
-const LAYERS: &[&str] = &[
-    "land",
-    "water",
-    "settlements",
-    "roads",
-    "buildings",
-    "waterways",
-    "poi",
-];
+const LAYERS: &[&str] = &["land", "water", "settlements", "roads", "buildings", "waterways", "poi"];
 const TMS_ID: &str = "e2e_25832";
 
 const PNG_MAGIC: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
@@ -50,7 +42,10 @@ async fn wmts_capabilities_and_tile() -> Result<()> {
     }
     let body = std::str::from_utf8(&caps.body).map_err(|e| anyhow!("capabilities body not utf-8: {e}"))?;
     if !body.contains("<Capabilities") {
-        return Err(anyhow!("capabilities body missing <Capabilities> root: {}", snippet(body)));
+        return Err(anyhow!(
+            "capabilities body missing <Capabilities> root: {}",
+            snippet(body)
+        ));
     }
     for layer in LAYERS {
         let needle = format!(">{layer}<");
@@ -73,7 +68,11 @@ async fn wmts_capabilities_and_tile() -> Result<()> {
     )
     .await?;
     if tile.status != 200 {
-        return Err(anyhow!("GetTile status {} body={}", tile.status, snippet_bytes(&tile.body)));
+        return Err(anyhow!(
+            "GetTile status {} body={}",
+            tile.status,
+            snippet_bytes(&tile.body)
+        ));
     }
     if tile.body.len() < PNG_MAGIC.len() || tile.body[..PNG_MAGIC.len()] != PNG_MAGIC {
         return Err(anyhow!(
