@@ -11,6 +11,7 @@ mod path;
 mod path_offset;
 mod pattern;
 mod prepare;
+mod raster;
 mod stroke;
 mod symbol;
 

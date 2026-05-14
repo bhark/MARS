@@ -11,7 +11,7 @@ use mars_text::Fonts;
 use tiny_skia::Pixmap;
 
 use crate::prepare::UnimplementedFeatures;
-use crate::symbol;
+use crate::{raster, symbol};
 
 pub(crate) fn dispatch(pm: &mut Pixmap, op: &DrawOp, fonts: &Fonts) -> Result<UnimplementedFeatures, RenderError> {
     match op {
@@ -28,6 +28,9 @@ pub(crate) fn dispatch(pm: &mut Pixmap, op: &DrawOp, fonts: &Fonts) -> Result<Un
             style,
         } => symbol::dispatch(pm, *anchor, *rotation_rad, style, fonts),
         DrawOp::Pattern { path, style } => pattern::draw(pm, path, style),
+        DrawOp::Raster { tile, dst, opacity } => {
+            raster::draw(pm, tile, *dst, *opacity).map(|()| UnimplementedFeatures::default())
+        }
     }
 }
 
@@ -117,6 +120,28 @@ mod tests {
         };
         let err = renderer().render(canvas(), &[op]).expect_err("routing error");
         assert!(matches!(err, RenderError::Backend(msg) if msg.contains("DrawOp::Path")));
+    }
+
+    #[test]
+    fn raster_op_routes_to_typed_not_implemented() {
+        use mars_render_port::{DecodedImage, PixelRect};
+        let tile = Arc::new(DecodedImage {
+            width: 2,
+            height: 2,
+            rgba: Arc::new(vec![0u8; 16]),
+        });
+        let op = DrawOp::Raster {
+            tile,
+            dst: PixelRect {
+                x: 0.0,
+                y: 0.0,
+                w: 16.0,
+                h: 16.0,
+            },
+            opacity: 1.0,
+        };
+        let err = renderer().render(canvas(), &[op]).expect_err("raster stub");
+        assert!(matches!(err, RenderError::NotImplemented { what } if what == "DrawOp::Raster"));
     }
 
     #[test]

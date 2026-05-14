@@ -57,6 +57,34 @@ pub struct Path {
     pub subpaths: Vec<Subpath>,
 }
 
+/// Axis-aligned destination rectangle in render-target pixel space.
+/// Floating point so sub-pixel placement survives without an extra
+/// rounding step at the seam.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PixelRect {
+    /// Top-left x in pixel space.
+    pub x: f32,
+    /// Top-left y in pixel space.
+    pub y: f32,
+    /// Width in pixels.
+    pub w: f32,
+    /// Height in pixels.
+    pub h: f32,
+}
+
+/// A decoded raster image: RGBA8, row-major, `width * height * 4` bytes.
+/// Used both for tiled image fills ([`DrawOp::Pattern`] image variant) and
+/// for raster-tile compositing ([`DrawOp::Raster`]).
+#[derive(Debug, Clone)]
+pub struct DecodedImage {
+    /// Width in pixels.
+    pub width: u32,
+    /// Height in pixels.
+    pub height: u32,
+    /// Straight (non-premultiplied) RGBA bytes, row-major.
+    pub rgba: Arc<Vec<u8>>,
+}
+
 /// One draw operation. Intentionally narrow - adding shapes goes through this
 /// enum. Variants the adapter has not yet wired return
 /// [`RenderError::NotImplemented`] from the dispatch hub; the runtime is free
@@ -106,6 +134,19 @@ pub enum DrawOp {
         path: Path,
         /// Style. The `fill` paint variant carries the pattern descriptor.
         style: Arc<Style>,
+    },
+    /// Composite a decoded raster tile onto a destination rectangle. Used
+    /// by raster layers - the runtime fetches and decodes the tile, the
+    /// renderer paints it at the requested rect with the requested opacity.
+    /// Stub today: dispatch returns [`RenderError::NotImplemented`].
+    Raster {
+        /// Decoded RGBA tile.
+        tile: Arc<DecodedImage>,
+        /// Destination rectangle in pixel space.
+        dst: PixelRect,
+        /// Per-op opacity multiplier in `[0.0, 1.0]`. Composed with the
+        /// tile's own alpha.
+        opacity: f32,
     },
 }
 
