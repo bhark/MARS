@@ -59,6 +59,10 @@ need cargo
 
 mkdir -p "${OUT_DIR}"
 
+# tee everything into run.log so the artifact has something useful even when
+# we bail before a kind cluster exists (missing fixture, missing tool, etc).
+exec > >(tee -a "${OUT_DIR}/run.log") 2>&1
+
 dump_diagnostics() {
   log "diagnostics -> ${OUT_DIR}"
   kubectl get ns -o name 2>/dev/null | while read -r ns_ref; do
@@ -89,6 +93,7 @@ cleanup() {
   else
     log "MARS_E2E_KEEP=1 set; leaving kind cluster ${CLUSTER} up"
   fi
+  printf 'exit_status=%d\nrun_id=%s\n' "${status}" "${RUN_ID}" > "${OUT_DIR}/status.txt"
   exit "${status}"
 }
 trap cleanup EXIT
