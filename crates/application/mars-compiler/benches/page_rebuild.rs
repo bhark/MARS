@@ -270,6 +270,7 @@ fn bench_page_rebuild(c: &mut Criterion) {
                         256,
                         &mars_compiler::memory_governor::MemoryGovernor::new(u64::MAX),
                         &mars_compiler::disk_governor::DiskGovernor::new(u64::MAX),
+                        mars_config::BindingFailurePolicy::FailCycle,
                     )
                     .await
                     .unwrap();

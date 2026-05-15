@@ -50,6 +50,7 @@ pub(crate) struct CycleCtx {
     pub(crate) knobs: CompileKnobs,
     pub(crate) mem_governor: MemoryGovernor,
     pub(crate) disk_governor: DiskGovernor,
+    pub(crate) failure_policy: mars_config::BindingFailurePolicy,
 }
 
 pub(crate) struct RebalanceCtx {

@@ -87,6 +87,23 @@ pub struct RebuildOutcome {
     pub refreshed_bindings: Vec<BindingMetadata>,
 }
 
+impl RebuildOutcome {
+    /// Move every entry from `other` into `self`. Used by `rebuild_pages`
+    /// to merge a per-binding local outcome into the shared one after the
+    /// binding's rebuild succeeds; on failure the local is dropped instead.
+    pub fn absorb(&mut self, mut other: RebuildOutcome) {
+        self.replacement_pages.append(&mut other.replacement_pages);
+        self.dropped_pages.append(&mut other.dropped_pages);
+        self.replacement_class_sidecars
+            .append(&mut other.replacement_class_sidecars);
+        self.replacement_label_sidecars
+            .append(&mut other.replacement_label_sidecars);
+        self.dropped_class_sidecars.append(&mut other.dropped_class_sidecars);
+        self.dropped_label_sidecars.append(&mut other.dropped_label_sidecars);
+        self.refreshed_bindings.append(&mut other.refreshed_bindings);
+    }
+}
+
 /// Output of one binding compile through the unified pipeline.
 #[derive(Debug)]
 pub struct BindingOutput {
@@ -208,6 +225,13 @@ pub(crate) fn drain_pruned_through<'a>(pruned: &'a [KeyedRow], idx: &mut usize, 
 /// `working_set_bytes` is the per-page hydrated-row ceiling (pass-2);
 /// `plan_budget_bytes` caps the pass-1 page-planner allocation when the
 /// truncate path runs the unified compile pipeline against a binding.
+///
+/// Each binding's rebuild writes into a local [`RebuildOutcome`] which is
+/// only merged into the shared outcome on success. Under
+/// [`BindingFailurePolicy::Isolate`] a per-binding error is logged,
+/// metered, and discarded so the cycle still publishes the other
+/// bindings' progress; under [`BindingFailurePolicy::FailCycle`] the
+/// first error aborts the pass.
 #[allow(clippy::too_many_arguments)]
 pub async fn rebuild_pages(
     deps: &Deps,
@@ -222,10 +246,12 @@ pub async fn rebuild_pages(
     spill_open_file_limit: usize,
     governor: &MemoryGovernor,
     disk_governor: &DiskGovernor,
+    failure_policy: mars_config::BindingFailurePolicy,
 ) -> Result<RebuildOutcome, CompilerError> {
     let mut outcome = RebuildOutcome::default();
     for (binding_id, binding_dirty) in dirty.per_binding {
-        if binding_dirty.truncated {
+        let mut local = RebuildOutcome::default();
+        let res = if binding_dirty.truncated {
             rebuild_binding_truncate(
                 deps,
                 plan,
@@ -238,31 +264,70 @@ pub async fn rebuild_pages(
                 spill_open_file_limit,
                 governor,
                 disk_governor,
-                &mut outcome,
+                &mut local,
             )
-            .await?;
-            continue;
+            .await
+        } else {
+            let sidecar_warn = plan
+                .bindings
+                .iter()
+                .find(|b| b.binding_id == binding_id)
+                .map(|b| b.sidecar_size_warn_bytes)
+                .unwrap_or(u64::MAX);
+            rebuild_binding_incremental(
+                deps,
+                plan,
+                prior,
+                sidecars.get(&binding_id),
+                &binding_id,
+                &binding_dirty,
+                working_set_bytes,
+                sidecar_warn,
+                &mut local,
+            )
+            .await
+        };
+        match res {
+            Ok(()) => outcome.absorb(local),
+            Err(err) => match failure_policy {
+                mars_config::BindingFailurePolicy::FailCycle => return Err(err),
+                mars_config::BindingFailurePolicy::Isolate => {
+                    let reason = classify_compiler_error(&err);
+                    deps.metrics
+                        .inc_compiler_binding_rebuild_failure(binding_id.as_str(), reason);
+                    tracing::error!(
+                        binding = binding_id.as_str(),
+                        reason,
+                        error = %err,
+                        "binding rebuild failed; isolating - prior pages preserved in published manifest"
+                    );
+                    // drop `local`: its partial writes never reach the outer outcome.
+                }
+            },
         }
-        let sidecar_warn = plan
-            .bindings
-            .iter()
-            .find(|b| b.binding_id == binding_id)
-            .map(|b| b.sidecar_size_warn_bytes)
-            .unwrap_or(u64::MAX);
-        rebuild_binding_incremental(
-            deps,
-            plan,
-            prior,
-            sidecars.get(&binding_id),
-            &binding_id,
-            &binding_dirty,
-            working_set_bytes,
-            sidecar_warn,
-            &mut outcome,
-        )
-        .await?;
     }
     Ok(outcome)
+}
+
+/// Classify a [`CompilerError`] into one of the bounded reason labels for
+/// the `mars_compiler_binding_rebuild_failures_total` counter. Keeps
+/// metric label cardinality flat regardless of the underlying error
+/// message.
+fn classify_compiler_error(err: &CompilerError) -> &'static str {
+    use mars_observability::binding_rebuild_failure_reason as r;
+    match err {
+        CompilerError::Source(_) => r::SOURCE,
+        CompilerError::Store(_) => r::STORE,
+        CompilerError::Artifact(_)
+        | CompilerError::Sidecar(_)
+        | CompilerError::Wkb(_)
+        | CompilerError::Attr(_)
+        | CompilerError::Plan(_)
+        | CompilerError::ScratchBudgetExceeded { .. }
+        | CompilerError::BootstrapPlanTooLarge { .. }
+        | CompilerError::RowAttributesTooLarge { .. } => r::COMPILE,
+        _ => r::OTHER,
+    }
 }
 
 /// Truncate-class rebuild: re-derive the binding's pages from scratch via

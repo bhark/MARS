@@ -39,6 +39,7 @@ pub(crate) async fn run(
         ctx.knobs.spill_open_file_limit,
         &ctx.mem_governor,
         &ctx.disk_governor,
+        ctx.failure_policy,
     )
     .await?;
     metrics.observe_compiler_rebuild_duration(started.elapsed());

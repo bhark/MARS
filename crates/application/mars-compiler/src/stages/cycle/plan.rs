@@ -28,5 +28,6 @@ pub(crate) async fn build(c: &Compiler) -> Result<CycleCtx, CompilerError> {
         knobs,
         mem_governor: governors::build_memory_governor(&c.config.compiler)?,
         disk_governor: governors::build_disk_governor(&c.config.compiler)?,
+        failure_policy: c.config.compiler.binding_failure_policy,
     })
 }

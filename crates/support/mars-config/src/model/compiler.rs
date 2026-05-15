@@ -114,6 +114,35 @@ pub struct Compiler {
     /// error (use `None` instead).
     #[serde(default = "default_dirty_page_ceiling_per_binding")]
     pub incremental_dirty_page_ceiling_per_binding: Option<usize>,
+    /// What to do when one binding's rebuild fails mid-cycle. The default
+    /// ([`BindingFailurePolicy::Isolate`]) keeps the failure local: log
+    /// + meter the failure, leave the binding's prior pages in the
+    /// published manifest, continue with other bindings. `FailCycle`
+    /// makes the first failure abort the whole cycle. See
+    /// [`BindingFailurePolicy`] for the trade-offs.
+    #[serde(default)]
+    pub binding_failure_policy: BindingFailurePolicy,
+}
+
+/// What to do when one binding's rebuild fails inside an incremental
+/// cycle. Affects only the incremental-cycle path; snapshot and rebalance
+/// still surface failures verbatim.
+///
+/// Under [`BindingFailurePolicy::Isolate`] (default), a failed binding's
+/// prior pages remain in the published manifest. The source_version IS
+/// still advanced (the change feed is per-cycle, not per-binding), so
+/// events for the failed binding are lost relative to the in-process
+/// view - drift accumulates until the next reconciliation cycle repairs
+/// it (capped by `compiler.reconcile_max_age` when set).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BindingFailurePolicy {
+    /// Log, meter, and continue. Other bindings still publish their
+    /// incremental progress.
+    #[default]
+    Isolate,
+    /// First binding failure aborts the cycle.
+    FailCycle,
 }
 
 impl Default for Compiler {
@@ -133,6 +162,7 @@ impl Default for Compiler {
             images_dir: None,
             reconcile_max_age: None,
             incremental_dirty_page_ceiling_per_binding: default_dirty_page_ceiling_per_binding(),
+            binding_failure_policy: BindingFailurePolicy::default(),
         }
     }
 }
