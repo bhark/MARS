@@ -67,6 +67,11 @@ pub(crate) struct ResolvedLabel {
     pub priority: Option<u16>,
     pub min_distance: Option<f32>,
     pub placement_line: Option<EmitLinePlacement>,
+    pub position: Option<mars_style::AnchorPosition>,
+    pub offset_px: Option<(f32, f32)>,
+    pub angle_deg: Option<f32>,
+    pub partials: Option<bool>,
+    pub force: Option<bool>,
     pub unimplemented: Vec<&'static str>,
 }
 
@@ -296,6 +301,11 @@ fn resolve_label(p: ParsedLabel, layer_name: &str, label_item: Option<&str>) -> 
         priority: p.priority,
         min_distance: p.min_distance,
         placement_line: p.placement_line,
+        position: p.position,
+        offset_px: p.offset_px,
+        angle_deg: p.angle_deg,
+        partials: p.partials,
+        force: p.force,
         unimplemented: p.unimplemented,
     }
 }

@@ -73,7 +73,7 @@ layers:
     label:
       text: "[name]"
       style: { type: ref, name: "label_streets" }
-      placement: { kind: line, repeat_m: 250, max_angle_delta_deg: 25 }
+      placement: { kind: line, repeat_m: 250, max_angle_delta_deg: 25, angle_mode: follow }
 
 observability:
   log_level: info

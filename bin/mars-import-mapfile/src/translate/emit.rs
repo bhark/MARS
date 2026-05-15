@@ -102,6 +102,11 @@ fn emit_class(r: ResolvedClass, skel: &mut Skeleton) -> ClassSkeleton {
             halo_width: None,
             priority: None,
             min_distance: None,
+            position: None,
+            offset_px: None,
+            angle_deg: None,
+            partials: None,
+            force: None,
         });
         r.style_name
     };
@@ -136,6 +141,11 @@ fn emit_label(r: ResolvedLabel, skel: &mut Skeleton) -> LabelSkeleton {
         halo_width: r.halo_width,
         priority: r.priority,
         min_distance: r.min_distance,
+        position: r.position,
+        offset_px: r.offset_px,
+        angle_deg: r.angle_deg,
+        partials: r.partials,
+        force: r.force,
     });
 
     LabelSkeleton {

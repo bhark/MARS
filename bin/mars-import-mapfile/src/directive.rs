@@ -201,9 +201,12 @@ pub(crate) enum LabelDirective<'a> {
     RepeatDistance(&'a Token),
     MaxOverlapAngle(&'a Token),
     Angle(&'a Token),
-    /// `POSITION`, `PARTIALS`, `OFFSET`, `TYPE BITMAP`: typed signal that a
-    /// label directive is recognised but not yet implemented. The parser
-    /// warns at use site with the specific keyword.
+    Position(&'a Token),
+    Offset(&'a Token),
+    Partials(&'a Token),
+    Force(&'a Token),
+    /// `TYPE BITMAP`: typed signal for the still-unimplemented bitmap label
+    /// path. The parser warns at use site with the specific keyword.
     NotImplemented(&'a Token),
     Unknown,
 }
@@ -222,7 +225,11 @@ impl<'a> LabelDirective<'a> {
             "REPEATDISTANCE" => Self::RepeatDistance(t),
             "MAXOVERLAPANGLE" => Self::MaxOverlapAngle(t),
             "ANGLE" => Self::Angle(t),
-            "POSITION" | "PARTIALS" | "OFFSET" | "TYPE" => Self::NotImplemented(t),
+            "POSITION" => Self::Position(t),
+            "OFFSET" => Self::Offset(t),
+            "PARTIALS" => Self::Partials(t),
+            "FORCE" => Self::Force(t),
+            "TYPE" => Self::NotImplemented(t),
             _ => Self::Unknown,
         }
     }

@@ -119,6 +119,17 @@ pub(crate) struct StyleDef {
     pub(crate) priority: Option<u16>,
     /// Label-style minimum collision distance, mirroring LABEL MINDISTANCE.
     pub(crate) min_distance: Option<f32>,
+    /// Anchor keyword (LABEL POSITION).
+    pub(crate) position: Option<mars_style::AnchorPosition>,
+    /// Pixel offset (LABEL OFFSET dx dy).
+    pub(crate) offset_px: Option<(f32, f32)>,
+    /// Static label rotation in degrees (numeric LABEL ANGLE).
+    pub(crate) angle_deg: Option<f32>,
+    /// `LABEL PARTIALS` - when true, allow labels to extend past the canvas
+    /// edge. Default is `false` to match mapserver.
+    pub(crate) partials: Option<bool>,
+    /// `LABEL FORCE` - skip collision detection.
+    pub(crate) force: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -228,6 +239,10 @@ pub(crate) struct LabelSkeleton {
 pub(crate) struct EmitLinePlacement {
     pub(crate) repeat_m: Option<f64>,
     pub(crate) max_angle_delta_deg: Option<f32>,
+    /// `auto` (block-rotated at sample tangent) or `follow` (per-glyph
+    /// rotation). `None` lets the runtime default kick in (currently
+    /// `auto`); explicitly set when the mapfile uses `ANGLE FOLLOW`.
+    pub(crate) angle_mode: Option<mars_style::LineAngleMode>,
 }
 
 /// slugify a name for YAML identifiers: lowercase, non-alnum → '_'.
@@ -256,6 +271,32 @@ fn yaml_quote(s: &str) -> String {
 /// quote a `Colour` as a YAML string (`"#rrggbb"` or `"#rrggbbaa"`).
 fn quote_colour(c: Colour) -> String {
     yaml_quote(&c.to_string())
+}
+
+/// YAML wire spelling for `mars_style::AnchorPosition` (snake_case enum).
+fn anchor_position_yaml(p: mars_style::AnchorPosition) -> &'static str {
+    use mars_style::AnchorPosition;
+    match p {
+        AnchorPosition::Ul => "ul",
+        AnchorPosition::Uc => "uc",
+        AnchorPosition::Ur => "ur",
+        AnchorPosition::Cl => "cl",
+        AnchorPosition::Cc => "cc",
+        AnchorPosition::Cr => "cr",
+        AnchorPosition::Ll => "ll",
+        AnchorPosition::Lc => "lc",
+        AnchorPosition::Lr => "lr",
+        AnchorPosition::Auto => "auto",
+    }
+}
+
+/// YAML wire spelling for `mars_style::LineAngleMode`.
+fn line_angle_mode_yaml(m: mars_style::LineAngleMode) -> &'static str {
+    use mars_style::LineAngleMode;
+    match m {
+        LineAngleMode::Auto => "auto",
+        LineAngleMode::Follow => "follow",
+    }
 }
 
 /// render a marker into the style block under `    marker:`. flow-mapping
@@ -508,6 +549,21 @@ pub(crate) fn render(skel: &Skeleton, bands: &[(String, u64)]) -> String {
                 if let Some(d) = st.min_distance {
                     let _ = writeln!(out, "    min_distance: {d}");
                 }
+                if let Some(pos) = st.position {
+                    let _ = writeln!(out, "    position: {}", anchor_position_yaml(pos));
+                }
+                if let Some((dx, dy)) = st.offset_px {
+                    let _ = writeln!(out, "    offset_px: [{dx}, {dy}]");
+                }
+                if let Some(a) = st.angle_deg {
+                    let _ = writeln!(out, "    angle_deg: {a}");
+                }
+                if let Some(true) = st.partials {
+                    let _ = writeln!(out, "    partials: true");
+                }
+                if let Some(true) = st.force {
+                    let _ = writeln!(out, "    force: true");
+                }
             } else {
                 match &st.fill {
                     Some(EmitFill::Hex(c)) => {
@@ -663,6 +719,9 @@ pub(crate) fn render(skel: &Skeleton, bands: &[(String, u64)]) -> String {
                     }
                     if let Some(a) = p.max_angle_delta_deg {
                         parts.push(format!("max_angle_delta_deg: {a}"));
+                    }
+                    if let Some(m) = p.angle_mode {
+                        parts.push(format!("angle_mode: {}", line_angle_mode_yaml(m)));
                     }
                     let _ = writeln!(out, "      placement: {{ {} }}", parts.join(", "));
                 }
