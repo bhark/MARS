@@ -6,8 +6,8 @@
 //!   2. mutate the source (insert + update + delete),
 //!   3. drain the next batch from the subscription,
 //!   4. apply the batch via `Compiler::run_cycle_once`,
-//!   5. assert the new manifest is `format_version == 3`, that the
-//!      page-membership sidecar reflects post-cycle state, and that
+//!   5. assert the new manifest carries the current `MANIFEST_FORMAT_VERSION`,
+//!      that the page-membership sidecar reflects post-cycle state, and that
 //!      content hashes change only on dirty pages.
 
 #![cfg(feature = "integration")]

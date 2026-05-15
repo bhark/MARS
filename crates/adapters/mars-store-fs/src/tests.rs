@@ -232,7 +232,7 @@ async fn symlink_escape_rejected() {
     );
 }
 
-/// helper for the version-rejection tests: write `manifests/v{n}.json` with
+/// helper for the version-rejection test: write `manifests/v{n}.json` with
 /// a hand-crafted body and point `manifests/current` at it, sidestepping the
 /// publisher (which only emits the current `MANIFEST_FORMAT_VERSION`).
 fn write_legacy_manifest(root: &Path, version: u64, body: &str) {
@@ -243,114 +243,22 @@ fn write_legacy_manifest(root: &Path, version: u64, body: &str) {
 }
 
 #[tokio::test]
-async fn current_rejects_v1_manifest() {
+async fn current_rejects_mismatched_format_version() {
     let td = TempDir::new().unwrap();
     let publisher = FsPublisher::new(td.path()).unwrap();
-    // a minimal v1-shaped body. exact-match rejection means the version
-    // gate trips before serde tries to map fields onto the current struct.
-    write_legacy_manifest(
-        publisher.root(),
-        1,
-        r#"{"format_version":1,"version":1,"service":"svc","source_artifacts":[],"layer_artifacts":[],"style_artifact":null}"#,
+    // exact-match only: any value other than MANIFEST_FORMAT_VERSION is
+    // rejected up front, including "newer therefore probably ok".
+    let bogus = mars_types::MANIFEST_FORMAT_VERSION + 1;
+    let body = format!(
+        r#"{{"format_version":{bogus},"version":1,"service":"svc","created_at":{{"secs_since_epoch":0,"nanos_since_epoch":0}},"bindings":[],"pages":[],"class_sidecars":[],"label_sidecars":[],"style_artifact":null,"image_artifact":null,"raster_layers":[],"source_version":null,"epoch":0}}"#
     );
+    write_legacy_manifest(publisher.root(), 1, &body);
 
     let err = publisher.current().await.unwrap_err();
+    let supported = mars_types::MANIFEST_FORMAT_VERSION;
     assert!(
-        matches!(err, StoreError::UnsupportedManifestVersion { found: 1, supported: 6 }),
-        "expected UnsupportedManifestVersion {{ found: 1, supported: 6 }}, got {err:?}"
-    );
-}
-
-#[tokio::test]
-async fn current_rejects_v2_manifest() {
-    let td = TempDir::new().unwrap();
-    let publisher = FsPublisher::new(td.path()).unwrap();
-    write_legacy_manifest(
-        publisher.root(),
-        2,
-        r#"{"format_version":2,"version":2,"service":"svc","created_at":{"secs_since_epoch":0,"nanos_since_epoch":0},"source_artifacts":[],"layer_artifacts":[],"style_artifact":null,"empty_layer_cells":[],"source_version":null}"#,
-    );
-
-    let err = publisher.current().await.unwrap_err();
-    assert!(
-        matches!(err, StoreError::UnsupportedManifestVersion { found: 2, supported: 6 }),
-        "expected UnsupportedManifestVersion {{ found: 2, supported: 6 }}, got {err:?}"
-    );
-}
-
-#[tokio::test]
-async fn current_rejects_v3_manifest() {
-    let td = TempDir::new().unwrap();
-    let publisher = FsPublisher::new(td.path()).unwrap();
-    // v3 had `hilbert_range_table: Vec<(HilbertKey, HilbertKey)>`; v4 widened
-    // it to a 3-tuple carrying a stable PageId. v3 must be rejected.
-    write_legacy_manifest(
-        publisher.root(),
-        3,
-        r#"{"format_version":3,"version":3,"service":"svc","created_at":{"secs_since_epoch":0,"nanos_since_epoch":0},"bindings":[],"pages":[],"class_sidecars":[],"label_sidecars":[],"style_artifact":null,"source_version":null,"epoch":0}"#,
-    );
-
-    let err = publisher.current().await.unwrap_err();
-    assert!(
-        matches!(err, StoreError::UnsupportedManifestVersion { found: 3, supported: 6 }),
-        "expected UnsupportedManifestVersion {{ found: 3, supported: 6 }}, got {err:?}"
-    );
-}
-
-#[tokio::test]
-async fn current_rejects_v4_manifest() {
-    let td = TempDir::new().unwrap();
-    let publisher = FsPublisher::new(td.path()).unwrap();
-    // v4 predates `image_artifact`; v5 expects every field including
-    // image_artifact. exact-match rejects v4.
-    write_legacy_manifest(
-        publisher.root(),
-        4,
-        r#"{"format_version":4,"version":4,"service":"svc","created_at":{"secs_since_epoch":0,"nanos_since_epoch":0},"bindings":[],"pages":[],"class_sidecars":[],"label_sidecars":[],"style_artifact":null,"source_version":null,"epoch":0}"#,
-    );
-
-    let err = publisher.current().await.unwrap_err();
-    assert!(
-        matches!(err, StoreError::UnsupportedManifestVersion { found: 4, supported: 6 }),
-        "expected UnsupportedManifestVersion {{ found: 4, supported: 6 }}, got {err:?}"
-    );
-}
-
-#[tokio::test]
-async fn current_rejects_v5_manifest() {
-    let td = TempDir::new().unwrap();
-    let publisher = FsPublisher::new(td.path()).unwrap();
-    // v5 predates `raster_layers`; v6 expects every field including
-    // raster_layers. exact-match rejects v5.
-    write_legacy_manifest(
-        publisher.root(),
-        5,
-        r#"{"format_version":5,"version":5,"service":"svc","created_at":{"secs_since_epoch":0,"nanos_since_epoch":0},"bindings":[],"pages":[],"class_sidecars":[],"label_sidecars":[],"style_artifact":null,"image_artifact":null,"source_version":null,"epoch":0}"#,
-    );
-
-    let err = publisher.current().await.unwrap_err();
-    assert!(
-        matches!(err, StoreError::UnsupportedManifestVersion { found: 5, supported: 6 }),
-        "expected UnsupportedManifestVersion {{ found: 5, supported: 6 }}, got {err:?}"
-    );
-}
-
-#[tokio::test]
-async fn current_rejects_future_manifest_version() {
-    let td = TempDir::new().unwrap();
-    let publisher = FsPublisher::new(td.path()).unwrap();
-    // forwards-incompatibility: a v7 body must also be rejected, not silently
-    // accepted as "newer therefore probably ok".
-    write_legacy_manifest(
-        publisher.root(),
-        1,
-        r#"{"format_version":7,"version":1,"service":"svc","created_at":{"secs_since_epoch":0,"nanos_since_epoch":0},"bindings":[],"pages":[],"class_sidecars":[],"label_sidecars":[],"style_artifact":null,"image_artifact":null,"raster_layers":[],"source_version":null,"epoch":0}"#,
-    );
-
-    let err = publisher.current().await.unwrap_err();
-    assert!(
-        matches!(err, StoreError::UnsupportedManifestVersion { found: 7, supported: 6 }),
-        "expected UnsupportedManifestVersion {{ found: 7, supported: 6 }}, got {err:?}"
+        matches!(err, StoreError::UnsupportedManifestVersion { found, supported: s } if found == bogus && s == supported),
+        "expected UnsupportedManifestVersion {{ found: {bogus}, supported: {supported} }}, got {err:?}"
     );
 }
 

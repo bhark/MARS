@@ -6,13 +6,11 @@ use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
-/// current `Manifest::format_version`. Bumped to 6 when `raster_layers`
-/// joined the envelope so a manifest can advertise metadata-only raster
-/// layer bindings (locator / CRS / tile_size / max_level) read at request
-/// time by the runtime tile-fetch orchestrator. Readers reject anything
-/// other than this exact value (no floor, no "accept `<= max`" - see
-/// `mars-store-fs` / `mars-store-s3` manifest readers).
-pub const MANIFEST_FORMAT_VERSION: u32 = 6;
+/// current `Manifest::format_version`. readers reject anything other than
+/// this exact value - no floor, no "accept `<= max`" (see `mars-store-fs`
+/// / `mars-store-s3` manifest readers). bump on any incompatible change to
+/// the `Manifest` envelope.
+pub const MANIFEST_FORMAT_VERSION: u32 = 1;
 
 /// upper bound on the on-disk pointer string. Versions are `v\d+` so 32 chars
 /// (`v` + 31 decimal digits) covers anything `u64` can represent comfortably.
@@ -525,14 +523,13 @@ impl ImageFormat {
     }
 }
 
-/// manifest v3 data-transfer object.
+/// manifest data-transfer object.
 ///
 /// substrate is `(binding × decimation_level × page)`. each render-time page
 /// lookup is a binary search of `pages` (sorted by `(binding_id, level,
 /// hilbert_range.0)`) plus a bounded linear scan for spatial-bbox hits.
-/// `format_version` is bumped on incompatible changes to this struct; v3
-/// readers reject anything other than the current value (no floor, no
-/// "accept `<= max`" - that contract was retired).
+/// `format_version` is bumped on incompatible changes to this struct;
+/// readers reject anything other than the current value (exact-match only).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Manifest {
     /// On-disk format version of this manifest envelope. Exact-match only.
@@ -572,7 +569,7 @@ pub struct Manifest {
 }
 
 impl Manifest {
-    /// build the smallest valid v3 manifest: zero bindings, zero pages, zero
+    /// build the smallest valid manifest: zero bindings, zero pages, zero
     /// sidecars. used by stubs and tests; production paths populate the
     /// collections from compiler output.
     #[must_use]
@@ -744,8 +741,8 @@ mod tests {
 
     #[test]
     fn manifest_default_raster_layers_when_field_missing() {
-        // older serialised manifests (before raster_layers landed) may omit
-        // the field; serde defaults it to an empty vec rather than failing.
+        // raster_layers is `#[serde(default)]`: a body that omits it parses
+        // to an empty vec rather than failing.
         let m = Manifest::empty(1, "x");
         let s = serde_json::to_string(&m).unwrap();
         let stripped = s.replacen(r#""raster_layers":[],"#, "", 1);
@@ -755,8 +752,8 @@ mod tests {
 
     #[test]
     fn manifest_rejects_missing_format_version() {
-        // v3 has no serde defaults: a manifest body lacking `format_version`
-        // is a hard parse error, not a silent legacy floor.
+        // no serde default: a manifest body lacking `format_version` is a
+        // hard parse error, not a silent legacy floor.
         let valid = serde_json::to_string(&Manifest::empty(1, "x")).unwrap();
         assert!(serde_json::from_str::<Manifest>(&valid).is_ok());
 
