@@ -23,7 +23,7 @@ use bytes::Bytes;
 use mars_types::HilbertKey;
 
 const MAGIC: u32 = 0x_434D_5350; // "PMSC" little-endian
-const VERSION: u32 = 2;
+const VERSION: u32 = 1;
 const HEADER_LEN: usize = 4 + 4 + 8;
 const ENTRY_LEN: usize = 16;
 
