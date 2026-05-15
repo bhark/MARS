@@ -249,7 +249,24 @@ pub async fn rebuild_pages(
     failure_policy: mars_config::BindingFailurePolicy,
 ) -> Result<RebuildOutcome, CompilerError> {
     let mut outcome = RebuildOutcome::default();
+    // bindings the source flagged as degraded this cycle: skip the
+    // rebuild dispatch so prior pages keep being served, and surface a
+    // bounded healthcheck metric so operators see the gap.
+    for (binding_id, reason) in &dirty.failed {
+        deps.metrics.inc_compiler_binding_rebuild_failure(
+            binding_id.as_str(),
+            mars_observability::binding_rebuild_failure_reason::BINDING_UNHEALTHY,
+        );
+        tracing::warn!(
+            binding = binding_id.as_str(),
+            reason = %reason,
+            "binding degraded by source; skipping rebuild, prior pages preserved"
+        );
+    }
     for (binding_id, binding_dirty) in dirty.per_binding {
+        if dirty.failed.contains_key(&binding_id) {
+            continue;
+        }
         let mut local = RebuildOutcome::default();
         let res = if binding_dirty.truncated {
             rebuild_binding_truncate(

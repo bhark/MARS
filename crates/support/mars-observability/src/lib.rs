@@ -149,6 +149,10 @@ pub mod binding_rebuild_failure_reason {
     pub const STORE: &str = "store";
     pub const COMPILE: &str = "compile";
     pub const OTHER: &str = "other";
+    /// the source flagged the binding as degraded for this cycle (failed
+    /// preflight on a rebind, absent from the publication, etc.); the
+    /// cycle skipped its rebuild and preserved prior pages.
+    pub const BINDING_UNHEALTHY: &str = "binding_unhealthy";
 }
 
 /// Bucket an HTTP status into one of `2xx/3xx/4xx/5xx/other`. We deliberately

@@ -256,6 +256,7 @@ async fn boundary_key_row_appears_in_exactly_one_dirty_page() {
             },
         )]),
         warnings: vec![],
+        failed: BTreeMap::new(),
     };
 
     let sidecars: HashMap<BindingId, SidecarReader<'_>> = HashMap::new();

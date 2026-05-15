@@ -150,6 +150,69 @@ pub enum ChangeEvent {
         /// Logical name of the source collection.
         collection: SourceCollectionId,
     },
+    /// The underlying object backing the binding was replaced (e.g. a
+    /// swap-and-rename pipeline rebuilt the table, a partition was
+    /// rotated, a publication membership change was detected). The
+    /// adapter signals this distinctly from `Truncate` so operators can
+    /// tell the two causes apart in traces and metrics. The compiler
+    /// reacts based on `reason`:
+    /// - `OidChanged` triggers a per-binding resnapshot equivalent to
+    ///   `Truncate`.
+    /// - `PreflightFailed` or `BindingUnpublished` mark the binding
+    ///   degraded; the prior manifest pages stay served and the cycle
+    ///   skips the rebuild via the per-binding failure-isolation policy.
+    Rebind {
+        /// Logical name of the source collection.
+        collection: SourceCollectionId,
+        /// Why the rebind was raised.
+        reason: RebindReason,
+    },
+}
+
+/// Reason a [`ChangeEvent::Rebind`] was emitted. Carried so the compiler
+/// can dispatch (resnapshot vs degrade) and so operators see the cause
+/// distinctly in traces and metric labels.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RebindReason {
+    /// The change feed delivered a backend identity transition for a
+    /// bound name (e.g. pgoutput Relation message with a new relation
+    /// OID for a known schema/table). Preflight passed; the cache was
+    /// rebound. The compiler resnapshots the binding to repair the
+    /// manifest slice for the previous identity.
+    OidChanged {
+        /// Previous backend identity that the cache held.
+        old_oid: u32,
+        /// New backend identity to route under going forward.
+        new_oid: u32,
+    },
+    /// Backend identity transition arrived but the new object failed
+    /// preflight (e.g. REPLICA IDENTITY != FULL, geometry/id column
+    /// missing). The cache rejected the rebind; the binding is degraded
+    /// until the operator fixes the source.
+    PreflightFailed {
+        /// Human-readable failure reason for the operator-facing log.
+        reason: String,
+    },
+    /// A periodic catalog probe found the bound name absent from the
+    /// publication / catalog. The change feed cannot deliver a Relation
+    /// for it, so the adapter surfaces the gap directly. Treated like
+    /// `PreflightFailed`: degrade, do not silently drop pages.
+    BindingUnpublished,
+}
+
+/// Health classification for a single binding, returned by
+/// [`Source::probe_binding_health`]. Adapters with no notion of
+/// publication membership rely on the default impl which always reports
+/// `Healthy`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BindingHealth {
+    /// The binding's backing object exists and is wired for change
+    /// delivery (e.g. present in the postgres publication).
+    Healthy(SourceCollectionId),
+    /// The binding's backing object is not currently published. The
+    /// change feed will not deliver events for it; the compiler should
+    /// degrade the binding via the per-binding failure-isolation path.
+    Unpublished(SourceCollectionId),
 }
 
 /// A committed batch of change events. Adapters MUST only emit a batch once
@@ -309,6 +372,18 @@ pub trait Source: Send + Sync + 'static {
         Err(SourceError::NotImplemented {
             what: "open_compile_session",
         })
+    }
+
+    /// Periodic backstop for bindings whose backing object disappears
+    /// without an in-band change-feed signal (e.g. a publication-membership
+    /// drop with no replacement). Adapters that have no analogous concept
+    /// fall through to the default impl, which reports every requested
+    /// binding `Healthy`.
+    async fn probe_binding_health(
+        &self,
+        collections: &[SourceCollectionId],
+    ) -> Result<Vec<BindingHealth>, SourceError> {
+        Ok(collections.iter().cloned().map(BindingHealth::Healthy).collect())
     }
 }
 

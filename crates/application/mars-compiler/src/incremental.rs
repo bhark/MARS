@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use mars_source::{ChangeEvent, GeometryEnvelope};
+use mars_source::{ChangeEvent, GeometryEnvelope, RebindReason};
 use mars_types::{BindingId, BindingMetadata, DecimationLevel, HilbertKey, LevelMetadata, PageId, SourceCollectionId};
 
 use crate::hilbert::key_from_centroid;
@@ -16,6 +16,11 @@ pub struct DirtyPages {
     pub per_binding: BTreeMap<BindingId, BindingDirty>,
     /// non-fatal gaps that should be operator-visible.
     pub warnings: Vec<IncrementalWarning>,
+    /// bindings the source flagged as degraded for this cycle (failed
+    /// preflight on a rebind, dropped from the publication, etc.). the
+    /// render dispatch skips their rebuild and the per-binding failure
+    /// isolation path preserves their prior pages.
+    pub failed: BTreeMap<BindingId, String>,
 }
 
 /// dirty state for one binding.
@@ -128,6 +133,28 @@ impl<'a> IncrementalCycle<'a> {
                 entry.truncated = true;
                 entry.per_level.clear();
                 entry.observed.clear();
+            }
+            ChangeEvent::Rebind { collection, reason } => {
+                let binding_id = self.binding_id_for(&collection)?;
+                match reason {
+                    RebindReason::OidChanged { .. } => {
+                        // same bookkeeping as Truncate: drop accumulated
+                        // dirty state and let the cycle re-bootstrap the
+                        // binding from a fresh snapshot.
+                        let entry = self.dirty.per_binding.entry(binding_id).or_default();
+                        entry.truncated = true;
+                        entry.per_level.clear();
+                        entry.observed.clear();
+                    }
+                    RebindReason::PreflightFailed { reason } => {
+                        self.dirty.failed.insert(binding_id, reason);
+                    }
+                    RebindReason::BindingUnpublished => {
+                        self.dirty
+                            .failed
+                            .insert(binding_id, "binding absent from publication".to_string());
+                    }
+                }
             }
         }
         Ok(())
