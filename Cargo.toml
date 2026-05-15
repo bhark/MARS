@@ -44,7 +44,10 @@ exclude = [
 ]
 
 [workspace.package]
-version = "0.0.1"
+# placeholder. CI patches this to the tag at build time during release.yml.
+# never bump in a PR; cut a release with scripts/release.sh and the workflow
+# rewrites cargo + chart versions in the runner.
+version = "0.0.0-dev"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT OR Apache-2.0"

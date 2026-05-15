@@ -2,8 +2,10 @@ apiVersion: v2
 name: mars-operator
 description: Kubernetes operator that reconciles MarsService custom resources into ConfigMap + PVCs + compiler/runtime Deployments + Service.
 type: application
-version: 0.1.0
-appVersion: "0.1.0"
+# placeholder. CI patches both fields to the tag at build time during
+# release.yml. never bump in a PR.
+version: 0.0.0-dev
+appVersion: "0.0.0-dev"
 kubeVersion: ">=1.27.0"
 home: https://github.com/bhark/MARS
 sources:

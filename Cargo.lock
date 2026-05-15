@@ -2447,7 +2447,7 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
 name = "mars"
-version = "0.0.1"
+version = "0.0.0-dev"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2484,7 +2484,7 @@ dependencies = [
 
 [[package]]
 name = "mars-artifact"
-version = "0.0.1"
+version = "0.0.0-dev"
 dependencies = [
  "blake3",
  "bytes",
@@ -2501,7 +2501,7 @@ dependencies = [
 
 [[package]]
 name = "mars-bin-shared"
-version = "0.0.1"
+version = "0.0.0-dev"
 dependencies = [
  "anyhow",
  "mars-config",
@@ -2516,7 +2516,7 @@ dependencies = [
 
 [[package]]
 name = "mars-compile"
-version = "0.0.1"
+version = "0.0.0-dev"
 dependencies = [
  "anyhow",
  "clap",
@@ -2530,7 +2530,7 @@ dependencies = [
 
 [[package]]
 name = "mars-compiler"
-version = "0.0.1"
+version = "0.0.0-dev"
 dependencies = [
  "async-trait",
  "blake3",
@@ -2558,7 +2558,7 @@ dependencies = [
 
 [[package]]
 name = "mars-config"
-version = "0.0.1"
+version = "0.0.0-dev"
 dependencies = [
  "humantime",
  "mars-expr",
@@ -2575,7 +2575,7 @@ dependencies = [
 
 [[package]]
 name = "mars-expr"
-version = "0.0.1"
+version = "0.0.0-dev"
 dependencies = [
  "criterion",
  "proptest",
@@ -2585,7 +2585,7 @@ dependencies = [
 
 [[package]]
 name = "mars-grid"
-version = "0.0.1"
+version = "0.0.0-dev"
 dependencies = [
  "mars-types",
  "thiserror 2.0.18",
@@ -2593,7 +2593,7 @@ dependencies = [
 
 [[package]]
 name = "mars-http"
-version = "0.0.1"
+version = "0.0.0-dev"
 dependencies = [
  "arc-swap",
  "axum",
@@ -2620,7 +2620,7 @@ dependencies = [
 
 [[package]]
 name = "mars-import-mapfile"
-version = "0.0.1"
+version = "0.0.0-dev"
 dependencies = [
  "anyhow",
  "clap",
@@ -2633,7 +2633,7 @@ dependencies = [
 
 [[package]]
 name = "mars-observability"
-version = "0.0.1"
+version = "0.0.0-dev"
 dependencies = [
  "prometheus",
  "thiserror 2.0.18",
@@ -2642,7 +2642,7 @@ dependencies = [
 
 [[package]]
 name = "mars-operator"
-version = "0.0.1"
+version = "0.0.0-dev"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2668,7 +2668,7 @@ dependencies = [
 
 [[package]]
 name = "mars-proj"
-version = "0.0.1"
+version = "0.0.0-dev"
 dependencies = [
  "criterion",
  "mars-types",
@@ -2678,7 +2678,7 @@ dependencies = [
 
 [[package]]
 name = "mars-render"
-version = "0.0.1"
+version = "0.0.0-dev"
 dependencies = [
  "criterion",
  "image-webp",
@@ -2694,7 +2694,7 @@ dependencies = [
 
 [[package]]
 name = "mars-render-port"
-version = "0.0.1"
+version = "0.0.0-dev"
 dependencies = [
  "mars-style",
  "mars-types",
@@ -2703,7 +2703,7 @@ dependencies = [
 
 [[package]]
 name = "mars-runtime"
-version = "0.0.1"
+version = "0.0.0-dev"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -2738,7 +2738,7 @@ dependencies = [
 
 [[package]]
 name = "mars-source"
-version = "0.0.1"
+version = "0.0.0-dev"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2751,7 +2751,7 @@ dependencies = [
 
 [[package]]
 name = "mars-source-postgres"
-version = "0.0.1"
+version = "0.0.0-dev"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2778,7 +2778,7 @@ dependencies = [
 
 [[package]]
 name = "mars-source-xyz"
-version = "0.0.1"
+version = "0.0.0-dev"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2793,7 +2793,7 @@ dependencies = [
 
 [[package]]
 name = "mars-store"
-version = "0.0.1"
+version = "0.0.0-dev"
 dependencies = [
  "async-trait",
  "blake3",
@@ -2808,7 +2808,7 @@ dependencies = [
 
 [[package]]
 name = "mars-store-fs"
-version = "0.0.1"
+version = "0.0.0-dev"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2830,7 +2830,7 @@ dependencies = [
 
 [[package]]
 name = "mars-store-s3"
-version = "0.0.1"
+version = "0.0.0-dev"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2847,7 +2847,7 @@ dependencies = [
 
 [[package]]
 name = "mars-style"
-version = "0.0.1"
+version = "0.0.0-dev"
 dependencies = [
  "serde",
  "serde_json",
@@ -2857,7 +2857,7 @@ dependencies = [
 
 [[package]]
 name = "mars-test-support"
-version = "0.0.1"
+version = "0.0.0-dev"
 dependencies = [
  "png",
  "zune-jpeg",
@@ -2865,7 +2865,7 @@ dependencies = [
 
 [[package]]
 name = "mars-text"
-version = "0.0.1"
+version = "0.0.0-dev"
 dependencies = [
  "fontdb",
  "mars-style",
@@ -2877,7 +2877,7 @@ dependencies = [
 
 [[package]]
 name = "mars-types"
-version = "0.0.1"
+version = "0.0.0-dev"
 dependencies = [
  "serde",
  "serde_json",
@@ -2886,7 +2886,7 @@ dependencies = [
 
 [[package]]
 name = "mars-wms"
-version = "0.0.1"
+version = "0.0.0-dev"
 dependencies = [
  "mars-config",
  "mars-proj",
@@ -2901,7 +2901,7 @@ dependencies = [
 
 [[package]]
 name = "mars-wmts"
-version = "0.0.1"
+version = "0.0.0-dev"
 dependencies = [
  "mars-config",
  "mars-runtime",
