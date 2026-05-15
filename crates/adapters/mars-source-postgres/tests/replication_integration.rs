@@ -256,7 +256,9 @@ async fn bind_without_full_identity_degrades_binding_instead_of_killing_feed() {
         let b = next_batch_or_timeout(&mut sub).await.unwrap();
         for ev in &b.events {
             match ev {
-                ChangeEvent::Insert { collection, feature_id, .. } if collection.as_str() == "roads_c" => {
+                ChangeEvent::Insert {
+                    collection, feature_id, ..
+                } if collection.as_str() == "roads_c" => {
                     assert_eq!(*feature_id, 7);
                     saw_roads_insert = true;
                 }
@@ -327,7 +329,9 @@ async fn rebind_after_table_swap_emits_oid_changed() {
                     assert_ne!(old_oid, new_oid, "rebind must carry distinct oids");
                     saw_rebind = true;
                 }
-                ChangeEvent::Insert { collection, feature_id, .. } if collection.as_str() == "roads_c" => {
+                ChangeEvent::Insert {
+                    collection, feature_id, ..
+                } if collection.as_str() == "roads_c" => {
                     assert_eq!(*feature_id, 2);
                     saw_new_insert = true;
                 }
@@ -438,7 +442,9 @@ async fn probe_binding_health_reports_unpublished_when_table_dropped() {
         ])
         .await
         .unwrap();
-    let roads = report.iter().find(|h| matches!(h, BindingHealth::Healthy(c) if c.as_str() == "roads_c"));
+    let roads = report
+        .iter()
+        .find(|h| matches!(h, BindingHealth::Healthy(c) if c.as_str() == "roads_c"));
     let buildings = report
         .iter()
         .find(|h| matches!(h, BindingHealth::Unpublished(c) if c.as_str() == "buildings_c"));
