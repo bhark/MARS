@@ -3,7 +3,7 @@
 //! Covers the full transport path:
 //!   - INSERT/UPDATE/DELETE/TRUNCATE round-trips through the pgoutput decoder
 //!     and translator into `ChangeEvent`s with correct cell coverage.
-//!   - REPLICA IDENTITY enforcement (DELETE without FULL is a hard error).
+//!   - Preflight enforcement of the id-column-in-identity contract.
 //!   - Multi-relation TRUNCATE emits one event per known collection in a
 //!     single batch.
 //!   - Ack semantics: an unacknowledged batch is replayed on reconnect; an
@@ -57,13 +57,17 @@ async fn boot_postgis() -> (ContainerAsync<GenericImage>, String) {
     (container, dsn)
 }
 
-async fn setup_schema(src: &PgSource, full_identity: &[&str], default_identity: &[&str]) {
+/// Standard postgres baseline: each table gets `gid INT4 PRIMARY KEY`
+/// and the postgres default REPLICA IDENTITY (DEFAULT, PK-based). Tests
+/// that need a different identity setup (e.g. NOTHING / no PK) issue
+/// the deviation inline before subscribing.
+async fn setup_schema(src: &PgSource, tables: &[&str]) {
     let client = src.pool().get().await.unwrap();
     client
         .batch_execute("CREATE EXTENSION IF NOT EXISTS postgis;")
         .await
         .unwrap();
-    for tbl in full_identity.iter().chain(default_identity.iter()) {
+    for tbl in tables {
         client
             .batch_execute(&format!(
                 "CREATE TABLE {tbl} (\
@@ -74,18 +78,7 @@ async fn setup_schema(src: &PgSource, full_identity: &[&str], default_identity: 
             .await
             .unwrap();
     }
-    for tbl in full_identity {
-        client
-            .batch_execute(&format!("ALTER TABLE {tbl} REPLICA IDENTITY FULL;"))
-            .await
-            .unwrap();
-    }
-    let table_list = full_identity
-        .iter()
-        .chain(default_identity.iter())
-        .copied()
-        .collect::<Vec<_>>()
-        .join(", ");
+    let table_list = tables.join(", ");
     client
         .batch_execute(&format!("CREATE PUBLICATION {PUB} FOR TABLE {table_list};"))
         .await
@@ -135,10 +128,12 @@ async fn next_batch_or_timeout(
 }
 
 #[tokio::test]
-async fn insert_update_delete_round_trip() {
+async fn insert_update_delete_round_trip_under_default_identity() {
     let (_c, dsn) = boot_postgis().await;
     let src = PgSource::connect(pg_cfg(&dsn)).await.unwrap();
-    setup_schema(&src, &["roads"], &[]).await;
+    // standard postgres baseline: PK + REPLICA IDENTITY DEFAULT. no
+    // explicit ALTER TABLE ... REPLICA IDENTITY FULL anywhere.
+    setup_schema(&src, &["roads"]).await;
 
     let topology = topology_for(&[("roads_c", "roads")]);
     let src = PgSource::connect(pg_cfg(&dsn)).await.unwrap().with_topology(topology);
@@ -168,7 +163,10 @@ async fn insert_update_delete_round_trip() {
         other => panic!("expected Insert, got {other:?}"),
     }
 
-    // update moving the geometry: old and new envelopes are both present.
+    // UPDATE moves the geometry. under DEFAULT identity pgoutput sends
+    // no old tuple; the translator surfaces feature_id from `new` and
+    // emits old_envelope: None. old-side dirty pages are recovered
+    // downstream from the page-membership sidecar.
     client
         .batch_execute("UPDATE roads SET geom = ST_SetSRID(ST_MakePoint(2000, 2000), 25832) WHERE gid = 1;")
         .await
@@ -182,13 +180,17 @@ async fn insert_update_delete_round_trip() {
             ..
         } => {
             assert_eq!(*feature_id, 1);
-            assert_eq!(old_envelope.as_ref().unwrap().centroid, [50.0, 50.0]);
+            assert!(
+                old_envelope.is_none(),
+                "old_envelope must be None under default identity"
+            );
             assert_eq!(new_envelope.centroid, [2000.0, 2000.0]);
         }
         other => panic!("expected Update, got {other:?}"),
     }
 
-    // delete.
+    // DELETE: K tuple carries `gid` only. feature_id still recovered,
+    // old_envelope is None.
     client.batch_execute("DELETE FROM roads WHERE gid = 1;").await.unwrap();
     let batch = next_batch_or_timeout(&mut sub).await.unwrap();
     match &batch.events[0] {
@@ -198,20 +200,34 @@ async fn insert_update_delete_round_trip() {
             ..
         } => {
             assert_eq!(*feature_id, 1);
-            assert_eq!(old_envelope.as_ref().unwrap().centroid, [2000.0, 2000.0]);
+            assert!(old_envelope.is_none());
         }
         other => panic!("expected Delete, got {other:?}"),
     }
 }
 
 #[tokio::test]
-async fn bind_without_full_identity_degrades_binding_instead_of_killing_feed() {
+async fn bind_without_id_in_identity_degrades_binding_instead_of_killing_feed() {
     let (_c, dsn) = boot_postgis().await;
     let src = PgSource::connect(pg_cfg(&dsn)).await.unwrap();
-    // mix one table without REPLICA IDENTITY FULL with one that has it, to
-    // assert the failure is scoped per-binding: the healthy table keeps
-    // emitting normal events while the degraded one signals via Rebind.
-    setup_schema(&src, &["roads"], &["leaky"]).await;
+    setup_schema(&src, &["roads"]).await;
+    // add a sibling table whose id column isn't part of the replica
+    // identity. no PRIMARY KEY + REPLICA IDENTITY NOTHING means
+    // pgoutput won't flag `gid` as a key column, and the bind must
+    // refuse. NOTHING also blocks UPDATE/DELETE server-side, so we
+    // only exercise the INSERT path here - which is enough to surface
+    // the Relation message and trigger preflight.
+    {
+        let client = src.pool().get().await.unwrap();
+        client
+            .batch_execute(
+                "CREATE TABLE leaky (gid INT4, geom geometry(Point, 25832));\
+                 ALTER TABLE leaky REPLICA IDENTITY NOTHING;\
+                 ALTER PUBLICATION mars_e2e_pub ADD TABLE leaky;",
+            )
+            .await
+            .unwrap();
+    }
 
     let topology = topology_for(&[("leaky_c", "leaky"), ("roads_c", "roads")]);
     let src = PgSource::connect(pg_cfg(&dsn)).await.unwrap().with_topology(topology);
@@ -236,20 +252,23 @@ async fn bind_without_full_identity_degrades_binding_instead_of_killing_feed() {
             },
         ] => {
             assert_eq!(collection.as_str(), "leaky_c");
-            assert!(reason.contains("REPLICA IDENTITY FULL"), "reason = {reason}");
+            assert!(reason.contains("replica identity"), "reason = {reason}");
         }
         other => panic!("expected single Rebind PreflightFailed, got {other:?}"),
     }
 
     // subsequent dml on the rejected table drops silently. the healthy
     // sibling keeps emitting events, proving the subscription stayed up.
-    client.batch_execute("DELETE FROM leaky WHERE gid = 1;").await.unwrap();
+    client
+        .batch_execute("INSERT INTO leaky VALUES (2, ST_SetSRID(ST_MakePoint(60, 60), 25832));")
+        .await
+        .unwrap();
     client
         .batch_execute("INSERT INTO roads VALUES (7, ST_SetSRID(ST_MakePoint(10, 10), 25832));")
         .await
         .unwrap();
 
-    // drain batches until we see the roads insert; the leaky delete may
+    // drain batches until we see the roads insert; the leaky insert may
     // arrive as an empty batch in between.
     let mut saw_roads_insert = false;
     for _ in 0..3 {
@@ -277,7 +296,7 @@ async fn bind_without_full_identity_degrades_binding_instead_of_killing_feed() {
 async fn rebind_after_table_swap_emits_oid_changed() {
     let (_c, dsn) = boot_postgis().await;
     let src = PgSource::connect(pg_cfg(&dsn)).await.unwrap();
-    setup_schema(&src, &["roads"], &[]).await;
+    setup_schema(&src, &["roads"]).await;
 
     let topology = topology_for(&[("roads_c", "roads")]);
     let src = PgSource::connect(pg_cfg(&dsn)).await.unwrap().with_topology(topology);
@@ -294,15 +313,14 @@ async fn rebind_after_table_swap_emits_oid_changed() {
     let b = next_batch_or_timeout(&mut sub).await.unwrap();
     assert!(matches!(b.events.as_slice(), [ChangeEvent::Insert { .. }]));
 
-    // operator-side swap-and-rename pipeline: drop the old table out of the
-    // publication, rebuild it, add the new one back in. fresh table carries
-    // REPLICA IDENTITY FULL so preflight passes.
+    // operator-side swap-and-rename pipeline: drop the old table out of
+    // the publication, rebuild it (with PK so preflight passes), add it
+    // back in.
     client
         .batch_execute(
             "ALTER PUBLICATION mars_e2e_pub DROP TABLE roads;\
              ALTER TABLE roads RENAME TO roads_old;\
              CREATE TABLE roads (gid INT4 PRIMARY KEY, geom geometry(Point, 25832));\
-             ALTER TABLE roads REPLICA IDENTITY FULL;\
              ALTER PUBLICATION mars_e2e_pub ADD TABLE roads;",
         )
         .await
@@ -347,10 +365,10 @@ async fn rebind_after_table_swap_emits_oid_changed() {
 }
 
 #[tokio::test]
-async fn rebind_to_table_without_full_identity_emits_preflight_failed() {
+async fn rebind_to_table_without_id_in_identity_emits_preflight_failed() {
     let (_c, dsn) = boot_postgis().await;
     let src = PgSource::connect(pg_cfg(&dsn)).await.unwrap();
-    setup_schema(&src, &["roads"], &[]).await;
+    setup_schema(&src, &["roads"]).await;
 
     let topology = topology_for(&[("roads_c", "roads")]);
     let src = PgSource::connect(pg_cfg(&dsn)).await.unwrap().with_topology(topology);
@@ -366,13 +384,17 @@ async fn rebind_to_table_without_full_identity_emits_preflight_failed() {
         .unwrap();
     let _ = next_batch_or_timeout(&mut sub).await.unwrap();
 
-    // replacement table forgets REPLICA IDENTITY FULL; the rebind must
-    // refuse and the binding must degrade. subscription stays alive.
+    // replacement table has no PK and REPLICA IDENTITY NOTHING, so its
+    // `gid` column is not part of the table's effective replica identity.
+    // the rebind must refuse and the binding must degrade. NOTHING also
+    // blocks UPDATE/DELETE on the table; INSERT is enough to surface the
+    // Relation message that triggers preflight.
     client
         .batch_execute(
             "ALTER PUBLICATION mars_e2e_pub DROP TABLE roads;\
              ALTER TABLE roads RENAME TO roads_old;\
-             CREATE TABLE roads (gid INT4 PRIMARY KEY, geom geometry(Point, 25832));\
+             CREATE TABLE roads (gid INT4, geom geometry(Point, 25832));\
+             ALTER TABLE roads REPLICA IDENTITY NOTHING;\
              ALTER PUBLICATION mars_e2e_pub ADD TABLE roads;",
         )
         .await
@@ -392,7 +414,7 @@ async fn rebind_to_table_without_full_identity_emits_preflight_failed() {
                     reason: RebindReason::PreflightFailed { reason },
                 } => {
                     assert_eq!(collection.as_str(), "roads_c");
-                    assert!(reason.contains("REPLICA IDENTITY FULL"), "reason = {reason}");
+                    assert!(reason.contains("replica identity"), "reason = {reason}");
                     saw_preflight_failed = true;
                 }
                 ChangeEvent::Insert { .. } => panic!("rejected oid must not emit row events: {ev:?}"),
@@ -410,7 +432,7 @@ async fn rebind_to_table_without_full_identity_emits_preflight_failed() {
 async fn probe_binding_health_reports_unpublished_when_table_dropped() {
     let (_c, dsn) = boot_postgis().await;
     let src = PgSource::connect(pg_cfg(&dsn)).await.unwrap();
-    setup_schema(&src, &["roads", "buildings"], &[]).await;
+    setup_schema(&src, &["roads", "buildings"]).await;
 
     let topology = topology_for(&[("roads_c", "roads"), ("buildings_c", "buildings")]);
     let src = PgSource::connect(pg_cfg(&dsn)).await.unwrap().with_topology(topology);
@@ -456,7 +478,7 @@ async fn probe_binding_health_reports_unpublished_when_table_dropped() {
 async fn truncate_emits_one_event_per_bound_table() {
     let (_c, dsn) = boot_postgis().await;
     let src = PgSource::connect(pg_cfg(&dsn)).await.unwrap();
-    setup_schema(&src, &["roads", "buildings"], &[]).await;
+    setup_schema(&src, &["roads", "buildings"]).await;
 
     let topology = topology_for(&[("roads_c", "roads"), ("buildings_c", "buildings")]);
     let src = PgSource::connect(pg_cfg(&dsn)).await.unwrap().with_topology(topology);
@@ -498,7 +520,7 @@ async fn truncate_emits_one_event_per_bound_table() {
 async fn unacked_batch_is_replayed_on_reconnect() {
     let (_c, dsn) = boot_postgis().await;
     let src = PgSource::connect(pg_cfg(&dsn)).await.unwrap();
-    setup_schema(&src, &["roads"], &[]).await;
+    setup_schema(&src, &["roads"]).await;
 
     let topology = topology_for(&[("roads_c", "roads")]);
 
@@ -538,7 +560,7 @@ async fn unacked_batch_is_replayed_on_reconnect() {
 async fn acked_batch_is_not_replayed_on_reconnect() {
     let (_c, dsn) = boot_postgis().await;
     let src = PgSource::connect(pg_cfg(&dsn)).await.unwrap();
-    setup_schema(&src, &["roads"], &[]).await;
+    setup_schema(&src, &["roads"]).await;
 
     let topology = topology_for(&[("roads_c", "roads")]);
 

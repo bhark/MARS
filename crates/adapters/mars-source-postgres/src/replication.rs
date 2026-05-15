@@ -103,10 +103,6 @@ pub(crate) struct CachedRelation {
     pub id_col_idx: usize,
     pub id_type_oid: u32,
     pub geometry_col_idx: usize,
-    /// pgoutput replica-identity byte: `d` default, `n` nothing, `f` full,
-    /// `i` index. validated at bind time (must be `f`); the row-event
-    /// paths keep a defensive guard against pgoutput weirdness.
-    pub replica_identity: u8,
     pub state: BindingState,
 }
 

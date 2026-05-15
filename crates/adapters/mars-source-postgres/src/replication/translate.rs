@@ -41,6 +41,12 @@ pub(crate) fn translate(
 /// at Relation-message time (when we can fail closed on one binding)
 /// instead of at the first UPDATE / DELETE (when failure killed the
 /// whole subscription).
+///
+/// the binding's id column must be part of the table's replica identity
+/// (PRIMARY KEY for DEFAULT identity, or the index named by REPLICA
+/// IDENTITY USING INDEX). pgoutput tags those columns with key flag
+/// bit 0x01; if the id column lacks that flag we cannot recover the
+/// feature id from a DELETE's K tuple, so the bind is refused.
 fn validate_relation_for_bind(rel: &Relation, top: &CollectionTopology) -> Result<CachedRelation, RelationBindError> {
     let Some(geometry_col_idx) = rel.columns.iter().position(|c| c.name == top.geometry_column) else {
         return Err(RelationBindError::MissingGeometryColumn {
@@ -52,19 +58,19 @@ fn validate_relation_for_bind(rel: &Relation, top: &CollectionTopology) -> Resul
             column: top.id_column.clone(),
         });
     };
-    if rel.replica_identity != b'f' {
-        return Err(RelationBindError::IncompatibleReplicaIdentity {
-            got: rel.replica_identity,
+    let id_col = &rel.columns[id_col_idx];
+    if id_col.flags & 1 == 0 {
+        return Err(RelationBindError::IdColumnNotInIdentity {
+            column: top.id_column.clone(),
         });
     }
-    let id_type_oid = rel.columns[id_col_idx].type_oid;
+    let id_type_oid = id_col.type_oid;
     Ok(CachedRelation {
         oid: rel.oid,
         topology: top.clone(),
         id_col_idx,
         id_type_oid,
         geometry_col_idx,
-        replica_identity: rel.replica_identity,
         state: BindingState::Active,
     })
 }
@@ -75,8 +81,11 @@ pub(crate) enum RelationBindError {
     MissingGeometryColumn { column: String },
     #[error("missing id column {column:?} declared by topology")]
     MissingIdColumn { column: String },
-    #[error("requires REPLICA IDENTITY FULL (got identity {:?})", *got as char)]
-    IncompatibleReplicaIdentity { got: u8 },
+    #[error(
+        "id column {column:?} is not part of the table's replica identity; \
+         expected it in the PRIMARY KEY or in the index named by REPLICA IDENTITY USING INDEX"
+    )]
+    IdColumnNotInIdentity { column: String },
 }
 
 fn cache_relation(rel: Relation, cache: &mut RelationCache, topology: &ReplicationTopology) -> Translated {
@@ -123,7 +132,6 @@ fn cache_relation(rel: Relation, cache: &mut RelationCache, topology: &Replicati
                 id_col_idx: 0,
                 id_type_oid: 0,
                 geometry_col_idx: 0,
-                replica_identity: rel.replica_identity,
                 state: BindingState::Rejected { reason: reason.clone() },
             });
             tracing::warn!(
@@ -169,23 +177,19 @@ fn update_event(
     let Some(entry) = active_entry(cache, oid, "update") else {
         return Ok(Translated(Vec::new()));
     };
-
-    // bound tables MUST carry REPLICA IDENTITY FULL so the
-    // OLD geometry is present on every UPDATE/DELETE. preflight enforces
-    // this at bind time; this remains as a defensive guard for the case
-    // where pgoutput claims FULL but omits the O tuple anyway.
-    let Some(old) = payload.full_old.as_ref() else {
-        return Err(missing_full_old_error(entry, "update"));
-    };
+    // pgoutput's new tuple is always present on UPDATE and always
+    // carries the PK columns (the preflight check on the key flag
+    // guarantees the id column is one of those). the old-side dirty
+    // pages are recovered downstream via the page-membership sidecar
+    // keyed by feature_id, so we no longer extract OLD geometry here.
     let feature_id = extract_feature_id(&payload.new, entry)?;
-    let old_envelope = envelope_from_tuple(old, entry.geometry_col_idx)?;
     let new_envelope = envelope_from_tuple(&payload.new, entry.geometry_col_idx)?;
 
     Ok(Translated(vec![ChangeEvent::Update {
         collection: entry.topology.collection.clone(),
         feature_id,
         new_envelope,
-        old_envelope: Some(old_envelope),
+        old_envelope: None,
     }]))
 }
 
@@ -212,27 +216,6 @@ fn active_entry<'a>(cache: &'a RelationCache, oid: u32, op: &'static str) -> Opt
     }
 }
 
-fn missing_full_old_error(entry: &CachedRelation, op: &str) -> SourceError {
-    let schema = &entry.topology.schema;
-    let table = &entry.topology.table;
-    if entry.replica_identity == b'f' {
-        // pgoutput claims FULL but no O tuple arrived: defensive - should
-        // not happen unless the upstream behaviour changes mid-stream.
-        SourceError::backend_msg(
-            "pgoutput",
-            format!("{op} on {schema}.{table} declares REPLICA IDENTITY FULL but old tuple is missing"),
-        )
-    } else {
-        SourceError::backend_msg(
-            "pgoutput",
-            format!(
-                "{op} on {schema}.{table} requires REPLICA IDENTITY FULL (got identity {:?})",
-                entry.replica_identity as char
-            ),
-        )
-    }
-}
-
 fn delete_event(
     oid: u32,
     payload: DeletePayload<'_>,
@@ -242,16 +225,18 @@ fn delete_event(
     let Some(entry) = active_entry(cache, oid, "delete") else {
         return Ok(Translated(Vec::new()));
     };
+    // K (default/index identity) and O (full identity) tuples both
+    // carry the key columns; the id-column-in-key preflight guarantees
+    // feature_id is recoverable from either. old-side dirty pages come
+    // from the page-membership sidecar.
     let tuple = match &payload {
-        DeletePayload::Full(t) => t,
-        DeletePayload::KeyOnly(_) => return Err(missing_full_old_error(entry, "delete")),
+        DeletePayload::Full(t) | DeletePayload::KeyOnly(t) => t,
     };
     let feature_id = extract_feature_id(tuple, entry)?;
-    let old_envelope = envelope_from_tuple(tuple, entry.geometry_col_idx)?;
     Ok(Translated(vec![ChangeEvent::Delete {
         collection: entry.topology.collection.clone(),
         feature_id,
-        old_envelope: Some(old_envelope),
+        old_envelope: None,
     }]))
 }
 
@@ -419,7 +404,10 @@ mod tests {
         }
     }
 
-    fn relation_msg_with_identity(oid: u32, name: &str, replica_identity: u8) -> super::Relation {
+    /// `gid_key` mirrors what pgoutput sets when the column is part of the
+    /// table's effective replica identity (PK under DEFAULT, indexed
+    /// columns under USING INDEX, or every column under FULL).
+    fn relation_msg_full(oid: u32, name: &str, replica_identity: u8, gid_key: bool) -> super::Relation {
         super::Relation {
             oid,
             namespace: "public".into(),
@@ -427,13 +415,16 @@ mod tests {
             replica_identity,
             columns: vec![
                 super::super::pgoutput::RelationColumn {
-                    flags: 0,
+                    flags: if gid_key { 1 } else { 0 },
                     name: "gid".into(),
                     type_oid: 23,
                     type_modifier: -1,
                 },
                 super::super::pgoutput::RelationColumn {
-                    flags: 0,
+                    // FULL marks every column as key; otherwise only the id
+                    // columns get the flag. tests that don't care can use
+                    // the default identity case below.
+                    flags: if replica_identity == b'f' { 1 } else { 0 },
                     name: "geom".into(),
                     type_oid: 17_834,
                     type_modifier: -1,
@@ -442,8 +433,14 @@ mod tests {
         }
     }
 
+    /// Standard postgres baseline: REPLICA IDENTITY DEFAULT with `gid`
+    /// covered by the PRIMARY KEY.
+    fn relation_msg_with_identity(oid: u32, name: &str, replica_identity: u8) -> super::Relation {
+        relation_msg_full(oid, name, replica_identity, true)
+    }
+
     fn relation_msg() -> super::Relation {
-        relation_msg_with_identity(100, "roads_t", b'f')
+        relation_msg_with_identity(100, "roads_t", b'd')
     }
 
     fn one_event(t: Translated) -> ChangeEvent {
@@ -503,15 +500,16 @@ mod tests {
     }
 
     #[test]
-    fn rebind_to_oid_without_full_identity_marks_rejected() {
+    fn rebind_to_oid_without_id_in_identity_marks_rejected() {
         let mut cache = RelationCache::default();
         let t = topo();
         let _ = translate(Message::Relation(relation_msg()), &mut cache, &t).unwrap();
 
-        // operator-side swap with a replacement table that forgot to set
-        // REPLICA IDENTITY FULL.
+        // operator-side swap with a replacement table whose id column is
+        // not part of the replica identity (e.g. no PK, or REPLICA IDENTITY
+        // USING INDEX on an index that doesn't cover `gid`).
         let res = translate(
-            Message::Relation(relation_msg_with_identity(777, "roads_t", b'd')),
+            Message::Relation(relation_msg_full(777, "roads_t", b'd', false)),
             &mut cache,
             &t,
         )
@@ -519,9 +517,10 @@ mod tests {
         match one_event(res) {
             ChangeEvent::Rebind {
                 collection,
-                reason: RebindReason::PreflightFailed { .. },
+                reason: RebindReason::PreflightFailed { reason },
             } => {
                 assert_eq!(collection.as_str(), "roads");
+                assert!(reason.contains("replica identity"), "reason = {reason}");
             }
             other => panic!("expected Rebind PreflightFailed, got {other:?}"),
         }
@@ -617,12 +616,15 @@ mod tests {
     }
 
     #[test]
-    fn update_extracts_old_and_new_geometry() {
+    fn update_emits_new_envelope_and_no_old_envelope() {
         let mut cache = RelationCache::default();
         let t = topo();
         let _ = translate(Message::Relation(relation_msg()), &mut cache, &t).unwrap();
         let old_geom = point_le(50.0, 50.0);
         let new_geom = point_le(2000.0, 2000.0);
+        // pgoutput may still deliver a full_old tuple (e.g. table happens
+        // to be REPLICA IDENTITY FULL); the translator must ignore it and
+        // rely on the downstream sidecar for old-side dirty pages.
         let payload = UpdatePayload {
             key_old: None,
             full_old: Some(Tuple {
@@ -649,7 +651,7 @@ mod tests {
                 ..
             } => {
                 assert_eq!(feature_id, 42);
-                assert_eq!(old_envelope.unwrap().centroid, [50.0, 50.0]);
+                assert!(old_envelope.is_none(), "old_envelope should always be None now");
                 assert_eq!(new_envelope.centroid, [2000.0, 2000.0]);
             }
             other => panic!("expected Update event, got {other:?}"),
@@ -657,14 +659,53 @@ mod tests {
     }
 
     #[test]
-    fn relation_without_full_identity_emits_rebind_preflight_failed() {
+    fn update_without_full_old_succeeds_under_default_identity() {
+        // standard postgres path: DEFAULT identity → no full_old tuple,
+        // just key_old (or nothing when the PK is unchanged). translator
+        // recovers feature_id from `new` and emits old_envelope: None.
         let mut cache = RelationCache::default();
         let t = topo();
-        // relation has REPLICA IDENTITY DEFAULT (b'd'), not FULL: the
-        // bind is refused at relation-message time instead of waiting
-        // for the first UPDATE to kill the subscription.
+        let _ = translate(Message::Relation(relation_msg()), &mut cache, &t).unwrap();
+        let new_geom = point_le(50.0, 50.0);
+        let payload = UpdatePayload {
+            key_old: None,
+            full_old: None,
+            new: Tuple {
+                columns: vec![ColumnData::Text(b"42"), ColumnData::Binary(&new_geom)],
+            },
+        };
         let res = translate(
-            Message::Relation(relation_msg_with_identity(100, "roads_t", b'd')),
+            Message::Update {
+                relation_oid: 100,
+                payload,
+            },
+            &mut cache,
+            &t,
+        )
+        .unwrap();
+        match one_event(res) {
+            ChangeEvent::Update {
+                feature_id,
+                old_envelope,
+                ..
+            } => {
+                assert_eq!(feature_id, 42);
+                assert!(old_envelope.is_none());
+            }
+            other => panic!("expected Update event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn relation_without_id_in_identity_emits_rebind_preflight_failed() {
+        let mut cache = RelationCache::default();
+        let t = topo();
+        // relation reports `gid` with no key flag - either no PK or a
+        // USING INDEX that doesn't cover the id column. preflight refuses
+        // at Relation-message time rather than letting the first DELETE
+        // hit an unrecoverable feature_id.
+        let res = translate(
+            Message::Relation(relation_msg_full(100, "roads_t", b'd', false)),
             &mut cache,
             &t,
         )
@@ -675,10 +716,7 @@ mod tests {
                 reason: RebindReason::PreflightFailed { reason: failure_reason },
             } => {
                 assert_eq!(collection.as_str(), "roads");
-                assert!(
-                    failure_reason.contains("REPLICA IDENTITY FULL"),
-                    "reason = {failure_reason}"
-                );
+                assert!(failure_reason.contains("replica identity"), "reason = {failure_reason}");
             }
             other => panic!("expected Rebind PreflightFailed, got {other:?}"),
         }
@@ -706,35 +744,13 @@ mod tests {
     }
 
     #[test]
-    fn update_without_full_old_errors_on_full_identity() {
-        // defensive: relation declares FULL but pgoutput omitted the O tuple.
+    fn delete_extracts_feature_id_from_either_tuple() {
         let mut cache = RelationCache::default();
         let t = topo();
         let _ = translate(Message::Relation(relation_msg()), &mut cache, &t).unwrap();
-        let new_geom = point_le(50.0, 50.0);
-        let payload = UpdatePayload {
-            key_old: None,
-            full_old: None,
-            new: Tuple {
-                columns: vec![ColumnData::Text(b"42"), ColumnData::Binary(&new_geom)],
-            },
-        };
-        let err = translate(
-            Message::Update {
-                relation_oid: 100,
-                payload,
-            },
-            &mut cache,
-            &t,
-        );
-        assert!(matches!(err, Err(SourceError::Backend { .. })));
-    }
 
-    #[test]
-    fn delete_requires_full_old() {
-        let mut cache = RelationCache::default();
-        let t = topo();
-        let _ = translate(Message::Relation(relation_msg()), &mut cache, &t).unwrap();
+        // full identity path: O tuple carries every column. feature_id
+        // is recovered from it; the old geometry is dropped on the floor.
         let g = point_le(10.0, 10.0);
         let res = translate(
             Message::Delete {
@@ -754,23 +770,36 @@ mod tests {
                 ..
             } => {
                 assert_eq!(feature_id, 42);
-                assert_eq!(old_envelope.unwrap().centroid, [10.0, 10.0]);
+                assert!(old_envelope.is_none());
             }
             other => panic!("expected Delete event, got {other:?}"),
         }
 
-        // key-only must error
-        let err = translate(
+        // default identity path: K tuple carries key columns only. the
+        // geometry slot is unused (typically NULL); feature_id still
+        // comes through, old_envelope is None.
+        let res = translate(
             Message::Delete {
                 relation_oid: 100,
                 payload: DeletePayload::KeyOnly(Tuple {
-                    columns: vec![ColumnData::Text(b"42"), ColumnData::Null],
+                    columns: vec![ColumnData::Text(b"99"), ColumnData::Null],
                 }),
             },
             &mut cache,
             &t,
-        );
-        assert!(matches!(err, Err(SourceError::Backend { .. })));
+        )
+        .unwrap();
+        match one_event(res) {
+            ChangeEvent::Delete {
+                feature_id,
+                old_envelope,
+                ..
+            } => {
+                assert_eq!(feature_id, 99);
+                assert!(old_envelope.is_none());
+            }
+            other => panic!("expected Delete event, got {other:?}"),
+        }
     }
 
     #[test]

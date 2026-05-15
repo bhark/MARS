@@ -111,8 +111,11 @@ pub struct GeometryEnvelope {
 /// One change-feed event, lowered from an upstream change-feed message or a
 /// polling diff.
 ///
-/// `old_envelope` is `Some` only when the feed is configured to supply prior
-/// values for updates and deletes.
+/// `old_envelope` is currently unused: the pgoutput adapter always sets it
+/// to `None`, and the compiler resolves old-side dirty pages through the
+/// page-membership sidecar (keyed by `feature_id`). retained as
+/// `Option<GeometryEnvelope>` for forward compatibility with future
+/// adapters that can cheaply supply prior bounds; candidate for removal.
 #[derive(Debug, Clone)]
 pub enum ChangeEvent {
     /// A row was inserted.
@@ -132,7 +135,8 @@ pub enum ChangeEvent {
         feature_id: u64,
         /// new-row envelope.
         new_envelope: GeometryEnvelope,
-        /// old-row envelope, if supplied by the feed.
+        /// deprecated: always `None` from the pgoutput adapter; see the
+        /// enum-level docstring.
         old_envelope: Option<GeometryEnvelope>,
     },
     /// A row was deleted.
@@ -141,7 +145,8 @@ pub enum ChangeEvent {
         collection: SourceCollectionId,
         /// stable feature id.
         feature_id: u64,
-        /// deleted-row envelope, if supplied by the feed.
+        /// deprecated: always `None` from the pgoutput adapter; see the
+        /// enum-level docstring.
         old_envelope: Option<GeometryEnvelope>,
     },
     /// The whole collection was truncated; the binding goes through a
