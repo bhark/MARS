@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 
 use mars_source::{ChangeBatch, ChangeEvent};
-use mars_types::{BindingId, LevelMetadata};
+use mars_types::{BindingId, BindingMetadata};
 
 use crate::CompilerError;
 use crate::incremental::{DirtyPages, IncrementalCycle};
@@ -27,13 +27,13 @@ pub(crate) fn run(
     reconcile_events: Vec<ChangeEvent>,
     batches: Vec<ChangeBatch>,
 ) -> Result<IngestOutcome, CompilerError> {
-    let level_meta: HashMap<BindingId, Vec<LevelMetadata>> = ctx
+    let binding_meta: HashMap<BindingId, BindingMetadata> = ctx
         .prior
         .bindings
         .iter()
-        .map(|b| (b.binding_id.clone(), b.levels.clone()))
+        .map(|b| (b.binding_id.clone(), b.clone()))
         .collect();
-    let mut cycle = IncrementalCycle::new(&ctx.plan, sidecars, &level_meta);
+    let mut cycle = IncrementalCycle::new(&ctx.plan, sidecars, &binding_meta);
     let mut last_source_version: Option<String> = ctx.prior.source_version.clone();
     let mut event_count: u64 = 0;
     for event in reconcile_events {

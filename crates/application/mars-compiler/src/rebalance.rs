@@ -13,7 +13,7 @@
 //! within an order of magnitude of target without the heuristics ever
 //! becoming load-bearing for cycle latency.
 
-use mars_types::{Bbox, LevelMetadata, PageEntry, PageKey};
+use mars_types::{Bbox, PageEntry, PageKey};
 
 /// pages below `SIZE_LO_FACTOR * target_bytes` qualify for merge with a
 /// neighbour; pages above `SIZE_HI_FACTOR * target_bytes` qualify for split.
@@ -49,14 +49,16 @@ pub enum RebalanceOp {
 
 /// identify rebalance candidates within one level. `pages` is the slice that
 /// belongs to this level, in level-local order (sorted by `hilbert_range.0`).
-/// the analyser is pure: it never reads the source or the object store.
+/// `combined_bbox` is the binding-level hilbert-key basis; it is the same
+/// for every level of a binding. the analyser is pure: it never reads the
+/// source or the object store.
 #[must_use]
-pub fn rebalance_candidates(level: &LevelMetadata, pages: &[PageEntry], target_bytes: u64) -> Vec<RebalanceOp> {
+pub fn rebalance_candidates(combined_bbox: Bbox, pages: &[PageEntry], target_bytes: u64) -> Vec<RebalanceOp> {
     if target_bytes == 0 || pages.is_empty() {
         return Vec::new();
     }
     let target = target_bytes as f64;
-    let combined_area = bbox_area(level.combined_bbox);
+    let combined_area = bbox_area(combined_bbox);
 
     let mut ops: Vec<RebalanceOp> = Vec::new();
     let mut consumed = vec![false; pages.len()];
@@ -128,23 +130,6 @@ mod tests {
     use super::*;
     use mars_types::{BindingId, ContentHash, DecimationLevel, HilbertKey, PageId};
 
-    fn level(combined: Bbox, ranges: Vec<(HilbertKey, HilbertKey)>) -> LevelMetadata {
-        let table = ranges
-            .into_iter()
-            .enumerate()
-            .map(|(i, (lo, hi))| (lo, hi, PageId::new(i as u64)))
-            .collect::<Vec<_>>();
-        LevelMetadata {
-            level: DecimationLevel::new(0),
-            vertex_tolerance_m: 0.0,
-            geometry_min_size_m: 0.0,
-            label_min_priority: 0,
-            page_count: table.len() as u32,
-            combined_bbox: combined,
-            hilbert_range_table: table,
-        }
-    }
-
     fn page(id: u64, lo: u64, hi: u64, bbox: Bbox, size: u64) -> PageEntry {
         PageEntry {
             key: PageKey {
@@ -162,18 +147,17 @@ mod tests {
 
     #[test]
     fn empty_pages_yields_no_ops() {
-        let lvl = level(Bbox::new(0.0, 0.0, 100.0, 100.0), vec![]);
-        assert!(rebalance_candidates(&lvl, &[], 1000).is_empty());
+        let combined = Bbox::new(0.0, 0.0, 100.0, 100.0);
+        assert!(rebalance_candidates(combined, &[], 1000).is_empty());
     }
 
     #[test]
     fn oversize_page_splits_into_proportional_count() {
         let combined = Bbox::new(0.0, 0.0, 100.0, 100.0);
-        let lvl = level(combined, vec![(HilbertKey::new(0), HilbertKey::new(u64::MAX))]);
         let target = 1_000;
         // 2.5x target -> ceil(2.5) = 3
         let p = page(0, 0, u64::MAX, combined, (2.5 * target as f64) as u64);
-        let ops = rebalance_candidates(&lvl, std::slice::from_ref(&p), target);
+        let ops = rebalance_candidates(combined, std::slice::from_ref(&p), target);
         assert_eq!(ops.len(), 1);
         assert!(matches!(ops[0], RebalanceOp::Split { ref page, into: 3 } if page == &p.key));
     }
@@ -187,19 +171,12 @@ mod tests {
         // half-bbox per page so dilation stays in band even though sizes don't.
         let left_bbox = Bbox::new(0.0, 0.0, 50.0, 100.0);
         let right_bbox = Bbox::new(50.0, 0.0, 100.0, 100.0);
-        let lvl = level(
-            combined,
-            vec![
-                (HilbertKey::new(0), HilbertKey::new(HALF)),
-                (HilbertKey::new(HALF + 1), HilbertKey::new(u64::MAX)),
-            ],
-        );
         let target = 1_000;
         let pages = vec![
             page(0, 0, HALF, left_bbox, 200),
             page(1, HALF + 1, u64::MAX, right_bbox, 200),
         ];
-        let ops = rebalance_candidates(&lvl, &pages, target);
+        let ops = rebalance_candidates(combined, &pages, target);
         assert_eq!(ops.len(), 1);
         match &ops[0] {
             RebalanceOp::Merge { left, right } => {
@@ -215,18 +192,11 @@ mod tests {
         let combined = Bbox::new(0.0, 0.0, 100.0, 100.0);
         let left_bbox = Bbox::new(0.0, 0.0, 50.0, 100.0);
         let right_bbox = Bbox::new(50.0, 0.0, 100.0, 100.0);
-        let lvl = level(
-            combined,
-            vec![
-                (HilbertKey::new(0), HilbertKey::new(HALF)),
-                (HilbertKey::new(HALF + 1), HilbertKey::new(u64::MAX)),
-            ],
-        );
         let pages = vec![
             page(0, 0, HALF, left_bbox, 1_000),
             page(1, HALF + 1, u64::MAX, right_bbox, 1_100),
         ];
-        assert!(rebalance_candidates(&lvl, &pages, 1_000).is_empty());
+        assert!(rebalance_candidates(combined, &pages, 1_000).is_empty());
     }
 
     #[test]
@@ -234,18 +204,11 @@ mod tests {
         let combined = Bbox::new(0.0, 0.0, 100.0, 100.0);
         let left_bbox = Bbox::new(0.0, 0.0, 50.0, 100.0);
         let right_bbox = Bbox::new(50.0, 0.0, 100.0, 100.0);
-        let lvl = level(
-            combined,
-            vec![
-                (HilbertKey::new(0), HilbertKey::new(HALF)),
-                (HilbertKey::new(HALF + 1), HilbertKey::new(u64::MAX)),
-            ],
-        );
         let pages = vec![
             page(0, 0, HALF, left_bbox, 200),               // would merge ...
             page(1, HALF + 1, u64::MAX, right_bbox, 5_000), // ... but next is split
         ];
-        let ops = rebalance_candidates(&lvl, &pages, 1_000);
+        let ops = rebalance_candidates(combined, &pages, 1_000);
         assert_eq!(ops.len(), 1);
         assert!(matches!(ops[0], RebalanceOp::Split { .. }));
     }
@@ -256,9 +219,8 @@ mod tests {
         // bbox -> dilation > 4. size in band so only the dilation rule fires.
         // span = 1 key -> cell_area = combined_area / 2^32, ratio ~= 2^32.
         let combined = Bbox::new(0.0, 0.0, 100.0, 100.0);
-        let lvl = level(combined, vec![(HilbertKey::new(0), HilbertKey::new(0))]);
         let p = page(0, 0, 0, combined, 1_000);
-        let ops = rebalance_candidates(&lvl, std::slice::from_ref(&p), 1_000);
+        let ops = rebalance_candidates(combined, std::slice::from_ref(&p), 1_000);
         assert_eq!(ops.len(), 1);
         assert!(matches!(ops[0], RebalanceOp::Split { ref page, into: 2 } if page == &p.key));
     }
@@ -269,9 +231,8 @@ mod tests {
         // span/2^32 = 2^32 -> cell_area = 2^32 * combined_area >> page_area.
         // dilation < 1, but size triggers the split.
         let combined = Bbox::new(0.0, 0.0, 100.0, 100.0);
-        let lvl = level(combined, vec![(HilbertKey::new(0), HilbertKey::new(u64::MAX))]);
         let p = page(0, 0, u64::MAX, combined, 4_000);
-        let ops = rebalance_candidates(&lvl, std::slice::from_ref(&p), 1_000);
+        let ops = rebalance_candidates(combined, std::slice::from_ref(&p), 1_000);
         assert_eq!(ops.len(), 1);
         match &ops[0] {
             RebalanceOp::Split { page, into } => {

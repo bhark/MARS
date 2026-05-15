@@ -30,7 +30,7 @@ use mars_source::{
 };
 use mars_store::ManifestStore;
 use mars_store::mem::{InMemoryPublisher, InMemoryStore};
-use mars_types::{BindingId, CrsCode, DecimationLevel, LevelMetadata, Manifest, PageEntry};
+use mars_types::{BindingId, BindingMetadata, CrsCode, DecimationLevel, Manifest, PageEntry};
 use tokio::runtime::Runtime;
 
 fn point_wkb(x: f64, y: f64) -> Bytes {
@@ -224,7 +224,7 @@ fn bench_page_rebuild(c: &mut Criterion) {
         let label = format!("page_rebuild/n={n}/page_bytes={page_size}");
         let fixture = rt.block_on(build_fixture(n, page_size));
         let binding_id = BindingId::try_new("points").unwrap();
-        let level_meta_map: HashMap<BindingId, Vec<LevelMetadata>> = HashMap::from([(
+        let binding_meta_map: HashMap<BindingId, BindingMetadata> = HashMap::from([(
             binding_id.clone(),
             fixture
                 .prior
@@ -232,7 +232,6 @@ fn bench_page_rebuild(c: &mut Criterion) {
                 .iter()
                 .find(|b| b.binding_id == binding_id)
                 .unwrap()
-                .levels
                 .clone(),
         )]);
         // re-pick a centroid inside the target page's bbox.
@@ -247,7 +246,7 @@ fn bench_page_rebuild(c: &mut Criterion) {
                 rt.block_on(async {
                     let sidecar = SidecarReader::open(&fixture.sidecar_bytes).unwrap();
                     let sidecars = HashMap::from([(binding_id.clone(), sidecar)]);
-                    let mut cycle = IncrementalCycle::new(&fixture.plan, &sidecars, &level_meta_map);
+                    let mut cycle = IncrementalCycle::new(&fixture.plan, &sidecars, &binding_meta_map);
                     cycle
                         .ingest(ChangeEvent::Update {
                             collection: SourceCollectionId::new("points"),

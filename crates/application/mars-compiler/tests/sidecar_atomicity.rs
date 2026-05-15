@@ -490,17 +490,16 @@ async fn run_one_rebuild_cycle(
     let bytes = deps.store.get(&sidecar_ref.key, sidecar_ref.hash).await?;
     let sidecar = SidecarReader::open(&bytes)?;
     let sidecars = HashMap::from([(binding_id.clone(), sidecar)]);
-    let level_meta = HashMap::from([(
+    let binding_meta = HashMap::from([(
         binding_id.clone(),
         prior
             .bindings
             .iter()
             .find(|b| b.binding_id == binding_id)
             .unwrap()
-            .levels
             .clone(),
     )]);
-    let mut cycle = IncrementalCycle::new(plan, &sidecars, &level_meta);
+    let mut cycle = IncrementalCycle::new(plan, &sidecars, &binding_meta);
     cycle.ingest(ChangeEvent::Insert {
         collection: SourceCollectionId::new("points"),
         feature_id: 9999,

@@ -180,7 +180,6 @@ async fn boundary_key_row_appears_in_exactly_one_dirty_page() {
         geometry_min_size_m: 0.0,
         label_min_priority: 0,
         page_count: 2,
-        combined_bbox: bbox,
         hilbert_range_table: vec![
             (HilbertKey::new(0), boundary_key, PageId::new(0)),
             (boundary_key, HilbertKey::max(), PageId::new(1)),
@@ -192,6 +191,7 @@ async fn boundary_key_row_appears_in_exactly_one_dirty_page() {
         source_table: "test".into(),
         native_crs: CrsCode::new("EPSG:25832"),
         feature_count_total: 0,
+        combined_bbox: bbox,
         levels: vec![level_meta],
         page_membership_sidecar: None,
     };

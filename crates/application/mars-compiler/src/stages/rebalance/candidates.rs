@@ -27,7 +27,7 @@ pub(crate) fn collect(ctx: &RebalanceCtx) -> Vec<RebalanceOp> {
                 .cloned()
                 .collect();
             ops.extend(rebalance_candidates(
-                level,
+                binding_meta.combined_bbox,
                 &level_pages,
                 binding_plan.page_size_target_bytes,
             ));

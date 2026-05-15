@@ -349,7 +349,6 @@ pub struct LevelMetadata {
     pub geometry_min_size_m: f64,
     pub label_min_priority: u32,
     pub page_count: u32,
-    pub combined_bbox: Bbox,
     /// per-page `(hilbert_lo, hilbert_hi, page_id)` sorted ascending by
     /// `hilbert_lo`; binary-searchable. `page_id` is carried alongside the
     /// range because rebalance allocates fresh page ids that no longer
@@ -368,6 +367,9 @@ pub struct BindingMetadata {
     pub source_table: String,
     pub native_crs: CrsCode,
     pub feature_count_total: u64,
+    /// hilbert-key basis for this binding. all levels share one bbox by
+    /// construction; lives here so the type model can't drift.
+    pub combined_bbox: Bbox,
     pub levels: Vec<LevelMetadata>,
     /// `(feature_id, hilbert_key)` sidecar pinned by the manifest commit.
     /// `None` when a binding runs in `REPLICA IDENTITY FULL` mode (old-row
@@ -684,6 +686,7 @@ mod tests {
             source_table: "public.buildings".to_owned(),
             native_crs: CrsCode::new("EPSG:25832"),
             feature_count_total: 100,
+            combined_bbox: Bbox::new(0.0, 0.0, 1.0, 1.0),
             levels: vec![],
             page_membership_sidecar: None,
         });
@@ -988,7 +991,6 @@ mod tests {
             geometry_min_size_m: 2.0,
             label_min_priority: 5,
             page_count: 12,
-            combined_bbox: Bbox::new(-10.0, -10.0, 10.0, 10.0),
             hilbert_range_table: vec![
                 (HilbertKey::new(0), HilbertKey::new(100), PageId::new(0)),
                 (HilbertKey::new(101), HilbertKey::new(500), PageId::new(1)),
@@ -1006,6 +1008,7 @@ mod tests {
             source_table: "public.buildings".to_owned(),
             native_crs: CrsCode::new("EPSG:25832"),
             feature_count_total: 5_000_000,
+            combined_bbox: Bbox::new(-10.0, -10.0, 10.0, 10.0),
             levels: vec![],
             page_membership_sidecar: None,
         };

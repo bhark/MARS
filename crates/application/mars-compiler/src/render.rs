@@ -390,14 +390,7 @@ async fn rebuild_binding_incremental(
             .ok_or(CompilerError::InvariantViolation {
                 what: "rebuild: missing prior binding metadata",
             })?;
-    let combined_bbox =
-        prior_binding
-            .levels
-            .first()
-            .map(|l| l.combined_bbox)
-            .ok_or(CompilerError::InvariantViolation {
-                what: "rebuild: prior binding has no level metadata",
-            })?;
+    let combined_bbox = prior_binding.combined_bbox;
 
     // 1. assemble the union of dirty hilbert ranges across all dirty levels.
     //    look up by `page_id` in the level's hilbert_range_table; the table
@@ -665,7 +658,6 @@ pub fn recompute_level_metadata(prior: &LevelMetadata, pages: &[PageEntry], bind
         geometry_min_size_m: prior.geometry_min_size_m,
         label_min_priority: prior.label_min_priority,
         page_count: ranges.len() as u32,
-        combined_bbox: prior.combined_bbox,
         hilbert_range_table: ranges,
     }
 }
@@ -677,7 +669,6 @@ pub(crate) fn empty_level_metadata(level: &LevelPlan) -> LevelMetadata {
         geometry_min_size_m: level.geometry_min_size_m,
         label_min_priority: level.label_min_priority,
         page_count: 0,
-        combined_bbox: Bbox::new(0.0, 0.0, 0.0, 0.0),
         hilbert_range_table: Vec::new(),
     }
 }
@@ -733,7 +724,6 @@ mod tests {
             geometry_min_size_m: 0.0,
             label_min_priority: 0,
             page_count: 0,
-            combined_bbox: Bbox::new(0.0, 0.0, 100.0, 100.0),
             hilbert_range_table: vec![],
         };
         let pages = vec![

@@ -33,7 +33,7 @@ use mars_source::{
 };
 use mars_store::ObjectStore;
 use mars_store::mem::{InMemoryPublisher, InMemoryStore};
-use mars_types::{BindingId, ContentHash, CrsCode, DecimationLevel, LevelMetadata, PageEntry, PageKey};
+use mars_types::{BindingId, BindingMetadata, ContentHash, CrsCode, DecimationLevel, PageEntry, PageKey};
 
 fn point_wkb(x: f64, y: f64) -> Bytes {
     let mut v = Vec::with_capacity(21);
@@ -251,14 +251,9 @@ async fn surgical_invalidation_rebuilds_only_dirty_pages() {
 
     // pick concrete feature ids inside each page from the prior sidecar via
     // its hilbert range. the sidecar yields (feature_id, key) ordered by id.
-    let level_meta = bootstrap
-        .bindings
-        .iter()
-        .find(|b| b.binding_id == binding_id)
-        .unwrap()
-        .levels[0]
-        .clone();
-    let bootstrap_combined = level_meta.combined_bbox;
+    let prior_binding_meta = bootstrap.bindings.iter().find(|b| b.binding_id == binding_id).unwrap();
+    let bootstrap_combined = prior_binding_meta.combined_bbox;
+    let level_meta = prior_binding_meta.levels[0].clone();
     let prior_sidecar_ref = bootstrap
         .bindings
         .iter()
@@ -357,10 +352,20 @@ async fn surgical_invalidation_rebuilds_only_dirty_pages() {
 
     // run the cycle.
     let sidecars: HashMap<BindingId, SidecarReader<'_>> = HashMap::from([(binding_id.clone(), prior_sidecar)]);
-    let level_meta_map: HashMap<BindingId, Vec<LevelMetadata>> =
-        HashMap::from([(binding_id.clone(), vec![level_meta.clone()])]);
+    let binding_meta_map: HashMap<BindingId, BindingMetadata> = HashMap::from([(
+        binding_id.clone(),
+        BindingMetadata {
+            binding_id: binding_id.clone(),
+            source_table: "test".into(),
+            native_crs: CrsCode::new("EPSG:25832"),
+            feature_count_total: 0,
+            combined_bbox: bootstrap_combined,
+            levels: vec![level_meta.clone()],
+            page_membership_sidecar: None,
+        },
+    )]);
 
-    let mut cycle = IncrementalCycle::new(&plan, &sidecars, &level_meta_map);
+    let mut cycle = IncrementalCycle::new(&plan, &sidecars, &binding_meta_map);
     for ev in events {
         cycle.ingest(ev).unwrap();
     }

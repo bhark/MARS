@@ -82,14 +82,7 @@ async fn execute_rebalance_one_binding(
             .ok_or(CompilerError::InvariantViolation {
                 what: "rebalance: missing prior binding metadata",
             })?;
-    let combined_bbox =
-        prior_binding
-            .levels
-            .first()
-            .map(|l| l.combined_bbox)
-            .ok_or(CompilerError::InvariantViolation {
-                what: "rebalance: prior binding has no level metadata",
-            })?;
+    let combined_bbox = prior_binding.combined_bbox;
     let sc = sidecar.ok_or(CompilerError::InvariantViolation {
         what: "rebalance: missing page-membership sidecar",
     })?;

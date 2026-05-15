@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use mars_source::{ChangeEvent, GeometryEnvelope};
-use mars_types::{BindingId, DecimationLevel, HilbertKey, LevelMetadata, PageId, SourceCollectionId};
+use mars_types::{BindingId, BindingMetadata, DecimationLevel, HilbertKey, LevelMetadata, PageId, SourceCollectionId};
 
 use crate::hilbert::key_from_centroid;
 use crate::plan::BootstrapPlan;
@@ -70,7 +70,7 @@ pub enum IncrementalError {
 pub struct IncrementalCycle<'a> {
     plan: &'a BootstrapPlan,
     sidecars: &'a HashMap<BindingId, SidecarReader<'a>>,
-    level_meta: &'a HashMap<BindingId, Vec<LevelMetadata>>,
+    binding_meta: &'a HashMap<BindingId, BindingMetadata>,
     dirty: DirtyPages,
 }
 
@@ -80,12 +80,12 @@ impl<'a> IncrementalCycle<'a> {
     pub fn new(
         plan: &'a BootstrapPlan,
         sidecars: &'a HashMap<BindingId, SidecarReader<'a>>,
-        level_meta: &'a HashMap<BindingId, Vec<LevelMetadata>>,
+        binding_meta: &'a HashMap<BindingId, BindingMetadata>,
     ) -> Self {
         Self {
             plan,
             sidecars,
-            level_meta,
+            binding_meta,
             dirty: DirtyPages::default(),
         }
     }
@@ -186,13 +186,13 @@ impl<'a> IncrementalCycle<'a> {
     }
 
     fn mark_envelope(&mut self, binding_id: &BindingId, envelope: &GeometryEnvelope) -> Result<(), IncrementalError> {
-        let levels = self
-            .level_meta
+        let binding = self
+            .binding_meta
             .get(binding_id)
-            .ok_or_else(|| IncrementalError::MissingLevelMetadata(binding_id.clone()))?
-            .clone();
+            .ok_or_else(|| IncrementalError::MissingLevelMetadata(binding_id.clone()))?;
+        let key = key_from_centroid(envelope.centroid[0], envelope.centroid[1], binding.combined_bbox);
+        let levels = binding.levels.clone();
         for level in levels {
-            let key = key_from_centroid(envelope.centroid[0], envelope.centroid[1], level.combined_bbox);
             self.mark_key_at_level(binding_id, &level, key);
         }
         Ok(())
@@ -200,9 +200,10 @@ impl<'a> IncrementalCycle<'a> {
 
     fn mark_key(&mut self, binding_id: &BindingId, key: HilbertKey) -> Result<(), IncrementalError> {
         let levels = self
-            .level_meta
+            .binding_meta
             .get(binding_id)
             .ok_or_else(|| IncrementalError::MissingLevelMetadata(binding_id.clone()))?
+            .levels
             .clone();
         for level in levels {
             self.mark_key_at_level(binding_id, &level, key);
@@ -310,8 +311,19 @@ mod tests {
             geometry_min_size_m: 0.0,
             label_min_priority: 0,
             page_count: table.len() as u32,
-            combined_bbox: Bbox::new(0.0, 0.0, 100.0, 100.0),
             hilbert_range_table: table,
+        }
+    }
+
+    fn binding_meta(id: &str, levels: Vec<LevelMetadata>) -> BindingMetadata {
+        BindingMetadata {
+            binding_id: BindingId::try_new(id).unwrap(),
+            source_table: id.to_string(),
+            native_crs: CrsCode::new("EPSG:25832"),
+            feature_count_total: 0,
+            combined_bbox: Bbox::new(0.0, 0.0, 100.0, 100.0),
+            levels,
+            page_membership_sidecar: None,
         }
     }
 
@@ -331,12 +343,15 @@ mod tests {
             raster_layers: Vec::new(),
         };
         let ranges = exact_ranges(&[[10.0, 10.0], [20.0, 20.0], [30.0, 30.0], [40.0, 40.0], [50.0, 50.0]]);
-        let levels = HashMap::from([
+        let bindings = HashMap::from([
             (
                 BindingId::try_new("roads").unwrap(),
-                vec![level(0, ranges.clone()), level(1, ranges.clone())],
+                binding_meta("roads", vec![level(0, ranges.clone()), level(1, ranges.clone())]),
             ),
-            (BindingId::try_new("buildings").unwrap(), vec![level(0, ranges.clone())]),
+            (
+                BindingId::try_new("buildings").unwrap(),
+                binding_meta("buildings", vec![level(0, ranges.clone())]),
+            ),
         ]);
 
         let sidecar_key = key_from_centroid(30.0, 30.0, Bbox::new(0.0, 0.0, 100.0, 100.0));
@@ -345,7 +360,7 @@ mod tests {
         let sidecar = SidecarReader::open(&sidecar_bytes).unwrap();
         let sidecars = HashMap::from([(BindingId::try_new("roads").unwrap(), sidecar)]);
 
-        let mut cycle = IncrementalCycle::new(&plan, &sidecars, &levels);
+        let mut cycle = IncrementalCycle::new(&plan, &sidecars, &bindings);
         cycle
             .ingest(ChangeEvent::Insert {
                 collection: "roads".into(),
@@ -453,7 +468,6 @@ mod tests {
             geometry_min_size_m: 0.0,
             label_min_priority: 0,
             page_count: 3,
-            combined_bbox: Bbox::new(0.0, 0.0, 100.0, 100.0),
             hilbert_range_table: vec![
                 (key_lo, key_lo, PageId::new(7)),
                 (key_mid, key_mid, PageId::new(42)),

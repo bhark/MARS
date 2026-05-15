@@ -113,6 +113,7 @@ pub async fn rebuild_binding_from_plan<'a>(
                 source_table: binding_plan.source_table.clone(),
                 native_crs: binding_plan.native_crs.clone(),
                 feature_count_total: 0,
+                combined_bbox: page_plan.combined_bbox,
                 levels: binding_plan.levels.iter().map(empty_level_metadata).collect(),
                 page_membership_sidecar: None,
             },
@@ -304,7 +305,6 @@ pub async fn rebuild_binding_from_plan<'a>(
             geometry_min_size_m: level_plan.geometry_min_size_m,
             label_min_priority: level_plan.label_min_priority,
             page_count: level_pages.len() as u32,
-            combined_bbox: page_plan.combined_bbox,
             hilbert_range_table: level_pages
                 .iter()
                 .map(|p| (p.hilbert_range.0, p.hilbert_range.1, p.key.page_id))
@@ -337,6 +337,7 @@ pub async fn rebuild_binding_from_plan<'a>(
         source_table: binding_plan.source_table.clone(),
         native_crs: binding_plan.native_crs.clone(),
         feature_count_total: page_plan.feature_count_total,
+        combined_bbox: page_plan.combined_bbox,
         levels: levels_meta,
         page_membership_sidecar: Some(ArtifactEntry {
             key: sidecar_key,

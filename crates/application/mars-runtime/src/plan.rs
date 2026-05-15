@@ -187,7 +187,6 @@ mod tests {
             geometry_min_size_m,
             label_min_priority: 0,
             page_count: 0,
-            combined_bbox: Bbox::new(0.0, 0.0, 1.0, 1.0),
             hilbert_range_table: vec![],
         }
     }
@@ -213,6 +212,7 @@ mod tests {
             source_table: id.to_owned(),
             native_crs: CrsCode::new("EPSG:25832"),
             feature_count_total: 0,
+            combined_bbox: Bbox::new(0.0, 0.0, 1.0, 1.0),
             levels,
             page_membership_sidecar: None,
         }

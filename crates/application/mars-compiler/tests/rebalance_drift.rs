@@ -200,11 +200,10 @@ async fn rebalance_candidates_flags_oversize_page() {
         .collect();
     assert_eq!(level0_pages.len(), 1, "fixture should produce one page");
 
-    let level0_meta = manifest.bindings[0].levels[0].clone();
     let single = &level0_pages[0];
     // pick a target that puts the lone page above 1.5x → forces split into 4.
     let target = single.size_bytes / 4;
-    let ops = rebalance_candidates(&level0_meta, &level0_pages, target);
+    let ops = rebalance_candidates(manifest.bindings[0].combined_bbox, &level0_pages, target);
     assert_eq!(ops.len(), 1);
     match &ops[0] {
         RebalanceOp::Split { page, into } => {
@@ -245,7 +244,6 @@ async fn execute_rebalance_split_preserves_feature_ids_and_balances_sizes() {
     .await
     .unwrap();
     let binding_id = BindingId::try_new("points").unwrap();
-    let level0_meta = manifest.bindings[0].levels[0].clone();
     let level0_pages: Vec<PageEntry> = manifest
         .pages
         .iter()
@@ -261,7 +259,7 @@ async fn execute_rebalance_split_preserves_feature_ids_and_balances_sizes() {
     let sidecars = HashMap::from([(binding_id.clone(), sidecar)]);
 
     let target = single.size_bytes / 4;
-    let ops = rebalance_candidates(&level0_meta, &level0_pages, target);
+    let ops = rebalance_candidates(manifest.bindings[0].combined_bbox, &level0_pages, target);
     assert!(!ops.is_empty());
 
     let outcome = execute_rebalance(&deps, &plan, &manifest, &sidecars, ops, 4 * 1024 * 1024 * 1024)
