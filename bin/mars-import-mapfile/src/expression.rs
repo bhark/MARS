@@ -32,6 +32,73 @@ pub(crate) fn parse_mapfile_expression(input: &str, line: usize) -> Result<Expr,
     Ok(expr)
 }
 
+/// parse a mapfile `EXPRESSION { v1, v2, ... }` set form into a flat list of
+/// literals. caller (resolve_class) wraps these into a CLASSITEM-qualified
+/// `IN (...)` predicate. empty `{}` returns an empty vec.
+///
+/// values may be numeric, single- or double-quoted strings, or unquoted
+/// barewords. barewords lower to `Literal::String` since they have no
+/// column-reference role inside set braces.
+pub(crate) fn parse_set_literal(input: &str, line: usize) -> Result<Vec<Literal>, ExpressionError> {
+    let trimmed = input.trim();
+    let body = trimmed
+        .strip_prefix('{')
+        .and_then(|s| s.strip_suffix('}'))
+        .ok_or_else(|| ExpressionError::Parse {
+            msg: "set form must be enclosed in `{...}`".to_string(),
+            line,
+        })?
+        .trim();
+    if body.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    let mut buf = String::new();
+    let mut in_single = false;
+    let mut in_double = false;
+    for ch in body.chars() {
+        match ch {
+            '\'' if !in_double => {
+                in_single = !in_single;
+                buf.push(ch);
+            }
+            '"' if !in_single => {
+                in_double = !in_double;
+                buf.push(ch);
+            }
+            ',' if !in_single && !in_double => {
+                out.push(classify_set_item(buf.trim(), line)?);
+                buf.clear();
+            }
+            _ => buf.push(ch),
+        }
+    }
+    if in_single || in_double {
+        return Err(ExpressionError::Parse {
+            msg: "unterminated string literal in set form".to_string(),
+            line,
+        });
+    }
+    out.push(classify_set_item(buf.trim(), line)?);
+    Ok(out)
+}
+
+fn classify_set_item(s: &str, line: usize) -> Result<Literal, ExpressionError> {
+    if s.is_empty() {
+        return Err(ExpressionError::Parse {
+            msg: "empty value in set form".to_string(),
+            line,
+        });
+    }
+    if let Some(rest) = s.strip_prefix('\'').and_then(|r| r.strip_suffix('\'')) {
+        return Ok(Literal::String(rest.to_string()));
+    }
+    if let Some(rest) = s.strip_prefix('"').and_then(|r| r.strip_suffix('"')) {
+        return Ok(Literal::String(rest.to_string()));
+    }
+    Ok(number_or_string(s))
+}
+
 // ------------------------------------------------------------------ lexer
 
 #[derive(Debug, Clone, PartialEq)]
@@ -866,6 +933,56 @@ mod tests {
     fn no_cmp_chaining() {
         // `a = b = c` would form invalid DSL on round-trip; reject early.
         let err = parse_mapfile_expression("[a] = 1 = 2", 1).unwrap_err();
+        assert!(matches!(err, ExpressionError::Parse { .. }), "got {err:?}");
+    }
+
+    #[test]
+    fn set_literal_numeric() {
+        let lits = parse_set_literal("{14, 15, 984}", 1).unwrap();
+        assert_eq!(lits, vec![Literal::Int(14), Literal::Int(15), Literal::Int(984)]);
+    }
+
+    #[test]
+    fn set_literal_single() {
+        let lits = parse_set_literal("{14}", 1).unwrap();
+        assert_eq!(lits, vec![Literal::Int(14)]);
+    }
+
+    #[test]
+    fn set_literal_barewords_are_strings() {
+        // barewords inside a set are mapfile shorthand for string values.
+        let lits = parse_set_literal("{skovPlantage,agerMark,eng}", 1).unwrap();
+        assert_eq!(
+            lits,
+            vec![
+                Literal::String("skovPlantage".into()),
+                Literal::String("agerMark".into()),
+                Literal::String("eng".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn set_literal_quoted_strings() {
+        let lits = parse_set_literal("{'a','b'}", 1).unwrap();
+        assert_eq!(lits, vec![Literal::String("a".into()), Literal::String("b".into())]);
+    }
+
+    #[test]
+    fn set_literal_empty() {
+        let lits = parse_set_literal("{}", 1).unwrap();
+        assert!(lits.is_empty());
+    }
+
+    #[test]
+    fn set_literal_unterminated_is_parse_error() {
+        let err = parse_set_literal("{14", 1).unwrap_err();
+        assert!(matches!(err, ExpressionError::Parse { .. }), "got {err:?}");
+    }
+
+    #[test]
+    fn set_literal_unopened_is_parse_error() {
+        let err = parse_set_literal("14}", 1).unwrap_err();
         assert!(matches!(err, ExpressionError::Parse { .. }), "got {err:?}");
     }
 

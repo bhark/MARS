@@ -2,9 +2,11 @@
 //! `Option` fields and per-class [`StyleBlock`]s. No defaulting, no emit -
 //! defaults live in [`super::resolved`]; emit lives in [`super::emit`].
 
+use mars_expr::{Expr, Literal};
 use tracing::warn;
 
 use crate::directive::ClassDirective;
+use crate::expression::{parse_mapfile_expression, parse_set_literal};
 use crate::scanner::{Token, block_range, is_block_opener};
 
 use super::is_unsupported;
@@ -15,11 +17,27 @@ use super::style_block::{StyleBlock, parse_style_block};
 pub(crate) struct ParsedClass {
     pub class_line: usize,
     pub name: Option<String>,
-    pub expression: Option<String>,
+    pub expression: Option<ParsedExpression>,
     pub styles: Vec<StyleBlock>,
     pub min_scale_denom: Option<u64>,
     pub max_scale_denom: Option<u64>,
     pub label: Option<ParsedLabel>,
+}
+
+/// shape of a parsed CLASS-level EXPRESSION. some forms are self-contained
+/// predicates; others need CLASSITEM context applied at resolve time. the
+/// scanner strips quotes from args, so a bareword and a quoted literal are
+/// indistinguishable here - both lower to `BareLiteral`.
+#[derive(Debug)]
+pub(crate) enum ParsedExpression {
+    // complete predicate ready to emit verbatim
+    Predicate(String),
+    // a single value (literal or bareword) needing CLASSITEM equality wrapping
+    BareLiteral(Literal),
+    // `{v1,v2,...}` set form needing CLASSITEM IN wrapping
+    Set(Vec<Literal>),
+    // unparsable; raw text preserved for the TODO comment
+    Todo(String),
 }
 
 pub(crate) fn parse_class(body: &[Token], class_line: usize) -> ParsedClass {
@@ -44,16 +62,7 @@ pub(crate) fn parse_class(body: &[Token], class_line: usize) -> ParsedClass {
                 }
             }
             ClassDirective::Expression(t) => {
-                let joined = t.args.join(" ");
-                match crate::expression::parse_mapfile_expression(&joined, t.line) {
-                    Ok(expr) => {
-                        p.expression = Some(format!("{expr}"));
-                    }
-                    Err(e) => {
-                        warn!(line = t.line, error = %e, "could not parse EXPRESSION");
-                        p.expression = Some(format!("# TODO: hand-translate: {joined}"));
-                    }
-                }
+                p.expression = Some(parse_class_expression(t));
             }
             ClassDirective::Style => {
                 if let Some(r) = block_range(body, i) {
@@ -96,6 +105,43 @@ fn parse_class_scale_denom(t: &Token) -> Option<u64> {
         _ => {
             warn!(line = t.line, keyword = %t.keyword, value = %arg, "could not parse class scale denom");
             None
+        }
+    }
+}
+
+/// classify a CLASS EXPRESSION token into one of the four parsed shapes.
+/// the scanner strips surrounding double quotes, so `EXPRESSION "lit"` and
+/// `EXPRESSION lit` arrive identically as a single arg - both lower to
+/// `BareLiteral` here and pick up their column at resolve time.
+fn parse_class_expression(t: &Token) -> ParsedExpression {
+    let joined = t.args.join(" ");
+    let trimmed = joined.trim();
+
+    if trimmed.starts_with('{') {
+        return match parse_set_literal(trimmed, t.line) {
+            Ok(lits) => ParsedExpression::Set(lits),
+            Err(e) => {
+                warn!(line = t.line, error = %e, "could not parse EXPRESSION set");
+                ParsedExpression::Todo(joined)
+            }
+        };
+    }
+
+    match parse_mapfile_expression(trimmed, t.line) {
+        Ok(Expr::Literal(lit)) => ParsedExpression::BareLiteral(lit),
+        Ok(expr) => ParsedExpression::Predicate(format!("{expr}")),
+        Err(e) => {
+            // single-arg fallback: the scanner strips quotes, so a quoted
+            // string and an unquoted bareword both arrive as one arg with
+            // no expression-y characters. treat as a literal value (the
+            // resolver decides whether to wrap with CLASSITEM). regex form
+            // `/.../` is held back so it still surfaces as a TODO.
+            if t.args.len() == 1 && !t.args[0].starts_with('/') {
+                ParsedExpression::BareLiteral(Literal::String(t.args[0].clone()))
+            } else {
+                warn!(line = t.line, error = %e, "could not parse EXPRESSION");
+                ParsedExpression::Todo(joined)
+            }
         }
     }
 }

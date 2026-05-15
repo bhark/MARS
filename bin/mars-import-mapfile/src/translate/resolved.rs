@@ -13,7 +13,7 @@ use tracing::warn;
 
 use crate::emitter::{EmitLinePlacement, MarkerKind, SymbolDef, slugify};
 
-use super::class::ParsedClass;
+use super::class::{ParsedClass, ParsedExpression};
 use super::label::ParsedLabel;
 use super::layer::{
     ParsedLayer, guess_id_column, lift_inline_subquery, lifted_to_source, mapfile_type_to_geom, parse_data,
@@ -306,12 +306,7 @@ fn resolve_class(
 
     let collapsed = collapse_styles(&p.styles, p.class_line, symbols);
 
-    // CLASSITEM expansion: a CLASS with NAME but no EXPRESSION inherits an
-    // implicit `<classitem> = '<NAME>'` predicate.
-    let when = p.expression.or_else(|| match (class_item, title.as_deref()) {
-        (Some(item), Some(value)) => Some(format!("{item} = '{}'", value.replace('\'', "''"))),
-        _ => None,
-    });
+    let when = resolve_when(p.expression, class_item, title.as_deref(), layer_name, p.class_line);
 
     let label = p
         .label
@@ -343,6 +338,69 @@ fn resolve_class(
         label,
         unimplemented,
     }
+}
+
+/// reconcile a class's EXPRESSION shape with the layer's CLASSITEM.
+///
+/// `BareLiteral` and `Set` are CLASSITEM-relative by construction - they pick
+/// up the column at this point. `Predicate` is self-contained and passes
+/// through. `None` falls back to the CLASS NAME / CLASSITEM expansion that
+/// has always existed for un-EXPRESSION'd classes.
+fn resolve_when(
+    expression: Option<ParsedExpression>,
+    class_item: Option<&str>,
+    title: Option<&str>,
+    layer_name: &str,
+    class_line: usize,
+) -> Option<String> {
+    match expression {
+        Some(ParsedExpression::Predicate(s)) => Some(s),
+        Some(ParsedExpression::BareLiteral(lit)) => match class_item {
+            Some(ci) => Some(format!("{ci} = {lit}")),
+            None => {
+                warn!(
+                    layer = %layer_name,
+                    line = class_line,
+                    "CLASS EXPRESSION literal without CLASSITEM - emitting TODO"
+                );
+                Some(format!("# TODO: bare EXPRESSION without CLASSITEM: {lit}"))
+            }
+        },
+        Some(ParsedExpression::Set(lits)) => match (class_item, lits.is_empty()) {
+            (Some(ci), false) => Some(format_in(ci, &lits)),
+            (Some(_), true) => {
+                warn!(layer = %layer_name, line = class_line, "CLASS EXPRESSION empty set");
+                Some("# TODO: empty EXPRESSION set".to_string())
+            }
+            (None, _) => {
+                warn!(
+                    layer = %layer_name,
+                    line = class_line,
+                    "CLASS EXPRESSION set without CLASSITEM - emitting TODO"
+                );
+                Some("# TODO: EXPRESSION set requires CLASSITEM".to_string())
+            }
+        },
+        Some(ParsedExpression::Todo(raw)) => Some(format!("# TODO: hand-translate: {raw}")),
+        None => match (class_item, title) {
+            (Some(item), Some(value)) => Some(format!("{item} = '{}'", value.replace('\'', "''"))),
+            _ => None,
+        },
+    }
+}
+
+fn format_in(column: &str, lits: &[mars_expr::Literal]) -> String {
+    use std::fmt::Write as _;
+    let mut s = String::with_capacity(column.len() + 8 + lits.len() * 6);
+    let _ = write!(s, "{column} IN (");
+    for (i, lit) in lits.iter().enumerate() {
+        if i > 0 {
+            s.push_str(", ");
+        }
+        let _ = write!(s, "{lit}");
+    }
+    s.push(')');
+    s
 }
 
 fn layer_label_style_name(layer: &str) -> String {

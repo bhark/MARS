@@ -1,0 +1,62 @@
+# CLASSITEM combined with EXPRESSION (gaps #5 and #6).
+# - EXPRESSION "lit" / bareword: wraps with CLASSITEM equality
+# - EXPRESSION {set}: wraps with CLASSITEM IN(...)
+# - EXPRESSION (...) self-contained predicate: passes through unchanged
+# - CLASS NAME without EXPRESSION: existing CLASSITEM-from-NAME expansion
+MAP
+  NAME "classitem_expression"
+  TITLE "Classitem + Expression Coverage"
+
+  LAYER
+    NAME "ranks"
+    TYPE POLYGON
+    STATUS ON
+    DATA "geom FROM ranks"
+    PROCESSING "ITEMS=ogc_fid,rtt,other,name"
+    CLASSITEM "rtt"
+
+    # gap #6: quoted-literal EXPRESSION with CLASSITEM
+    CLASS
+      NAME "hovedrute"
+      EXPRESSION "Hovedrute"
+      STYLE
+        COLOR 200 30 30
+      END
+    END
+
+    # gap #5: numeric set form
+    CLASS
+      NAME "majors"
+      EXPRESSION {14,15,984}
+      STYLE
+        COLOR 30 30 200
+      END
+    END
+
+    # gap #5: bareword set form
+    CLASS
+      NAME "naturkind"
+      EXPRESSION {skovPlantage,agerMark,eng}
+      STYLE
+        COLOR 80 160 80
+      END
+    END
+
+    # regression: self-contained paren-expression passes through unchanged
+    CLASS
+      NAME "explicit_other"
+      EXPRESSION ([other] = 'x')
+      STYLE
+        COLOR 100 100 100
+      END
+    END
+
+    # regression: bare CLASS NAME (no EXPRESSION) still picks up CLASSITEM
+    CLASS
+      NAME "default"
+      STYLE
+        COLOR 220 220 220
+      END
+    END
+  END
+END

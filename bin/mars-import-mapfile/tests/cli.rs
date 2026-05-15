@@ -87,6 +87,11 @@ fn expression_ops_fixture_matches() {
 }
 
 #[test]
+fn classitem_expression_fixture_matches() {
+    assert_fixture_matches("classitem_expression");
+}
+
+#[test]
 fn geomtransform_fixture_matches() {
     assert_fixture_matches("geomtransform");
 }
