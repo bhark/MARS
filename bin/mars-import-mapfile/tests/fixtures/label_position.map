@@ -1,0 +1,29 @@
+# Label placement parity fixture: POSITION, OFFSET, PARTIALS, FORCE,
+# numeric ANGLE. exercises every LABEL block field that landed alongside
+# the mapserver-parity collision/placement extension.
+MAP
+  NAME "labels"
+  TITLE "Label Placement Parity"
+
+  LAYER
+    NAME "city"
+    TYPE POINT
+    STATUS ON
+    DATA "geom FROM city"
+    PROCESSING "ITEMS=ogc_fid,name"
+
+    LABEL
+      TEXT "[name]"
+      FONT "sans-serif"
+      SIZE 13
+      COLOR 16 16 16
+      PRIORITY 8
+      MINDISTANCE 16
+      POSITION UC
+      OFFSET 3 -4
+      ANGLE 15
+      PARTIALS TRUE
+      FORCE TRUE
+    END
+  END
+END

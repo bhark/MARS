@@ -275,7 +275,11 @@ mod tests {
 
     #[test]
     fn parse_label_only_type_bitmap_remains_unimplemented() {
-        let p = parse_label(&[tok("POSITION", &["UC"]), tok("OFFSET", &["1", "2"]), tok("TYPE", &["BITMAP"])]);
+        let p = parse_label(&[
+            tok("POSITION", &["UC"]),
+            tok("OFFSET", &["1", "2"]),
+            tok("TYPE", &["BITMAP"]),
+        ]);
         assert_eq!(
             p.unimplemented,
             vec!["LABEL.TYPE BITMAP"],

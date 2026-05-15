@@ -26,8 +26,7 @@ pub(crate) fn draw_follow(
     if polyline.len() < 2 {
         return Ok(());
     }
-    let run = mars_text::measure(text, style, fonts)
-        .map_err(|e| RenderError::Backend(format!("font measure: {e}")))?;
+    let run = mars_text::measure(text, style, fonts).map_err(|e| RenderError::Backend(format!("font measure: {e}")))?;
     if run.glyph_count() == 0 {
         return Ok(());
     }

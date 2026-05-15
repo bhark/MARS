@@ -728,11 +728,7 @@ type ChosenPlacement = ((f32, f32), (f32, f32, f32, f32));
 /// pick the first non-colliding candidate from a [`PreparedPlacement`].
 /// returns `(label-local-frame anchor offset, bbox in canvas frame)` for
 /// the chosen placement, or `None` when no candidate fits.
-fn pick_placement(
-    placement: &PreparedPlacement,
-    cand_md: f32,
-    placed: &[PlacedFootprint],
-) -> Option<ChosenPlacement> {
+fn pick_placement(placement: &PreparedPlacement, cand_md: f32, placed: &[PlacedFootprint]) -> Option<ChosenPlacement> {
     match placement {
         PreparedPlacement::Fixed {
             anchor_offset_px,

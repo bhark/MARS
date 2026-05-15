@@ -579,11 +579,7 @@ mod tests {
         }
         // sum of per-glyph advances ≈ total run advance.
         let sum: f32 = layouts.iter().map(|g| g.advance_x).sum();
-        assert!(
-            (sum - run.advance_x).abs() < 1e-3,
-            "sum {sum} vs run {}",
-            run.advance_x
-        );
+        assert!((sum - run.advance_x).abs() < 1e-3, "sum {sum} vs run {}", run.advance_x);
     }
 
     #[test]
