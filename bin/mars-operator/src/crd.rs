@@ -34,10 +34,78 @@ pub(crate) struct MarsServiceSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) artifact_store: Option<ArtifactStoreSpec>,
 
+    /// Postgres catalog bootstrap. When present and `enabled` is true (the
+    /// default), the operator runs a one-shot Job that calls `mars setup`
+    /// before any compiler/runtime workload comes up. Names + schemas are
+    /// declared inside `spec.config.source.bootstrap` (and used both by the
+    /// Job and by `mars setup` for bare-metal deployments); this block only
+    /// carries the Kubernetes-specific orchestration knobs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) bootstrap: Option<BootstrapSpec>,
+
     /// Full MARS service config (mars_config::Config). Opaque in the CRD
     /// schema; parsed and validated server-side at reconcile.
     #[schemars(schema_with = "preserve_unknown_fields")]
     pub(crate) config: serde_json::Value,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BootstrapSpec {
+    /// When false, the operator skips Job-driven bootstrap and runs a read-
+    /// only preflight against postgres with the runtime credential, gating
+    /// the compiler/runtime children on the prerequisites already existing.
+    #[serde(default = "default_true")]
+    pub(crate) enabled: bool,
+
+    /// Secret reference for the admin DSN (CREATE ROLE / CREATE PUBLICATION /
+    /// pg_create_logical_replication_slot privileges). Required when
+    /// `enabled` is true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) admin_secret_ref: Option<SecretKeyRef>,
+
+    /// Secret reference for the runtime role password. Required when
+    /// `enabled` is true. Mounted only into the bootstrap Job pod; the
+    /// always-on compiler/runtime never sees the admin secret.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) runtime_password_secret_ref: Option<SecretKeyRef>,
+
+    /// What to drop on CR delete. Role removal defaults off so shared roles
+    /// survive a service teardown.
+    #[serde(default)]
+    pub(crate) teardown_on_delete: TeardownPolicy,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SecretKeyRef {
+    pub(crate) name: String,
+    pub(crate) key: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TeardownPolicy {
+    #[serde(default = "default_true")]
+    pub(crate) slot: bool,
+    #[serde(default = "default_true")]
+    pub(crate) publication: bool,
+    #[serde(default)]
+    pub(crate) role: bool,
+}
+
+impl Default for TeardownPolicy {
+    fn default() -> Self {
+        Self {
+            slot: true,
+            publication: true,
+            role: false,
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, Default)]

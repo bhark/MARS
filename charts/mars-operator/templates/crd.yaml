@@ -51,6 +51,73 @@ spec:
                     default: ''
                     type: string
                 type: object
+              bootstrap:
+                description: |-
+                  Postgres catalog bootstrap. When present and `enabled` is true (the
+                  default), the operator runs a one-shot Job that calls `mars setup`
+                  before any compiler/runtime workload comes up. Names + schemas are
+                  declared inside `spec.config.source.bootstrap` (and used both by the
+                  Job and by `mars setup` for bare-metal deployments); this block only
+                  carries the Kubernetes-specific orchestration knobs.
+                nullable: true
+                properties:
+                  adminSecretRef:
+                    description: |-
+                      Secret reference for the admin DSN (CREATE ROLE / CREATE PUBLICATION /
+                      pg_create_logical_replication_slot privileges). Required when
+                      `enabled` is true.
+                    nullable: true
+                    properties:
+                      key:
+                        type: string
+                      name:
+                        type: string
+                    required:
+                    - key
+                    - name
+                    type: object
+                  enabled:
+                    default: true
+                    description: |-
+                      When false, the operator skips Job-driven bootstrap and runs a read-
+                      only preflight against postgres with the runtime credential, gating
+                      the compiler/runtime children on the prerequisites already existing.
+                    type: boolean
+                  runtimePasswordSecretRef:
+                    description: |-
+                      Secret reference for the runtime role password. Required when
+                      `enabled` is true. Mounted only into the bootstrap Job pod; the
+                      always-on compiler/runtime never sees the admin secret.
+                    nullable: true
+                    properties:
+                      key:
+                        type: string
+                      name:
+                        type: string
+                    required:
+                    - key
+                    - name
+                    type: object
+                  teardownOnDelete:
+                    default:
+                      publication: true
+                      role: false
+                      slot: true
+                    description: |-
+                      What to drop on CR delete. Role removal defaults off so shared roles
+                      survive a service teardown.
+                    properties:
+                      publication:
+                        default: true
+                        type: boolean
+                      role:
+                        default: false
+                        type: boolean
+                      slot:
+                        default: true
+                        type: boolean
+                    type: object
+                type: object
               compiler:
                 properties:
                   env:
