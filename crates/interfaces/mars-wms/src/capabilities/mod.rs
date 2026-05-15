@@ -91,3 +91,64 @@ pub(super) fn xml_err(e: std::io::Error) -> WmsError {
         reason: e.to_string(),
     }
 }
+
+/// Node in the WMS GetCapabilities layer tree. Interior nodes are
+/// synthesised from `Layer.group` path segments and carry only a `title`
+/// from the segment string; leaf nodes wrap an actual configured layer
+/// and emit the full per-layer block (Name, Title, BoundingBox, Style).
+///
+/// Built with a stable child ordering: synthesised group children first
+/// (alphabetical by segment), real layer children second (config order).
+/// This keeps GetCapabilities output deterministic across config reloads.
+pub(super) struct LayerNode<'a> {
+    pub title: String,
+    pub leaf: Option<&'a mars_config::Layer>,
+    pub group_children: std::collections::BTreeMap<String, LayerNode<'a>>,
+    pub layer_children: Vec<LayerNode<'a>>,
+}
+
+impl<'a> LayerNode<'a> {
+    fn new_group(title: String) -> Self {
+        Self {
+            title,
+            leaf: None,
+            group_children: Default::default(),
+            layer_children: Vec::new(),
+        }
+    }
+
+    fn new_leaf(layer: &'a mars_config::Layer) -> Self {
+        Self {
+            title: String::new(),
+            leaf: Some(layer),
+            group_children: Default::default(),
+            layer_children: Vec::new(),
+        }
+    }
+}
+
+/// Split a `Layer.group` value into normalised path segments.
+/// Empty / whitespace segments are dropped; leading and trailing slashes
+/// are tolerated. Used to bucket layers into the capabilities tree.
+fn split_group_path(path: &str) -> Vec<&str> {
+    path.split('/').map(str::trim).filter(|s| !s.is_empty()).collect()
+}
+
+/// Build a [`LayerNode`] tree where each [`Layer.group`] path inserts the
+/// layer as a leaf at the resolved depth. Layers without a group hang off
+/// the root.
+pub(super) fn build_layer_tree<'a>(layers: &'a [mars_config::Layer]) -> LayerNode<'a> {
+    let mut root = LayerNode::new_group(String::new());
+    for layer in layers {
+        let segments: Vec<&str> = layer.group.as_deref().map(split_group_path).unwrap_or_default();
+        let mut cursor = &mut root;
+        for seg in &segments {
+            cursor = cursor
+                .group_children
+                .entry((*seg).to_string())
+                .or_insert_with(|| LayerNode::new_group((*seg).to_string()));
+        }
+        cursor.layer_children.push(LayerNode::new_leaf(layer));
+    }
+    root
+}

@@ -17,7 +17,10 @@ use mars_types::{Bbox, ImageFormat, Manifest};
 use quick_xml::Writer;
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
 
-use super::{INFO_FORMATS, configured_formats, derive_layer_bboxes, text_element, union_bbox, xml_err};
+use super::{
+    INFO_FORMATS, LayerNode, build_layer_tree, configured_formats, derive_layer_bboxes, text_element, union_bbox,
+    xml_err,
+};
 use crate::WmsError;
 
 /// Render the WMS 1.1.1 capabilities XML.
@@ -102,25 +105,10 @@ pub(super) fn capabilities_xml(cfg: &Config, manifest: &Manifest) -> Result<Stri
         write_bbox(&mut w, cfg.source.native_crs.as_str(), bb)?;
     }
 
-    // child layers
-    for layer in &cfg.layers {
-        let mut layer_tag = BytesStart::new("Layer");
-        if layer.enable_get_feature_info {
-            layer_tag.push_attribute(("queryable", "1"));
-        }
-        w.write_event(Event::Start(layer_tag)).map_err(xml_err)?;
-        text_element(&mut w, "Name", layer.name.as_str())?;
-        text_element(&mut w, "Title", &layer.title)?;
-        if !layer.abstract_.is_empty() {
-            text_element(&mut w, "Abstract", &layer.abstract_)?;
-        }
-        let bbox = layer_bboxes.get(&layer.name).copied().or(layer.bbox);
-        if let Some(bb) = bbox {
-            write_bbox(&mut w, cfg.source.native_crs.as_str(), bb)?;
-        }
-        write_default_style_with_legend_url(&mut w, layer, &advertised_formats)?;
-        w.write_event(Event::End(BytesEnd::new("Layer"))).map_err(xml_err)?;
-    }
+    // child layers: walk the path-derived tree so configured `group` values
+    // surface as nested <Layer> elements.
+    let tree = build_layer_tree(&cfg.layers);
+    emit_children(&mut w, &tree, cfg, &layer_bboxes, &advertised_formats)?;
 
     w.write_event(Event::End(BytesEnd::new("Layer"))).map_err(xml_err)?;
     w.write_event(Event::End(BytesEnd::new("Capability")))
@@ -132,6 +120,68 @@ pub(super) fn capabilities_xml(cfg: &Config, manifest: &Manifest) -> Result<Stri
         name: "capabilities",
         reason: e.to_string(),
     })
+}
+
+/// Walk one tree level emitting group nodes first (sorted by segment)
+/// then real layer leaves (config order). Children of synthesised group
+/// nodes inherit the root SRS/BoundingBox per WMS 1.1.1 spec, so interior
+/// nodes emit only a Title.
+fn emit_children<W: std::io::Write>(
+    w: &mut Writer<W>,
+    node: &LayerNode<'_>,
+    cfg: &Config,
+    layer_bboxes: &std::collections::HashMap<mars_types::LayerId, Bbox>,
+    formats: &[ImageFormat],
+) -> Result<(), WmsError> {
+    for child in node.group_children.values() {
+        emit_group(w, child, cfg, layer_bboxes, formats)?;
+    }
+    for child in &node.layer_children {
+        if let Some(layer) = child.leaf {
+            emit_leaf(w, layer, cfg, layer_bboxes, formats)?;
+        }
+    }
+    Ok(())
+}
+
+fn emit_group<W: std::io::Write>(
+    w: &mut Writer<W>,
+    node: &LayerNode<'_>,
+    cfg: &Config,
+    layer_bboxes: &std::collections::HashMap<mars_types::LayerId, Bbox>,
+    formats: &[ImageFormat],
+) -> Result<(), WmsError> {
+    w.write_event(Event::Start(BytesStart::new("Layer"))).map_err(xml_err)?;
+    text_element(w, "Title", &node.title)?;
+    emit_children(w, node, cfg, layer_bboxes, formats)?;
+    w.write_event(Event::End(BytesEnd::new("Layer"))).map_err(xml_err)?;
+    Ok(())
+}
+
+fn emit_leaf<W: std::io::Write>(
+    w: &mut Writer<W>,
+    layer: &mars_config::Layer,
+    cfg: &Config,
+    layer_bboxes: &std::collections::HashMap<mars_types::LayerId, Bbox>,
+    formats: &[ImageFormat],
+) -> Result<(), WmsError> {
+    let mut layer_tag = BytesStart::new("Layer");
+    if layer.enable_get_feature_info {
+        layer_tag.push_attribute(("queryable", "1"));
+    }
+    w.write_event(Event::Start(layer_tag)).map_err(xml_err)?;
+    text_element(w, "Name", layer.name.as_str())?;
+    text_element(w, "Title", &layer.title)?;
+    if !layer.abstract_.is_empty() {
+        text_element(w, "Abstract", &layer.abstract_)?;
+    }
+    let bbox = layer_bboxes.get(&layer.name).copied().or(layer.bbox);
+    if let Some(bb) = bbox {
+        write_bbox(w, cfg.source.native_crs.as_str(), bb)?;
+    }
+    write_default_style_with_legend_url(w, layer, formats)?;
+    w.write_event(Event::End(BytesEnd::new("Layer"))).map_err(xml_err)?;
+    Ok(())
 }
 
 /// 1.1.1 default `<Style>` block. The LegendURL template pins

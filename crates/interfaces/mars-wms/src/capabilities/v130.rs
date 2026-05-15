@@ -7,7 +7,10 @@ use mars_types::{Bbox, ImageFormat, Manifest};
 use quick_xml::Writer;
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
 
-use super::{INFO_FORMATS, configured_formats, derive_layer_bboxes, text_element, union_bbox, xml_err};
+use super::{
+    INFO_FORMATS, LayerNode, build_layer_tree, configured_formats, derive_layer_bboxes, text_element, union_bbox,
+    xml_err,
+};
 use crate::WmsError;
 
 /// Render the WMS 1.3.0 capabilities XML.
@@ -92,33 +95,10 @@ pub(super) fn capabilities_xml(cfg: &Config, manifest: &Manifest) -> Result<Stri
         write_bbox(&mut w, cfg.source.native_crs.as_str(), bb)?;
     }
 
-    // child layers
-    for layer in &cfg.layers {
-        let mut layer_tag = BytesStart::new("Layer");
-        if layer.enable_get_feature_info {
-            layer_tag.push_attribute(("queryable", "1"));
-        }
-        w.write_event(Event::Start(layer_tag)).map_err(xml_err)?;
-        text_element(&mut w, "Name", layer.name.as_str())?;
-        text_element(&mut w, "Title", &layer.title)?;
-        if !layer.abstract_.is_empty() {
-            text_element(&mut w, "Abstract", &layer.abstract_)?;
-        }
-        let bbox = layer_bboxes.get(&layer.name).copied().or(layer.bbox);
-        if let Some(bb) = bbox {
-            write_bbox(&mut w, cfg.source.native_crs.as_str(), bb)?;
-        }
-        if let Some(scale) = &layer.scale {
-            if let Some(min) = scale.min {
-                text_element(&mut w, "MinScaleDenominator", &min.to_string())?;
-            }
-            if let Some(max) = scale.max {
-                text_element(&mut w, "MaxScaleDenominator", &max.to_string())?;
-            }
-        }
-        write_default_style_with_legend_url(&mut w, layer, &advertised_formats)?;
-        w.write_event(Event::End(BytesEnd::new("Layer"))).map_err(xml_err)?;
-    }
+    // child layers: walk the path-derived tree so configured `group` values
+    // surface as nested <Layer> elements with shared root CRS/BoundingBox.
+    let tree = build_layer_tree(&cfg.layers);
+    emit_children(&mut w, &tree, cfg, &layer_bboxes, &advertised_formats)?;
 
     w.write_event(Event::End(BytesEnd::new("Layer"))).map_err(xml_err)?;
     w.write_event(Event::End(BytesEnd::new("Capability")))
@@ -130,6 +110,77 @@ pub(super) fn capabilities_xml(cfg: &Config, manifest: &Manifest) -> Result<Stri
         name: "capabilities",
         reason: e.to_string(),
     })
+}
+
+/// Emit each child of a node: synthesised group children first (sorted
+/// by segment), real layer leaves second (config order). Mirrors the
+/// stable iteration shape in [`LayerNode`]. The root layer's CRS and
+/// BoundingBox are inherited per WMS 1.3.0 spec, so interior group
+/// elements emit only a Title.
+fn emit_children<W: std::io::Write>(
+    w: &mut Writer<W>,
+    node: &LayerNode<'_>,
+    cfg: &Config,
+    layer_bboxes: &std::collections::HashMap<mars_types::LayerId, Bbox>,
+    formats: &[ImageFormat],
+) -> Result<(), WmsError> {
+    for child in node.group_children.values() {
+        emit_group(w, child, cfg, layer_bboxes, formats)?;
+    }
+    for child in &node.layer_children {
+        if let Some(layer) = child.leaf {
+            emit_leaf(w, layer, cfg, layer_bboxes, formats)?;
+        }
+    }
+    Ok(())
+}
+
+fn emit_group<W: std::io::Write>(
+    w: &mut Writer<W>,
+    node: &LayerNode<'_>,
+    cfg: &Config,
+    layer_bboxes: &std::collections::HashMap<mars_types::LayerId, Bbox>,
+    formats: &[ImageFormat],
+) -> Result<(), WmsError> {
+    w.write_event(Event::Start(BytesStart::new("Layer"))).map_err(xml_err)?;
+    text_element(w, "Title", &node.title)?;
+    emit_children(w, node, cfg, layer_bboxes, formats)?;
+    w.write_event(Event::End(BytesEnd::new("Layer"))).map_err(xml_err)?;
+    Ok(())
+}
+
+fn emit_leaf<W: std::io::Write>(
+    w: &mut Writer<W>,
+    layer: &mars_config::Layer,
+    cfg: &Config,
+    layer_bboxes: &std::collections::HashMap<mars_types::LayerId, Bbox>,
+    formats: &[ImageFormat],
+) -> Result<(), WmsError> {
+    let mut layer_tag = BytesStart::new("Layer");
+    if layer.enable_get_feature_info {
+        layer_tag.push_attribute(("queryable", "1"));
+    }
+    w.write_event(Event::Start(layer_tag)).map_err(xml_err)?;
+    text_element(w, "Name", layer.name.as_str())?;
+    text_element(w, "Title", &layer.title)?;
+    if !layer.abstract_.is_empty() {
+        text_element(w, "Abstract", &layer.abstract_)?;
+    }
+    let bbox = layer_bboxes.get(&layer.name).copied().or(layer.bbox);
+    if let Some(bb) = bbox {
+        write_bbox(w, cfg.source.native_crs.as_str(), bb)?;
+    }
+    if let Some(scale) = &layer.scale {
+        if let Some(min) = scale.min {
+            text_element(w, "MinScaleDenominator", &min.to_string())?;
+        }
+        if let Some(max) = scale.max {
+            text_element(w, "MaxScaleDenominator", &max.to_string())?;
+        }
+    }
+    write_default_style_with_legend_url(w, layer, formats)?;
+    w.write_event(Event::End(BytesEnd::new("Layer"))).map_err(xml_err)?;
+    Ok(())
 }
 
 /// Emit a single default `<Style>` block per layer including a relative
@@ -326,6 +377,119 @@ layers:
             !xml.contains("ContactInformation"),
             "expected no contact block when email empty"
         );
+    }
+
+    fn count_event<F: Fn(&[u8]) -> bool>(xml: &str, want_start: bool, pred: F) -> usize {
+        let mut r = Reader::from_str(xml);
+        let mut buf = Vec::new();
+        let mut n = 0;
+        loop {
+            match r.read_event_into(&mut buf).unwrap() {
+                Event::Start(e) if want_start && pred(e.name().as_ref()) => n += 1,
+                Event::End(e) if !want_start && pred(e.name().as_ref()) => n += 1,
+                Event::Eof => break,
+                _ => {}
+            }
+            buf.clear();
+        }
+        n
+    }
+
+    fn extract_titles(xml: &str) -> Vec<String> {
+        let mut r = Reader::from_str(xml);
+        let mut buf = Vec::new();
+        let mut titles = Vec::new();
+        let mut in_title = false;
+        loop {
+            match r.read_event_into(&mut buf).unwrap() {
+                Event::Start(e) if e.name().as_ref() == b"Title" => in_title = true,
+                Event::End(e) if e.name().as_ref() == b"Title" => in_title = false,
+                Event::Text(t) if in_title => titles.push(String::from_utf8_lossy(&t.into_inner()).to_string()),
+                Event::Eof => break,
+                _ => {}
+            }
+            buf.clear();
+        }
+        titles
+    }
+
+    fn cfg_with_groups() -> Config {
+        let yaml = r#"
+service: { name: t, title: "Root", abstract: "A", contact_email: "" }
+source: { type: postgis, dsn: "postgres://x", native_crs: EPSG:25832 }
+artifacts:
+  store: { type: fs, path: /tmp }
+  cache: { path: /tmp/c, max_size: 1GiB }
+scales:
+  bands: [{ name: hi, max_denom_exclusive: 25000 }]
+cells:
+  grid: regular
+  origin: [0, 0]
+  size_per_band: { hi: 1024m }
+interfaces: {}
+reprojection:
+  allowlist: [EPSG:25832]
+layers:
+  - { name: ungrouped, title: "Ungrouped", type: polygon, sources: [{ from: u, geometry_column: g }] }
+  - { name: basemap, title: "Basemap", type: polygon, group: "/Basis", sources: [{ from: b, geometry_column: g }] }
+  - { name: bygning, title: "Bygning", type: polygon, group: "/Adresse/Bygning", sources: [{ from: y, geometry_column: g }] }
+  - { name: park, title: "Park", type: polygon, group: "/Basis", sources: [{ from: p, geometry_column: g }] }
+"#;
+        serde_yaml_ng::from_str(yaml).unwrap()
+    }
+
+    /// 4 leaves + 1 root + 2 distinct group paths (/Basis, /Adresse/Bygning).
+    /// Synthesised parents: Basis (1), Adresse (1), Adresse/Bygning (1). So
+    /// total <Layer> opens = root(1) + groups(3) + leaves(4) = 8.
+    #[test]
+    fn nested_groups_emit_intermediate_layer_elements() {
+        let cfg = cfg_with_groups();
+        let m = Manifest::empty(1, cfg.service.name.clone());
+        let xml = capabilities_xml(&cfg, &m).unwrap();
+        assert_eq!(count_event(&xml, true, |n| n == b"Layer"), 8);
+        assert_eq!(count_event(&xml, false, |n| n == b"Layer"), 8);
+    }
+
+    /// Synthesised parents use the path segment as Title. Real leaves use
+    /// the configured layer.title. The service root contributes its own
+    /// Title before any layer/group is emitted.
+    #[test]
+    fn nested_group_titles_appear_in_tree_order() {
+        let cfg = cfg_with_groups();
+        let m = Manifest::empty(1, cfg.service.name.clone());
+        let xml = capabilities_xml(&cfg, &m).unwrap();
+        let titles = extract_titles(&xml);
+        // service title appears in <Service><Title> AND in the root <Layer>.
+        // synthesised group children come first, sorted alphabetically by
+        // segment ("Adresse" before "Basis"). Real-leaf children land last
+        // (ungrouped is the only direct-root leaf).
+        assert!(titles.contains(&"Adresse".into()), "Adresse parent title: {titles:?}");
+        assert!(titles.contains(&"Bygning".into()), "Bygning parent title: {titles:?}");
+        assert!(titles.contains(&"Basis".into()), "Basis parent title: {titles:?}");
+        assert!(titles.contains(&"Bygning".into()) && titles.contains(&"Basemap".into()));
+        let adresse = titles.iter().position(|t| t == "Adresse").unwrap();
+        let basis = titles.iter().position(|t| t == "Basis").unwrap();
+        assert!(adresse < basis, "synthesised parents must sort alphabetically");
+    }
+
+    /// Real leaves inside groups still carry their <Name> so GetMap can
+    /// address them. Synthesised parents have no <Name> -> not GetMap-able.
+    #[test]
+    fn synthesised_parents_omit_name_real_leaves_keep_it() {
+        let cfg = cfg_with_groups();
+        let m = Manifest::empty(1, cfg.service.name.clone());
+        let xml = capabilities_xml(&cfg, &m).unwrap();
+        for name in ["basemap", "bygning", "park", "ungrouped"] {
+            assert!(
+                xml.contains(&format!("<Name>{name}</Name>")),
+                "leaf <Name>{name}</Name> missing"
+            );
+        }
+        // synthesised group names ("Basis", "Adresse", "Bygning") must NOT
+        // appear as <Name>. Title is fine; Name would imply GetMap addressable.
+        assert!(!xml.contains("<Name>Basis</Name>"));
+        assert!(!xml.contains("<Name>Adresse</Name>"));
+        assert!(!xml.contains("<Name>Bygning</Name>"));
     }
 
     #[test]
