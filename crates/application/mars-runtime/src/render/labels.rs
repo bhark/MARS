@@ -11,7 +11,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use mars_artifact::{ArtifactReader, LabelCandidate, LabelShape, SectionKind, decode_label_candidates};
 use mars_render_port::{DrawOp, Renderer};
-use mars_style::{LabelStyle, Placement, Stylesheet};
+use mars_style::{AnchorPosition, LabelStyle, Placement, Stylesheet};
 use mars_types::BindingMetadata;
 
 use crate::{RenderPlan, RuntimeError};
@@ -24,14 +24,40 @@ use super::{map_artifact_err, map_proj_err};
 /// projected into request-CRS pixel space. carries enough state for the
 /// collision pass to keep or drop it without redoing the projection.
 pub(super) struct PreparedLabel {
-    anchor_px: (f32, f32),
+    /// raw geometry-anchor in pixel space, pre-POSITION, pre-OFFSET. the
+    /// collision pass adds the chosen placement's label-local offset (after
+    /// rotating by `angle_rad`) to obtain the final baseline anchor.
+    raw_anchor_px: (f32, f32),
     text: String,
     style: Arc<LabelStyle>,
     priority: u16,
-    bbox_px: (f32, f32, f32, f32),
-    /// counter-clockwise rotation in radians; non-zero for line labels
-    /// sampled along a polyline.
+    /// counter-clockwise rotation in radians; non-zero for rotated labels
+    /// (line tangent or explicit ANGLE).
     angle_rad: f32,
+    /// resolved POSITION (with OFFSET folded in) - one fixed candidate or
+    /// an AUTO set the collision pass tries in order.
+    placement: PreparedPlacement,
+}
+
+/// resolved POSITION decision for a single `PreparedLabel`. `Fixed` carries
+/// the only bbox the collision pass should consider; `Auto` carries the
+/// ordered set of candidate placements to try.
+pub(super) enum PreparedPlacement {
+    Fixed {
+        anchor_offset_px: (f32, f32),
+        bbox_px: (f32, f32, f32, f32),
+    },
+    Auto {
+        candidates: Vec<PositionCandidate>,
+    },
+}
+
+/// one POSITION candidate inside [`PreparedPlacement::Auto`]. carries the
+/// label-local-frame offset from `raw_anchor_px` to the would-be baseline
+/// anchor, plus the bbox the collision pass tests against.
+pub(super) struct PositionCandidate {
+    anchor_offset_px: (f32, f32),
+    bbox_px: (f32, f32, f32, f32),
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -121,15 +147,14 @@ pub(super) fn prepare_labels(
         // angle resolution: explicit numeric ANGLE wins over the
         // placement-derived angle (which is zero for the point/polygon path).
         let angle_rad = effective_angle_rad(&style, 0.0);
-        let anchor_px = apply_offset(raw_anchor_px, style.offset_px, angle_rad);
-        let bbox_px = label_bbox(anchor_px, &metrics, angle_rad);
+        let placement = build_placement(raw_anchor_px, &metrics, &style, angle_rad);
         out.push(PreparedLabel {
-            anchor_px,
+            raw_anchor_px,
             text: c.text,
             style,
             priority: c.priority,
-            bbox_px,
             angle_rad,
+            placement,
         });
     }
     Ok(out)
@@ -182,7 +207,6 @@ fn sample_polyline_labels(
         Err(_) => return,
     };
     let half_advance = metrics.advance_x * 0.5;
-    let half_h = metrics.ascent.max(metrics.descent);
     if metrics.advance_x <= 0.0 {
         return;
     }
@@ -230,15 +254,14 @@ fn sample_polyline_labels(
         if !inside_pixel_canvas(centre.pos, plan.width, plan.height) {
             continue;
         }
-        let anchor_px = apply_offset(centre.pos, style.offset_px, angle);
-        let bbox_px = rotated_label_bbox(anchor_px, half_advance, half_h, angle);
+        let placement = build_placement(centre.pos, &metrics, style, angle);
         out.push(PreparedLabel {
-            anchor_px,
+            raw_anchor_px: centre.pos,
             text: text.to_owned(),
             style: style.clone(),
             priority,
-            bbox_px,
             angle_rad: angle,
+            placement,
         });
     }
 }
@@ -419,6 +442,82 @@ fn effective_angle_rad(style: &LabelStyle, placement_angle: f32) -> f32 {
     }
 }
 
+/// label-local-frame offset from the geometry point to the baseline anchor
+/// for a given POSITION keyword. mapserver semantics: POSITION names where
+/// the label sits *relative to the point*, so e.g. `Uc` puts the label
+/// above the point with its bottom edge through the point.
+///
+/// pixel y grows downward; positive y in label-local frame is "below the
+/// baseline", which matches descent.
+fn anchor_offset_for_position(pos: AnchorPosition, m: &mars_render_port::TextMetrics) -> (f32, f32) {
+    let half_w = m.advance_x * 0.5;
+    // vertical centre of the bbox relative to baseline, in label-local frame.
+    // bbox spans [-ascent, +descent]; midpoint is (descent - ascent) / 2.
+    let centre_y = (m.descent - m.ascent) * 0.5;
+    match pos {
+        AnchorPosition::Ul => (-half_w, -m.descent),
+        AnchorPosition::Uc => (0.0, -m.descent),
+        AnchorPosition::Ur => (half_w, -m.descent),
+        AnchorPosition::Cl => (-half_w, -centre_y),
+        AnchorPosition::Cc | AnchorPosition::Auto => (0.0, -centre_y),
+        AnchorPosition::Cr => (half_w, -centre_y),
+        AnchorPosition::Ll => (-half_w, m.ascent),
+        AnchorPosition::Lc => (0.0, m.ascent),
+        AnchorPosition::Lr => (half_w, m.ascent),
+    }
+}
+
+/// POSITION AUTO candidate order. mapserver's AUTO walks the perimeter
+/// trying for a non-colliding placement; CC is skipped because it sits on
+/// the geometry point itself and offers no escape from overlap.
+const AUTO_POSITIONS: [AnchorPosition; 8] = [
+    AnchorPosition::Uc,
+    AnchorPosition::Lc,
+    AnchorPosition::Cr,
+    AnchorPosition::Cl,
+    AnchorPosition::Ur,
+    AnchorPosition::Ll,
+    AnchorPosition::Ul,
+    AnchorPosition::Lr,
+];
+
+/// build the [`PreparedPlacement`] for a candidate from its style POSITION
+/// keyword + OFFSET. all bboxes are in canvas frame and ready for the
+/// collision pass; the chosen offset gets re-applied via [`apply_offset`]
+/// at emit time so the final anchor and bbox stay consistent.
+fn build_placement(
+    raw_anchor_px: (f32, f32),
+    metrics: &mars_render_port::TextMetrics,
+    style: &LabelStyle,
+    angle_rad: f32,
+) -> PreparedPlacement {
+    let make = |pos: AnchorPosition| -> PositionCandidate {
+        // POSITION offset is in label-local frame; OFFSET adds on top, also
+        // in label-local frame (rotates with ANGLE per mapserver semantics).
+        let pos_off = anchor_offset_for_position(pos, metrics);
+        let local_offset = (pos_off.0 + style.offset_px.0, pos_off.1 + style.offset_px.1);
+        let final_anchor = apply_offset(raw_anchor_px, local_offset, angle_rad);
+        let bbox_px = label_bbox(final_anchor, metrics, angle_rad);
+        PositionCandidate {
+            anchor_offset_px: local_offset,
+            bbox_px,
+        }
+    };
+    match style.position {
+        AnchorPosition::Auto => {
+            let candidates = AUTO_POSITIONS.iter().copied().map(make).collect();
+            PreparedPlacement::Auto { candidates }
+        }
+        fixed => {
+            let c = make(fixed);
+            PreparedPlacement::Fixed {
+                anchor_offset_px: c.anchor_offset_px,
+                bbox_px: c.bbox_px,
+            }
+        }
+    }
+}
+
 /// shift an anchor by the style's OFFSET, in canvas frame when the label
 /// is axis-aligned, in label-local frame (rotates with the run) otherwise.
 /// matches mapserver semantics for `OFFSET <x> <y>` under non-zero ANGLE.
@@ -440,7 +539,9 @@ fn apply_offset(anchor: (f32, f32), offset_px: (f32, f32), angle_rad: f32) -> (f
 /// the surviving `DrawOp::Label` ops in placement order. each placed label
 /// remembers its `min_distance`; collision against a candidate uses the
 /// max of the two values, so the wider neighbour wins per pair (mirrors
-/// mapserver's `MINDISTANCE`, post-7.2 pixel semantics).
+/// mapserver's `MINDISTANCE`, post-7.2 pixel semantics). AUTO-positioned
+/// labels try each candidate placement in mapserver order; the first
+/// non-colliding one is placed.
 pub(super) fn collide_and_emit_labels(mut labels: Vec<PreparedLabel>, _w: u32, _h: u32) -> Vec<DrawOp> {
     if labels.is_empty() {
         return Vec::new();
@@ -451,24 +552,59 @@ pub(super) fn collide_and_emit_labels(mut labels: Vec<PreparedLabel>, _w: u32, _
     let mut ops = Vec::with_capacity(labels.len());
     for label in labels {
         let cand_md = label.style.min_distance.max(0.0);
-        if placed
-            .iter()
-            .any(|p| bboxes_within(label.bbox_px, p.bbox, cand_md.max(p.min_distance)))
-        {
+        let chosen = pick_placement(&label.placement, cand_md, &placed);
+        let Some((anchor_offset, bbox_used)) = chosen else {
             continue;
-        }
+        };
+        let anchor = apply_offset(label.raw_anchor_px, anchor_offset, label.angle_rad);
         placed.push(PlacedFootprint {
-            bbox: label.bbox_px,
+            bbox: bbox_used,
             min_distance: cand_md,
         });
         ops.push(DrawOp::Label {
-            anchor: label.anchor_px,
+            anchor,
             text: label.text,
             style: label.style,
             angle_rad: label.angle_rad,
         });
     }
     ops
+}
+
+/// chosen placement output: `(label-local-frame anchor offset, bbox in
+/// canvas frame)`.
+type ChosenPlacement = ((f32, f32), (f32, f32, f32, f32));
+
+/// pick the first non-colliding candidate from a [`PreparedPlacement`].
+/// returns `(label-local-frame anchor offset, bbox in canvas frame)` for
+/// the chosen placement, or `None` when no candidate fits.
+fn pick_placement(
+    placement: &PreparedPlacement,
+    cand_md: f32,
+    placed: &[PlacedFootprint],
+) -> Option<ChosenPlacement> {
+    match placement {
+        PreparedPlacement::Fixed {
+            anchor_offset_px,
+            bbox_px,
+        } => {
+            if collides(*bbox_px, cand_md, placed) {
+                None
+            } else {
+                Some((*anchor_offset_px, *bbox_px))
+            }
+        }
+        PreparedPlacement::Auto { candidates } => candidates
+            .iter()
+            .find(|c| !collides(c.bbox_px, cand_md, placed))
+            .map(|c| (c.anchor_offset_px, c.bbox_px)),
+    }
+}
+
+fn collides(bbox: (f32, f32, f32, f32), cand_md: f32, placed: &[PlacedFootprint]) -> bool {
+    placed
+        .iter()
+        .any(|p| bboxes_within(bbox, p.bbox, cand_md.max(p.min_distance)))
 }
 
 struct PlacedFootprint {
@@ -544,7 +680,7 @@ mod tests {
 
     fn prepared(bbox: (f32, f32, f32, f32), priority: u16, min_distance: f32) -> PreparedLabel {
         PreparedLabel {
-            anchor_px: (0.0, 0.0),
+            raw_anchor_px: (0.0, 0.0),
             text: String::new(),
             style: Arc::new(LabelStyle {
                 font_family: String::new(),
@@ -553,15 +689,28 @@ mod tests {
                 halo: None,
                 priority,
                 min_distance,
-                position: mars_style::AnchorPosition::default(),
+                position: AnchorPosition::default(),
                 offset_px: (0.0, 0.0),
                 angle_deg: None,
                 partials: false,
                 force: false,
             }),
             priority,
-            bbox_px: bbox,
             angle_rad: 0.0,
+            placement: PreparedPlacement::Fixed {
+                anchor_offset_px: (0.0, 0.0),
+                bbox_px: bbox,
+            },
+        }
+    }
+
+    fn metrics_8x4() -> mars_render_port::TextMetrics {
+        // half_w = 4; ascent + descent = 4 vertical; matches a hand-friendly
+        // 8x4-pixel bbox centred at the baseline anchor.
+        mars_render_port::TextMetrics {
+            advance_x: 8.0,
+            ascent: 3.0,
+            descent: 1.0,
         }
     }
 
@@ -602,6 +751,131 @@ mod tests {
         let b = prepared((20.0, 0.0, 30.0, 10.0), 5, 12.0);
         let ops = collide_and_emit_labels(vec![a, b], 100, 100);
         assert_eq!(ops.len(), 1, "candidate's wider mindistance must apply");
+    }
+
+    #[test]
+    fn anchor_offset_resolves_each_position_keyword() {
+        let m = metrics_8x4();
+        // half_w = 4, ascent = 3, descent = 1; centre_y = -1
+        assert_eq!(anchor_offset_for_position(AnchorPosition::Ul, &m), (-4.0, -1.0));
+        assert_eq!(anchor_offset_for_position(AnchorPosition::Uc, &m), (0.0, -1.0));
+        assert_eq!(anchor_offset_for_position(AnchorPosition::Ur, &m), (4.0, -1.0));
+        assert_eq!(anchor_offset_for_position(AnchorPosition::Cl, &m), (-4.0, 1.0));
+        assert_eq!(anchor_offset_for_position(AnchorPosition::Cc, &m), (0.0, 1.0));
+        assert_eq!(anchor_offset_for_position(AnchorPosition::Cr, &m), (4.0, 1.0));
+        assert_eq!(anchor_offset_for_position(AnchorPosition::Ll, &m), (-4.0, 3.0));
+        assert_eq!(anchor_offset_for_position(AnchorPosition::Lc, &m), (0.0, 3.0));
+        assert_eq!(anchor_offset_for_position(AnchorPosition::Lr, &m), (4.0, 3.0));
+        // Auto falls back to CC for the per-position helper; the candidate
+        // walk lives in `build_placement`.
+        assert_eq!(anchor_offset_for_position(AnchorPosition::Auto, &m), (0.0, 1.0));
+    }
+
+    #[test]
+    fn auto_position_walk_skips_cc_and_covers_eight_perimeter_positions() {
+        assert_eq!(AUTO_POSITIONS.len(), 8);
+        assert!(!AUTO_POSITIONS.contains(&AnchorPosition::Cc));
+        assert!(!AUTO_POSITIONS.contains(&AnchorPosition::Auto));
+        // each entry appears exactly once.
+        for p in AUTO_POSITIONS {
+            let count = AUTO_POSITIONS.iter().filter(|q| **q == p).count();
+            assert_eq!(count, 1, "duplicate AUTO candidate: {p:?}");
+        }
+    }
+
+    #[test]
+    fn build_placement_auto_picks_first_non_colliding_candidate() {
+        // 1 candidate placed at the geometry point's UC position (label
+        // sits above the point). build a second label with AUTO and a
+        // bbox that collides at UC but not at LC. expect the second to
+        // land in the LC slot.
+        let m = metrics_8x4();
+        let style_uc = Arc::new(LabelStyle {
+            font_family: String::new(),
+            font_size: 12.0,
+            fill: mars_style::Colour::rgba(0, 0, 0, 255),
+            halo: None,
+            priority: 0,
+            min_distance: 0.0,
+            position: AnchorPosition::Uc,
+            offset_px: (0.0, 0.0),
+            angle_deg: None,
+            partials: false,
+            force: false,
+        });
+        let mut style_auto = (*style_uc).clone();
+        style_auto.position = AnchorPosition::Auto;
+        let style_auto = Arc::new(style_auto);
+        let first = PreparedLabel {
+            raw_anchor_px: (50.0, 50.0),
+            text: String::new(),
+            style: style_uc.clone(),
+            priority: 10,
+            angle_rad: 0.0,
+            placement: build_placement((50.0, 50.0), &m, &style_uc, 0.0),
+        };
+        let second = PreparedLabel {
+            raw_anchor_px: (50.0, 50.0),
+            text: String::new(),
+            style: style_auto.clone(),
+            priority: 5,
+            angle_rad: 0.0,
+            placement: build_placement((50.0, 50.0), &m, &style_auto, 0.0),
+        };
+        let ops = collide_and_emit_labels(vec![first, second], 200, 200);
+        assert_eq!(ops.len(), 2, "AUTO must find an alternate slot");
+        // ensure the AUTO label landed below the point (Lc), not at the
+        // same UC slot as the placed one. Lc anchor_y is raw + ascent (3.0)
+        // → 50 + 3 = 53; Uc would have been 50 - descent (1.0) = 49.
+        if let DrawOp::Label { anchor, .. } = &ops[1] {
+            assert!(anchor.1 > 50.0, "AUTO should escape downward; got {anchor:?}");
+        } else {
+            panic!("expected Label op");
+        }
+    }
+
+    #[test]
+    fn build_placement_auto_drops_when_all_candidates_collide() {
+        // place a giant occupier covering the whole search area, then drop
+        // an AUTO candidate at the same point. no slot fits.
+        let m = metrics_8x4();
+        let style_force = Arc::new(LabelStyle {
+            font_family: String::new(),
+            font_size: 12.0,
+            fill: mars_style::Colour::rgba(0, 0, 0, 255),
+            halo: None,
+            priority: 10,
+            min_distance: 0.0,
+            position: AnchorPosition::Cc,
+            offset_px: (0.0, 0.0),
+            angle_deg: None,
+            partials: false,
+            force: false,
+        });
+        let mut style_auto = (*style_force).clone();
+        style_auto.position = AnchorPosition::Auto;
+        let style_auto = Arc::new(style_auto);
+        let occupier = PreparedLabel {
+            raw_anchor_px: (100.0, 100.0),
+            text: String::new(),
+            style: style_force.clone(),
+            priority: 100,
+            angle_rad: 0.0,
+            placement: PreparedPlacement::Fixed {
+                anchor_offset_px: (0.0, 0.0),
+                bbox_px: (50.0, 50.0, 150.0, 150.0),
+            },
+        };
+        let candidate = PreparedLabel {
+            raw_anchor_px: (100.0, 100.0),
+            text: String::new(),
+            style: style_auto.clone(),
+            priority: 5,
+            angle_rad: 0.0,
+            placement: build_placement((100.0, 100.0), &m, &style_auto, 0.0),
+        };
+        let ops = collide_and_emit_labels(vec![occupier, candidate], 200, 200);
+        assert_eq!(ops.len(), 1, "all AUTO candidates inside the occupier must drop");
     }
 
     #[test]
