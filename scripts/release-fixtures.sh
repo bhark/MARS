@@ -1,22 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# maintainer-only helper: cut a fixture GitHub Release.
+# maintainer-only helper: cut the parity OSM fixture GitHub Release. the
+# e2e suite shares this dump (see tests/e2e/scripts/fetch-fixture.sh and
+# tests/integration/fixtures/e2e-osm/derive-e2e.sql), so there is exactly
+# one public fixture asset.
 #
-# computes the sha256, writes the in-repo manifest, then calls `gh release
-# create` with the asset and the appropriate release notes (parity carries
-# ODbL attribution; e2e is a brief schema pointer).
+# computes the sha256, writes the in-repo manifest, then calls
+# `gh release create` with the asset and ODbL attribution notes.
 #
 # usage:
-#   scripts/release-fixtures.sh parity v1 --file ~/parity/osm-parity.sql.gz
-#   scripts/release-fixtures.sh e2e v1 --file ~/e2e/local-map-subset.sql.gz
+#   scripts/release-fixtures.sh v1 --file ~/mars-fixtures/osm-parity.sql.gz
 #
 # flags:
-#   --file PATH    absolute path to the local dump (defaults documented below)
+#   --file PATH    absolute path to the local dump (defaults to
+#                  ${HOME}/mars-fixtures/osm-parity.sql.gz)
 #   --dry-run      do everything except create the Release. manifest + notes
 #                  are still written so they can be reviewed before publishing.
-#   --no-push      skip `git push` of the manifest commit (script never pushes
-#                  on its own; this flag is reserved for a future autopush mode)
 #
 # after the Release is live the script prints the suggested commit command
 # for the updated manifest. the maintainer runs that, reviews, and pushes.
@@ -26,19 +26,16 @@ REPO="bhark/MARS"
 
 usage() {
   cat <<EOF
-usage: scripts/release-fixtures.sh <kind> <version> [--file PATH] [--dry-run]
+usage: scripts/release-fixtures.sh <version> [--file PATH] [--dry-run]
 
-  <kind>      'parity' or 'e2e'
   <version>   tag suffix, e.g. v1, v2, v3-rc1
 
-  --file PATH absolute path to the local dump file. defaults:
-                parity: \${HOME}/mars-fixtures/osm-parity.sql.gz
-                e2e:    \${HOME}/mars-fixtures/local-map-subset.sql.gz
+  --file PATH absolute path to the local dump. default:
+                \${HOME}/mars-fixtures/osm-parity.sql.gz
   --dry-run   skip the actual 'gh release create' call
 EOF
 }
 
-KIND=""
 VERSION=""
 FILE=""
 DRY_RUN=0
@@ -48,15 +45,13 @@ while [[ $# -gt 0 ]]; do
     -h|--help) usage; exit 0 ;;
     --file) FILE="$2"; shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
-    --no-push) shift ;;
     -*)
       echo "unknown flag: $1" >&2
       usage >&2
       exit 2
       ;;
     *)
-      if [[ -z "${KIND}" ]]; then KIND="$1"
-      elif [[ -z "${VERSION}" ]]; then VERSION="$1"
+      if [[ -z "${VERSION}" ]]; then VERSION="$1"
       else echo "unexpected positional arg: $1" >&2; usage >&2; exit 2
       fi
       shift
@@ -64,31 +59,16 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "${KIND}" || -z "${VERSION}" ]]; then
+if [[ -z "${VERSION}" ]]; then
   usage >&2
   exit 2
 fi
 
-case "${KIND}" in
-  parity)
-    FILE_KEY="osm-parity.sql.gz"
-    MANIFEST="${ROOT}/tests/parity/fixtures/osm/manifest.sha256"
-    DEFAULT_FILE="${HOME}/mars-fixtures/osm-parity.sql.gz"
-    TAG_PREFIX="parity-fixtures"
-    RELEASE_TITLE="Parity fixtures ${VERSION}"
-    ;;
-  e2e)
-    FILE_KEY="local-map-subset.sql.gz"
-    MANIFEST="${ROOT}/tests/integration/fixtures/local-map-subset/manifest.sha256"
-    DEFAULT_FILE="${HOME}/mars-fixtures/local-map-subset.sql.gz"
-    TAG_PREFIX="e2e-fixtures"
-    RELEASE_TITLE="E2E fixtures ${VERSION}"
-    ;;
-  *)
-    echo "unknown kind: ${KIND} (expected 'parity' or 'e2e')" >&2
-    exit 2
-    ;;
-esac
+FILE_KEY="osm-parity.sql.gz"
+MANIFEST="${ROOT}/tests/parity/fixtures/osm/manifest.sha256"
+DEFAULT_FILE="${HOME}/mars-fixtures/osm-parity.sql.gz"
+TAG_PREFIX="parity-fixtures"
+RELEASE_TITLE="Parity fixtures ${VERSION}"
 
 FILE="${FILE:-${DEFAULT_FILE}}"
 TAG="${TAG_PREFIX}-${VERSION}"
@@ -122,38 +102,20 @@ URL="https://github.com/${REPO}/releases/download/${TAG}/${FILE_KEY}"
 NOTES_FILE="$(mktemp -t mars-fixture-notes.XXXXXX.md)"
 trap 'rm -f "${NOTES_FILE}"' EXIT
 
-case "${KIND}" in
-  parity)
-    cat > "${NOTES_FILE}" <<EOF
+cat > "${NOTES_FILE}" <<EOF
 \`${FILE_KEY}\` contains data (C) OpenStreetMap contributors, available
 under the Open Database License (ODbL). See
 https://www.openstreetmap.org/copyright for the full license.
 
 Source: Liechtenstein extract, processed with \`osm2pgsql\`, captured as
 \`pg_dump --format=plain | gzip\`. Schema is osm2pgsql's native
-\`planet_osm_*\` layout; the parity harness layers derived
-\`parity_*\` materialised tables on top via
-\`tests/parity/fixtures/osm/02-views.sql\`.
-
-Consumed by \`tests/parity/tests/osm.rs\` through
-\`tests/parity/scripts/fetch-fixture.sh\`.
+\`planet_osm_*\` layout. Two consumers layer derived materialised tables
+on top:
+  - parity: \`tests/parity/fixtures/osm/02-views.sql\` -> \`parity_*\`
+  - e2e:    \`tests/integration/fixtures/e2e-osm/derive-e2e.sql\` -> \`e2e_source.*\` (in EPSG:25832)
 
 sha256: \`${SHA}\`
 EOF
-    ;;
-  e2e)
-    cat > "${NOTES_FILE}" <<EOF
-\`${FILE_KEY}\` is a hand-authored synthetic 6-layer dataset
-(land/water/settlements/roads/buildings/waterways, EPSG:25832) consumed by
-the kind-based e2e suite.
-
-See \`tests/integration/fixtures/local-map-subset/README.md\` for the
-required schema contract.
-
-sha256: \`${SHA}\`
-EOF
-    ;;
-esac
 
 write_manifest() {
   local target="$1"
@@ -167,7 +129,6 @@ EOF
 
 echo
 echo "--- fixture release plan ---"
-printf 'kind:      %s\n' "${KIND}"
 printf 'file:      %s\n' "${FILE}"
 printf 'sha256:    %s\n' "${SHA}"
 printf 'tag:       %s\n' "${TAG}"
@@ -200,9 +161,10 @@ Release published: https://github.com/${REPO}/releases/tag/${TAG}
 next: commit the updated manifest. suggested:
 
   git add ${MANIFEST}
-  git commit -m "chore(${KIND}): pin ${FILE_KEY%.sql.gz} fixture to ${TAG}"
+  git commit -m "chore(parity): pin osm fixture to ${TAG}"
 
-then run scripts/run-${KIND}.sh once to verify the SHA round-trips against
-the published asset. if it doesn't, re-run this script with a bumped version
-(the published asset is byte-pinned; never overwrite an existing tag's asset).
+then run scripts/run-parity.sh and scripts/run-e2e.sh once to verify the
+SHA round-trips against the published asset. if it doesn't, re-run this
+script with a bumped version (the published asset is byte-pinned; never
+overwrite an existing tag's asset).
 EOF
