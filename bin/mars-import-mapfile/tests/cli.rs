@@ -112,6 +112,11 @@ fn service_metadata_fixture_matches() {
 }
 
 #[test]
+fn layer_metadata_fixture_matches() {
+    assert_fixture_matches("layer_metadata");
+}
+
+#[test]
 fn strict_exits_two_on_unsupported() {
     let out = Command::new(bin_path())
         .arg("--strict")

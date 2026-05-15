@@ -42,11 +42,13 @@ pub(crate) fn emit_layer(r: ResolvedLayer, skel: &mut Skeleton) {
     skel.layers.push(LayerSkeleton {
         name: r.name,
         title: r.title,
+        abstract_: r.abstract_,
         geom_kind: r.geom_kind,
         sources,
         classes,
         label,
         group: r.group_path,
+        wms: r.wms,
     });
 }
 

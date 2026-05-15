@@ -33,6 +33,7 @@ use self::map_metadata::parse_map_metadata;
 use self::resolved::resolve_symbol;
 use self::symbol::parse_symbol;
 
+mod layer_metadata;
 mod map_metadata;
 
 /// keywords whose presence we don't translate yet. some are block openers,

@@ -1,0 +1,37 @@
+# layer-level METADATA fixture: per-layer wms_* keys flowing through the
+# importer into the per-layer service block. Exercises wms_title/abstract
+# overrides, wms_keywordlist, wms_metadataurl_*, wms_opaque, wms_srs override,
+# wms_enable_request (full RequestGating), ows_include_items, wms_attribution_*,
+# wms_authorityurl_*, wms_identifier_*.
+MAP
+  NAME "layer_meta"
+  TITLE "Layer Metadata Coverage"
+
+  LAYER
+    NAME "roads"
+    TYPE LINE
+    DATA "geom FROM roads"
+    METADATA
+      "wms_title"           "Road network"
+      "wms_abstract"        "Major and minor roads"
+      "wms_keywordlist"     "roads, transport, network"
+      "wms_opaque"          "0"
+      "wms_srs"             "EPSG:25832 EPSG:3857"
+      "wms_enable_request"  "* !GetStyles !DescribeLayer"
+      "ows_include_items"   "name,kind"
+      "wms_metadataurl_type"   "ISO19115:2003"
+      "wms_metadataurl_format" "text/xml"
+      "wms_metadataurl_href"   "https://example.org/md/roads.xml"
+      "wms_attribution_title"             "Acme Roads"
+      "wms_attribution_onlineresource"    "https://acme.example/"
+      "wms_attribution_logourl_format"    "image/png"
+      "wms_attribution_logourl_href"      "https://acme.example/logo.png"
+      "wms_attribution_logourl_width"     "120"
+      "wms_attribution_logourl_height"    "80"
+      "wms_authorityurl_name"    "isri"
+      "wms_authorityurl_href"    "https://example.org/isri"
+      "wms_identifier_authority" "isri"
+      "wms_identifier_value"     "urn:layer:roads"
+    END
+  END
+END

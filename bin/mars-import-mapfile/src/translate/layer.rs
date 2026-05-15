@@ -21,6 +21,7 @@ use crate::translate::{is_unsupported, normalize_n_plus_one};
 use super::class::{ParsedClass, parse_class};
 use super::emit::emit_layer;
 use super::label::{ParsedLabel, parse_label};
+use super::layer_metadata::{LayerMetadata, parse_layer_metadata_block};
 use super::resolved::resolve_layer;
 
 #[derive(Debug, Default)]
@@ -47,14 +48,14 @@ pub(crate) struct ParsedLayer {
     /// When both `group` and `wms_layer_group` are present, the hierarchical
     /// form wins at resolve time (MapServer convention).
     pub wms_layer_group: Option<String>,
-    /// `STATUS OFF` - layer is disabled. Combined with `wms_only`, this is
-    /// the abstract-parent-layer pattern that gets absorbed into the
-    /// path-based capabilities tree by [`super::resolved::resolve_layer`].
+    /// `STATUS OFF` - layer is disabled. Combined with a request_gating
+    /// denial on GetMap, this is the abstract-parent-layer pattern that gets
+    /// absorbed into the path-based capabilities tree by
+    /// [`super::resolved::resolve_layer`].
     pub status_off: bool,
-    /// `METADATA { wms_enable_request "GetCapabilities !*" }` (or
-    /// `... !GetMap`) - the layer should appear in capabilities but never
-    /// be GetMap-able.
-    pub wms_only: bool,
+    /// Per-layer WMS metadata harvested from a `METADATA { ... }` block.
+    /// Drives the expanded service-side per-layer fields the YAML emits.
+    pub wms_metadata: LayerMetadata,
 }
 
 pub(crate) fn handle_layer(
@@ -164,7 +165,9 @@ pub(crate) fn parse_layer(body: &[Token]) -> ParsedLayer {
             }
             LayerDirective::Metadata(_t) => {
                 if let Some(r) = block_range(body, i) {
-                    parse_layer_metadata(&body[r.start + 1..r.end - 1], &mut p);
+                    let inner = &body[r.start + 1..r.end - 1];
+                    parse_layer_metadata(inner, &mut p);
+                    p.wms_metadata = parse_layer_metadata_block(inner);
                     i = r.end;
                     continue;
                 }
@@ -197,27 +200,16 @@ pub(crate) fn parse_layer(body: &[Token]) -> ParsedLayer {
     p
 }
 
-/// Layer-scoped METADATA parser. We only care about two WMS-side keys:
-/// `wms_layer_group` (hierarchical group path) and `wms_enable_request`
-/// (used to recognise the abstract-parent layer pattern). Other keys are
-/// absorbed without warning - mapfile METADATA is a free-form k/v bag.
+/// Layer-scoped METADATA pre-pass: harvests the keys that affect parse-time
+/// hierarchy decisions (`wms_layer_group`). The richer WMS metadata bag is
+/// parsed separately by [`parse_layer_metadata_block`] and lives on
+/// `p.wms_metadata`.
 fn parse_layer_metadata(body: &[Token], p: &mut ParsedLayer) {
     for t in body {
         let key = t.keyword.to_ascii_lowercase();
         let value = t.args.first().map(String::as_str).unwrap_or("");
-        match key.as_str() {
-            "wms_layer_group" if p.wms_layer_group.is_none() => {
-                p.wms_layer_group = Some(value.to_string());
-            }
-            "wms_enable_request" => {
-                // `!GetMap` or a wildcard `!*` reduces the layer to a
-                // capabilities-only entry. We collapse both into wms_only.
-                let v = value.to_ascii_lowercase();
-                if v.contains("!getmap") || v.contains("!*") {
-                    p.wms_only = true;
-                }
-            }
-            _ => {}
+        if key == "wms_layer_group" && p.wms_layer_group.is_none() {
+            p.wms_layer_group = Some(value.to_string());
         }
     }
 }

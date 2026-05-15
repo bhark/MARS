@@ -19,13 +19,16 @@ use super::label::ParsedLabel;
 use super::layer::{
     ParsedLayer, guess_id_column, lift_inline_subquery, lifted_to_source, mapfile_type_to_geom, parse_data,
 };
+use super::layer_metadata::{IncludeItemsParsed, LayerMetadata};
 use super::style_block::{CollapsedStyle, collapse_styles};
 use super::symbol::ParsedSymbol;
+use crate::emitter::{IncludeItemsSkeleton, LayerAttributionSkeleton, LayerGatingSkeleton, LayerWmsSkeleton};
 
 #[derive(Debug)]
 pub(crate) struct ResolvedLayer {
     pub name: String,
     pub title: Option<String>,
+    pub abstract_: Option<String>,
     pub geom_kind: Option<String>,
     pub sources: Vec<ResolvedSource>,
     pub classes: Vec<ResolvedClass>,
@@ -36,6 +39,7 @@ pub(crate) struct ResolvedLayer {
     /// (flat) and `wms_layer_group` (hierarchical); the hierarchical form
     /// wins when both are set.
     pub group_path: Option<String>,
+    pub wms: LayerWmsSkeleton,
     pub unimplemented: Vec<&'static str>,
 }
 
@@ -95,13 +99,14 @@ pub(crate) fn resolve_layer(
 ) -> Option<ResolvedLayer> {
     let name = p.name.clone().unwrap_or_else(|| format!("unnamed_layer_l{layer_line}"));
 
-    // abstract parent layer: STATUS OFF + wms_enable_request restricting
-    // GetMap. the path-based capabilities builder reconstructs the parent
-    // <Layer> element from real children's group paths, so we drop this
-    // record entirely. operators relying on Title/Abstract on the parent
-    // entry should add wms_group_title / wms_group_abstract follow-up
-    // support (out of scope here).
-    if p.status_off && p.wms_only {
+    // abstract parent layer: STATUS OFF + wms_enable_request denying GetMap.
+    // the path-based capabilities builder reconstructs the parent <Layer>
+    // element from real children's group paths, so we drop this record
+    // entirely. operators relying on Title/Abstract on the parent entry
+    // should add wms_group_title / wms_group_abstract follow-up support
+    // (out of scope here).
+    let getmap_denied = matches!(p.wms_metadata.request_gating.get_map, Some(false));
+    if p.status_off && getmap_denied {
         tracing::info!(
             line = layer_line,
             layer = %name,
@@ -126,15 +131,18 @@ pub(crate) fn resolve_layer(
                 data = ?p.data,
                 "raster layer translated as kind: raster scaffold; compile and runtime will return typed NotImplemented",
             );
+            let raster_wms = layer_wms_skeleton(&p.wms_metadata);
             return Some(ResolvedLayer {
                 name,
-                title: p.title,
+                title: p.wms_metadata.title_override.clone().or(p.title.clone()),
+                abstract_: p.wms_metadata.abstract_override.clone(),
                 geom_kind: Some("raster".into()),
                 sources: Vec::new(),
                 classes: Vec::new(),
                 label: None,
                 attributes: Vec::new(),
                 group_path: normalize_group_path(p.wms_layer_group.as_deref(), p.group.as_deref()),
+                wms: raster_wms,
                 unimplemented: vec!["LAYER TYPE RASTER (compiler / runtime pipeline not yet implemented)"],
             });
         }
@@ -216,18 +224,63 @@ pub(crate) fn resolve_layer(
     }
 
     let group_path = normalize_group_path(p.wms_layer_group.as_deref(), p.group.as_deref());
+    let title = p.wms_metadata.title_override.clone().or(p.title.clone());
+    let abstract_ = p.wms_metadata.abstract_override.clone();
+    let wms = layer_wms_skeleton(&p.wms_metadata);
 
     Some(ResolvedLayer {
         name,
-        title: p.title,
+        title,
+        abstract_,
         geom_kind: geom_kind_str.map(|s| s.to_string()),
         sources,
         classes,
         label,
         attributes: all_attrs.into_iter().collect(),
         group_path,
+        wms,
         unimplemented,
     })
+}
+
+/// Project the parser-side [`LayerMetadata`] into the emitter-side
+/// [`LayerWmsSkeleton`]. The two shapes differ only in field naming and the
+/// `IncludeItemsParsed` -> `IncludeItemsSkeleton` enum rename; everything
+/// else is moved as-is.
+fn layer_wms_skeleton(m: &LayerMetadata) -> LayerWmsSkeleton {
+    LayerWmsSkeleton {
+        keywords: m.keywords.clone(),
+        metadata_urls: m
+            .metadata_urls
+            .iter()
+            .map(|mu| (mu.type_.clone(), mu.format.clone(), mu.href.clone()))
+            .collect(),
+        authorities: m.authorities.clone(),
+        identifiers: m.identifiers.clone(),
+        opaque: m.opaque,
+        advertised_crs: m.advertised_crs.clone(),
+        attribution: m.attribution.as_ref().map(|a| LayerAttributionSkeleton {
+            title: a.title.clone(),
+            online_resource: a.online_resource.clone(),
+            logo_format: a.logo_format.clone(),
+            logo_href: a.logo_href.clone(),
+            logo_width: a.logo_width,
+            logo_height: a.logo_height,
+        }),
+        include_items: m.include_items.as_ref().map(|i| match i {
+            IncludeItemsParsed::All => IncludeItemsSkeleton::All,
+            IncludeItemsParsed::None => IncludeItemsSkeleton::None,
+            IncludeItemsParsed::Explicit(names) => IncludeItemsSkeleton::Explicit(names.clone()),
+        }),
+        request_gating: LayerGatingSkeleton {
+            get_capabilities: m.request_gating.get_capabilities,
+            get_map: m.request_gating.get_map,
+            get_feature_info: m.request_gating.get_feature_info,
+            get_legend_graphic: m.request_gating.get_legend_graphic,
+            get_styles: m.request_gating.get_styles,
+            describe_layer: m.request_gating.describe_layer,
+        },
+    }
 }
 
 /// Collapse mapfile `GROUP` (flat) and `wms_layer_group` (hierarchical)
