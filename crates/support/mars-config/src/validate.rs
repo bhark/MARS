@@ -12,6 +12,7 @@ mod crs;
 mod label;
 mod layer;
 mod service;
+mod source;
 mod style;
 
 #[cfg(test)]
@@ -41,6 +42,7 @@ pub fn validate(config: &mut Config, config_dir: &Path) -> Result<(), ConfigErro
     service::validate_service(config)?;
     compiler::validate_compiler_and_render(config)?;
     crs::validate_native_crs(config)?;
+    source::validate_bootstrap(config)?;
     style::validate_styles(&config.styles)?;
 
     let bands = band::validate_bands(config)?;
@@ -535,5 +537,70 @@ raster:
         let r = l.raster.expect("raster present");
         assert_eq!(r.source.tile_size, 256, "tile_size default");
         assert!((r.opacity - 1.0).abs() < f32::EPSILON, "opacity default");
+    }
+
+    fn cfg_with_bootstrap(role: &str, schemas: &[&str]) -> crate::model::Config {
+        use crate::model::{Bootstrap, ChangeFeed};
+        let mut cfg = minimal_config();
+        cfg.source.change_feed = Some(ChangeFeed {
+            kind: "pgoutput".into(),
+            publication: Some("mars_pub".into()),
+            slot: Some("mars_slot".into()),
+            poll_interval: None,
+        });
+        cfg.source.bootstrap = Some(Bootstrap {
+            role: role.into(),
+            schemas: schemas.iter().map(|s| (*s).into()).collect(),
+        });
+        cfg
+    }
+
+    #[test]
+    fn accepts_valid_bootstrap() {
+        let mut cfg = cfg_with_bootstrap("mars_replicator", &["public", "geo"]);
+        validate(&mut cfg, Path::new(".")).expect("valid bootstrap accepted");
+    }
+
+    #[test]
+    fn rejects_bootstrap_without_change_feed() {
+        let mut cfg = cfg_with_bootstrap("mars_replicator", &["public"]);
+        cfg.source.change_feed = None;
+        let err = validate(&mut cfg, Path::new(".")).unwrap_err();
+        assert!(err.to_string().contains("change_feed"));
+    }
+
+    #[test]
+    fn rejects_bootstrap_with_polling_change_feed() {
+        use crate::model::ChangeFeed;
+        let mut cfg = cfg_with_bootstrap("mars_replicator", &["public"]);
+        cfg.source.change_feed = Some(ChangeFeed {
+            kind: "polling".into(),
+            publication: None,
+            slot: None,
+            poll_interval: Some("5s".into()),
+        });
+        let err = validate(&mut cfg, Path::new(".")).unwrap_err();
+        assert!(err.to_string().contains("pgoutput"));
+    }
+
+    #[test]
+    fn rejects_bootstrap_empty_schemas() {
+        let mut cfg = cfg_with_bootstrap("mars_replicator", &[]);
+        let err = validate(&mut cfg, Path::new(".")).unwrap_err();
+        assert!(err.to_string().contains("schemas"));
+    }
+
+    #[test]
+    fn rejects_bootstrap_bad_identifier() {
+        let mut cfg = cfg_with_bootstrap("Mars-Replicator", &["public"]);
+        let err = validate(&mut cfg, Path::new(".")).unwrap_err();
+        assert!(err.to_string().contains("role"));
+    }
+
+    #[test]
+    fn rejects_bootstrap_bad_schema_ident() {
+        let mut cfg = cfg_with_bootstrap("mars_replicator", &["bad-schema"]);
+        let err = validate(&mut cfg, Path::new(".")).unwrap_err();
+        assert!(err.to_string().contains("schemas"));
     }
 }

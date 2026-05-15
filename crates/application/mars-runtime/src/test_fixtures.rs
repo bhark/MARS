@@ -384,6 +384,7 @@ pub fn build_minimal_config(layer_id: &LayerId, binding_id: &BindingId, label_su
             native_crs: CrsCode::new(REQUEST_CRS),
             change_feed: None,
             pool: Default::default(),
+            bootstrap: None,
         },
         artifacts: Artifacts {
             store: ArtifactStore {
@@ -812,6 +813,7 @@ pub fn build_multi_layer_config(layer_ids: &[LayerId], binding_ids: &[BindingId]
             native_crs: CrsCode::new(REQUEST_CRS),
             change_feed: None,
             pool: Default::default(),
+            bootstrap: None,
         },
         artifacts: Artifacts {
             store: ArtifactStore {

@@ -153,6 +153,7 @@ fn build_two_band_config() -> Config {
             native_crs: CrsCode::new("EPSG:25832"),
             change_feed: None,
             pool: Default::default(),
+            bootstrap: None,
         },
         artifacts: Artifacts {
             store: mars_config::ArtifactStore {

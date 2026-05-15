@@ -22,6 +22,12 @@ pub struct Source {
     /// Connection-pool tuning. Defaults are conservative and adapter-specific.
     #[serde(default)]
     pub pool: SourcePool,
+    /// Optional catalog-provisioning surface consumed by `mars setup` /
+    /// `mars teardown`. When set, names and schemas declared here are the
+    /// single source of truth across deployment shapes (CLI, operator-driven
+    /// bootstrap Job, manual SQL).
+    #[serde(default)]
+    pub bootstrap: Option<Bootstrap>,
 }
 
 /// Connection-pool tuning surface for source adapters. All fields are optional;
@@ -72,4 +78,16 @@ impl ChangeFeed {
     pub fn poll_interval_dur(&self) -> Result<Option<Duration>, ConfigError> {
         self.poll_interval.as_deref().map(units::parse_duration).transpose()
     }
+}
+
+/// Catalog-provisioning surface. Names and schemas listed here are exactly
+/// what `mars setup` will CREATE and what `mars teardown` will DROP. The
+/// publication and slot names themselves live on [`ChangeFeed`] so the
+/// subscriber and bootstrap cannot drift.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Bootstrap {
+    /// Login role to provision with REPLICATION + SELECT on the listed schemas.
+    pub role: String,
+    /// Schemas whose tables are published. Must be non-empty.
+    pub schemas: Vec<String>,
 }
