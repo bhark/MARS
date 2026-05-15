@@ -107,24 +107,29 @@ pub(super) fn prepare_labels(
             Some(a) => a,
             None => continue,
         };
-        let anchor_px = world_to_pixel(anchor_world, plan.bbox, plan.width, plan.height);
-        if !inside_pixel_canvas(anchor_px, plan.width, plan.height) {
+        let raw_anchor_px = world_to_pixel(anchor_world, plan.bbox, plan.width, plan.height);
+        if !inside_pixel_canvas(raw_anchor_px, plan.width, plan.height) {
             continue;
         }
-        let bbox_px = match renderer.measure_text(&c.text, &style) {
-            Ok(m) => text_bbox_from_metrics(anchor_px, m),
+        let metrics = match renderer.measure_text(&c.text, &style) {
+            Ok(m) => m,
             // font lookup / shaping failure: drop the candidate. matches the
             // existing "drop on error" behaviour of style/anchor resolution
             // a few lines above.
             Err(_) => continue,
         };
+        // angle resolution: explicit numeric ANGLE wins over the
+        // placement-derived angle (which is zero for the point/polygon path).
+        let angle_rad = effective_angle_rad(&style, 0.0);
+        let anchor_px = apply_offset(raw_anchor_px, style.offset_px, angle_rad);
+        let bbox_px = label_bbox(anchor_px, &metrics, angle_rad);
         out.push(PreparedLabel {
             anchor_px,
             text: c.text,
             style,
             priority: c.priority,
             bbox_px,
-            angle_rad: 0.0,
+            angle_rad,
         });
     }
     Ok(out)
@@ -219,12 +224,16 @@ fn sample_polyline_labels(
                 angle -= std::f32::consts::TAU;
             }
         }
+        // numeric ANGLE wins over the tangent if set on the style. mirrors
+        // mapserver: explicit `ANGLE <deg>` overrides AUTO/FOLLOW.
+        let angle = effective_angle_rad(style, angle);
         if !inside_pixel_canvas(centre.pos, plan.width, plan.height) {
             continue;
         }
-        let bbox_px = rotated_label_bbox(centre.pos, half_advance, half_h, angle);
+        let anchor_px = apply_offset(centre.pos, style.offset_px, angle);
+        let bbox_px = rotated_label_bbox(anchor_px, half_advance, half_h, angle);
         out.push(PreparedLabel {
-            anchor_px: centre.pos,
+            anchor_px,
             text: text.to_owned(),
             style: style.clone(),
             priority,
@@ -387,6 +396,44 @@ fn text_bbox_from_metrics(anchor: (f32, f32), m: mars_render_port::TextMetrics) 
         anchor.0 + half_w,
         anchor.1 + m.descent,
     )
+}
+
+/// font-aware bbox around `anchor` at `angle_rad`. axis-aligned for the
+/// `angle ≈ 0` fast path; rotated bbox otherwise.
+fn label_bbox(anchor: (f32, f32), m: &mars_render_port::TextMetrics, angle_rad: f32) -> (f32, f32, f32, f32) {
+    if angle_rad.abs() < f32::EPSILON {
+        return text_bbox_from_metrics(anchor, *m);
+    }
+    let half_w = m.advance_x * 0.5;
+    let half_h = m.ascent.max(m.descent);
+    rotated_label_bbox(anchor, half_w, half_h, angle_rad)
+}
+
+/// effective label angle: explicit numeric `ANGLE <deg>` on the style
+/// overrides whatever the placement step derived (zero for points/polys,
+/// tangent for AUTO line labels).
+fn effective_angle_rad(style: &LabelStyle, placement_angle: f32) -> f32 {
+    match style.angle_deg {
+        Some(deg) => deg.to_radians(),
+        None => placement_angle,
+    }
+}
+
+/// shift an anchor by the style's OFFSET, in canvas frame when the label
+/// is axis-aligned, in label-local frame (rotates with the run) otherwise.
+/// matches mapserver semantics for `OFFSET <x> <y>` under non-zero ANGLE.
+fn apply_offset(anchor: (f32, f32), offset_px: (f32, f32), angle_rad: f32) -> (f32, f32) {
+    let (dx, dy) = offset_px;
+    if dx == 0.0 && dy == 0.0 {
+        return anchor;
+    }
+    if angle_rad.abs() < f32::EPSILON {
+        return (anchor.0 + dx, anchor.1 + dy);
+    }
+    let (sin_a, cos_a) = angle_rad.sin_cos();
+    let rx = cos_a * dx - sin_a * dy;
+    let ry = sin_a * dx + cos_a * dy;
+    (anchor.0 + rx, anchor.1 + ry)
 }
 
 /// run a greedy collision pass over the accumulated label set and return
@@ -555,6 +602,49 @@ mod tests {
         let b = prepared((20.0, 0.0, 30.0, 10.0), 5, 12.0);
         let ops = collide_and_emit_labels(vec![a, b], 100, 100);
         assert_eq!(ops.len(), 1, "candidate's wider mindistance must apply");
+    }
+
+    #[test]
+    fn effective_angle_picks_style_override_when_set() {
+        let mut s = LabelStyle {
+            font_family: String::new(),
+            font_size: 12.0,
+            fill: mars_style::Colour::rgba(0, 0, 0, 255),
+            halo: None,
+            priority: 0,
+            min_distance: 0.0,
+            position: mars_style::AnchorPosition::default(),
+            offset_px: (0.0, 0.0),
+            angle_deg: None,
+            partials: false,
+            force: false,
+        };
+        // no override: placement angle passes through
+        assert!((effective_angle_rad(&s, 1.0) - 1.0).abs() < 1e-6);
+        // override: degrees → radians, placement angle ignored
+        s.angle_deg = Some(90.0);
+        assert!((effective_angle_rad(&s, 1.0) - std::f32::consts::FRAC_PI_2).abs() < 1e-6);
+    }
+
+    #[test]
+    fn apply_offset_in_canvas_frame_when_axis_aligned() {
+        let a = apply_offset((100.0, 200.0), (5.0, -3.0), 0.0);
+        assert!((a.0 - 105.0).abs() < 1e-6);
+        assert!((a.1 - 197.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn apply_offset_rotates_with_label_frame_when_rotated() {
+        // 90° rotation: offset (5, 0) in label frame -> (0, 5) in canvas frame.
+        let a = apply_offset((100.0, 200.0), (5.0, 0.0), std::f32::consts::FRAC_PI_2);
+        assert!((a.0 - 100.0).abs() < 1e-4, "got {}", a.0);
+        assert!((a.1 - 205.0).abs() < 1e-4, "got {}", a.1);
+    }
+
+    #[test]
+    fn apply_offset_is_noop_for_zero_offset() {
+        let a = apply_offset((10.0, 20.0), (0.0, 0.0), 1.5);
+        assert_eq!(a, (10.0, 20.0));
     }
 
     #[test]
