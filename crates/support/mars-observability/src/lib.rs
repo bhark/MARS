@@ -76,6 +76,13 @@ pub mod metrics {
     /// running count indicates a binding repeatedly failing in isolation;
     /// alert on the rate.
     pub const COMPILER_BINDING_REBUILD_FAILURES: &str = "mars_compiler_binding_rebuild_failures_total";
+
+    /// Histogram labelled by `kind` (truncate | incremental) tracking the
+    /// wall-clock duration of one per-binding rebuild inside the cycle.
+    /// Compared against `mars_compiler_rebuild_duration_seconds` (cycle
+    /// total) it tells operators whether slow cycles are a parallelism
+    /// shortage or an individual-binding cost.
+    pub const COMPILER_BINDING_REBUILD_DURATION: &str = "mars_compiler_binding_rebuild_duration_seconds";
 }
 
 /// Bounded label values for `mars_adapter_error_total{adapter}`. Adapter
@@ -139,6 +146,15 @@ pub mod truncate_reason {
     /// `MissingPagePolicy::Truncate` resolved the gap by re-deriving the
     /// binding from source.
     pub const MISSING_PAGE: &str = "missing_page";
+}
+
+/// Bounded label values for
+/// `mars_compiler_binding_rebuild_duration_seconds{kind}`. A binding
+/// rebuild is either a full truncate (delegating to the unified compile
+/// pipeline) or an incremental refresh against the prior page set.
+pub mod binding_rebuild_kind {
+    pub const TRUNCATE: &str = "truncate";
+    pub const INCREMENTAL: &str = "incremental";
 }
 
 /// Bounded label values for
@@ -208,6 +224,7 @@ struct MetricsInner {
     compiler_binding_truncate: IntCounterVec,
     compiler_missing_page: IntCounterVec,
     compiler_binding_rebuild_failures: IntCounterVec,
+    compiler_binding_rebuild_duration: HistogramVec,
 }
 
 impl std::fmt::Debug for Metrics {
@@ -328,6 +345,14 @@ impl Metrics {
             ),
             &["binding", "reason"],
         )?;
+        let compiler_binding_rebuild_duration = HistogramVec::new(
+            HistogramOpts::new(
+                metrics::COMPILER_BINDING_REBUILD_DURATION,
+                "per-binding rebuild duration in seconds, labeled by kind (truncate | incremental)",
+            )
+            .buckets(vec![0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0]),
+            &["kind"],
+        )?;
 
         registry.register(Box::new(request_total.clone()))?;
         registry.register(Box::new(request_duration.clone()))?;
@@ -348,6 +373,7 @@ impl Metrics {
         registry.register(Box::new(compiler_binding_truncate.clone()))?;
         registry.register(Box::new(compiler_missing_page.clone()))?;
         registry.register(Box::new(compiler_binding_rebuild_failures.clone()))?;
+        registry.register(Box::new(compiler_binding_rebuild_duration.clone()))?;
 
         Ok(Self {
             inner: Arc::new(MetricsInner {
@@ -371,6 +397,7 @@ impl Metrics {
                 compiler_binding_truncate,
                 compiler_missing_page,
                 compiler_binding_rebuild_failures,
+                compiler_binding_rebuild_duration,
             }),
         })
     }
@@ -466,6 +493,17 @@ impl Metrics {
             .compiler_binding_rebuild_failures
             .with_label_values(&[binding, reason])
             .inc();
+    }
+
+    /// Record one per-binding rebuild duration. `kind` is one of the
+    /// constants in [`binding_rebuild_kind`]. Observed for both success
+    /// and failure paths so concurrent throughput is measurable
+    /// regardless of `BindingFailurePolicy`.
+    pub fn observe_compiler_binding_rebuild_duration(&self, kind: &str, duration: Duration) {
+        self.inner
+            .compiler_binding_rebuild_duration
+            .with_label_values(&[kind])
+            .observe(duration.as_secs_f64());
     }
 
     /// Increment the capabilities rebuild failure counter.
