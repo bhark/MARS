@@ -3,7 +3,7 @@ use crate::ArtifactError;
 use super::{
     FeatureGeom, GeomKind,
     codec::read_geom,
-    index::{FeatureIndexEntry, iter_feature_index},
+    index::{FeatureIndexEntry, GeometryPayload, iter_feature_index},
 };
 
 /// Decode the coordinates for a single index entry. The `coord_area` slice
@@ -67,21 +67,17 @@ pub fn decode_geometry_at_slots(bytes: &[u8], slots: &[u32]) -> Result<Vec<Featu
     let mut sorted = slots.to_vec();
     sorted.sort_unstable();
     sorted.dedup();
-    let iter = iter_feature_index(bytes)?;
-    let coord_area = iter.coord_area();
+    let payload = GeometryPayload::open(bytes)?;
+    let coord_area = payload.coord_area();
+    let count = payload.len();
     let mut out: Vec<FeatureGeom> = Vec::with_capacity(sorted.len());
-    let mut cursor = 0usize;
-    for (slot_idx, entry) in iter.enumerate() {
-        let entry = entry?;
-        if cursor >= sorted.len() {
-            break;
-        }
-        let want = sorted[cursor];
-        let slot_u32 = u32::try_from(slot_idx).map_err(|_| ArtifactError::Malformed("slot index overflow"))?;
-        if slot_u32 != want {
+    for &slot in &sorted {
+        // silent oob drop matches the prior contract: out-of-range slots
+        // cannot match any feature.
+        if (slot as usize) >= count {
             continue;
         }
-        cursor += 1;
+        let entry = payload.entry_at(slot)?;
         let geom = decode_one_geom(coord_area, &entry)?;
         out.push(FeatureGeom {
             user_id: entry.user_id,

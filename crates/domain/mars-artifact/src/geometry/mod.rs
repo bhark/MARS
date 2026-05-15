@@ -80,5 +80,5 @@ pub use decode::{
     decode_geometry_at_slots, decode_geometry_payload, decode_geometry_payload_filtered, decode_one_geom,
 };
 pub(crate) use index::FEATURE_INDEX_ENTRY_LEN;
-pub use index::{FeatureIndexEntry, FeatureIndexIter, iter_feature_index};
+pub use index::{FeatureIndexEntry, FeatureIndexIter, GeometryPayload, iter_feature_index};
 pub use visit::{GeomVisitor, visit_one_geom};

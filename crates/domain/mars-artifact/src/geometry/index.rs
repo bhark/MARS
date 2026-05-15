@@ -84,34 +84,94 @@ impl Iterator for FeatureIndexIter<'_> {
         }
         let off = 4 + self.pos * FEATURE_INDEX_ENTRY_LEN;
         self.pos += 1;
-        let entry = (|| -> Result<FeatureIndexEntry, ArtifactError> {
-            let user_id = u64::from_le_bytes(read_array::<8>(self.bytes, off)?);
-            let bbox = [
-                f32::from_le_bytes(read_array::<4>(self.bytes, off + 8)?),
-                f32::from_le_bytes(read_array::<4>(self.bytes, off + 12)?),
-                f32::from_le_bytes(read_array::<4>(self.bytes, off + 16)?),
-                f32::from_le_bytes(read_array::<4>(self.bytes, off + 20)?),
-            ];
-            let geom_type = self.bytes[off + 24];
-            let coord_offset = u32::from_le_bytes(read_array::<4>(self.bytes, off + 25)?);
-            let coord_len = u32::from_le_bytes(read_array::<4>(self.bytes, off + 29)?);
-            // bound-check the entry up front so callers can decode by entry
-            // without re-validating each time.
-            let end = (coord_offset as usize)
-                .checked_add(coord_len as usize)
-                .ok_or(ArtifactError::Truncated)?;
-            if end > self.coord_area_len {
-                return Err(ArtifactError::Truncated);
-            }
-            Ok(FeatureIndexEntry {
-                user_id,
-                bbox,
-                geom_type,
-                coord_offset,
-                coord_len,
-            })
-        })();
-        Some(entry)
+        Some(decode_entry_at_offset(self.bytes, off, self.coord_area_len))
+    }
+}
+
+/// Decode one feature index entry from the absolute byte offset `off` into
+/// `bytes` (the full geometry-payload buffer). `coord_area_len` is the size
+/// of the coord region trailing the fixed-stride index header; the helper
+/// bounds-checks `coord_offset + coord_len` against it so callers can use
+/// the returned entry without re-validating.
+fn decode_entry_at_offset(bytes: &[u8], off: usize, coord_area_len: usize) -> Result<FeatureIndexEntry, ArtifactError> {
+    let user_id = u64::from_le_bytes(read_array::<8>(bytes, off)?);
+    let bbox = [
+        f32::from_le_bytes(read_array::<4>(bytes, off + 8)?),
+        f32::from_le_bytes(read_array::<4>(bytes, off + 12)?),
+        f32::from_le_bytes(read_array::<4>(bytes, off + 16)?),
+        f32::from_le_bytes(read_array::<4>(bytes, off + 20)?),
+    ];
+    let geom_type = bytes[off + 24];
+    let coord_offset = u32::from_le_bytes(read_array::<4>(bytes, off + 25)?);
+    let coord_len = u32::from_le_bytes(read_array::<4>(bytes, off + 29)?);
+    let end = (coord_offset as usize)
+        .checked_add(coord_len as usize)
+        .ok_or(ArtifactError::Truncated)?;
+    if end > coord_area_len {
+        return Err(ArtifactError::Truncated);
+    }
+    Ok(FeatureIndexEntry {
+        user_id,
+        bbox,
+        geom_type,
+        coord_offset,
+        coord_len,
+    })
+}
+
+/// Random-access handle over a geometry-payload section. Parses the header
+/// once, then resolves any slot to its 33-byte index entry in O(1) via
+/// fixed-stride addressing. Use this when callers already have a filtered
+/// slot set (e.g. from a spatial-index query) and want to skip the linear
+/// walk that [`FeatureIndexIter`] performs.
+pub struct GeometryPayload<'a> {
+    bytes: &'a [u8],
+    coord_area_len: usize,
+    count: usize,
+}
+
+impl<'a> GeometryPayload<'a> {
+    /// Parse the payload header (4 bytes count + count * stride) and bind
+    /// to the trailing coord region. Errors on truncation.
+    pub fn open(bytes: &'a [u8]) -> Result<Self, ArtifactError> {
+        let (count, header_len) = parse_payload_header(bytes)?;
+        let coord_area_len = bytes.len() - header_len;
+        Ok(Self {
+            bytes,
+            coord_area_len,
+            count,
+        })
+    }
+
+    /// Number of feature entries in the payload.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.count
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
+    /// Bytes of the coord area (the region after the fixed-stride index
+    /// header). Pass to [`crate::decode_one_geom`] alongside an entry.
+    #[must_use]
+    pub fn coord_area(&self) -> &'a [u8] {
+        &self.bytes[self.bytes.len() - self.coord_area_len..]
+    }
+
+    /// Decode the entry at slot `slot`. Returns [`ArtifactError::Malformed`]
+    /// if the slot is out of range - callers receiving slots from a
+    /// well-formed spatial index never hit this in practice; it's a typed
+    /// guard against malformed inputs.
+    pub fn entry_at(&self, slot: u32) -> Result<FeatureIndexEntry, ArtifactError> {
+        let s = slot as usize;
+        if s >= self.count {
+            return Err(ArtifactError::Malformed("feature slot out of range"));
+        }
+        let off = 4 + s * FEATURE_INDEX_ENTRY_LEN;
+        decode_entry_at_offset(self.bytes, off, self.coord_area_len)
     }
 }
 

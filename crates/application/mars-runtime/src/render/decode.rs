@@ -9,8 +9,8 @@
 
 use bytes::Bytes;
 use mars_artifact::{
-    ArtifactReader, FeatureGeom, SectionKind, SpatialIndex, decode_class_assignment, decode_one_geom,
-    decode_style_refs, iter_feature_index,
+    ArtifactReader, FeatureGeom, GeometryPayload, SectionKind, SpatialIndex, decode_class_assignment, decode_one_geom,
+    decode_style_refs,
 };
 use mars_render_port::DrawOp;
 use mars_style::Stylesheet;
@@ -131,27 +131,23 @@ pub(super) fn decode_page_to_ops(
         }
     }
 
-    // walk the index alongside the slot cursor so we keep (slot, feature)
-    // pairs together (decode_geometry_at_slots loses slot identity).
-    let iter = iter_feature_index(&geom_bytes).map_err(map_artifact_err)?;
-    let coord_area = iter.coord_area();
+    // resolve each surviving slot in O(1) against the fixed-stride feature
+    // index; pairs (slot, feature) so the class lookup below can join.
+    // decode_geometry_at_slots loses slot identity, hence the direct lookup.
+    let payload = GeometryPayload::open(&geom_bytes).map_err(map_artifact_err)?;
+    let coord_area = payload.coord_area();
+    let payload_count = payload.len();
     let mut paired: Vec<(u32, FeatureGeom)> = Vec::with_capacity(slots.len());
-    let mut cursor = 0usize;
-    for (slot_idx, entry) in iter.enumerate() {
-        if cursor >= slots.len() {
-            break;
-        }
-        let entry = entry.map_err(map_artifact_err)?;
-        let slot_u32 = u32::try_from(slot_idx).map_err(|_| RuntimeError::InvalidManifest {
-            reason: "render: slot index overflow".into(),
-        })?;
-        if slot_u32 != slots[cursor] {
+    for &slot in &slots {
+        // spatial index promises in-range slots; this guard surfaces a
+        // typed error if the artifact and index ever disagree.
+        if (slot as usize) >= payload_count {
             continue;
         }
-        cursor += 1;
+        let entry = payload.entry_at(slot).map_err(map_artifact_err)?;
         let geom = decode_one_geom(coord_area, &entry).map_err(map_artifact_err)?;
         paired.push((
-            slot_u32,
+            slot,
             FeatureGeom {
                 user_id: entry.user_id,
                 bbox: entry.bbox,

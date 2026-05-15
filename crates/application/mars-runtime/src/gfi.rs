@@ -14,7 +14,7 @@
 
 use bytes::Bytes;
 use futures_util::StreamExt;
-use mars_artifact::{ArtifactReader, AttrValue, SectionKind, SpatialIndex, decode_row};
+use mars_artifact::{ArtifactReader, AttrValue, GeometryPayload, SectionKind, SpatialIndex, decode_row};
 use mars_config::Layer;
 use mars_types::{Bbox, BindingMetadata, LayerId, PageEntry};
 
@@ -129,31 +129,23 @@ fn decode_page_hits(
     if slots.is_empty() {
         return Ok(Vec::new());
     }
-    // walk the feature index once and collect (slot, user_id) at the
-    // matched slots. attributes are joined by slot (the substrate primary
-    // key); user_id is the source-supplied identifier carried back to the
-    // caller for display.
+    // resolve each surviving slot in O(1) against the fixed-stride feature
+    // index, collecting (slot, user_id). attributes are joined by slot
+    // (the substrate primary key); user_id is the source-supplied identifier
+    // carried back to the caller for display.
     let geom_bytes = reader.section(SectionKind::GeometryPayload).map_err(map_artifact_err)?;
     let mut sorted = slots;
     sorted.sort_unstable();
     sorted.dedup();
-    let iter = mars_artifact::iter_feature_index(&geom_bytes).map_err(map_artifact_err)?;
+    let payload = GeometryPayload::open(&geom_bytes).map_err(map_artifact_err)?;
+    let payload_count = payload.len();
     let mut hits: Vec<(u32, u64)> = Vec::with_capacity(sorted.len());
-    let mut cursor = 0usize;
-    for (slot_idx, entry) in iter.enumerate() {
-        let entry = entry.map_err(map_artifact_err)?;
-        if cursor >= sorted.len() {
-            break;
-        }
-        let want = sorted[cursor];
-        let slot_u32 = u32::try_from(slot_idx).map_err(|_| RuntimeError::InvalidManifest {
-            reason: "gfi: slot index overflow".into(),
-        })?;
-        if slot_u32 != want {
+    for &slot in &sorted {
+        if (slot as usize) >= payload_count {
             continue;
         }
-        cursor += 1;
-        hits.push((slot_u32, entry.user_id));
+        let entry = payload.entry_at(slot).map_err(map_artifact_err)?;
+        hits.push((slot, entry.user_id));
     }
 
     let mut out: Vec<LayerFeatureInfo> = Vec::with_capacity(hits.len());
