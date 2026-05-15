@@ -29,6 +29,12 @@ parking_lot    = { workspace = true }
 memmap2        = { workspace = true }
 
 [dev-dependencies]
-tokio    = { workspace = true, features = ["macros", "rt-multi-thread"] }
-tempfile = { workspace = true }
-proptest = { workspace = true }
+tokio      = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tempfile   = { workspace = true }
+proptest   = { workspace = true }
+criterion  = { workspace = true }
+mars-store = { workspace = true, features = ["test-utils"] }
+
+[[bench]]
+name    = "cache"
+harness = false
