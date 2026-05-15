@@ -61,6 +61,7 @@ fn emit_class(r: ResolvedClass, skel: &mut Skeleton) -> ClassSkeleton {
         r.collapsed.stroke_offset_px,
         r.collapsed.stroke_gap.as_ref(),
         r.collapsed.stroke_linejoin,
+        r.collapsed.geom_transform,
     );
 
     let existing = skel.styles.iter().find(|s| {
@@ -75,6 +76,7 @@ fn emit_class(r: ResolvedClass, skel: &mut Skeleton) -> ClassSkeleton {
             s.stroke_offset_px,
             s.stroke_gap.as_ref(),
             s.stroke_linejoin,
+            s.geom_transform,
         ) == canonical
     });
 
@@ -93,6 +95,7 @@ fn emit_class(r: ResolvedClass, skel: &mut Skeleton) -> ClassSkeleton {
             opacity: r.collapsed.opacity,
             stroke_offset_px: r.collapsed.stroke_offset_px,
             stroke_gap: r.collapsed.stroke_gap,
+            geom_transform: r.collapsed.geom_transform,
             font_family: None,
             font_size: None,
             halo_color: None,
@@ -126,6 +129,7 @@ fn emit_label(r: ResolvedLabel, skel: &mut Skeleton) -> LabelSkeleton {
         opacity: None,
         stroke_offset_px: None,
         stroke_gap: None,
+        geom_transform: None,
         font_family: Some(r.font_family),
         font_size: Some(r.font_size),
         halo_color: r.halo_color,

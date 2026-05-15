@@ -155,6 +155,9 @@ pub(crate) enum StyleDirective<'a> {
     Gap(&'a Token),
     InitialGap(&'a Token),
     LineJoin(&'a Token),
+    /// `GEOMTRANSFORM "<variant>"`: vertex-extraction subset (start | end |
+    /// vertices). Unknown variants land in the layer-level unimplemented bag.
+    GeomTransform(&'a Token),
     /// `MINWIDTH` / `MAXWIDTH`: typed signal that a style attenuation
     /// directive is not yet implemented. The parser warns at use site.
     NotImplementedAttenuation(&'a Token),
@@ -177,6 +180,7 @@ impl<'a> StyleDirective<'a> {
             "GAP" => Self::Gap(t),
             "INITIALGAP" => Self::InitialGap(t),
             "LINEJOIN" => Self::LineJoin(t),
+            "GEOMTRANSFORM" => Self::GeomTransform(t),
             "MINWIDTH" | "MAXWIDTH" => Self::NotImplementedAttenuation(t),
             _ => Self::Unknown,
         }

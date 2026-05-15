@@ -107,6 +107,8 @@ pub(crate) struct StyleDef {
     pub(crate) opacity: Option<f32>,
     pub(crate) stroke_offset_px: Option<f32>,
     pub(crate) stroke_gap: Option<EmitStrokeGap>,
+    /// `mars_style::GeomTransform` wire value (`"start" | "end" | "vertices"`).
+    pub(crate) geom_transform: Option<&'static str>,
     pub(crate) font_family: Option<String>,
     pub(crate) font_size: Option<f32>,
     pub(crate) halo_color: Option<Colour>,
@@ -556,6 +558,9 @@ pub(crate) fn render(skel: &Skeleton, bands: &[(String, u64)]) -> String {
                         "    stroke_gap: {{ interval_px: {}, initial_px: {} }}",
                         g.interval_px, g.initial_px
                     );
+                }
+                if let Some(gt) = st.geom_transform {
+                    let _ = writeln!(out, "    geom_transform: {gt}");
                 }
                 if let Some(m) = st.marker.as_ref() {
                     write_marker(&mut out, m);

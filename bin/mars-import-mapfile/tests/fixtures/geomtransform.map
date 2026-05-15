@@ -1,0 +1,31 @@
+# GEOMTRANSFORM coverage: a line layer that stamps a circle at every
+# vertex (mapserver-equivalent vertex marker pattern).
+MAP
+  NAME "geomtransform"
+  TITLE "GeomTransform Coverage"
+
+  SYMBOL
+    NAME "dot"
+    TYPE ELLIPSE
+    POINTS 1 1 END
+    FILLED TRUE
+  END
+
+  LAYER
+    NAME "rivers"
+    TYPE LINE
+    STATUS ON
+    DATA "geom FROM rivers"
+    PROCESSING "ITEMS=ogc_fid"
+
+    CLASS
+      NAME "vertices"
+      STYLE
+        SYMBOL "dot"
+        COLOR 0 0 0
+        SIZE 4
+        GEOMTRANSFORM "vertices"
+      END
+    END
+  END
+END

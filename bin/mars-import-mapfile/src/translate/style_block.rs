@@ -47,6 +47,10 @@ pub(crate) struct StyleBlock {
     pub(crate) initial_gap_px: Option<f32>,
     /// STYLE.LINEJOIN -> mars stroke_linejoin wire value.
     pub(crate) linejoin: Option<&'static str>,
+    /// STYLE.GEOMTRANSFORM "<variant>" -> mars geom_transform wire value.
+    /// Carries the lowercase wire string ("start" | "end" | "vertices") so
+    /// emission stays stringly-typed alongside `linejoin`.
+    pub(crate) geom_transform: Option<&'static str>,
     /// Recognised-but-not-implemented STYLE directive names. Aggregated at
     /// resolve time so the parser stays a pure data sink; `emit_layer` fires
     /// one warn per layer summarising what was dropped.
@@ -111,6 +115,19 @@ pub(crate) fn parse_style_block(body: &[Token]) -> StyleBlock {
                     }
                 }
             }
+            StyleDirective::GeomTransform(t) => {
+                // mapserver accepts the variant quoted ("start") or bare; the
+                // unimplemented bag is the right home for the wider vocabulary
+                // (`bbox`, `labelpnt`, `simplify(...)` etc.) until we add it.
+                if let Some(arg) = parsing::first_unquoted(t) {
+                    match arg.to_ascii_lowercase().as_str() {
+                        "start" => st.geom_transform = Some("start"),
+                        "end" => st.geom_transform = Some("end"),
+                        "vertices" => st.geom_transform = Some("vertices"),
+                        _ => push_unique(&mut st.unimplemented, "STYLE.GEOMTRANSFORM (unknown variant)"),
+                    }
+                }
+            }
             StyleDirective::NotImplementedAttenuation(t) => {
                 // record the dropped directive as a typed signal; the
                 // layer-level warn fires once at emit time.
@@ -143,6 +160,7 @@ pub(crate) struct CollapsedStyle {
     pub(crate) stroke_offset_px: Option<f32>,
     pub(crate) stroke_gap: Option<EmitStrokeGap>,
     pub(crate) stroke_linejoin: Option<&'static str>,
+    pub(crate) geom_transform: Option<&'static str>,
     pub(crate) unimplemented: Vec<&'static str>,
 }
 
@@ -261,6 +279,7 @@ pub(crate) fn collapse_styles(
         })
     });
     let stroke_linejoin = styles.iter().find_map(|s| s.linejoin);
+    let geom_transform = styles.iter().find_map(|s| s.geom_transform);
     CollapsedStyle {
         fill,
         stroke,
@@ -271,6 +290,7 @@ pub(crate) fn collapse_styles(
         stroke_offset_px,
         stroke_gap,
         stroke_linejoin,
+        geom_transform,
         unimplemented,
     }
 }
@@ -287,6 +307,7 @@ pub(crate) fn canonical_signature(
     stroke_offset_px: Option<f32>,
     stroke_gap: Option<&EmitStrokeGap>,
     stroke_linejoin: Option<&'static str>,
+    geom_transform: Option<&'static str>,
 ) -> String {
     use std::fmt::Write as _;
     let mut s = String::new();
@@ -351,6 +372,9 @@ pub(crate) fn canonical_signature(
     }
     if let Some(lj) = stroke_linejoin {
         let _ = write!(s, ",linejoin={lj}");
+    }
+    if let Some(gt) = geom_transform {
+        let _ = write!(s, ",geom_transform={gt}");
     }
     s
 }
@@ -591,5 +615,74 @@ mod tests {
         assert_eq!(st.symbol.as_deref(), Some("lines"));
         assert_eq!(st.angle_deg, Some(30.0));
         assert_eq!(st.size, Some(5.0));
+    }
+
+    #[test]
+    fn parse_style_block_accepts_geomtransform_quoted_and_bare() {
+        for raw in ["\"start\"", "start", "Start", "\"VERTICES\""] {
+            let toks = vec![Token {
+                line: 1,
+                keyword: "GEOMTRANSFORM".into(),
+                args: vec![raw.into()],
+            }];
+            let st = parse_style_block(&toks);
+            assert!(st.geom_transform.is_some(), "expected match for {raw}");
+            assert!(st.unimplemented.is_empty());
+        }
+    }
+
+    #[test]
+    fn parse_style_block_flags_unknown_geomtransform_variant() {
+        let toks = vec![Token {
+            line: 1,
+            keyword: "GEOMTRANSFORM".into(),
+            args: vec!["bbox".into()],
+        }];
+        let st = parse_style_block(&toks);
+        assert!(st.geom_transform.is_none());
+        assert_eq!(st.unimplemented, vec!["STYLE.GEOMTRANSFORM (unknown variant)"]);
+    }
+
+    #[test]
+    fn collapse_styles_propagates_geom_transform() {
+        let styles = vec![StyleBlock {
+            geom_transform: Some("vertices"),
+            ..Default::default()
+        }];
+        let c = collapse_styles(&styles, 1, &Default::default());
+        assert_eq!(c.geom_transform, Some("vertices"));
+    }
+
+    #[test]
+    fn canonical_signature_differs_per_geom_transform() {
+        let a = canonical_signature(
+            "polygon",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("start"),
+        );
+        let b = canonical_signature(
+            "polygon",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("vertices"),
+        );
+        let none = canonical_signature("polygon", None, None, None, None, None, None, None, None, None, None);
+        assert_ne!(a, b);
+        assert_ne!(a, none);
     }
 }
