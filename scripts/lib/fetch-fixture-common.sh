@@ -85,11 +85,13 @@ fetch_fixture::ensure() {
   mkdir -p "$(dirname "${dest}")"
 
   if [[ -f "${dest}" ]]; then
-    if fetch_fixture::verify "${dest}" "${manifest}" "${file_key}"; then
-      printf 'fetch-fixture: present and verified: %s\n' "${dest}"
-      return 0
-    fi
-    case $? in
+    local verify_rc=0
+    fetch_fixture::verify "${dest}" "${manifest}" "${file_key}" || verify_rc=$?
+    case ${verify_rc} in
+      0)
+        printf 'fetch-fixture: present and verified: %s\n' "${dest}"
+        return 0
+        ;;
       2)
         # manifest has no sha pin for this file. treat the local file as
         # authoritative but warn so the maintainer notices the gap.
@@ -119,11 +121,13 @@ EOF
 
   fetch_fixture::download "${url}" "${dest}"
 
-  if fetch_fixture::verify "${dest}" "${manifest}" "${file_key}"; then
-    printf 'fetch-fixture: ready: %s\n' "${dest}"
-    return 0
-  fi
-  case $? in
+  local verify_rc=0
+  fetch_fixture::verify "${dest}" "${manifest}" "${file_key}" || verify_rc=$?
+  case ${verify_rc} in
+    0)
+      printf 'fetch-fixture: ready: %s\n' "${dest}"
+      return 0
+      ;;
     2)
       # downloaded but manifest has no pin. accept, warn loudly.
       printf 'fetch-fixture: downloaded %s but manifest has no sha to verify against\n' \
