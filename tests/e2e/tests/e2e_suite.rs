@@ -1,6 +1,7 @@
 //! single test binary. all #[test] fns live in submodules so they share one
-//! process and one `kube::Client` singleton (see `mars_e2e_kind::cluster`).
-//! cargo runs tests inside a binary serially under `--test-threads=1`.
+//! process; cargo runs tests inside a binary serially under `--test-threads=1`.
+//! each test builds its own `kube::Client` because the kube/tower buffer worker
+//! is bound to the runtime it was spawned on (see `mars_e2e_kind::cluster`).
 //!
 //! files live under `tests/e2e_suite/` rather than as siblings so they aren't
 //! mistaken for additional test targets even if `autotests` is later turned

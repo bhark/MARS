@@ -1,26 +1,21 @@
 //! cluster handle. assumes `scripts/run-e2e.sh` set up the kind cluster and
 //! exported `KUBECONFIG`; we only build a `kube::Client` from that.
+//!
+//! a fresh client is built per call. caching across `#[tokio::test]` boundaries
+//! is unsafe: kube::Client wraps a tower::buffer worker task that's spawned on
+//! whichever runtime is live at construction time, and dies when that runtime
+//! drops. namespace isolation remains the boundary between tests.
 
 use anyhow::{Context, Result};
 use kube::Client;
 use std::sync::Arc;
-use tokio::sync::OnceCell;
-
-/// process-wide singleton. tests share one client; namespace isolation is the
-/// boundary between tests.
-static CLIENT: OnceCell<Arc<Client>> = OnceCell::const_new();
 
 pub async fn client() -> Result<Arc<Client>> {
-    let c = CLIENT
-        .get_or_try_init(|| async {
-            init_tracing();
-            let client = Client::try_default()
-                .await
-                .context("build kube::Client from KUBECONFIG")?;
-            Ok::<Arc<Client>, anyhow::Error>(Arc::new(client))
-        })
-        .await?;
-    Ok(c.clone())
+    init_tracing();
+    let client = Client::try_default()
+        .await
+        .context("build kube::Client from KUBECONFIG")?;
+    Ok(Arc::new(client))
 }
 
 fn init_tracing() {
