@@ -41,7 +41,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # gated: only runs on PRs with the `parity` label and on the nightly cron.
-    # needs docker + the OSM extract dump fetched via MARS_PARITY_FIXTURE_URL.
+    # needs docker; the OSM extract dump is auto-fetched from the pinned
+    # GitHub Release (tests/parity/fixtures/osm/manifest.sha256).
     if: |
       github.event_name == 'schedule' ||
       (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'parity'))
@@ -56,17 +57,9 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq build-essential clang cmake pkg-config libsqlite3-dev sqlite3
       - name: fetch parity fixture
-        env:
-          MARS_PARITY_FIXTURE_URL: ${{ secrets.MARS_PARITY_FIXTURE_URL }}
-        run: |
-          mkdir -p target/parity-fixtures
-          if [ -z "${MARS_PARITY_FIXTURE_URL:-}" ]; then
-            echo "::error::MARS_PARITY_FIXTURE_URL not set; cannot fetch parity dump"
-            exit 1
-          fi
-          curl -fsSL "${MARS_PARITY_FIXTURE_URL}" -o target/parity-fixtures/osm-parity.sql.gz
+        run: tests/parity/scripts/fetch-fixture.sh
       - name: run parity
-        run: scripts/run-parity.sh -- --nocapture
+        run: scripts/run-parity.sh --no-fetch -- --nocapture
       - name: upload diff artefacts on failure
         if: failure()
         uses: actions/upload-artifact@v7
@@ -100,8 +93,6 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq build-essential clang cmake pkg-config libsqlite3-dev sqlite3
       - name: run e2e
-        env:
-          MARS_E2E_FIXTURE_URL: ${{ secrets.MARS_E2E_FIXTURE_URL }}
         run: scripts/run-e2e.sh
       - name: upload diagnostics on failure
         if: failure()
