@@ -9,6 +9,9 @@ CREATE TABLE IF NOT EXISTS e2e_source.pattern_zone (
 
 CREATE INDEX IF NOT EXISTS pattern_zone_geom_gix ON e2e_source.pattern_zone USING GIST (geom);
 
+-- mars requires REPLICA IDENTITY FULL on every published table.
+ALTER TABLE e2e_source.pattern_zone REPLICA IDENTITY FULL;
+
 -- one rectangle inside the render bbox [536000,5210000,548000,5235000];
 -- sized so a 16px tile repeats clearly within a 256px frame.
 INSERT INTO e2e_source.pattern_zone (geom) VALUES (

@@ -13,6 +13,9 @@ CREATE TABLE IF NOT EXISTS e2e_source.poi (
 
 CREATE INDEX IF NOT EXISTS poi_geom_gix ON e2e_source.poi USING GIST (geom);
 
+-- mars requires REPLICA IDENTITY FULL on every published table.
+ALTER TABLE e2e_source.poi REPLICA IDENTITY FULL;
+
 -- seed rows inside the render bbox [536000,5210000,548000,5235000].
 -- names are neutral (alpha/beta/gamma/delta) — the tests key off these.
 INSERT INTO e2e_source.poi (kind, name, geom) VALUES

@@ -11,4 +11,12 @@ CREATE PUBLICATION mars_e2e_pub FOR TABLE
   e2e_source.roads,
   e2e_source.buildings,
   e2e_source.waterways;
+-- mars requires REPLICA IDENTITY FULL on every published table so
+-- update/delete carry the OLD row (incl. geometry) for dirty-page derivation.
+ALTER TABLE e2e_source.land       REPLICA IDENTITY FULL;
+ALTER TABLE e2e_source.water      REPLICA IDENTITY FULL;
+ALTER TABLE e2e_source.settlements REPLICA IDENTITY FULL;
+ALTER TABLE e2e_source.roads      REPLICA IDENTITY FULL;
+ALTER TABLE e2e_source.buildings  REPLICA IDENTITY FULL;
+ALTER TABLE e2e_source.waterways  REPLICA IDENTITY FULL;
 SELECT pg_create_logical_replication_slot('mars_e2e_slot', 'pgoutput');
