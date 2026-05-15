@@ -3,8 +3,6 @@
 //! Layout:
 //! - `pgoutput`: byte-level decoder for pgoutput v1/v2 messages. Pure, tested
 //!   against captured fixtures.
-//! - `wkb_bbox`: bbox-only WKB / EWKB extractor. Avoids materialising full
-//!   geometries; we only need the cell-touching extents.
 //! - `translate`: relation-cache + topology-aware lowering from pgoutput
 //!   messages to `ChangeEvent`s.
 //! - `transport`: replication-protocol I/O loop. Drives a
@@ -24,7 +22,6 @@ use mars_source::{ChangeSubscription, SourceError};
 pub(crate) mod pgoutput;
 pub(crate) mod translate;
 pub(crate) mod transport;
-pub(crate) mod wkb_bbox;
 
 /// Per-collection topology the change-feed needs to compute dirty cells.
 /// Keyed by the fully-qualified `schema.table` (matches what pgoutput's
