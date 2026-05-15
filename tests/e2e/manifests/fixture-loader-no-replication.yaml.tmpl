@@ -1,0 +1,56 @@
+# identical to fixture-loader.yaml.tmpl but skips create-replication.sql
+# (no publication / no slot pre-created). The MarsService bootstrap Job
+# rendered by the operator is responsible for that.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fixture-loader-bootstrap
+data:
+  loader.sh: |
+    #!/bin/sh
+    set -eu
+    echo "[loader] dropping any prior e2e_source schema + planet_osm_* leftovers"
+    psql "$PG_DSN" -v ON_ERROR_STOP=1 -c "DROP SCHEMA IF EXISTS e2e_source CASCADE"
+    psql "$PG_DSN" -v ON_ERROR_STOP=1 -c "DROP TABLE IF EXISTS planet_osm_line, planet_osm_point, planet_osm_polygon, planet_osm_roads CASCADE"
+    echo "[loader] restoring osm2pgsql dump (planet_osm_*)"
+    gunzip -c "/fixture/{{FIXTURE_FILENAME}}" \
+      | grep -v '^CREATE SCHEMA public;$' \
+      | psql "$PG_DSN" -v ON_ERROR_STOP=1
+    echo "[loader] deriving e2e_source schema from planet_osm_*"
+    psql "$PG_DSN" -v ON_ERROR_STOP=1 -f /sql/derive-e2e.sql
+    echo "[loader] done (publication/slot left to operator bootstrap)"
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: fixture-loader-bootstrap
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: loader
+          image: postgis/postgis:18-3.6
+          env:
+            - name: PG_DSN
+              value: "postgres://mars:mars@postgis:5432/mars"
+          command: ["/bin/sh", "/loader/loader.sh"]
+          volumeMounts:
+            - { name: loader,  mountPath: /loader }
+            - { name: sql,     mountPath: /sql }
+            - { name: fixture, mountPath: /fixture }
+      volumes:
+        - name: loader
+          configMap:
+            name: fixture-loader-bootstrap
+            defaultMode: 0o755
+        - name: sql
+          configMap:
+            name: fixture-sql
+        - name: fixture
+          hostPath:
+            path: /var/lib/mars-e2e-fixtures
+            type: Directory

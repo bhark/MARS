@@ -29,3 +29,6 @@ mod e_resilience;
 
 #[path = "e2e_suite/f_image_pattern.rs"]
 mod f_image_pattern;
+
+#[path = "e2e_suite/g_bootstrap.rs"]
+mod g_bootstrap;
