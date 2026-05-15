@@ -112,6 +112,20 @@ impl Scenario {
         .await
         .context("apply MarsService manifest")?;
 
+        // wait for the operator-rendered runtime Deployment to have ready
+        // replicas before returning. otherwise per-test `wait::until` loops
+        // hit the api-server service proxy while the Service still has no
+        // endpoints, producing a 503 ERROR log per poll. names follow the
+        // child-builder convention `{svc}-{role}` (bin/mars-operator/src/
+        // children/labels.rs).
+        wait::deployment_ready(
+            client.clone(),
+            &ns.name,
+            "mars-e2e-runtime",
+            Duration::from_secs(300),
+        )
+        .await?;
+
         Ok(Self { client, ns })
     }
 }

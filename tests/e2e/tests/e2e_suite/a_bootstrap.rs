@@ -13,10 +13,8 @@ async fn bootstrap() -> Result<()> {
     let client = scenario.client.clone();
     let ns = &scenario.ns.name;
 
-    // operator-rendered Deployments + Service: names follow the child-builder
-    // convention `{svc}-{role}` (see bin/mars-operator/src/children/labels.rs).
-    // update if the operator changes its naming.
-    wait::deployment_ready(client.clone(), ns, "mars-e2e-runtime", Duration::from_secs(300)).await?;
+    // runtime deployment is awaited inside Scenario::up; compiler has no
+    // readiness probe, so its deployment_ready is just "container running".
     wait::deployment_ready(client.clone(), ns, "mars-e2e-compiler", Duration::from_secs(300)).await?;
 
     // /healthz: always 200 once the http server is listening.

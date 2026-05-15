@@ -25,7 +25,6 @@ async fn runtime_survives_pod_restart() -> Result<()> {
     let client = scenario.client.clone();
     let ns = &scenario.ns.name;
 
-    wait::deployment_ready(client.clone(), ns, "mars-e2e-runtime", Duration::from_secs(300)).await?;
     wait::until("runtime /readyz returns 200", Duration::from_secs(300), || async {
         let r = http::get(client.clone(), ns, "mars-e2e-runtime", 8080, "/readyz").await?;
         if r.status == 200 { Ok(Some(())) } else { Ok(None) }
