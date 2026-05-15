@@ -397,6 +397,7 @@ layers:
             when: None,
             scale: None,
             style: ClassStyle::Ref { name: "absent".into() },
+            label: None,
         });
         let deps = deps_with(Arc::new(CountingRenderer::default()));
         let plan = LegendPlan {

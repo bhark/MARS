@@ -209,6 +209,7 @@ mod tests {
                 when: None,
                 scale: None,
                 style: ClassStyle::Inline(style),
+                label: None,
             }
         }
         let layer = Layer {

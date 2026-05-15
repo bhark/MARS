@@ -115,6 +115,7 @@ pub(crate) fn class_inline(name: &str, when: Option<&str>) -> Class {
         when: when.map(Into::into),
         scale: None,
         style: ClassStyle::Inline(Default::default()),
+        label: None,
     }
 }
 

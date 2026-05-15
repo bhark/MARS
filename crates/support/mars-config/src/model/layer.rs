@@ -349,6 +349,12 @@ pub struct Class {
     pub scale: Option<ScaleWindow>,
     /// Style: either a `{ ref: name }` or an inline geometry style.
     pub style: ClassStyle,
+    /// Per-class label override. When a class matches, this label fully
+    /// replaces the layer-level `Layer.label` for the matched feature.
+    /// Classes without a label fall back to `Layer.label`. Mirrors MapServer
+    /// CLASS-level LABEL blocks.
+    #[serde(default)]
+    pub label: Option<LayerLabel>,
 }
 
 /// Style attachment for a class. Wire form is internally tagged on `type:`:

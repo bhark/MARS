@@ -27,17 +27,24 @@ fn collect_referenced_attributes(layer: &Layer) -> BTreeSet<String> {
         {
             mars_expr::collect_idents(&expr, &mut out);
         }
+        if let Some(label) = &class.label {
+            collect_template_idents(&label.text, &mut out);
+        }
     }
-    if let Some(label) = &layer.label
-        && let Ok(template) = mars_expr::parse_template(&label.text)
-    {
+    if let Some(label) = &layer.label {
+        collect_template_idents(&label.text, &mut out);
+    }
+    out
+}
+
+fn collect_template_idents(text: &str, out: &mut BTreeSet<String>) {
+    if let Ok(template) = mars_expr::parse_template(text) {
         for seg in &template.segments {
             if let mars_expr::Segment::Ident(name) = seg {
                 out.insert(name.clone());
             }
         }
     }
-    out
 }
 
 fn check_declared_covers(

@@ -630,6 +630,7 @@ mod tests {
                 when: None,
                 scale: None,
                 style: ClassStyle::Inline(Default::default()),
+                label: None,
             }],
             label: None,
             label_survival: mars_config::LabelSurvival::Independent,
@@ -761,6 +762,7 @@ mod tests {
                     when: Some("kind = 'main'".into()),
                     scale: None,
                     style: ClassStyle::Inline(Default::default()),
+                    label: None,
                 },
                 mars_config::Class {
                     name: "default".into(),
@@ -768,6 +770,7 @@ mod tests {
                     when: None,
                     scale: None,
                     style: ClassStyle::Inline(Default::default()),
+                    label: None,
                 },
             ],
             label: None,
@@ -939,6 +942,7 @@ mod tests {
             when: None,
             scale: None,
             style: ClassStyle::Inline(Default::default()),
+            label: None,
         }];
         let cfg = config_with(vec![l1, l2]);
         let err = build_bootstrap_plan(&cfg).unwrap_err();

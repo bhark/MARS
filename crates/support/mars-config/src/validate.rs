@@ -163,6 +163,76 @@ mod tests {
     }
 
     #[test]
+    fn rejects_class_label_text_referencing_undeclared_attribute() {
+        let mut cfg = minimal_config();
+        let mut b = binding("roads");
+        b.attributes = vec!["name".into()];
+        let mut l = layer("roads");
+        l.sources = vec![b];
+        let mut c = class_inline("major", None);
+        c.label = Some(inline_label("{missing}", None));
+        l.classes = vec![c];
+        cfg.layers = vec![l];
+        let err = validate(&mut cfg, Path::new(".")).unwrap_err();
+        assert!(
+            err.to_string().contains("missing"),
+            "expected class label attribute error: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_class_label_placement_geom_mismatch() {
+        let mut cfg = minimal_config();
+        let mut b = binding("roads");
+        b.attributes = vec!["name".into()];
+        let mut l = layer("roads");
+        l.kind = "polygon".into();
+        l.sources = vec![b];
+        let mut c = class_inline("major", None);
+        c.label = Some(inline_label(
+            "{name}",
+            Some(mars_style::Placement::Line {
+                repeat_m: 250.0,
+                max_angle_delta_deg: 25.0,
+                angle_mode: mars_style::LineAngleMode::Auto,
+            }),
+        ));
+        l.classes = vec![c];
+        cfg.layers = vec![l];
+        let err = validate(&mut cfg, Path::new(".")).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("placement does not match") && msg.contains("class") && msg.contains("major"),
+            "expected class label placement mismatch: {msg}"
+        );
+    }
+
+    #[test]
+    fn accepts_class_label_when_declared_and_matching_geom() {
+        let mut cfg = minimal_config();
+        let mut b = binding("roads");
+        b.attributes = vec!["name".into()];
+        let mut l = layer("roads");
+        l.sources = vec![b];
+        let mut c = class_inline("major", None);
+        c.label = Some(inline_label("{name}", None));
+        l.classes = vec![c];
+        cfg.layers = vec![l];
+        validate(&mut cfg, Path::new(".")).expect("class label with declared attr and matching geom should validate");
+    }
+
+    #[test]
+    fn class_with_label_roundtrips_through_yaml() {
+        use crate::model::Class;
+        let mut c = class_inline("major", None);
+        c.label = Some(inline_label("{name}", None));
+        let yaml = serde_yaml_ng::to_string(&c).unwrap();
+        let back: Class = serde_yaml_ng::from_str(&yaml).unwrap();
+        let lbl = back.label.expect("class label survives roundtrip");
+        assert_eq!(lbl.text, "{name}");
+    }
+
+    #[test]
     fn rejects_duplicate_class_names_within_layer() {
         let mut cfg = minimal_config();
         let mut l = layer("roads");

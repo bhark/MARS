@@ -209,6 +209,7 @@ fn build_two_band_config() -> Config {
                 when: Some("vejkategori = 'Stor vej'".into()),
                 scale: None,
                 style: ClassStyle::Inline(Default::default()),
+                label: None,
             }],
             label: None,
             label_survival: mars_config::LabelSurvival::Independent,

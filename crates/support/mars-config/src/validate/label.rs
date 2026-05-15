@@ -1,19 +1,36 @@
 use std::collections::BTreeMap;
 
 use crate::ConfigError;
-use crate::model::{LabelStyleAttach, Layer, StyleEntry};
+use crate::model::{LabelStyleAttach, Layer, LayerLabel, StyleEntry};
 
 pub(super) fn validate_label(layer: &Layer, styles: &BTreeMap<String, StyleEntry>) -> Result<(), ConfigError> {
-    let Some(label) = &layer.label else {
-        return Ok(());
+    if let Some(label) = &layer.label {
+        validate_one(layer, None, label, styles)?;
+    }
+    for class in &layer.classes {
+        if let Some(label) = &class.label {
+            validate_one(layer, Some(class.name.as_str()), label, styles)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_one(
+    layer: &Layer,
+    class: Option<&str>,
+    label: &LayerLabel,
+    styles: &BTreeMap<String, StyleEntry>,
+) -> Result<(), ConfigError> {
+    let scope = match class {
+        Some(c) => format!("layer {} class {:?} label", layer.name, c),
+        None => format!("layer {} label", layer.name),
     };
 
     if let LabelStyleAttach::Ref { name } = &label.style
         && !matches!(styles.get(name), Some(StyleEntry::Label(_)))
     {
         return Err(ConfigError::Invalid(format!(
-            "layer {} label references unknown or non-label style {:?}",
-            layer.name, name
+            "{scope} references unknown or non-label style {name:?}"
         )));
     }
 
@@ -36,8 +53,8 @@ pub(super) fn validate_label(layer: &Layer, styles: &BTreeMap<String, StyleEntry
         );
         if !ok {
             return Err(ConfigError::Invalid(format!(
-                "layer {} placement does not match geometry type {:?}",
-                layer.name, layer.kind
+                "{scope} placement does not match geometry type {:?}",
+                layer.kind
             )));
         }
     }
