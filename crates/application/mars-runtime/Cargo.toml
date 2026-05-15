@@ -12,6 +12,12 @@ description = "MARS runtime use-case: render plan → resolve artifacts → labe
 [lints]
 workspace = true
 
+[features]
+# exposes `mars_runtime::test_fixtures` (in-memory runtime + manifest +
+# pages) for tests and benches. activated for all dev/test/bench targets
+# via the self-dev-dep below; not enabled in production builds.
+test-fixtures = ["mars-store/test-utils"]
+
 [dependencies]
 mars-types         = { workspace = true }
 mars-grid          = { workspace = true }
@@ -41,6 +47,11 @@ rayon              = { workspace = true }
 zune-jpeg          = { workspace = true }
 
 [dev-dependencies]
+# self-dev-dep with `test-fixtures` enabled. lets integration tests in
+# `tests/` and benches in `benches/` see `mars_runtime::test_fixtures`
+# without each target having to opt in via `required-features` (which
+# silently skips targets when the feature is not active).
+mars-runtime       = { path = ".", features = ["test-fixtures"] }
 mars-store         = { workspace = true, features = ["test-utils"] }
 tokio              = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tracing-subscriber = { workspace = true }

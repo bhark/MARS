@@ -32,6 +32,9 @@ mod plan;
 mod render;
 mod state;
 
+#[cfg(feature = "test-fixtures")]
+pub mod test_fixtures;
+
 pub use fetch::{fetch_page, fetch_sidecar};
 pub use gfi::LayerFeatureInfo;
 pub use legend::{LegendPlan, render_legend};

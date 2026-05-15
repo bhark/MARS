@@ -2718,6 +2718,7 @@ dependencies = [
  "mars-observability",
  "mars-proj",
  "mars-render-port",
+ "mars-runtime",
  "mars-source",
  "mars-store",
  "mars-style",
