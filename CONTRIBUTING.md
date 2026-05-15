@@ -26,8 +26,6 @@ Commits are **subject-only conventional commits**. No body, no co-author trailer
 - Scope mirrors the touched crate (`runtime`, `compiler`, `wms`, `wmts`, `render`, `proj`, `grid`, `store-s3`, `store-fs`, `source-postgres`, `artifact`, `expr`, `style`, `types`, `config`, `observability`, `http`, `text`, `bin-shared`, `diff-capture`, `mars`, ...). One scope per commit.
 - Commit each individual piece of work as its own commit once tests + clippy are green. Do not batch commits at the end of a multi-step task.
 
-Releases are automated from these commit messages by `release-plz`; non-conforming commits are skipped from the changelog.
-
 ## Running tests
 
 ```sh
@@ -45,7 +43,26 @@ CI runs the quick tier (`fmt`, `clippy`, `test`, `cargo-deny`, hex-arch) on ever
 
 ## Releases
 
-Releases are PR-driven via `release-plz`. Conventional commits land on `main`, `release-plz` opens a release PR that bumps `[workspace.package].version` and updates `CHANGELOG.md`. Merging the PR tags `vX.Y.Z`, which triggers binary + container publishing.
+Releases are tag-driven. The tag IS the version: `[workspace.package].version` and `Chart.yaml`'s `version`/`appVersion` stay at the `0.0.0-dev` placeholder on `main` and are rewritten by CI in the runner from the tag at build time. Never bump them in a PR.
+
+Cut a release with the helper script:
+
+```sh
+scripts/release.sh patch          # 0.1.4 -> 0.1.5
+scripts/release.sh minor          # 0.1.4 -> 0.2.0
+scripts/release.sh major          # 0.1.4 -> 1.0.0
+scripts/release.sh v0.2.0-rc.1    # explicit (use for prereleases)
+```
+
+The script preflights a clean tree on `main`, up-to-date with `origin/main`, with the latest CI run on `main` green. It then tags and pushes. The tag push triggers `.github/workflows/release.yml`, which:
+
+1. Builds release binaries for `x86_64-unknown-linux-gnu`, packages a tarball + sha256, and attaches them to the GitHub Release.
+2. Builds + pushes multi-arch (`linux/amd64`, `linux/arm64`) container images to `ghcr.io/bhark/mars` and `ghcr.io/bhark/mars-operator`, tagged with the version, `<major>.<minor>`, `<major>`, and `latest` (the `latest` tag is suppressed for prereleases).
+3. Packages the operator chart and pushes it to `oci://ghcr.io/bhark/charts/mars-operator`. The chart `.tgz` and the raw CRD YAML are attached to the GitHub Release for kustomize / GitOps consumers.
+
+Helm OCI has no `:latest` concept; pin a chart version on `helm install`.
+
+`CHANGELOG.md` is hand-maintained in the PR(s) that land work, not at release time.
 
 ## License
 
