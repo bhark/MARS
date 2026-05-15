@@ -206,6 +206,22 @@ pub struct StrokeGap {
     pub initial_px: f32,
 }
 
+/// Geometry transform applied at render time. Mirrors mapserver's
+/// `GEOMTRANSFORM` for the vertex-extraction subset. The runtime derives a
+/// synthetic point set from the input geometry and stamps `Style::marker`
+/// (when set) at each derived position; line/polygon paint is suppressed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GeomTransform {
+    /// First vertex of every part / ring.
+    Start,
+    /// Last vertex of every part / ring. For closed polygon rings this is
+    /// the same coord as `Start` because rings are coord-closed.
+    End,
+    /// Every vertex of every part / ring.
+    Vertices,
+}
+
 /// Polygon fill paint. `Solid` is a bare hex string on the wire; `Hatch`
 /// and `Image` are tagged maps. Dispatch is exhaustive on purpose so a new
 /// variant breaks the build at every match site (see `docs/EXTENDING.md`
@@ -367,6 +383,11 @@ pub struct Style {
     /// `INITIALGAP`.
     #[serde(default)]
     pub stroke_gap: Option<StrokeGap>,
+    /// Derive a synthetic point set from the input geometry before render.
+    /// `None` means "render the geometry as is". mirrors mapserver's
+    /// `GEOMTRANSFORM` (start | end | vertices subset).
+    #[serde(default)]
+    pub geom_transform: Option<GeomTransform>,
 }
 
 /// Label-typed style.
@@ -889,5 +910,34 @@ mod tests {
         let halo = l.halo.unwrap();
         assert_eq!(halo.colour, Colour::rgba(0xff, 0xff, 0xff, 0xff));
         assert!((halo.width - 1.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn geom_transform_wire_form_is_snake_case() {
+        for (variant, wire) in [
+            (GeomTransform::Start, "start"),
+            (GeomTransform::End, "end"),
+            (GeomTransform::Vertices, "vertices"),
+        ] {
+            let out = serde_yaml_ng::to_string(&variant).unwrap();
+            assert_eq!(out.trim(), wire);
+            let back: GeomTransform = serde_yaml_ng::from_str(wire).unwrap();
+            assert_eq!(back, variant);
+        }
+    }
+
+    #[test]
+    fn style_geom_transform_defaults_to_none() {
+        let s: Style = serde_yaml_ng::from_str("stroke: '#000000'\n").unwrap();
+        assert!(s.geom_transform.is_none());
+    }
+
+    #[test]
+    fn style_with_geom_transform_round_trips() {
+        let yaml = "stroke: '#000000'\ngeom_transform: vertices\n";
+        let s: Style = serde_yaml_ng::from_str(yaml).unwrap();
+        assert_eq!(s.geom_transform, Some(GeomTransform::Vertices));
+        let out = serde_yaml_ng::to_string(&s).unwrap();
+        assert!(out.contains("geom_transform: vertices"));
     }
 }
