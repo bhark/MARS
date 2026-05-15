@@ -158,12 +158,7 @@ pub(crate) fn compute(inputs: StatusInputs<'_>) -> MarsServiceStatus {
         inputs.config_message,
     ));
     if let Some(bs) = inputs.bootstrap {
-        conditions.push(condition(
-            "BootstrapReady",
-            bs.ready,
-            bs.reason.as_str(),
-            bs.message,
-        ));
+        conditions.push(condition("BootstrapReady", bs.ready, bs.reason.as_str(), bs.message));
     }
     conditions.push(condition(
         "ChildrenApplied",

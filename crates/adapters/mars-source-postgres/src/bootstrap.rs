@@ -116,9 +116,7 @@ pub fn render_statements(plan: &BootstrapPlan) -> Result<Vec<String>, BootstrapE
         .map(|s| ident(s))
         .collect::<Result<Vec<_>, _>>()?
         .join(", ");
-    out.push(format!(
-        "CREATE PUBLICATION {pub_q} FOR TABLES IN SCHEMA {schemas_q};"
-    ));
+    out.push(format!("CREATE PUBLICATION {pub_q} FOR TABLES IN SCHEMA {schemas_q};"));
 
     Ok(out)
 }
@@ -135,10 +133,7 @@ pub fn render_slot_creation(plan: &BootstrapPlan) -> String {
 pub fn render_teardown_statements(plan: &TeardownPlan) -> Result<Vec<String>, BootstrapError> {
     let mut out = Vec::new();
     if plan.drop_slot {
-        out.push(format!(
-            "SELECT pg_drop_replication_slot({});",
-            sql_literal(&plan.slot)
-        ));
+        out.push(format!("SELECT pg_drop_replication_slot({});", sql_literal(&plan.slot)));
     }
     if plan.drop_publication {
         let pub_q = ident(&plan.publication)?;
@@ -172,7 +167,9 @@ pub async fn apply(admin_dsn: &str, plan: &BootstrapPlan) -> Result<(), Bootstra
     // ALTER form when the publication already exists.
     let (grants, _create_pub) = pre.split_at(pre.len() - 1);
     for stmt in grants {
-        tx.batch_execute(stmt).await.map_err(|e| BootstrapError::query(stmt, e))?;
+        tx.batch_execute(stmt)
+            .await
+            .map_err(|e| BootstrapError::query(stmt, e))?;
     }
 
     let pub_q = ident(&plan.publication)?;
@@ -207,8 +204,7 @@ pub async fn apply(admin_dsn: &str, plan: &BootstrapPlan) -> Result<(), Bootstra
             )
             .await
             .map_err(|e| BootstrapError::query("probe pg_publication_namespace", e))?;
-        let current: std::collections::BTreeSet<String> =
-            rows.iter().map(|r| r.get::<_, String>(0)).collect();
+        let current: std::collections::BTreeSet<String> = rows.iter().map(|r| r.get::<_, String>(0)).collect();
         let desired: std::collections::BTreeSet<String> = plan.schemas.iter().cloned().collect();
 
         let to_add: Vec<String> = desired.difference(&current).cloned().collect();
@@ -373,7 +369,10 @@ mod tests {
         assert!(joined.contains("GRANT USAGE ON SCHEMA \"public\" TO \"mars_replicator\";"));
         assert!(joined.contains("GRANT USAGE ON SCHEMA \"geo\" TO \"mars_replicator\";"));
         assert!(joined.contains("GRANT SELECT ON ALL TABLES IN SCHEMA \"public\" TO \"mars_replicator\";"));
-        assert!(joined.contains("ALTER DEFAULT PRIVILEGES IN SCHEMA \"geo\" GRANT SELECT ON TABLES TO \"mars_replicator\";"));
+        assert!(
+            joined
+                .contains("ALTER DEFAULT PRIVILEGES IN SCHEMA \"geo\" GRANT SELECT ON TABLES TO \"mars_replicator\";")
+        );
     }
 
     #[test]

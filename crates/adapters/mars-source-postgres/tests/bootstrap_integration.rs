@@ -147,7 +147,9 @@ async fn applying_twice_is_a_no_op() {
     create_schemas(&admin, &["app"]).await;
 
     apply(&dsn, &plan(&["app"])).await.expect("first apply");
-    apply(&dsn, &plan(&["app"])).await.expect("second apply should be idempotent");
+    apply(&dsn, &plan(&["app"]))
+        .await
+        .expect("second apply should be idempotent");
 
     assert_eq!(publication_schemas(&admin, PUB).await, vec!["app"]);
     assert!(slot_exists(&admin, SLOT).await);
@@ -162,9 +164,7 @@ async fn schema_mutation_reconciles_publication() {
     apply(&dsn, &plan(&["app", "geo"])).await.expect("initial apply");
     assert_eq!(publication_schemas(&admin, PUB).await, vec!["app", "geo"]);
 
-    apply(&dsn, &plan(&["app", "extra"]))
-        .await
-        .expect("reconcile apply");
+    apply(&dsn, &plan(&["app", "extra"])).await.expect("reconcile apply");
 
     assert_eq!(publication_schemas(&admin, PUB).await, vec!["app", "extra"]);
 }

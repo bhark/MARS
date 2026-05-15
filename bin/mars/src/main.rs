@@ -192,17 +192,7 @@ async fn async_main(cli: Cli, cfg: Option<Arc<Config>>) -> Result<()> {
                 drop_role,
                 dry_run,
             }),
-        ) => {
-            tool_teardown(
-                &config,
-                &admin_dsn,
-                drop_slot,
-                drop_publication,
-                drop_role,
-                dry_run,
-            )
-            .await
-        }
+        ) => tool_teardown(&config, &admin_dsn, drop_slot, drop_publication, drop_role, dry_run).await,
         (Some(_), Some(_)) => unreachable!("clap conflicts_with rules this out at parse time"),
     }
 }
@@ -596,12 +586,7 @@ async fn tool_inspect(path: &Path) -> Result<()> {
     Ok(())
 }
 
-async fn tool_setup(
-    config: &Path,
-    admin_dsn: &str,
-    runtime_password: String,
-    dry_run: bool,
-) -> Result<()> {
+async fn tool_setup(config: &Path, admin_dsn: &str, runtime_password: String, dry_run: bool) -> Result<()> {
     let cfg = load_and_validate(config)?;
     let plan = build_bootstrap_plan(&cfg, runtime_password)?;
     if dry_run {

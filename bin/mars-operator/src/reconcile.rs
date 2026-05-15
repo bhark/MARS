@@ -272,9 +272,7 @@ async fn reconcile_bootstrap(
     let runtime_ref = bs_spec
         .runtime_password_secret_ref
         .as_ref()
-        .ok_or_else(|| OperatorError::ConfigInvalid(
-            "bootstrap.runtimePasswordSecretRef is required".into(),
-        ))?;
+        .ok_or_else(|| OperatorError::ConfigInvalid("bootstrap.runtimePasswordSecretRef is required".into()))?;
     let secret_api: Api<Secret> = Api::namespaced(ctx.client.clone(), ns);
     let admin_rv = secret_api
         .get_opt(&admin_ref.name)
@@ -410,11 +408,7 @@ async fn reconcile_deletion(
             .await?;
         return Ok(Action::requeue(Duration::from_secs(10)));
     };
-    let succeeded = existing
-        .status
-        .as_ref()
-        .and_then(|s| s.succeeded)
-        .unwrap_or(0);
+    let succeeded = existing.status.as_ref().and_then(|s| s.succeeded).unwrap_or(0);
     if succeeded >= 1 {
         remove_finalizer(ctx, cr.as_ref(), svc_name, ns).await?;
         return Ok(Action::await_change());
@@ -473,7 +467,6 @@ async fn apply_service_account(ctx: &Ctx, ns: &str, sa: &ServiceAccount) -> Resu
         .await?;
     Ok(())
 }
-
 
 fn owner_reference(cr: &MarsService) -> Result<OwnerReference> {
     let uid = cr

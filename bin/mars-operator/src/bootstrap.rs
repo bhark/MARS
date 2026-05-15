@@ -13,15 +13,15 @@
 use blake3::Hasher;
 use k8s_openapi::api::batch::v1::{Job, JobSpec};
 use k8s_openapi::api::core::v1::{
-    ConfigMapVolumeSource, Container, EnvVar, EnvVarSource, PodSpec, PodTemplateSpec, SecretKeySelector, ServiceAccount,
-    Volume, VolumeMount,
+    ConfigMapVolumeSource, Container, EnvVar, EnvVarSource, PodSpec, PodTemplateSpec, SecretKeySelector,
+    ServiceAccount, Volume, VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, OwnerReference};
 
 use crate::children::compiler::{container_security_context, pod_security_context};
 use crate::children::labels::{
-    self, COMPONENT_BOOTSTRAP, COMPONENT_TEARDOWN, bootstrap_job_name, bootstrap_service_account_name,
-    config_map_name, teardown_job_name,
+    self, COMPONENT_BOOTSTRAP, COMPONENT_TEARDOWN, bootstrap_job_name, bootstrap_service_account_name, config_map_name,
+    teardown_job_name,
 };
 use crate::crd::{BootstrapSpec, MarsService, SecretKeyRef, TeardownPolicy};
 use crate::error::{OperatorError, Result};
@@ -127,18 +127,12 @@ pub(crate) fn render_bootstrap_job(
         .bootstrap
         .runtime_password_secret_ref
         .as_ref()
-        .ok_or_else(|| OperatorError::ConfigInvalid(
-            "bootstrap.runtimePasswordSecretRef is required".into(),
-        ))?;
+        .ok_or_else(|| OperatorError::ConfigInvalid("bootstrap.runtimePasswordSecretRef is required".into()))?;
 
     let container = Container {
         name: "bootstrap".into(),
         image: Some(image.to_string()),
-        args: Some(vec![
-            "setup".into(),
-            "--config".into(),
-            "/etc/mars/mars.yaml".into(),
-        ]),
+        args: Some(vec!["setup".into(), "--config".into(), "/etc/mars/mars.yaml".into()]),
         env: Some(vec![
             secret_env("MARS_ADMIN_DSN", admin),
             secret_env("MARS_RUNTIME_PASSWORD", runtime),
@@ -446,14 +440,7 @@ mod tests {
             publication: false,
             role: false,
         };
-        let job = render_teardown_job(
-            &cr,
-            test_support::TEST_IMAGE,
-            &bs,
-            &policy,
-            test_support::owner_ref(),
-        )
-        .unwrap();
+        let job = render_teardown_job(&cr, test_support::TEST_IMAGE, &bs, &policy, test_support::owner_ref()).unwrap();
         let args = job.spec.unwrap().template.spec.unwrap().containers[0]
             .args
             .clone()
