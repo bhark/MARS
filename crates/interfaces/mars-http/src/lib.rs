@@ -378,6 +378,29 @@ mod tests {
         String::from_utf8_lossy(&bytes).into_owned()
     }
 
+    /// Build a `/wms?...` URI for a parametric test body. `extra` carries
+    /// neutral logical keys (`"crs"`, `"i"`, `"j"`); the helper rewrites to
+    /// the version-appropriate wire keys (`"srs"`, `"x"`, `"y"` under 1.1.1)
+    /// so call sites read identically across versions.
+    fn wms_uri(version: &str, request: &str, extra: &[(&str, &str)]) -> String {
+        let mut out = format!("/wms?service=WMS&version={version}&request={request}");
+        for (k, v) in extra {
+            let key = match (*k, version) {
+                ("crs", "1.1.1") => "srs",
+                ("i", "1.1.1") => "x",
+                ("j", "1.1.1") => "y",
+                _ => k,
+            };
+            out.push('&');
+            out.push_str(key);
+            out.push('=');
+            out.push_str(v);
+        }
+        out
+    }
+
+    const WMS_VERSIONS: &[&str] = &["1.3.0", "1.1.1"];
+
     #[tokio::test]
     async fn healthz_ok() {
         let app = empty_router();
@@ -630,32 +653,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn wms_capabilities_304_on_matching_etag() {
-        let app = empty_router();
-        let first = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/wms?service=WMS&version=1.3.0&request=GetCapabilities")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let etag = first.headers().get(header::ETAG).cloned().unwrap();
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/wms?service=WMS&version=1.3.0&request=GetCapabilities")
-                    .header(header::IF_NONE_MATCH, etag.clone())
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::NOT_MODIFIED);
-        assert_eq!(resp.headers().get(header::ETAG).cloned().unwrap(), etag);
-        assert!(body_str(resp).await.is_empty());
+    async fn wms_capabilities_304_on_matching_etag_per_version() {
+        for version in WMS_VERSIONS {
+            let app = empty_router();
+            let uri = format!("/wms?service=WMS&version={version}&request=GetCapabilities");
+            let first = app
+                .clone()
+                .oneshot(Request::builder().uri(uri.as_str()).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            let etag = first.headers().get(header::ETAG).cloned().unwrap();
+            let resp = app
+                .oneshot(
+                    Request::builder()
+                        .uri(uri.as_str())
+                        .header(header::IF_NONE_MATCH, etag.clone())
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::NOT_MODIFIED, "{version}");
+            assert_eq!(resp.headers().get(header::ETAG).cloned().unwrap(), etag, "{version}");
+            assert!(body_str(resp).await.is_empty(), "{version}");
+        }
     }
 
     #[tokio::test]
@@ -795,202 +816,260 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn wms_error_tags_requested_version() {
-        // explicit version=1.3.0 must round-trip into the exception envelope.
-        let app = empty_router();
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/wms?service=WMS&version=1.3.0&request=GetMap")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-        let body = body_str(resp).await;
-        assert!(body.contains(r#"version="1.3.0""#));
+    async fn wms_error_envelope_tags_negotiated_version() {
+        // both pinned versions must round-trip into the ServiceExceptionReport
+        // envelope. supersedes the 1.3.0-only wms_error_tags_requested_version.
+        for version in WMS_VERSIONS {
+            let app = empty_router();
+            let resp = app
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/wms?service=WMS&version={version}&request=GetMap").as_str())
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{version}");
+            let body = body_str(resp).await;
+            assert!(body.contains(&format!(r#"version="{version}""#)), "{version}: {body}");
+            assert!(body.contains(r#"code="MissingParameterValue""#), "{version}: {body}");
+        }
     }
 
     #[tokio::test]
-    async fn wms_get_map_503_without_manifest() {
-        let app = empty_router();
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/wms?service=WMS&version=1.3.0&request=GetMap&layers=a&styles=&crs=EPSG:25832&bbox=0,0,10,10&width=16&height=16&format=image/png")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
-        let ct = resp.headers().get(header::CONTENT_TYPE).cloned().unwrap();
-        assert!(ct.to_str().unwrap().starts_with("text/xml"));
-        let body = body_str(resp).await;
-        assert!(body.contains("ServiceExceptionReport"));
-        assert!(!body.contains("code="));
+    async fn wms_get_map_503_without_manifest_per_version() {
+        for version in WMS_VERSIONS {
+            let app = empty_router();
+            let uri = wms_uri(
+                version,
+                "GetMap",
+                &[
+                    ("layers", "a"),
+                    ("styles", ""),
+                    ("crs", "EPSG:25832"),
+                    ("bbox", "0,0,10,10"),
+                    ("width", "16"),
+                    ("height", "16"),
+                    ("format", "image/png"),
+                ],
+            );
+            let resp = app
+                .oneshot(Request::builder().uri(uri.as_str()).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE, "{version}");
+            let ct = resp.headers().get(header::CONTENT_TYPE).cloned().unwrap();
+            assert!(ct.to_str().unwrap().starts_with("text/xml"), "{version}");
+            let body = body_str(resp).await;
+            assert!(body.contains("ServiceExceptionReport"), "{version}: {body}");
+            assert!(body.contains(&format!(r#"version="{version}""#)), "{version}: {body}");
+            // NotReady carries no code attribute by design.
+            assert!(!body.contains("code="), "{version}: {body}");
+        }
     }
 
     #[tokio::test]
-    async fn wms_get_legend_graphic_503_without_manifest() {
+    async fn wms_get_legend_graphic_503_without_manifest_per_version() {
         // legend rendering needs config from the active state; without a
         // manifest the runtime returns NotReady and the handler maps it to a
-        // 503 XML response.
-        let app = empty_router();
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/wms?service=WMS&version=1.3.0&request=GetLegendGraphic&layer=a&format=image/png")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
-        let body = body_str(resp).await;
-        assert!(body.contains("ServiceExceptionReport"));
+        // 503 XML response. the envelope must carry the negotiated version.
+        for version in WMS_VERSIONS {
+            let app = empty_router();
+            let uri = format!("/wms?service=WMS&version={version}&request=GetLegendGraphic&layer=a&format=image/png");
+            let resp = app
+                .oneshot(Request::builder().uri(uri.as_str()).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE, "{version}");
+            let body = body_str(resp).await;
+            assert!(body.contains("ServiceExceptionReport"), "{version}: {body}");
+            assert!(body.contains(&format!(r#"version="{version}""#)), "{version}: {body}");
+        }
     }
 
     #[tokio::test]
-    async fn wms_get_legend_graphic_missing_layer_400() {
-        let app = empty_router();
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri("/wms?service=WMS&version=1.3.0&request=GetLegendGraphic&format=image/png")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    async fn wms_get_legend_graphic_missing_layer_400_per_version() {
+        for version in WMS_VERSIONS {
+            let app = empty_router();
+            let uri = format!("/wms?service=WMS&version={version}&request=GetLegendGraphic&format=image/png");
+            let resp = app
+                .oneshot(Request::builder().uri(uri.as_str()).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{version}");
+            let body = body_str(resp).await;
+            assert!(body.contains(&format!(r#"version="{version}""#)), "{version}: {body}");
+        }
     }
 
     #[tokio::test]
-    async fn wms_get_feature_info_503_without_manifest() {
-        // a syntactically valid GFI request parses cleanly and dispatches
-        // through the gfi path; with no manifest the runtime returns NotReady
-        // which the handler translates to a 503 XML exception.
-        let app = empty_router();
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri(
-                        "/wms?service=WMS&version=1.3.0&request=GetFeatureInfo&layers=a&styles=&\
-                         crs=EPSG:25832&bbox=0,0,10,10&width=16&height=16&format=image/png&\
-                         query_layers=a&info_format=text/plain&i=8&j=8",
-                    )
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
-        let ct = resp.headers().get(header::CONTENT_TYPE).cloned().unwrap();
-        assert!(ct.to_str().unwrap().starts_with("text/xml"));
-        let body = body_str(resp).await;
-        assert!(body.contains("ServiceExceptionReport"));
+    async fn wms_get_feature_info_503_without_manifest_per_version() {
+        // syntactically valid GFI for both versions parses cleanly and
+        // dispatches through the gfi path; with no manifest the runtime
+        // returns NotReady which the handler translates to 503 XML.
+        for version in WMS_VERSIONS {
+            let app = empty_router();
+            let uri = wms_uri(
+                version,
+                "GetFeatureInfo",
+                &[
+                    ("layers", "a"),
+                    ("styles", ""),
+                    ("crs", "EPSG:25832"),
+                    ("bbox", "0,0,10,10"),
+                    ("width", "16"),
+                    ("height", "16"),
+                    ("format", "image/png"),
+                    ("query_layers", "a"),
+                    ("info_format", "text/plain"),
+                    ("i", "8"),
+                    ("j", "8"),
+                ],
+            );
+            let resp = app
+                .oneshot(Request::builder().uri(uri.as_str()).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE, "{version}");
+            let ct = resp.headers().get(header::CONTENT_TYPE).cloned().unwrap();
+            assert!(ct.to_str().unwrap().starts_with("text/xml"), "{version}");
+            let body = body_str(resp).await;
+            assert!(body.contains("ServiceExceptionReport"), "{version}: {body}");
+            assert!(body.contains(&format!(r#"version="{version}""#)), "{version}: {body}");
+        }
     }
 
     #[tokio::test]
-    async fn wms_get_feature_info_invalid_query_layers_400() {
-        let app = empty_router();
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri(
-                        "/wms?service=WMS&version=1.3.0&request=GetFeatureInfo&layers=a&styles=&\
-                         crs=EPSG:25832&bbox=0,0,10,10&width=16&height=16&format=image/png&\
-                         query_layers=z&info_format=text/plain&i=8&j=8",
-                    )
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-        let body = body_str(resp).await;
-        assert!(body.contains(r#"code="InvalidParameterValue""#));
+    async fn wms_get_feature_info_invalid_query_layers_400_per_version() {
+        for version in WMS_VERSIONS {
+            let app = empty_router();
+            let uri = wms_uri(
+                version,
+                "GetFeatureInfo",
+                &[
+                    ("layers", "a"),
+                    ("styles", ""),
+                    ("crs", "EPSG:25832"),
+                    ("bbox", "0,0,10,10"),
+                    ("width", "16"),
+                    ("height", "16"),
+                    ("format", "image/png"),
+                    ("query_layers", "z"),
+                    ("info_format", "text/plain"),
+                    ("i", "8"),
+                    ("j", "8"),
+                ],
+            );
+            let resp = app
+                .oneshot(Request::builder().uri(uri.as_str()).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::BAD_REQUEST, "{version}");
+            let body = body_str(resp).await;
+            assert!(body.contains(r#"code="InvalidParameterValue""#), "{version}: {body}");
+            assert!(body.contains(&format!(r#"version="{version}""#)), "{version}: {body}");
+        }
     }
 
     #[tokio::test]
-    async fn wms_exceptions_inimage_returns_200_image_on_runtime_error() {
+    async fn wms_exceptions_inimage_returns_200_image_per_version() {
         // exceptions=INIMAGE renders the error message onto a transparent
-        // image of the requested dimensions instead of XML.
-        let app = empty_router();
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri(
-                        "/wms?service=WMS&version=1.3.0&request=GetMap&layers=a&styles=&\
-                         crs=EPSG:25832&bbox=0,0,10,10&width=64&height=64&format=image/png&exceptions=INIMAGE",
-                    )
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        let ct = resp.headers().get(header::CONTENT_TYPE).cloned().unwrap();
-        assert_eq!(ct, "image/png");
-        let body = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
-        assert!(body.starts_with(b"BLANK"), "expected encoder fallthrough");
-        let mut w = [0u8; 4];
-        w.copy_from_slice(&body[5..9]);
-        assert_eq!(u32::from_le_bytes(w), 64);
+        // image of the requested dimensions instead of XML; behaviour must
+        // be identical for 1.1.1 and 1.3.0.
+        for version in WMS_VERSIONS {
+            let app = empty_router();
+            let uri = wms_uri(
+                version,
+                "GetMap",
+                &[
+                    ("layers", "a"),
+                    ("styles", ""),
+                    ("crs", "EPSG:25832"),
+                    ("bbox", "0,0,10,10"),
+                    ("width", "64"),
+                    ("height", "64"),
+                    ("format", "image/png"),
+                    ("exceptions", "INIMAGE"),
+                ],
+            );
+            let resp = app
+                .oneshot(Request::builder().uri(uri.as_str()).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::OK, "{version}");
+            let ct = resp.headers().get(header::CONTENT_TYPE).cloned().unwrap();
+            assert_eq!(ct, "image/png", "{version}");
+            let body = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+            assert!(body.starts_with(b"BLANK"), "{version}: expected encoder fallthrough");
+            let mut w = [0u8; 4];
+            w.copy_from_slice(&body[5..9]);
+            assert_eq!(u32::from_le_bytes(w), 64, "{version}");
+        }
     }
 
     #[tokio::test]
-    async fn wms_exceptions_blank_returns_200_image_on_runtime_error() {
-        // exceptions=BLANK suppresses the XML error report; the runtime's
-        // NotReady error must be converted into a 200 OK image of the
-        // requested dimensions instead.
-        let app = empty_router();
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri(
-                        "/wms?service=WMS&version=1.3.0&request=GetMap&layers=a&styles=&\
-                         crs=EPSG:25832&bbox=0,0,10,10&width=16&height=16&format=image/png&exceptions=BLANK",
-                    )
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        let ct = resp.headers().get(header::CONTENT_TYPE).cloned().unwrap();
-        assert_eq!(ct, "image/png");
-        let body = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
-        // NoopEncoder echoes "BLANK" + width + height; assert the blank ran
-        // through it at the requested dimensions.
-        assert!(body.starts_with(b"BLANK"), "expected encoder fallthrough");
-        let mut w = [0u8; 4];
-        w.copy_from_slice(&body[5..9]);
-        assert_eq!(u32::from_le_bytes(w), 16);
+    async fn wms_exceptions_blank_returns_200_image_per_version() {
+        for version in WMS_VERSIONS {
+            let app = empty_router();
+            let uri = wms_uri(
+                version,
+                "GetMap",
+                &[
+                    ("layers", "a"),
+                    ("styles", ""),
+                    ("crs", "EPSG:25832"),
+                    ("bbox", "0,0,10,10"),
+                    ("width", "16"),
+                    ("height", "16"),
+                    ("format", "image/png"),
+                    ("exceptions", "BLANK"),
+                ],
+            );
+            let resp = app
+                .oneshot(Request::builder().uri(uri.as_str()).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::OK, "{version}");
+            let ct = resp.headers().get(header::CONTENT_TYPE).cloned().unwrap();
+            assert_eq!(ct, "image/png", "{version}");
+            let body = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+            assert!(body.starts_with(b"BLANK"), "{version}: expected encoder fallthrough");
+            let mut w = [0u8; 4];
+            w.copy_from_slice(&body[5..9]);
+            assert_eq!(u32::from_le_bytes(w), 16, "{version}");
+        }
     }
 
     #[tokio::test]
-    async fn wms_exceptions_xml_returns_service_exception() {
-        // sanity inverse of the blank test: default exceptions=XML keeps the
-        // existing behaviour.
-        let app = empty_router();
-        let resp = app
-            .oneshot(
-                Request::builder()
-                    .uri(
-                        "/wms?service=WMS&version=1.3.0&request=GetMap&layers=a&styles=&\
-                         crs=EPSG:25832&bbox=0,0,10,10&width=16&height=16&format=image/png&exceptions=XML",
-                    )
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
-        let body = body_str(resp).await;
-        assert!(body.contains("ServiceExceptionReport"));
+    async fn wms_exceptions_xml_returns_service_exception_per_version() {
+        // sanity inverse of the blank test: explicit exceptions=XML still
+        // produces a 503 ServiceExceptionReport tagged with the right version.
+        for version in WMS_VERSIONS {
+            let app = empty_router();
+            let uri = wms_uri(
+                version,
+                "GetMap",
+                &[
+                    ("layers", "a"),
+                    ("styles", ""),
+                    ("crs", "EPSG:25832"),
+                    ("bbox", "0,0,10,10"),
+                    ("width", "16"),
+                    ("height", "16"),
+                    ("format", "image/png"),
+                    ("exceptions", "XML"),
+                ],
+            );
+            let resp = app
+                .oneshot(Request::builder().uri(uri.as_str()).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE, "{version}");
+            let body = body_str(resp).await;
+            assert!(body.contains("ServiceExceptionReport"), "{version}: {body}");
+            assert!(body.contains(&format!(r#"version="{version}""#)), "{version}: {body}");
+        }
     }
 
     #[tokio::test]
@@ -1035,5 +1114,75 @@ mod tests {
         let body = body_str(resp).await;
         assert!(body.contains("mars_request_total"));
         assert!(body.contains("interface=\"health\""));
+    }
+
+    #[tokio::test]
+    async fn wms_capabilities_reflects_swap_for_v111() {
+        // counterpart to wms_capabilities_reflects_swap: verify the v111
+        // handle is wired to the same ArcSwap mechanic so a manifest change
+        // also rotates the 1.1.1 document.
+        let metrics = Metrics::new().unwrap();
+        let v111 = capabilities_handle("<caps111>v1</caps111>".into());
+        let app = router(
+            empty_runtime(&metrics),
+            CapabilitiesBundle {
+                wms: WmsCapabilitiesHandles {
+                    v111: v111.clone(),
+                    v130: capabilities_handle("<caps>v1</caps>".into()),
+                },
+                wmts: capabilities_handle("<wmtscaps/>".into()),
+            },
+            InterfacesConfig {
+                wms: test_wms_cfg(),
+                wmts: test_wmts_cfg(),
+                cors: None,
+            },
+            metrics,
+        );
+        v111.store(Arc::new(CapabilitiesDoc::new("<caps111>v2</caps111>".to_owned())));
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/wms?service=WMS&version=1.1.1&request=GetCapabilities")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = body_str(resp).await;
+        assert!(body.contains("<caps111>v2</caps111>"), "got: {body}");
+    }
+
+    #[tokio::test]
+    async fn wms_capabilities_isolation_between_versions() {
+        // empty_router seeds distinct stub bodies; each version must serve
+        // only its own marker. locks dispatch against cross-pollination.
+        let app = empty_router();
+        let v111 = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/wms?service=WMS&version=1.1.1&request=GetCapabilities")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let v130 = app
+            .oneshot(
+                Request::builder()
+                    .uri("/wms?service=WMS&version=1.3.0&request=GetCapabilities")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let b111 = body_str(v111).await;
+        let b130 = body_str(v130).await;
+        assert!(b111.contains("<wmscaps111/>"), "v111 body: {b111}");
+        assert!(!b111.contains("<wmscaps/>"), "v111 leaked v130 body: {b111}");
+        assert!(b130.contains("<wmscaps/>"), "v130 body: {b130}");
+        assert!(!b130.contains("<wmscaps111/>"), "v130 leaked v111 body: {b130}");
     }
 }
