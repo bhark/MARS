@@ -310,6 +310,8 @@ pub async fn build_fixture_with(opts: FixtureOptions) -> Fixture {
             hilbert_range_table: vec![(HilbertKey::new(0), HilbertKey::new(u64::MAX), PageId::new(1))],
         }],
         page_membership_sidecar: None,
+        cycles_since_reconcile: 0,
+        last_reconcile_at: None,
     };
 
     let manifest = Manifest {
@@ -672,6 +674,8 @@ where
                 hilbert_range_table: vec![(HilbertKey::new(0), HilbertKey::new(u64::MAX), PageId::new(1))],
             }],
             page_membership_sidecar: None,
+            cycles_since_reconcile: 0,
+            last_reconcile_at: None,
         });
         pages.push(page_entry);
         class_sidecars.push(class_entry);

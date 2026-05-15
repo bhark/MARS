@@ -116,6 +116,8 @@ pub async fn rebuild_binding_from_plan<'a>(
                 combined_bbox: page_plan.combined_bbox,
                 levels: binding_plan.levels.iter().map(empty_level_metadata).collect(),
                 page_membership_sidecar: None,
+                cycles_since_reconcile: 0,
+                last_reconcile_at: None,
             },
             pages: Vec::new(),
             class_sidecars: Vec::new(),
@@ -344,6 +346,8 @@ pub async fn rebuild_binding_from_plan<'a>(
             hash: sidecar_hash,
             size_bytes: sidecar_size,
         }),
+        cycles_since_reconcile: 0,
+        last_reconcile_at: None,
     };
     let output = BindingOutput {
         meta,

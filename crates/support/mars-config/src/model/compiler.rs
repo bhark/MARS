@@ -98,6 +98,13 @@ pub struct Compiler {
     /// image fills fail compile with a typed error.
     #[serde(default)]
     pub images_dir: Option<String>,
+    /// Wall-clock floor on reconciliation cadence: if the last successful
+    /// reconcile for a binding is older than this, force a reconcile on the
+    /// next cycle regardless of `reconcile_every_cycles`. Caps drift after
+    /// leader churn / restart, which resets the in-memory cycle counter.
+    /// Unit-suffixed duration (`2h`, `30min`). `None` disables the floor.
+    #[serde(default)]
+    pub reconcile_max_age: Option<String>,
 }
 
 impl Default for Compiler {
@@ -115,6 +122,7 @@ impl Default for Compiler {
             compile_spill_open_file_limit: default_compile_spill_open_file_limit(),
             rebalance: Rebalance::default(),
             images_dir: None,
+            reconcile_max_age: None,
         }
     }
 }
@@ -165,6 +173,11 @@ impl Compiler {
             Some(s) => std::path::PathBuf::from(s),
             None => std::env::temp_dir().join("mars-compile-spill"),
         }
+    }
+
+    /// Resolve `reconcile_max_age` to a `Duration` when set.
+    pub fn reconcile_max_age_dur(&self) -> Result<Option<Duration>, ConfigError> {
+        self.reconcile_max_age.as_deref().map(units::parse_duration).transpose()
     }
 }
 

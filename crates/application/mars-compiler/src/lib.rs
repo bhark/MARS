@@ -273,16 +273,16 @@ pub struct Compiler {
     deps: Deps,
     config: Config,
     /// Per-binding cycle counter that drives the periodic reconciliation hook
-    /// in [`Self::run_cycle_once`]. Single-instance leader-elected compiler
-    /// means we can keep this in process; on leader handover the counter
-    /// resets, which is intentional (a new leader runs a fresh
-    /// reconciliation pass before drift accumulates).
+    /// in [`Self::run_cycle_once`]. Hydrated lazily on first observation
+    /// per binding from `prior.bindings[*].cycles_since_reconcile`, so the
+    /// cadence survives leader handover / process restart; written back
+    /// into each cycle's manifest via [`stages::cycle::merge`].
     ///
     /// `parking_lot::Mutex` rather than `tokio::sync::RwLock`: the
     /// critical section is purely sync (no `.await` under the guard) and
     /// every access mutates, so the async-aware RwLock would just be
     /// noise. infallible `lock()` keeps the call site clean.
-    cycle_counter: parking_lot::Mutex<HashMap<BindingId, u32>>,
+    pub(crate) cycle_counter: parking_lot::Mutex<HashMap<BindingId, u32>>,
 }
 
 impl Compiler {

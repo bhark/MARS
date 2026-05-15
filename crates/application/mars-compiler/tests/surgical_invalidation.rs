@@ -362,6 +362,8 @@ async fn surgical_invalidation_rebuilds_only_dirty_pages() {
             combined_bbox: bootstrap_combined,
             levels: vec![level_meta.clone()],
             page_membership_sidecar: None,
+            cycles_since_reconcile: 0,
+            last_reconcile_at: None,
         },
     )]);
 

@@ -375,6 +375,17 @@ pub struct BindingMetadata {
     /// `None` when a binding runs in `REPLICA IDENTITY FULL` mode (old-row
     /// geometry comes from the change event itself, no sidecar needed).
     pub page_membership_sidecar: Option<ArtifactEntry>,
+    /// incremental cycles elapsed since the last successful reconciliation
+    /// pass. persisted so the cadence survives leader handover / process
+    /// restart; hydrated into the compiler's in-memory cycle counter on
+    /// startup and written back here each cycle.
+    pub cycles_since_reconcile: u32,
+    /// wall-clock time of the last successful reconciliation pass. drives
+    /// the wall-clock floor in cadence selection: when set and older than
+    /// the configured max age, the binding is forced into the next due set
+    /// regardless of the cycle counter. `None` for never-reconciled bindings
+    /// (typically right after bootstrap).
+    pub last_reconcile_at: Option<SystemTime>,
 }
 
 /// kind of per-layer page sidecar artifact. class sidecars carry
@@ -689,6 +700,8 @@ mod tests {
             combined_bbox: Bbox::new(0.0, 0.0, 1.0, 1.0),
             levels: vec![],
             page_membership_sidecar: None,
+            cycles_since_reconcile: 0,
+            last_reconcile_at: None,
         });
         m.pages.push(PageEntry {
             key: pk.clone(),
@@ -1011,6 +1024,8 @@ mod tests {
             combined_bbox: Bbox::new(-10.0, -10.0, 10.0, 10.0),
             levels: vec![],
             page_membership_sidecar: None,
+            cycles_since_reconcile: 7,
+            last_reconcile_at: Some(SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000)),
         };
         let s = serde_json::to_string(&bm).unwrap();
         let back: BindingMetadata = serde_json::from_str(&s).unwrap();

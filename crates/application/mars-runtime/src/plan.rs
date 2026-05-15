@@ -215,6 +215,8 @@ mod tests {
             combined_bbox: Bbox::new(0.0, 0.0, 1.0, 1.0),
             levels,
             page_membership_sidecar: None,
+            cycles_since_reconcile: 0,
+            last_reconcile_at: None,
         }
     }
 

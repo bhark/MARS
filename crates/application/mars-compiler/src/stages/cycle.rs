@@ -23,7 +23,7 @@ pub(crate) async fn run(
     let ctx = plan::build(c).await?;
     let sidecars = ctx.sidecars.readers()?;
 
-    let reconcile_events = reconcile_cadence::run(c, &ctx, &sidecars).await?;
+    let (reconcile_events, cadence) = reconcile_cadence::run(c, &ctx, &sidecars).await?;
     let ingest::IngestOutcome {
         dirty,
         last_source_version,
@@ -47,12 +47,15 @@ pub(crate) async fn run(
     }
     if dirty.per_binding.is_empty() {
         // no work; publish a no-op version bump so downstream cursors
-        // advance even on empty windows.
-        let next = noop_bump::build(ctx.prior, last_source_version);
+        // advance even on empty windows. still flush the counter / reconcile
+        // state into the new manifest so a later leader picks up where we
+        // left off.
+        let mut next = noop_bump::build(ctx.prior, last_source_version);
+        merge::stamp_reconcile_state(c, &mut next, &[], &cadence);
         return crate::publish_with_retry(c.deps.manifest.as_ref(), &next, &c.deps.metrics, shutdown).await;
     }
 
     let outcome = rebuild::run(&c.deps, &c.deps.metrics, &ctx, &sidecars, dirty).await?;
-    let manifest = merge::run(&ctx.prior, &outcome, last_source_version);
+    let manifest = merge::run(c, &ctx.prior, &outcome, last_source_version, &cadence);
     crate::publish_with_retry(c.deps.manifest.as_ref(), &manifest, &c.deps.metrics, shutdown).await
 }

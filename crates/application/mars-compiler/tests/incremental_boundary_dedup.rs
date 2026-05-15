@@ -194,6 +194,8 @@ async fn boundary_key_row_appears_in_exactly_one_dirty_page() {
         combined_bbox: bbox,
         levels: vec![level_meta],
         page_membership_sidecar: None,
+        cycles_since_reconcile: 0,
+        last_reconcile_at: None,
     };
 
     let prior = Manifest {
