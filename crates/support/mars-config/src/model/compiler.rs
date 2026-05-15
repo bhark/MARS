@@ -105,6 +105,15 @@ pub struct Compiler {
     /// Unit-suffixed duration (`2h`, `30min`). `None` disables the floor.
     #[serde(default)]
     pub reconcile_max_age: Option<String>,
+    /// Per-binding ceiling on the dirty-page set produced by one incremental
+    /// cycle. When a binding's incremental-dirty page count exceeds the
+    /// ceiling (e.g. under WAL replay storms or after a long compiler
+    /// outage), the binding is escalated to a single truncate-class rebuild
+    /// instead of N per-page rebuilds. Same end state, bounded work.
+    /// `None` disables the ceiling; setting it explicitly to `0` is a config
+    /// error (use `None` instead).
+    #[serde(default = "default_dirty_page_ceiling_per_binding")]
+    pub incremental_dirty_page_ceiling_per_binding: Option<usize>,
 }
 
 impl Default for Compiler {
@@ -123,6 +132,7 @@ impl Default for Compiler {
             rebalance: Rebalance::default(),
             images_dir: None,
             reconcile_max_age: None,
+            incremental_dirty_page_ceiling_per_binding: default_dirty_page_ceiling_per_binding(),
         }
     }
 }
@@ -203,6 +213,10 @@ fn default_compile_in_flight_pages_budget() -> String {
 
 fn default_compile_spill_open_file_limit() -> usize {
     256
+}
+
+fn default_dirty_page_ceiling_per_binding() -> Option<usize> {
+    Some(10_000)
 }
 
 /// Opportunistic rebalance settings. Rebalance is

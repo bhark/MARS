@@ -1,8 +1,10 @@
 //! cycle pipeline orchestrator.
 //!
-//! sequence: plan -> reconcile_cadence -> ingest -> (no-op bump if empty)
-//! -> rebuild -> merge -> publish. each stage is one module below.
+//! sequence: plan -> reconcile_cadence -> ingest -> admission (dirty-page
+//! ceiling) -> (no-op bump if empty) -> rebuild -> merge -> publish. each
+//! stage is one module below.
 
+mod admission;
 mod ingest;
 mod merge;
 mod plan;
@@ -25,10 +27,19 @@ pub(crate) async fn run(
 
     let (reconcile_events, cadence) = reconcile_cadence::run(c, &ctx, &sidecars).await?;
     let ingest::IngestOutcome {
-        dirty,
+        mut dirty,
         last_source_version,
         event_count,
     } = ingest::run(&ctx, &sidecars, reconcile_events, batches)?;
+
+    // admission control: cap per-binding dirty pages by escalating offenders
+    // to a single truncate-class rebuild. happens before any other dirty-set
+    // mutation so downstream stages see one consistent state.
+    admission::enforce_ceiling(
+        &mut dirty,
+        c.config.compiler.incremental_dirty_page_ceiling_per_binding,
+        &c.deps.metrics,
+    );
 
     for w in &dirty.warnings {
         tracing::warn!(?w, "incremental cycle warning");

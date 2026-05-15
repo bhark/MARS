@@ -60,6 +60,22 @@ pub mod metrics {
     /// "render") and `kind` (a stable, short, adapter-defined label - typically
     /// the `what` field of the adapter's `Backend` error variant).
     pub const ADAPTER_ERROR_TOTAL: &str = "mars_adapter_error_total";
+
+    /// Counter labelled by `binding` and `reason` tracking forced
+    /// truncate-class rebuilds of a binding during the incremental cycle.
+    pub const COMPILER_BINDING_TRUNCATE: &str = "mars_compiler_binding_truncate_total";
+
+    /// Counter labelled by `binding` tracking change-feed events whose
+    /// hilbert key fell outside every page range (i.e. centroid outside the
+    /// bootstrap `combined_bbox`). Surfaces the silent-drift risk fixed by
+    /// `MissingPagePolicy`.
+    pub const COMPILER_MISSING_PAGE: &str = "mars_compiler_missing_page_total";
+
+    /// Counter labelled by `binding` and `reason` tracking per-binding
+    /// rebuild failures isolated by `BindingFailurePolicy::Isolate`. A
+    /// running count indicates a binding repeatedly failing in isolation;
+    /// alert on the rate.
+    pub const COMPILER_BINDING_REBUILD_FAILURES: &str = "mars_compiler_binding_rebuild_failures_total";
 }
 
 /// Bounded label values for `mars_adapter_error_total{adapter}`. Adapter
@@ -108,6 +124,31 @@ pub mod reject_reason {
 pub mod rebalance_outcome {
     pub const OK: &str = "ok";
     pub const ERROR: &str = "error";
+}
+
+/// Bounded label values for `mars_compiler_binding_truncate_total{reason}`.
+/// Every truncate the compiler issues during a cycle must classify under
+/// one of these labels so cardinality stays flat.
+pub mod truncate_reason {
+    /// source emitted `ChangeEvent::Truncate` for the binding.
+    pub const CHANGE_EVENT: &str = "change_event";
+    /// the dirty-page set for this binding exceeded the configured
+    /// per-binding ceiling, so the cycle escalated to a single rebuild.
+    pub const DIRTY_CEILING: &str = "dirty_ceiling";
+    /// a hilbert key fell outside every page range and
+    /// `MissingPagePolicy::Truncate` resolved the gap by re-deriving the
+    /// binding from source.
+    pub const MISSING_PAGE: &str = "missing_page";
+}
+
+/// Bounded label values for
+/// `mars_compiler_binding_rebuild_failures_total{reason}`. Reason is the
+/// short kind of the `CompilerError` variant that propagated.
+pub mod binding_rebuild_failure_reason {
+    pub const SOURCE: &str = "source";
+    pub const STORE: &str = "store";
+    pub const COMPILE: &str = "compile";
+    pub const OTHER: &str = "other";
 }
 
 /// Bucket an HTTP status into one of `2xx/3xx/4xx/5xx/other`. We deliberately
@@ -160,6 +201,9 @@ struct MetricsInner {
     render_feature_unstyled: IntCounterVec,
     compiler_features_unmatched: IntCounterVec,
     adapter_error_total: IntCounterVec,
+    compiler_binding_truncate: IntCounterVec,
+    compiler_missing_page: IntCounterVec,
+    compiler_binding_rebuild_failures: IntCounterVec,
 }
 
 impl std::fmt::Debug for Metrics {
@@ -259,6 +303,27 @@ impl Metrics {
             ),
             &["adapter", "kind"],
         )?;
+        let compiler_binding_truncate = IntCounterVec::new(
+            Opts::new(
+                metrics::COMPILER_BINDING_TRUNCATE,
+                "total truncate-class binding rebuilds during the incremental cycle, labeled by binding and reason",
+            ),
+            &["binding", "reason"],
+        )?;
+        let compiler_missing_page = IntCounterVec::new(
+            Opts::new(
+                metrics::COMPILER_MISSING_PAGE,
+                "total change events whose hilbert key fell outside every page range, labeled by binding",
+            ),
+            &["binding"],
+        )?;
+        let compiler_binding_rebuild_failures = IntCounterVec::new(
+            Opts::new(
+                metrics::COMPILER_BINDING_REBUILD_FAILURES,
+                "total per-binding rebuild failures isolated by the cycle, labeled by binding and reason",
+            ),
+            &["binding", "reason"],
+        )?;
 
         registry.register(Box::new(request_total.clone()))?;
         registry.register(Box::new(request_duration.clone()))?;
@@ -276,6 +341,9 @@ impl Metrics {
         registry.register(Box::new(render_feature_unstyled.clone()))?;
         registry.register(Box::new(compiler_features_unmatched.clone()))?;
         registry.register(Box::new(adapter_error_total.clone()))?;
+        registry.register(Box::new(compiler_binding_truncate.clone()))?;
+        registry.register(Box::new(compiler_missing_page.clone()))?;
+        registry.register(Box::new(compiler_binding_rebuild_failures.clone()))?;
 
         Ok(Self {
             inner: Arc::new(MetricsInner {
@@ -296,6 +364,9 @@ impl Metrics {
                 render_feature_unstyled,
                 compiler_features_unmatched,
                 adapter_error_total,
+                compiler_binding_truncate,
+                compiler_missing_page,
+                compiler_binding_rebuild_failures,
             }),
         })
     }
@@ -367,6 +438,30 @@ impl Metrics {
     /// [`rebalance_outcome`] to keep label cardinality bounded.
     pub fn inc_compiler_rebalance_run(&self, outcome: &str) {
         self.inner.compiler_rebalance_runs.with_label_values(&[outcome]).inc();
+    }
+
+    /// Increment the binding-truncate counter for `(binding, reason)`. Use
+    /// the constants in [`truncate_reason`] so label cardinality is bounded.
+    pub fn inc_compiler_binding_truncate(&self, binding: &str, reason: &str) {
+        self.inner
+            .compiler_binding_truncate
+            .with_label_values(&[binding, reason])
+            .inc();
+    }
+
+    /// Increment the missing-page counter for `binding`.
+    pub fn inc_compiler_missing_page(&self, binding: &str) {
+        self.inner.compiler_missing_page.with_label_values(&[binding]).inc();
+    }
+
+    /// Increment the per-binding rebuild-failure counter for
+    /// `(binding, reason)`. Use the constants in
+    /// [`binding_rebuild_failure_reason`] to keep label cardinality bounded.
+    pub fn inc_compiler_binding_rebuild_failure(&self, binding: &str, reason: &str) {
+        self.inner
+            .compiler_binding_rebuild_failures
+            .with_label_values(&[binding, reason])
+            .inc();
     }
 
     /// Increment the capabilities rebuild failure counter.
