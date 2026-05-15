@@ -5,7 +5,7 @@
 pub const MAGIC: &[u8; 8] = b"MARS\0\0\0\0";
 
 /// Format version of the on-disk container. Bumped on incompatible changes.
-pub const FORMAT_VERSION: u32 = 2;
+pub const FORMAT_VERSION: u32 = 1;
 
 // generated planus code uses `unsafe` for zero-copy reads; it is the only
 // place we permit unsafe in this crate. all hand-written code below is safe.
