@@ -57,7 +57,7 @@ scripts/release.sh v0.2.0-rc.1    # explicit (use for prereleases)
 The script preflights a clean tree on `main`, up-to-date with `origin/main`, with the latest CI run on `main` green. It then tags and pushes. The tag push triggers `.github/workflows/release.yml`, which:
 
 1. Builds release binaries for `x86_64-unknown-linux-gnu`, packages a tarball + sha256, and attaches them to the GitHub Release.
-2. Builds + pushes multi-arch (`linux/amd64`, `linux/arm64`) container images to `ghcr.io/bhark/mars` and `ghcr.io/bhark/mars-operator`, tagged with the version, `<major>.<minor>`, `<major>`, and `latest` (the `latest` tag is suppressed for prereleases).
+2. Builds + pushes `linux/amd64` container images to `ghcr.io/bhark/mars` and `ghcr.io/bhark/mars-operator`, tagged with the version, `<major>.<minor>`, `<major>`, and `latest` (the `latest` tag is suppressed for prereleases).
 3. Packages the operator chart and pushes it to `oci://ghcr.io/bhark/charts/mars-operator`. The chart `.tgz` and the raw CRD YAML are attached to the GitHub Release for kustomize / GitOps consumers.
 
 Helm OCI has no `:latest` concept; pin a chart version on `helm install`.
