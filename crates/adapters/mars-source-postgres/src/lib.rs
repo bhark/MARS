@@ -21,6 +21,7 @@ use mars_source::{
 };
 use tokio_postgres::NoTls;
 
+pub mod bootstrap;
 mod compile_session;
 mod fetch;
 mod leader;
