@@ -366,7 +366,8 @@ async fn osm_parity_matrix() -> Result<()> {
     let dump = dump_path();
     if !dump.exists() {
         return Err(anyhow::anyhow!(
-            "osm-parity dump missing at {}\nproduce it offline (see {}/README.md) before running this harness.",
+            "osm-parity dump missing at {}\nrun `scripts/run-parity.sh` (auto-fetches) or \
+             `tests/parity/scripts/fetch-fixture.sh` directly; see {}/README.md.",
             dump.display(),
             fixture.display()
         ));
