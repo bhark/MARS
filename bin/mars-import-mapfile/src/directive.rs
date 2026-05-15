@@ -51,6 +51,9 @@ pub(crate) enum LayerDirective<'a> {
     ScaleToken,
     Class(&'a Token),
     Label(&'a Token),
+    Group(&'a Token),
+    Status(&'a Token),
+    Metadata(&'a Token),
     Unsupported(&'a Token),
     Unknown,
 }
@@ -70,6 +73,9 @@ impl<'a> LayerDirective<'a> {
             "SCALETOKEN" => Self::ScaleToken,
             "CLASS" => Self::Class(t),
             "LABEL" => Self::Label(t),
+            "GROUP" => Self::Group(t),
+            "STATUS" => Self::Status(t),
+            "METADATA" => Self::Metadata(t),
             other if is_unsupported(other) => Self::Unsupported(t),
             _ => Self::Unknown,
         }

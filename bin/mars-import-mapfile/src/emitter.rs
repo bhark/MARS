@@ -182,6 +182,9 @@ pub(crate) struct LayerSkeleton {
     pub(crate) sources: Vec<SourceSkeleton>,
     pub(crate) classes: Vec<ClassSkeleton>,
     pub(crate) label: Option<LabelSkeleton>,
+    /// Slash-prefixed WMS group path (`/A/B/C`). `None` puts the layer at
+    /// the service root.
+    pub(crate) group: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -704,6 +707,9 @@ pub(crate) fn render(skel: &Skeleton, bands: &[(String, u64)]) -> String {
             }
             if let Some(kind) = &layer.geom_kind {
                 let _ = writeln!(out, "    type: {kind}");
+            }
+            if let Some(g) = &layer.group {
+                let _ = writeln!(out, "    group: {}", yaml_quote(g));
             }
 
             let band_tiers = split_layer_into_bands(layer, &windows);

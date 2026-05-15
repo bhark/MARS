@@ -30,6 +30,11 @@ pub(crate) struct ResolvedLayer {
     pub classes: Vec<ResolvedClass>,
     pub label: Option<ResolvedLabel>,
     pub attributes: Vec<String>,
+    /// Slash-separated WMS group path (`/A/B/C`) or `None` when the layer
+    /// hangs off the service root. Collapsed at resolve time from `GROUP`
+    /// (flat) and `wms_layer_group` (hierarchical); the hierarchical form
+    /// wins when both are set.
+    pub group_path: Option<String>,
     pub unimplemented: Vec<&'static str>,
 }
 
@@ -89,6 +94,21 @@ pub(crate) fn resolve_layer(
 ) -> Option<ResolvedLayer> {
     let name = p.name.clone().unwrap_or_else(|| format!("unnamed_layer_l{layer_line}"));
 
+    // abstract parent layer: STATUS OFF + wms_enable_request restricting
+    // GetMap. the path-based capabilities builder reconstructs the parent
+    // <Layer> element from real children's group paths, so we drop this
+    // record entirely. operators relying on Title/Abstract on the parent
+    // entry should add wms_group_title / wms_group_abstract follow-up
+    // support (out of scope here).
+    if p.status_off && p.wms_only {
+        tracing::info!(
+            line = layer_line,
+            layer = %name,
+            "absorbed abstract parent layer into group synthesis"
+        );
+        return None;
+    }
+
     if let Some(ref t) = p.layer_type {
         let up = t.to_ascii_uppercase();
         if up == "QUERY" {
@@ -113,6 +133,7 @@ pub(crate) fn resolve_layer(
                 classes: Vec::new(),
                 label: None,
                 attributes: Vec::new(),
+                group_path: normalize_group_path(p.wms_layer_group.as_deref(), p.group.as_deref()),
                 unimplemented: vec!["LAYER TYPE RASTER (compiler / runtime pipeline not yet implemented)"],
             });
         }
@@ -192,6 +213,8 @@ pub(crate) fn resolve_layer(
         }
     }
 
+    let group_path = normalize_group_path(p.wms_layer_group.as_deref(), p.group.as_deref());
+
     Some(ResolvedLayer {
         name,
         title: p.title,
@@ -200,8 +223,28 @@ pub(crate) fn resolve_layer(
         classes,
         label,
         attributes: all_attrs.into_iter().collect(),
+        group_path,
         unimplemented,
     })
+}
+
+/// Collapse mapfile `GROUP` (flat) and `wms_layer_group` (hierarchical)
+/// metadata into a single canonical slash-prefixed path. The hierarchical
+/// form wins when both are set (MapServer convention). Empty / whitespace
+/// segments are dropped, and the result is always either `None` or a path
+/// like `/A/B/C`.
+fn normalize_group_path(wms: Option<&str>, group: Option<&str>) -> Option<String> {
+    let raw = wms.or(group)?;
+    let segments: Vec<&str> = raw.split('/').map(str::trim).filter(|s| !s.is_empty()).collect();
+    if segments.is_empty() {
+        return None;
+    }
+    let mut out = String::with_capacity(raw.len() + 1);
+    for s in segments {
+        out.push('/');
+        out.push_str(s);
+    }
+    Some(out)
 }
 
 fn resolve_sources(
@@ -468,5 +511,38 @@ mod tests {
             mapfile_text_to_template("(tostring([col],\"%f\"))"),
             "tostring({col},\"%f\")"
         );
+    }
+
+    #[test]
+    fn group_path_collapses_flat_group_to_single_segment() {
+        assert_eq!(normalize_group_path(None, Some("Basis")).as_deref(), Some("/Basis"));
+    }
+
+    #[test]
+    fn group_path_collapses_hierarchical_wms_group_path() {
+        assert_eq!(
+            normalize_group_path(Some("/Adresse/Bygning"), None).as_deref(),
+            Some("/Adresse/Bygning")
+        );
+        // missing leading slash still produces a normalised path.
+        assert_eq!(
+            normalize_group_path(Some("Adresse/Bygning"), None).as_deref(),
+            Some("/Adresse/Bygning")
+        );
+    }
+
+    #[test]
+    fn group_path_wms_layer_group_wins_over_flat_group() {
+        assert_eq!(
+            normalize_group_path(Some("/A/B"), Some("Other")).as_deref(),
+            Some("/A/B"),
+        );
+    }
+
+    #[test]
+    fn group_path_drops_empty_segments_and_returns_none_when_blank() {
+        assert_eq!(normalize_group_path(Some("///A// /B/"), None).as_deref(), Some("/A/B"));
+        assert!(normalize_group_path(Some(""), None).is_none());
+        assert!(normalize_group_path(Some("///"), None).is_none());
     }
 }

@@ -1,0 +1,43 @@
+# LAYER GROUP / wms_layer_group / abstract-parent fixture. Exercises:
+#   - flat `GROUP "Basis"` -> `/Basis`
+#   - hierarchical `wms_layer_group "/Adresse/Bygning"` (wins over GROUP)
+#   - abstract-parent absorbed: STATUS OFF + wms_enable_request "!GetMap"
+#     drops the layer entirely; capabilities synthesises the parent from
+#     the children's paths.
+MAP
+  NAME "groups"
+  TITLE "WMS Layer Grouping Coverage"
+
+  LAYER
+    NAME "Basis_kort_root"
+    STATUS OFF
+    TYPE POLYGON
+    METADATA
+      "wms_layer_group" "/Basis"
+      "wms_enable_request" "GetCapabilities !GetMap"
+    END
+  END
+
+  LAYER
+    NAME "basemap"
+    TYPE POLYGON
+    DATA "geom FROM basemap"
+    GROUP "Basis"
+  END
+
+  LAYER
+    NAME "bygning"
+    TYPE POLYGON
+    DATA "geom FROM bygning"
+    GROUP "Ignored"
+    METADATA
+      "wms_layer_group" "/Adresse/Bygning"
+    END
+  END
+
+  LAYER
+    NAME "ungrouped"
+    TYPE LINE
+    DATA "geom FROM lines"
+  END
+END

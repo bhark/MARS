@@ -77,6 +77,11 @@ fn label_class_fixture_matches() {
 }
 
 #[test]
+fn layer_group_fixture_matches() {
+    assert_fixture_matches("layer_group");
+}
+
+#[test]
 fn expression_ops_fixture_matches() {
     assert_fixture_matches("expression_ops");
 }
