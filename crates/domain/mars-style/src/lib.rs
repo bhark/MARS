@@ -403,8 +403,58 @@ pub struct LabelStyle {
     // range values at config-load instead.
     #[serde(default)]
     pub priority: u16,
+    /// Minimum spacing between this label's bbox and every other placed
+    /// label's bbox, in pixels. Inflates the collision footprint; the
+    /// larger of the two neighbours' min_distance wins per pair. Mirrors
+    /// mapserver's `MINDISTANCE` (post-7.2 pixel semantics).
     #[serde(default)]
     pub min_distance: f32,
+    /// Anchor keyword positioning the bbox relative to the geometry's
+    /// representative point. `Auto` defers to the collision pass which
+    /// walks the eight perimeter positions in mapserver order. Mirrors
+    /// mapserver's `POSITION`.
+    #[serde(default)]
+    pub position: AnchorPosition,
+    /// Offset in pixels applied after `position`. Canvas-frame for
+    /// axis-aligned labels, label-local frame (rotates with the run) for
+    /// labels with a non-zero angle. Mirrors mapserver's `OFFSET dx dy`.
+    #[serde(default)]
+    pub offset_px: (f32, f32),
+    /// Static label rotation in degrees, counter-clockwise. `None` defers
+    /// to the placement-derived angle (zero for points/polygons, tangent
+    /// for lines). Mirrors mapserver's numeric `ANGLE <deg>`.
+    #[serde(default)]
+    pub angle_deg: Option<f32>,
+    /// When `false`, drop labels whose bbox extends past the canvas edge.
+    /// Defaults to `false` to match mapserver's `PARTIALS` default.
+    #[serde(default)]
+    pub partials: bool,
+    /// Skip the collision pass for this label - it is always placed, and
+    /// remains a collision obstacle for lower-priority labels behind it.
+    /// Mirrors mapserver's `FORCE`.
+    #[serde(default)]
+    pub force: bool,
+}
+
+/// Anchor position keyword for a label bbox. Names where the geometry's
+/// representative point sits on the label's bbox: `Uc` (upper-centre)
+/// anchors the bbox's top-centre to the point, so the label appears below.
+/// `Auto` defers selection to the collision pass which tries the eight
+/// perimeter positions in mapserver order. Mirrors mapserver's `POSITION`.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AnchorPosition {
+    Ul,
+    Uc,
+    Ur,
+    Cl,
+    Cc,
+    Cr,
+    Ll,
+    Lc,
+    Lr,
+    #[default]
+    Auto,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -430,6 +480,12 @@ pub enum Placement {
         /// the label's footprint, in degrees.
         #[serde(default = "Placement::default_max_angle_delta_deg")]
         max_angle_delta_deg: f32,
+        /// How to orient labels along the line. `Auto` rotates the whole
+        /// run as a block at the sample's local tangent; `Follow` rotates
+        /// each glyph to its own local tangent. Mirrors mapserver's
+        /// `ANGLE AUTO` vs `ANGLE FOLLOW`.
+        #[serde(default)]
+        angle_mode: LineAngleMode,
     },
     /// Single-anchor placement inside a polygon.
     Polygon {
@@ -446,6 +502,20 @@ impl Placement {
     const fn default_max_angle_delta_deg() -> f32 {
         25.0
     }
+}
+
+/// How a `Placement::Line` orients each placed label relative to the line's
+/// local tangent.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LineAngleMode {
+    /// Rotate the whole run as a single block at the sample's local
+    /// tangent. Cheap; mirrors mapserver's `ANGLE AUTO`.
+    #[default]
+    Auto,
+    /// Rotate each glyph to its own local tangent so the run curves with
+    /// the line. Mirrors mapserver's `ANGLE FOLLOW`.
+    Follow,
 }
 
 /// Polygon-label anchor strategy.
@@ -538,6 +608,7 @@ pub fn default_placement(kind: LayerGeomKind) -> Placement {
         LayerGeomKind::Line => Placement::Line {
             repeat_m: 250.0,
             max_angle_delta_deg: 25.0,
+            angle_mode: LineAngleMode::Auto,
         },
         LayerGeomKind::Polygon => Placement::Polygon {
             strategy: PolygonStrategy::Polylabel,
@@ -705,9 +776,11 @@ mod tests {
             Placement::Line {
                 repeat_m,
                 max_angle_delta_deg,
+                angle_mode,
             } => {
                 assert!((repeat_m - 250.0).abs() < f64::EPSILON);
                 assert!((max_angle_delta_deg - 25.0).abs() < f32::EPSILON);
+                assert_eq!(angle_mode, LineAngleMode::Auto);
             }
             _ => panic!("expected line"),
         }
@@ -717,9 +790,11 @@ mod tests {
             Placement::Line {
                 repeat_m,
                 max_angle_delta_deg,
+                angle_mode,
             } => {
                 assert!((repeat_m - 100.0).abs() < f64::EPSILON);
                 assert!((max_angle_delta_deg - 10.0).abs() < f32::EPSILON);
+                assert_eq!(angle_mode, LineAngleMode::Auto);
             }
             _ => panic!("expected line"),
         }
@@ -910,6 +985,75 @@ mod tests {
         let halo = l.halo.unwrap();
         assert_eq!(halo.colour, Colour::rgba(0xff, 0xff, 0xff, 0xff));
         assert!((halo.width - 1.5).abs() < f32::EPSILON);
+        // new fields default to the back-compat values so existing configs
+        // keep their current behaviour.
+        assert_eq!(l.position, AnchorPosition::Auto);
+        assert_eq!(l.offset_px, (0.0, 0.0));
+        assert!(l.angle_deg.is_none());
+        assert!(!l.partials);
+        assert!(!l.force);
+    }
+
+    #[test]
+    fn label_style_round_trips_new_fields() {
+        let yaml = r#"
+font_family: Arial
+font_size: 12
+fill: '#000000'
+position: uc
+offset_px: [3.5, -2.0]
+angle_deg: 45.0
+partials: true
+force: true
+min_distance: 8.0
+"#;
+        let l: LabelStyle = serde_yaml_ng::from_str(yaml).unwrap();
+        assert_eq!(l.position, AnchorPosition::Uc);
+        assert_eq!(l.offset_px, (3.5, -2.0));
+        assert_eq!(l.angle_deg, Some(45.0));
+        assert!(l.partials);
+        assert!(l.force);
+        assert!((l.min_distance - 8.0).abs() < f32::EPSILON);
+
+        // serialise back and reparse: round-trip must preserve the new fields.
+        let out = serde_yaml_ng::to_string(&l).unwrap();
+        let back: LabelStyle = serde_yaml_ng::from_str(&out).unwrap();
+        assert_eq!(back, l);
+    }
+
+    #[test]
+    fn anchor_position_wire_form_is_short_lowercase() {
+        for (pos, wire) in [
+            (AnchorPosition::Ul, "ul"),
+            (AnchorPosition::Uc, "uc"),
+            (AnchorPosition::Ur, "ur"),
+            (AnchorPosition::Cl, "cl"),
+            (AnchorPosition::Cc, "cc"),
+            (AnchorPosition::Cr, "cr"),
+            (AnchorPosition::Ll, "ll"),
+            (AnchorPosition::Lc, "lc"),
+            (AnchorPosition::Lr, "lr"),
+            (AnchorPosition::Auto, "auto"),
+        ] {
+            let out = serde_yaml_ng::to_string(&pos).unwrap();
+            assert_eq!(out.trim(), wire);
+            let back: AnchorPosition = serde_yaml_ng::from_str(wire).unwrap();
+            assert_eq!(back, pos);
+        }
+    }
+
+    #[test]
+    fn line_angle_mode_round_trips() {
+        let p: Placement = serde_yaml_ng::from_str("kind: line\nangle_mode: follow").unwrap();
+        match p {
+            Placement::Line { angle_mode, .. } => assert_eq!(angle_mode, LineAngleMode::Follow),
+            _ => panic!("expected line"),
+        }
+        let p: Placement = serde_yaml_ng::from_str("kind: line\nangle_mode: auto").unwrap();
+        match p {
+            Placement::Line { angle_mode, .. } => assert_eq!(angle_mode, LineAngleMode::Auto),
+            _ => panic!("expected line"),
+        }
     }
 
     #[test]

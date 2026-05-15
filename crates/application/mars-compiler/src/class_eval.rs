@@ -315,6 +315,7 @@ mod tests {
         let placement = Placement::Line {
             repeat_m: 250.0,
             max_angle_delta_deg: 25.0,
+            angle_mode: mars_style::LineAngleMode::Auto,
         };
         let spec = LabelSpec {
             priority: 0,

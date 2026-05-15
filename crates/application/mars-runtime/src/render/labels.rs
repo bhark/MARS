@@ -85,6 +85,7 @@ pub(super) fn prepare_labels(
             Placement::Line {
                 repeat_m,
                 max_angle_delta_deg,
+                ..
             },
         ) = (&c.shape, placement)
         {

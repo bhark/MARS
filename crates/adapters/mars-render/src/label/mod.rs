@@ -44,7 +44,7 @@ mod tests {
     use std::sync::Arc;
 
     use mars_render_port::{Canvas, DrawOp, Encoder, ImageFormat, Renderer};
-    use mars_style::{Colour, LabelStyle};
+    use mars_style::{AnchorPosition, Colour, LabelStyle};
 
     use crate::{TinySkiaEncoder, TinySkiaRenderer};
 
@@ -81,6 +81,11 @@ mod tests {
                 halo: None,
                 priority: 0,
                 min_distance: 0.0,
+                position: AnchorPosition::default(),
+                offset_px: (0.0, 0.0),
+                angle_deg: None,
+                partials: false,
+                force: false,
             }),
             angle_rad: 0.0,
         }];
@@ -102,6 +107,11 @@ mod tests {
             halo: None,
             priority: 0,
             min_distance: 0.0,
+            position: AnchorPosition::default(),
+            offset_px: (0.0, 0.0),
+            angle_deg: None,
+            partials: false,
+            force: false,
         });
         let upright = vec![DrawOp::Label {
             anchor: (32.0, 32.0),
@@ -160,6 +170,11 @@ mod tests {
             halo: None,
             priority: 0,
             min_distance: 0.0,
+            position: AnchorPosition::default(),
+            offset_px: (0.0, 0.0),
+            angle_deg: None,
+            partials: false,
+            force: false,
         };
         let m = r.measure_text("hello", &style).unwrap();
         assert!(m.advance_x.is_finite() && m.advance_x > 0.0);
@@ -180,6 +195,11 @@ mod tests {
             halo: None,
             priority: 0,
             min_distance: 0.0,
+            position: AnchorPosition::default(),
+            offset_px: (0.0, 0.0),
+            angle_deg: None,
+            partials: false,
+            force: false,
         };
         let m = r.measure_text("x", &style).unwrap();
         assert!(m.advance_x > 0.0 && m.ascent > 0.0);

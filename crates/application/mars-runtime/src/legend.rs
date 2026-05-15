@@ -243,6 +243,11 @@ fn default_label_style() -> LabelStyle {
         halo: None,
         priority: 0,
         min_distance: 0.0,
+        position: mars_style::AnchorPosition::default(),
+        offset_px: (0.0, 0.0),
+        angle_deg: None,
+        partials: false,
+        force: false,
     }
 }
 

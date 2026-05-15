@@ -10,7 +10,7 @@
 //! the anchor before rotation is applied.
 
 use mars_render_port::RenderError;
-use mars_style::{Colour, FillPaint, LabelStyle, Style};
+use mars_style::{AnchorPosition, Colour, FillPaint, LabelStyle, Style};
 use mars_text::Fonts;
 use tiny_skia::Pixmap;
 
@@ -39,6 +39,11 @@ pub(crate) fn draw(
         halo: None,
         priority: 0,
         min_distance: 0.0,
+        position: AnchorPosition::default(),
+        offset_px: (0.0, 0.0),
+        angle_deg: None,
+        partials: false,
+        force: false,
     };
 
     let run =

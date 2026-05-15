@@ -477,6 +477,11 @@ fn build_minimal_stylesheet() -> Stylesheet {
             halo: None,
             priority: 100,
             min_distance: 0.0,
+            position: mars_style::AnchorPosition::default(),
+            offset_px: (0.0, 0.0),
+            angle_deg: None,
+            partials: false,
+            force: false,
         }),
     );
     ss
