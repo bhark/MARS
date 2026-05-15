@@ -13,11 +13,11 @@ use super::scenario::Scenario;
 const PNG_MAGIC: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 const MIN_BODY_BYTES: usize = 512;
 
-// bbox fits the synthetic pattern_zone polygon (tests/e2e/sql/synthetic-pattern.sql).
-// at 256x256 the 16x16 stripe tile repeats 16 times across the frame.
+// bbox matches the synthetic pattern_zone polygon (tests/e2e/sql/synthetic-pattern.sql).
+// at 256x256 the 16x16 stripe tile repeats clearly across the frame.
 const PATH_AND_QUERY: &str = "/wms?service=WMS&version=1.3.0&request=GetMap\
 &layers=pattern_zone&styles=&crs=EPSG:25832\
-&bbox=860000,6105000,880000,6125000&width=256&height=256&format=image/png";
+&bbox=539000,5219000,545000,5228000&width=256&height=256&format=image/png";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn image_pattern_serves_png() -> Result<()> {

@@ -1,8 +1,9 @@
 //! fixture-loader orchestration. the SQL dump itself is fetched out-of-band
 //! by `scripts/fetch-fixture.sh`; this module wires it into the cluster via:
-//!   - a `fixture-sql` ConfigMap built from the canonical assert + replication
-//!     SQL files in `tests/integration/fixtures/local-map-subset/` (driver-side
-//!     to keep the YAML template clean of multi-line interpolation)
+//!   - a `fixture-sql` ConfigMap built from the canonical derive + assert +
+//!     replication SQL files in `tests/integration/fixtures/e2e-osm/`
+//!     (driver-side to keep the YAML template clean of multi-line
+//!     interpolation)
 //!   - a kind hostPath mount of `target/e2e-fixtures` declared in
 //!     `tests/e2e/kind.yaml.tmpl` that exposes the dump on the node, consumed
 //!     by the loader Job's hostPath volume.
@@ -26,7 +27,7 @@ pub fn host_fixture_path() -> Result<PathBuf> {
         Some(p) => PathBuf::from(p),
         None => {
             let repo = repo_root()?;
-            repo.join("target/e2e-fixtures/local-map-subset.sql.gz")
+            repo.join("target/e2e-fixtures/osm-parity.sql.gz")
         }
     };
     if !path.exists() {
@@ -48,14 +49,17 @@ pub fn fixture_filename(path: &std::path::Path) -> Result<String> {
         .ok_or_else(|| anyhow!("fixture path {} has no filename", path.display()))
 }
 
-/// create the `fixture-sql` ConfigMap with the canonical assert + replication
-/// SQL files, plus the e2e-only synthetic-poi extension consumed by the
-/// loader and the mutate-source script applied by b_incremental. server-side
-/// apply so reruns inside the same namespace are idempotent.
+/// create the `fixture-sql` ConfigMap with the canonical derive + assert +
+/// replication SQL files, plus the e2e-only synthetic-poi extension consumed
+/// by the loader and the mutate-source script applied by b_incremental.
+/// server-side apply so reruns inside the same namespace are idempotent.
 pub async fn apply_sql_configmap(client: Arc<Client>, ns: &str) -> Result<()> {
     let repo = repo_root()?;
-    let shared = repo.join("tests/integration/fixtures/local-map-subset");
+    let shared = repo.join("tests/integration/fixtures/e2e-osm");
     let e2e_sql = repo.join("tests/e2e/sql");
+    let derive = fs::read_to_string(shared.join("derive-e2e.sql"))
+        .await
+        .with_context(|| format!("read {}/derive-e2e.sql", shared.display()))?;
     let assert = fs::read_to_string(shared.join("assert-fixture.sql"))
         .await
         .with_context(|| format!("read {}/assert-fixture.sql", shared.display()))?;
@@ -73,6 +77,7 @@ pub async fn apply_sql_configmap(client: Arc<Client>, ns: &str) -> Result<()> {
         .with_context(|| format!("read {}/mutate-source.sql", e2e_sql.display()))?;
 
     let mut data = BTreeMap::new();
+    data.insert("derive-e2e.sql".to_string(), derive);
     data.insert("assert-fixture.sql".to_string(), assert);
     data.insert("create-replication.sql".to_string(), replication);
     data.insert("synthetic-poi.sql".to_string(), synthetic_poi);

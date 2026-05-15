@@ -10,7 +10,7 @@ use super::scenario::Scenario;
 const PNG_MAGIC: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 const MIN_BODY_BYTES: usize = 1024;
 
-const PATH_AND_QUERY: &str = "/wms?service=WMS&version=1.3.0&request=GetMap&layers=land,water,settlements,roads,buildings,waterways,poi&styles=&crs=EPSG:25832&bbox=850000,6090000,895000,6145000&width=512&height=512&format=image/png";
+const PATH_AND_QUERY: &str = "/wms?service=WMS&version=1.3.0&request=GetMap&layers=land,water,settlements,roads,buildings,waterways,poi&styles=&crs=EPSG:25832&bbox=536000,5210000,548000,5235000&width=512&height=512&format=image/png";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn wms_serves_png() -> Result<()> {

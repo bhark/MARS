@@ -1,9 +1,11 @@
-# one-shot fixture loader. reads the gzipped dump from a kind hostPath mount
+# one-shot fixture loader. reads the gzipped dump (osm2pgsql planet_osm_*
+# tables, shared with the parity suite) from a kind hostPath mount
 # (target/e2e-fixtures on the host -> /var/lib/mars-e2e-fixtures on the node)
-# and pipes it into psql. drops the schema first for idempotent reloads, then
+# and pipes it into psql. drops the schema first for idempotent reloads, runs
+# derive-e2e.sql to materialise e2e_source.* on top of planet_osm_*, then
 # applies assert-fixture + create-replication so the change-feed slot is in
-# place. the assert + replication SQL files live in a `fixture-sql` ConfigMap
-# applied by the test driver (see src/fixtures.rs).
+# place. the SQL files live in a `fixture-sql` ConfigMap applied by the test
+# driver (see src/fixtures.rs).
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -13,14 +15,21 @@ data:
   loader.sh: |
     #!/bin/sh
     set -eu
-    echo "[loader] dropping any prior e2e_source schema + pub/slot"
+    echo "[loader] dropping any prior e2e_source schema + pub/slot + planet_osm_* leftovers"
     psql "$PG_DSN" -v ON_ERROR_STOP=1 -c "DROP SCHEMA IF EXISTS e2e_source CASCADE"
     psql "$PG_DSN" -v ON_ERROR_STOP=1 -c "DROP PUBLICATION IF EXISTS mars_e2e_pub"
     psql "$PG_DSN" -v ON_ERROR_STOP=1 \
       -c "SELECT pg_drop_replication_slot('mars_e2e_slot') \
           WHERE EXISTS (SELECT 1 FROM pg_replication_slots WHERE slot_name = 'mars_e2e_slot')"
-    echo "[loader] restoring fixture dump"
-    gunzip -c "/fixture/{{FIXTURE_FILENAME}}" | psql "$PG_DSN" -v ON_ERROR_STOP=1
+    psql "$PG_DSN" -v ON_ERROR_STOP=1 -c "DROP TABLE IF EXISTS planet_osm_line, planet_osm_point, planet_osm_polygon, planet_osm_roads CASCADE"
+    echo "[loader] restoring osm2pgsql dump (planet_osm_*)"
+    # the dump's leading CREATE SCHEMA public collides with the bootstrap db;
+    # strip that single statement and let the rest restore unchanged.
+    gunzip -c "/fixture/{{FIXTURE_FILENAME}}" \
+      | grep -v '^CREATE SCHEMA public;$' \
+      | psql "$PG_DSN" -v ON_ERROR_STOP=1
+    echo "[loader] deriving e2e_source schema from planet_osm_*"
+    psql "$PG_DSN" -v ON_ERROR_STOP=1 -f /sql/derive-e2e.sql
     echo "[loader] asserting fixture shape"
     psql "$PG_DSN" -v ON_ERROR_STOP=1 -f /sql/assert-fixture.sql
     echo "[loader] creating replication pub + slot"

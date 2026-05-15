@@ -52,10 +52,10 @@ cells:
     mid: 4096m
     lo: 16384m
   extent:
-    min_x: 850000
-    min_y: 6090000
-    max_x: 895000
-    max_y: 6145000
+    min_x: 535000
+    min_y: 5201000
+    max_x: 551000
+    max_y: 5264000
 
 interfaces:
   wms:

@@ -53,16 +53,19 @@ The crate is excluded from the root `[workspace]` (see `/Cargo.toml`) so
 
 ## Fixture
 
-The test dataset is a gzipped Postgres dump that creates an `e2e_source`
-schema with six layers (land, water, settlements, roads, buildings,
-waterways) in EPSG:25832. The contract is documented in
-`tests/integration/fixtures/local-map-subset/README.md`; the dump itself is
+The test dataset is the same gzipped `osm2pgsql` dump that the parity suite
+consumes (Liechtenstein OpenStreetMap extract). The kind loader restores
+`planet_osm_*` and then runs `derive-e2e.sql` to materialise the
+`e2e_source` schema with six layers (land, water, settlements, roads,
+buildings, waterways) in EPSG:25832. The contract is documented in
+`tests/integration/fixtures/e2e-osm/README.md`; the dump itself is
 intentionally **not** committed.
 
 `scripts/fetch-fixture.sh` resolves the dump in this order:
 
-1. `target/e2e-fixtures/local-map-subset.sql.gz` if present and the SHA256
-   matches `tests/integration/fixtures/local-map-subset/manifest.sha256`.
+1. `target/e2e-fixtures/osm-parity.sql.gz` if present and the SHA256
+   matches `tests/parity/fixtures/osm/manifest.sha256` (the e2e and parity
+   suites share one pinned dump).
 2. Otherwise fetch from `${MARS_E2E_FIXTURE_URL}` (env override) or the
    `# source:` URL pinned in the same manifest.
 3. Otherwise error with a pointer back to this README.

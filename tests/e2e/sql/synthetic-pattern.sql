@@ -9,10 +9,10 @@ CREATE TABLE IF NOT EXISTS e2e_source.pattern_zone (
 
 CREATE INDEX IF NOT EXISTS pattern_zone_geom_gix ON e2e_source.pattern_zone USING GIST (geom);
 
--- one rectangle inside the render bbox [850000,6090000,895000,6145000];
+-- one rectangle inside the render bbox [536000,5210000,548000,5235000];
 -- sized so a 16px tile repeats clearly within a 256px frame.
 INSERT INTO e2e_source.pattern_zone (geom) VALUES (
-    ST_SetSRID(ST_MakeEnvelope(860000, 6105000, 880000, 6125000), 25832)
+    ST_SetSRID(ST_MakeEnvelope(539000, 5219000, 545000, 5228000), 25832)
 ) ON CONFLICT DO NOTHING;
 
 -- ride the same change-feed as the dump tables; pattern matches synthetic-poi.sql.
