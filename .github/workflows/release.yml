@@ -11,11 +11,19 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
 
+# never run two release builds for the same tag in parallel (force-push,
+# replays, etc). cancel-in-progress: false so an in-flight build finishes
+# even if a duplicate event arrives.
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
   binary:
     name: build binaries (${{ matrix.target }})
     runs-on: ${{ matrix.runner }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
@@ -33,15 +41,28 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq build-essential clang cmake pkg-config libsqlite3-dev sqlite3
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-edit
+      - name: patch versions to tag
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VER="${REF_NAME#v}"
+          cargo set-version --workspace "$VER"
+          VER="$VER" yq -i '.version = strenv(VER) | .appVersion = strenv(VER)' charts/mars-operator/Chart.yaml
       - name: build release binaries
         run: |
           cargo build --release --locked --target ${{ matrix.target }} \
             -p mars -p mars-compile -p mars-import-mapfile -p mars-operator
       - name: package
         id: pkg
+        env:
+          REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          ver="${GITHUB_REF_NAME#v}"
+          ver="${REF_NAME#v}"
           stage="mars-${ver}-${{ matrix.target }}"
           mkdir -p "dist/${stage}"
           cp target/${{ matrix.target }}/release/mars \
@@ -62,10 +83,11 @@ jobs:
             ${{ steps.pkg.outputs.sha }}
 
   container:
-    name: build + push container image (${{ matrix.bin }})
+    name: build + push container (${{ matrix.bin }})
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
+      fail-fast: false
       matrix:
         include:
           - bin: mars
@@ -74,7 +96,22 @@ jobs:
             image_suffix: "-operator"
     steps:
       - uses: actions/checkout@v6
+      - uses: docker/setup-qemu-action@v4
+        with:
+          platforms: arm64
       - uses: docker/setup-buildx-action@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-edit
+      - name: patch versions to tag
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VER="${REF_NAME#v}"
+          cargo set-version --workspace "$VER"
+          VER="$VER" yq -i '.version = strenv(VER) | .appVersion = strenv(VER)' charts/mars-operator/Chart.yaml
       - name: log in to ghcr.io
         uses: docker/login-action@v4
         with:
@@ -85,7 +122,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ghcr.io/${{ github.repository }}${{ matrix.image_suffix }}
+          images: ghcr.io/${{ github.repository_owner }}/mars${{ matrix.image_suffix }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -96,9 +133,58 @@ jobs:
         with:
           context: .
           push: true
+          platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             BIN=${{ matrix.bin }}
           cache-from: type=gha,scope=${{ matrix.bin }}
           cache-to: type=gha,mode=max,scope=${{ matrix.bin }}
+
+  chart:
+    name: package + push helm chart
+    runs-on: ubuntu-latest
+    needs: [container]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: azure/setup-helm@v5
+        with:
+          version: v3.16.1
+      - name: patch chart versions to tag
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          VER="${REF_NAME#v}"
+          VER="$VER" yq -i '.version = strenv(VER) | .appVersion = strenv(VER)' charts/mars-operator/Chart.yaml
+      - name: helm lint
+        run: helm lint charts/mars-operator
+      - name: package chart
+        id: pkg
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          ver="${REF_NAME#v}"
+          mkdir -p dist
+          helm package charts/mars-operator --destination dist
+          # ship the raw CRD too so kustomize / GitOps users don't need to
+          # crack open the chart tarball.
+          cp charts/mars-operator/templates/crd.yaml dist/mars-operator-crd.yaml
+          echo "tgz=dist/mars-operator-${ver}.tgz" >> "$GITHUB_OUTPUT"
+      - name: log in to ghcr.io
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: push chart to ghcr (oci)
+        run: |
+          helm push "${{ steps.pkg.outputs.tgz }}" "oci://ghcr.io/${{ github.repository_owner }}/charts"
+      - name: attach chart + crd to github release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            ${{ steps.pkg.outputs.tgz }}
+            dist/mars-operator-crd.yaml
