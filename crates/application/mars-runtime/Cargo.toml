@@ -74,3 +74,7 @@ harness = false
 name              = "label_collision"
 harness           = false
 required-features = ["bench-internals"]
+
+[[bench]]
+name    = "manifest_swap"
+harness = false
