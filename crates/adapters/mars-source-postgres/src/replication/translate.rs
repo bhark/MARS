@@ -3,10 +3,10 @@
 use std::borrow::Cow;
 
 use mars_artifact::{wkb_bbox, wkb_centroid};
-use mars_source::{ChangeEvent, GeometryEnvelope, SourceError};
+use mars_source::{ChangeEvent, GeometryEnvelope, RebindReason, SourceError};
 
 use super::pgoutput::{ColumnData, DeletePayload, Message, Relation, Tuple, UpdatePayload};
-use super::{CachedRelation, RelationCache, ReplicationTopology};
+use super::{BindOutcome, BindingState, CachedRelation, CollectionTopology, RelationCache, ReplicationTopology};
 
 /// Zero or more consumer-visible events from a single pgoutput message.
 /// row events return one; multi-relation truncate returns one per known
@@ -24,10 +24,7 @@ pub(crate) fn translate(
 ) -> Result<Translated, SourceError> {
     match msg {
         Message::Begin { .. } | Message::Commit { .. } | Message::Unhandled => Ok(Translated(Vec::new())),
-        Message::Relation(rel) => {
-            cache_relation(rel, cache, topology);
-            Ok(Translated(Vec::new()))
-        }
+        Message::Relation(rel) => Ok(cache_relation(rel, cache, topology)),
         Message::Insert { relation_oid, tuple } => insert_event(relation_oid, &tuple, cache, topology),
         Message::Update { relation_oid, payload } => update_event(relation_oid, payload, cache, topology),
         Message::Delete { relation_oid, payload } => delete_event(relation_oid, payload, cache, topology),
@@ -35,7 +32,54 @@ pub(crate) fn translate(
     }
 }
 
-fn cache_relation(rel: Relation, cache: &mut RelationCache, topology: &ReplicationTopology) {
+/// Pure preflight: the structural and contract checks a relation must
+/// pass before its oid can be routed by the change-feed. Returns an
+/// active `CachedRelation` on success, or a typed error describing why
+/// the bind was refused.
+///
+/// Lifted out of the row-event hot path so the same diagnostic surfaces
+/// at Relation-message time (when we can fail closed on one binding)
+/// instead of at the first UPDATE / DELETE (when failure killed the
+/// whole subscription).
+fn validate_relation_for_bind(rel: &Relation, top: &CollectionTopology) -> Result<CachedRelation, RelationBindError> {
+    let Some(geometry_col_idx) = rel.columns.iter().position(|c| c.name == top.geometry_column) else {
+        return Err(RelationBindError::MissingGeometryColumn {
+            column: top.geometry_column.clone(),
+        });
+    };
+    let Some(id_col_idx) = rel.columns.iter().position(|c| c.name == top.id_column) else {
+        return Err(RelationBindError::MissingIdColumn {
+            column: top.id_column.clone(),
+        });
+    };
+    if rel.replica_identity != b'f' {
+        return Err(RelationBindError::IncompatibleReplicaIdentity {
+            got: rel.replica_identity,
+        });
+    }
+    let id_type_oid = rel.columns[id_col_idx].type_oid;
+    Ok(CachedRelation {
+        oid: rel.oid,
+        topology: top.clone(),
+        id_col_idx,
+        id_type_oid,
+        geometry_col_idx,
+        replica_identity: rel.replica_identity,
+        state: BindingState::Active,
+    })
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum RelationBindError {
+    #[error("missing geometry column {column:?} declared by topology")]
+    MissingGeometryColumn { column: String },
+    #[error("missing id column {column:?} declared by topology")]
+    MissingIdColumn { column: String },
+    #[error("requires REPLICA IDENTITY FULL (got identity {:?})", *got as char)]
+    IncompatibleReplicaIdentity { got: u8 },
+}
+
+fn cache_relation(rel: Relation, cache: &mut RelationCache, topology: &ReplicationTopology) -> Translated {
     let Some(top) = topology.find(&rel.namespace, &rel.name) else {
         // a relation outside topology means the publication includes more
         // than mars knows about. tolerate but log; row events for it will
@@ -45,37 +89,57 @@ fn cache_relation(rel: Relation, cache: &mut RelationCache, topology: &Replicati
             relation = %rel.name,
             "pgoutput: relation not in mars topology, ignoring"
         );
-        return;
+        return Translated(Vec::new());
     };
-    let Some(geom_col_idx) = rel.columns.iter().position(|c| c.name == top.geometry_column) else {
-        tracing::error!(
-            namespace = %rel.namespace,
-            relation = %rel.name,
-            geometry_column = %top.geometry_column,
-            "pgoutput: relation missing geometry column declared by topology"
-        );
-        return;
-    };
-    let Some(id_col_idx) = rel.columns.iter().position(|c| c.name == top.id_column) else {
-        tracing::error!(
-            namespace = %rel.namespace,
-            relation = %rel.name,
-            id_column = %top.id_column,
-            "pgoutput: relation missing id column declared by topology"
-        );
-        return;
-    };
-    let id_type_oid = rel.columns[id_col_idx].type_oid;
-    cache.insert(
-        rel.oid,
-        CachedRelation {
-            topology: top.clone(),
-            id_col_idx,
-            id_type_oid,
-            geometry_col_idx: geom_col_idx,
-            replica_identity: rel.replica_identity,
+    match validate_relation_for_bind(&rel, top) {
+        Ok(entry) => match cache.bind(entry) {
+            BindOutcome::Fresh | BindOutcome::UnchangedOid => Translated(Vec::new()),
+            BindOutcome::Rebound { old_oid } => {
+                tracing::info!(
+                    collection = %top.collection,
+                    namespace = %rel.namespace,
+                    relation = %rel.name,
+                    old_oid,
+                    new_oid = rel.oid,
+                    "pgoutput: rebind detected, signalling per-binding resnapshot"
+                );
+                Translated(vec![ChangeEvent::Rebind {
+                    collection: top.collection.clone(),
+                    reason: RebindReason::OidChanged {
+                        old_oid,
+                        new_oid: rel.oid,
+                    },
+                }])
+            }
         },
-    );
+        Err(err) => {
+            let reason = err.to_string();
+            // mark the binding rejected so subsequent row events on this
+            // oid drop silently; emit a Rebind { PreflightFailed } so the
+            // compiler degrades the binding via the isolation policy.
+            cache.bind(CachedRelation {
+                oid: rel.oid,
+                topology: top.clone(),
+                id_col_idx: 0,
+                id_type_oid: 0,
+                geometry_col_idx: 0,
+                replica_identity: rel.replica_identity,
+                state: BindingState::Rejected { reason: reason.clone() },
+            });
+            tracing::warn!(
+                collection = %top.collection,
+                namespace = %rel.namespace,
+                relation = %rel.name,
+                oid = rel.oid,
+                %reason,
+                "pgoutput: preflight failed on bind/rebind, refusing to route oid"
+            );
+            Translated(vec![ChangeEvent::Rebind {
+                collection: top.collection.clone(),
+                reason: RebindReason::PreflightFailed { reason },
+            }])
+        }
+    }
 }
 
 fn insert_event(
@@ -84,13 +148,8 @@ fn insert_event(
     cache: &RelationCache,
     _topology: &ReplicationTopology,
 ) -> Result<Translated, SourceError> {
-    let Some(entry) = cache.get(oid) else {
-        // pgoutput guarantees Relation precedes the first row event for the
-        // same oid; an unknown oid is a stream-state error, not a stale cache.
-        return Err(SourceError::backend_msg(
-            "pgoutput",
-            format!("insert for unknown relation oid {oid}"),
-        ));
+    let Some(entry) = active_entry(cache, oid, "insert") else {
+        return Ok(Translated(Vec::new()));
     };
     let feature_id = extract_feature_id(tuple, entry)?;
     let new_envelope = envelope_from_tuple(tuple, entry.geometry_col_idx)?;
@@ -107,16 +166,14 @@ fn update_event(
     cache: &RelationCache,
     _topology: &ReplicationTopology,
 ) -> Result<Translated, SourceError> {
-    let Some(entry) = cache.get(oid) else {
-        return Err(SourceError::backend_msg(
-            "pgoutput",
-            format!("update for unknown relation oid {oid}"),
-        ));
+    let Some(entry) = active_entry(cache, oid, "update") else {
+        return Ok(Translated(Vec::new()));
     };
 
     // bound tables MUST carry REPLICA IDENTITY FULL so the
-    // OLD geometry is present on every UPDATE/DELETE. phase-c uses both
-    // old and new bboxes to derive Hilbert keys covering the dirty pages.
+    // OLD geometry is present on every UPDATE/DELETE. preflight enforces
+    // this at bind time; this remains as a defensive guard for the case
+    // where pgoutput claims FULL but omits the O tuple anyway.
     let Some(old) = payload.full_old.as_ref() else {
         return Err(missing_full_old_error(entry, "update"));
     };
@@ -130,6 +187,29 @@ fn update_event(
         new_envelope,
         old_envelope: Some(old_envelope),
     }]))
+}
+
+/// Resolve `oid` to an `Active` cache entry, or return `None` after
+/// logging once at the appropriate level. `None` on:
+/// - unknown oid: pgoutput stream-state error (Relation never arrived);
+///   not turned into a SourceError so other bindings keep flowing.
+/// - rejected binding: preflight refused the oid; the per-binding Rebind
+///   event already informed the compiler. drop silently.
+fn active_entry<'a>(cache: &'a RelationCache, oid: u32, op: &'static str) -> Option<&'a CachedRelation> {
+    let entry = cache.get_by_oid(oid)?;
+    match &entry.state {
+        BindingState::Active => Some(entry),
+        BindingState::Rejected { reason } => {
+            tracing::debug!(
+                op,
+                oid,
+                collection = %entry.topology.collection,
+                %reason,
+                "pgoutput: dropping row event for rejected binding"
+            );
+            None
+        }
+    }
 }
 
 fn missing_full_old_error(entry: &CachedRelation, op: &str) -> SourceError {
@@ -159,11 +239,8 @@ fn delete_event(
     cache: &RelationCache,
     _topology: &ReplicationTopology,
 ) -> Result<Translated, SourceError> {
-    let Some(entry) = cache.get(oid) else {
-        return Err(SourceError::backend_msg(
-            "pgoutput",
-            format!("delete for unknown relation oid {oid}"),
-        ));
+    let Some(entry) = active_entry(cache, oid, "delete") else {
+        return Ok(Translated(Vec::new()));
     };
     let tuple = match &payload {
         DeletePayload::Full(t) => t,
@@ -179,11 +256,15 @@ fn delete_event(
 }
 
 fn truncate_event(oids: &[u32], cache: &RelationCache) -> Result<Translated, SourceError> {
-    // multi-relation truncate: emit one event per known oid. unknown oids
-    // belong to relations outside the configured topology and are skipped.
+    // multi-relation truncate: emit one event per known, active oid.
+    // unknown oids belong to relations outside the configured topology
+    // and are skipped. rejected bindings are skipped too: a TRUNCATE on
+    // an already-degraded binding does not need to flip it further.
     let mut events = Vec::new();
     for oid in oids {
-        if let Some(entry) = cache.get(*oid) {
+        if let Some(entry) = cache.get_by_oid(*oid)
+            && matches!(entry.state, BindingState::Active)
+        {
             events.push(ChangeEvent::Truncate {
                 collection: entry.topology.collection.clone(),
             });
@@ -376,9 +457,93 @@ mod tests {
         let mut cache = RelationCache::default();
         let t = topo();
         let _ = translate(Message::Relation(relation_msg()), &mut cache, &t).unwrap();
-        let entry = cache.get(100).unwrap();
+        let entry = cache.get_by_oid(100).unwrap();
         assert_eq!(entry.geometry_col_idx, 1);
         assert_eq!(entry.topology.collection.as_str(), "roads");
+        assert!(matches!(entry.state, BindingState::Active));
+    }
+
+    #[test]
+    fn fresh_bind_emits_no_event() {
+        let mut cache = RelationCache::default();
+        let t = topo();
+        let Translated(events) = translate(Message::Relation(relation_msg()), &mut cache, &t).unwrap();
+        assert!(events.is_empty(), "fresh bind should be silent, got {events:?}");
+    }
+
+    #[test]
+    fn rebind_to_new_oid_emits_oid_changed() {
+        // initial bind at oid 100.
+        let mut cache = RelationCache::default();
+        let t = topo();
+        let _ = translate(Message::Relation(relation_msg()), &mut cache, &t).unwrap();
+
+        // operator-side swap: same name, new oid, still FULL identity.
+        let res = translate(
+            Message::Relation(relation_msg_with_identity(777, "roads_t", b'f')),
+            &mut cache,
+            &t,
+        )
+        .unwrap();
+        match one_event(res) {
+            ChangeEvent::Rebind {
+                collection,
+                reason: RebindReason::OidChanged { old_oid, new_oid },
+            } => {
+                assert_eq!(collection.as_str(), "roads");
+                assert_eq!(old_oid, 100);
+                assert_eq!(new_oid, 777);
+            }
+            other => panic!("expected Rebind OidChanged, got {other:?}"),
+        }
+        // the new oid routes to the rebound entry; the old oid is purged.
+        assert!(cache.get_by_oid(100).is_none());
+        let entry = cache.get_by_oid(777).unwrap();
+        assert!(matches!(entry.state, BindingState::Active));
+    }
+
+    #[test]
+    fn rebind_to_oid_without_full_identity_marks_rejected() {
+        let mut cache = RelationCache::default();
+        let t = topo();
+        let _ = translate(Message::Relation(relation_msg()), &mut cache, &t).unwrap();
+
+        // operator-side swap with a replacement table that forgot to set
+        // REPLICA IDENTITY FULL.
+        let res = translate(
+            Message::Relation(relation_msg_with_identity(777, "roads_t", b'd')),
+            &mut cache,
+            &t,
+        )
+        .unwrap();
+        match one_event(res) {
+            ChangeEvent::Rebind {
+                collection,
+                reason: RebindReason::PreflightFailed { .. },
+            } => {
+                assert_eq!(collection.as_str(), "roads");
+            }
+            other => panic!("expected Rebind PreflightFailed, got {other:?}"),
+        }
+        // the new oid is in the cache but in Rejected state; the old oid
+        // is gone (rebind purged it, then the rejected entry replaced).
+        assert!(cache.get_by_oid(100).is_none());
+        let entry = cache.get_by_oid(777).unwrap();
+        assert!(matches!(entry.state, BindingState::Rejected { .. }));
+    }
+
+    #[test]
+    fn unchanged_oid_is_silent() {
+        // pgoutput is free to re-emit a Relation for the same oid (e.g.
+        // after a schema-bump it does not actually care about). idempotent.
+        let mut cache = RelationCache::default();
+        let t = topo();
+        let _ = translate(Message::Relation(relation_msg()), &mut cache, &t).unwrap();
+        let Translated(events) = translate(Message::Relation(relation_msg()), &mut cache, &t).unwrap();
+        assert!(
+            events.is_empty(),
+            "re-bind of same oid should be silent, got {events:?}"
+        );
     }
 
     #[test]
@@ -492,16 +657,34 @@ mod tests {
     }
 
     #[test]
-    fn update_without_full_old_errors_on_default_identity() {
+    fn relation_without_full_identity_emits_rebind_preflight_failed() {
         let mut cache = RelationCache::default();
         let t = topo();
-        // relation has REPLICA IDENTITY DEFAULT (b'd'), not FULL.
-        let _ = translate(
+        // relation has REPLICA IDENTITY DEFAULT (b'd'), not FULL: the
+        // bind is refused at relation-message time instead of waiting
+        // for the first UPDATE to kill the subscription.
+        let res = translate(
             Message::Relation(relation_msg_with_identity(100, "roads_t", b'd')),
             &mut cache,
             &t,
         )
         .unwrap();
+        match one_event(res) {
+            ChangeEvent::Rebind {
+                collection,
+                reason: RebindReason::PreflightFailed { reason: failure_reason },
+            } => {
+                assert_eq!(collection.as_str(), "roads");
+                assert!(
+                    failure_reason.contains("REPLICA IDENTITY FULL"),
+                    "reason = {failure_reason}"
+                );
+            }
+            other => panic!("expected Rebind PreflightFailed, got {other:?}"),
+        }
+
+        // subsequent row events on the rejected oid drop silently rather
+        // than killing the subscription.
         let new_geom = point_le(50.0, 50.0);
         let payload = UpdatePayload {
             key_old: None,
@@ -510,22 +693,16 @@ mod tests {
                 columns: vec![ColumnData::Text(b"42"), ColumnData::Binary(&new_geom)],
             },
         };
-        let err = translate(
+        let Translated(events) = translate(
             Message::Update {
                 relation_oid: 100,
                 payload,
             },
             &mut cache,
             &t,
-        );
-        match err {
-            Err(SourceError::Backend { source, .. }) => {
-                let msg = source.to_string();
-                assert!(msg.contains("REPLICA IDENTITY FULL"), "msg = {msg}");
-                assert!(msg.contains("public.roads_t"), "msg = {msg}");
-            }
-            other => panic!("expected Backend error, got {other:?}"),
-        }
+        )
+        .unwrap();
+        assert!(events.is_empty(), "rejected oid should drop events, got {events:?}");
     }
 
     #[test]

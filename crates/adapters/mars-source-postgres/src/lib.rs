@@ -16,7 +16,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use deadpool_postgres::{Hook, HookError, Pool, Runtime};
 use futures_core::stream::BoxStream;
-use mars_source::{ChangeFeed, ChangeSubscription, CompileSession, RowBytes, Source, SourceBinding, SourceError};
+use mars_source::{
+    BindingHealth, ChangeFeed, ChangeSubscription, CompileSession, RowBytes, Source, SourceBinding, SourceError,
+};
 use tokio_postgres::NoTls;
 
 mod compile_session;
@@ -263,6 +265,51 @@ impl Source for PgSource {
     ) -> Result<Box<dyn CompileSession + 'a>, SourceError> {
         let session = compile_session::PgCompileSession::open(self.pool.clone(), binding.clone()).await?;
         Ok(Box::new(session))
+    }
+
+    /// Probe `pg_publication_tables` for the wired publication and
+    /// classify each requested collection as `Healthy` or `Unpublished`.
+    /// Backstop for the "binding silently dropped from the publication"
+    /// case the in-band Relation messages cannot deliver.
+    async fn probe_binding_health(
+        &self,
+        collections: &[SourceCollectionId],
+    ) -> Result<Vec<BindingHealth>, SourceError> {
+        if collections.is_empty() {
+            return Ok(Vec::new());
+        }
+        let topology = self.topology.as_ref().ok_or_else(|| {
+            SourceError::InvalidBinding("ReplicationTopology not wired; call PgSource::with_topology".into())
+        })?;
+        let client = self.pool.get().await.map_err(|e| SourceError::backend("pool", e))?;
+        let rows = client
+            .query(
+                "select schemaname, tablename \
+                   from pg_publication_tables \
+                  where pubname = $1",
+                &[&self.cfg.publication],
+            )
+            .await
+            .map_err(|e| SourceError::backend("pg_publication_tables", e))?;
+        let published: std::collections::HashSet<(String, String)> = rows
+            .into_iter()
+            .map(|row| (row.get::<_, String>(0), row.get::<_, String>(1)))
+            .collect();
+        Ok(collections
+            .iter()
+            .map(
+                |collection| match topology.collections.iter().find(|c| &c.collection == collection) {
+                    Some(top) if published.contains(&(top.schema.clone(), top.table.clone())) => {
+                        BindingHealth::Healthy(collection.clone())
+                    }
+                    // topology mismatch is treated as unpublished: a binding
+                    // not in the configured topology cannot be routed even if
+                    // the table happens to exist in the publication.
+                    Some(_) => BindingHealth::Unpublished(collection.clone()),
+                    None => BindingHealth::Unpublished(collection.clone()),
+                },
+            )
+            .collect())
     }
 }
 

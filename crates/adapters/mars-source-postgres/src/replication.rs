@@ -79,34 +79,84 @@ pub(crate) async fn subscribe(
 // change-feed translator surfaces the row's bbox/centroid in the ChangeEvent
 // payload, from which the compiler derives the affected HilbertKey directly.
 
-/// Cache mapping pgoutput relation oid to the `CollectionTopology` plus
-/// the index of the geometry column inside the relation's column list. The
-/// relation message arrives once per relation per session; we cache it for
-/// every subsequent row event referencing that oid.
+/// Cache of bound relations. The configured `(schema, table)` pair is
+/// the source of truth (the bound-name contract belongs to mars config);
+/// the pgoutput relation oid is just the current routing handle. Lookups
+/// from row events come in by oid, so we index both ways.
+///
+/// A name binds to exactly one entry at a time. When a `Relation` message
+/// arrives for a known name carrying a different oid, the cache treats
+/// it as a rebind: the old oid is purged from the secondary index and
+/// the entry is replaced (state = `Active`) or rejected (state =
+/// `Rejected`) depending on preflight.
 #[derive(Debug, Default)]
 pub(crate) struct RelationCache {
-    entries: HashMap<u32, CachedRelation>,
+    by_name: HashMap<(String, String), CachedRelation>,
+    name_for_oid: HashMap<u32, (String, String)>,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct CachedRelation {
+    /// current pgoutput handle. mutated on rebind.
+    pub oid: u32,
     pub topology: CollectionTopology,
     pub id_col_idx: usize,
     pub id_type_oid: u32,
     pub geometry_col_idx: usize,
     /// pgoutput replica-identity byte: `d` default, `n` nothing, `f` full,
-    /// `i` index. used by the translator to produce a useful operator-facing
-    /// error when an UPDATE/DELETE arrives without the old tuple we need.
+    /// `i` index. validated at bind time (must be `f`); the row-event
+    /// paths keep a defensive guard against pgoutput weirdness.
     pub replica_identity: u8,
+    pub state: BindingState,
+}
+
+/// Per-binding state. `Rejected` carries the operator-facing reason so
+/// the row-event paths can log once on the first event they drop.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum BindingState {
+    Active,
+    Rejected { reason: String },
+}
+
+/// Outcome of `RelationCache::bind` for a fresh `Relation` message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum BindOutcome {
+    /// no prior cache entry for this name; entry installed.
+    Fresh,
+    /// existing entry already pointed at this oid; nothing changed.
+    UnchangedOid,
+    /// entry was bound to a different oid; old oid purged, entry
+    /// replaced. carries the previous oid for tracing / event payloads.
+    Rebound { old_oid: u32 },
 }
 
 impl RelationCache {
-    pub(crate) fn insert(&mut self, oid: u32, entry: CachedRelation) {
-        self.entries.insert(oid, entry);
+    /// Install or replace the entry for the given name. On `Rebound`,
+    /// the old oid is purged from the secondary index.
+    pub(crate) fn bind(&mut self, entry: CachedRelation) -> BindOutcome {
+        let key = (entry.topology.schema.clone(), entry.topology.table.clone());
+        let new_oid = entry.oid;
+        let outcome = if let Some(prior) = self.by_name.get(&key) {
+            if prior.oid == new_oid {
+                BindOutcome::UnchangedOid
+            } else {
+                let old_oid = prior.oid;
+                self.name_for_oid.remove(&old_oid);
+                BindOutcome::Rebound { old_oid }
+            }
+        } else {
+            BindOutcome::Fresh
+        };
+        self.name_for_oid.insert(new_oid, key.clone());
+        self.by_name.insert(key, entry);
+        outcome
     }
 
-    pub(crate) fn get(&self, oid: u32) -> Option<&CachedRelation> {
-        self.entries.get(&oid)
+    /// Look up by the current pgoutput oid. Row events arrive keyed by
+    /// oid so this is the hot-path lookup.
+    pub(crate) fn get_by_oid(&self, oid: u32) -> Option<&CachedRelation> {
+        let key = self.name_for_oid.get(&oid)?;
+        self.by_name.get(key)
     }
 }
 
