@@ -69,3 +69,8 @@ harness = false
 [[bench]]
 name    = "render_e2e"
 harness = false
+
+[[bench]]
+name              = "label_collision"
+harness           = false
+required-features = ["bench-internals"]
