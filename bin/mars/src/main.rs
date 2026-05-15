@@ -3,8 +3,9 @@
 //! `mars --mode {runtime|compiler|all-in-one} --config /etc/mars/mars.yaml`
 //! is the service operation path.
 //!
-//! `mars validate <path>` and `mars inspect <path>` are operational tooling
-//! subcommands. Providing both `--mode` and a subcommand is a parse error.
+//! `mars validate <path>`, `mars inspect <path>`, `mars setup`, and
+//! `mars teardown` are operational tooling subcommands. Providing both
+//! `--mode` and a subcommand is a parse error.
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -83,6 +84,43 @@ enum Tool {
         #[arg(long)]
         url: String,
     },
+    /// Idempotently provision the postgres catalog objects MARS needs (role,
+    /// grants, publication, slot). Reads names + schemas from the config file.
+    Setup {
+        /// Path to the configuration file.
+        #[arg(long)]
+        config: PathBuf,
+        /// libpq DSN for an admin connection (CREATE ROLE / CREATE PUBLICATION
+        /// / pg_create_logical_replication_slot privileges).
+        #[arg(long, env = "MARS_ADMIN_DSN")]
+        admin_dsn: String,
+        /// Password to set on the runtime role.
+        #[arg(long, env = "MARS_RUNTIME_PASSWORD")]
+        runtime_password: String,
+        /// Print the SQL that would be executed and exit without connecting.
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
+    },
+    /// Inverse of `setup`. Each drop is opt-in.
+    Teardown {
+        /// Path to the configuration file.
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long, env = "MARS_ADMIN_DSN")]
+        admin_dsn: String,
+        /// Drop the replication slot.
+        #[arg(long, default_value_t = false)]
+        drop_slot: bool,
+        /// Drop the publication.
+        #[arg(long, default_value_t = false)]
+        drop_publication: bool,
+        /// Drop the runtime role.
+        #[arg(long, default_value_t = false)]
+        drop_role: bool,
+        /// Print the SQL that would be executed and exit without connecting.
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -115,7 +153,7 @@ async fn async_main(cli: Cli, cfg: Option<Arc<Config>>) -> Result<()> {
     // parse time; only one branch can populate.
     match (cli.mode, cli.tool) {
         (None, None) => Err(anyhow!(
-            "mars: provide --mode <runtime|compiler|all-in-one> or one of: validate, inspect"
+            "mars: provide --mode <runtime|compiler|all-in-one> or one of: validate, inspect, healthcheck, setup, teardown"
         )),
         (Some(Mode::Runtime), None) => {
             let cfg = cfg.ok_or_else(|| anyhow!("internal: service mode without loaded config"))?;
@@ -135,6 +173,36 @@ async fn async_main(cli: Cli, cfg: Option<Arc<Config>>) -> Result<()> {
         (None, Some(Tool::Validate { path })) => tool_validate(&path).await,
         (None, Some(Tool::Inspect { path })) => tool_inspect(&path).await,
         (None, Some(Tool::Healthcheck { url })) => tool_healthcheck(&url),
+        (
+            None,
+            Some(Tool::Setup {
+                config,
+                admin_dsn,
+                runtime_password,
+                dry_run,
+            }),
+        ) => tool_setup(&config, &admin_dsn, runtime_password, dry_run).await,
+        (
+            None,
+            Some(Tool::Teardown {
+                config,
+                admin_dsn,
+                drop_slot,
+                drop_publication,
+                drop_role,
+                dry_run,
+            }),
+        ) => {
+            tool_teardown(
+                &config,
+                &admin_dsn,
+                drop_slot,
+                drop_publication,
+                drop_role,
+                dry_run,
+            )
+            .await
+        }
         (Some(_), Some(_)) => unreachable!("clap conflicts_with rules this out at parse time"),
     }
 }
@@ -526,6 +594,113 @@ async fn tool_inspect(path: &Path) -> Result<()> {
         println!("unmatched slots: {unmatched} (geom - class)");
     }
     Ok(())
+}
+
+async fn tool_setup(
+    config: &Path,
+    admin_dsn: &str,
+    runtime_password: String,
+    dry_run: bool,
+) -> Result<()> {
+    let cfg = load_and_validate(config)?;
+    let plan = build_bootstrap_plan(&cfg, runtime_password)?;
+    if dry_run {
+        for stmt in mars_source_postgres::bootstrap::render_statements(&plan)? {
+            println!("{stmt}");
+        }
+        println!("{}", mars_source_postgres::bootstrap::render_slot_creation(&plan));
+        return Ok(());
+    }
+    tracing::info!(
+        role = %plan.role,
+        publication = %plan.publication,
+        slot = %plan.slot,
+        schemas = ?plan.schemas,
+        "applying bootstrap",
+    );
+    mars_source_postgres::bootstrap::apply(admin_dsn, &plan)
+        .await
+        .context("bootstrap apply")?;
+    Ok(())
+}
+
+async fn tool_teardown(
+    config: &Path,
+    admin_dsn: &str,
+    drop_slot: bool,
+    drop_publication: bool,
+    drop_role: bool,
+    dry_run: bool,
+) -> Result<()> {
+    let cfg = load_and_validate(config)?;
+    let bs = cfg
+        .source
+        .bootstrap
+        .as_ref()
+        .ok_or_else(|| anyhow!("source.bootstrap is not configured"))?;
+    let cf = cfg
+        .source
+        .change_feed
+        .as_ref()
+        .ok_or_else(|| anyhow!("source.change_feed is not configured"))?;
+    let plan = mars_source_postgres::bootstrap::TeardownPlan {
+        role: bs.role.clone(),
+        publication: cf.publication.clone().unwrap_or_default(),
+        slot: cf.slot.clone().unwrap_or_default(),
+        drop_slot,
+        drop_publication,
+        drop_role,
+    };
+    if dry_run {
+        for stmt in mars_source_postgres::bootstrap::render_teardown_statements(&plan)? {
+            println!("{stmt}");
+        }
+        return Ok(());
+    }
+    tracing::info!(
+        role = %plan.role,
+        publication = %plan.publication,
+        slot = %plan.slot,
+        drop_slot = plan.drop_slot,
+        drop_publication = plan.drop_publication,
+        drop_role = plan.drop_role,
+        "applying teardown",
+    );
+    mars_source_postgres::bootstrap::teardown(admin_dsn, &plan)
+        .await
+        .context("bootstrap teardown")?;
+    Ok(())
+}
+
+fn build_bootstrap_plan(
+    cfg: &Config,
+    runtime_password: String,
+) -> Result<mars_source_postgres::bootstrap::BootstrapPlan> {
+    let bs = cfg
+        .source
+        .bootstrap
+        .as_ref()
+        .ok_or_else(|| anyhow!("source.bootstrap is not configured"))?;
+    let cf = cfg
+        .source
+        .change_feed
+        .as_ref()
+        .ok_or_else(|| anyhow!("source.change_feed is not configured"))?;
+    let publication = cf
+        .publication
+        .clone()
+        .ok_or_else(|| anyhow!("source.change_feed.publication is required for bootstrap"))?;
+    let slot = cf
+        .slot
+        .clone()
+        .ok_or_else(|| anyhow!("source.change_feed.slot is required for bootstrap"))?;
+    Ok(mars_source_postgres::bootstrap::BootstrapPlan {
+        role: bs.role.clone(),
+        runtime_password,
+        publication,
+        slot,
+        schemas: bs.schemas.clone(),
+    })
 }
 
 // ---------- composition helpers ----------

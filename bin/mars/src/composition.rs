@@ -182,6 +182,7 @@ mod tests {
                     poll_interval: None,
                 }),
                 pool: Default::default(),
+                bootstrap: None,
             },
             artifacts: Artifacts {
                 store: ArtifactStore {
