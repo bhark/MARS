@@ -390,20 +390,30 @@ fn text_bbox_from_metrics(anchor: (f32, f32), m: mars_render_port::TextMetrics) 
 }
 
 /// run a greedy collision pass over the accumulated label set and return
-/// the surviving `DrawOp::Label` ops in placement order.
+/// the surviving `DrawOp::Label` ops in placement order. each placed label
+/// remembers its `min_distance`; collision against a candidate uses the
+/// max of the two values, so the wider neighbour wins per pair (mirrors
+/// mapserver's `MINDISTANCE`, post-7.2 pixel semantics).
 pub(super) fn collide_and_emit_labels(mut labels: Vec<PreparedLabel>, _w: u32, _h: u32) -> Vec<DrawOp> {
     if labels.is_empty() {
         return Vec::new();
     }
     // priority desc → place high-priority labels first, drop conflicts.
     labels.sort_by_key(|l| std::cmp::Reverse(l.priority));
-    let mut placed: Vec<(f32, f32, f32, f32)> = Vec::with_capacity(labels.len());
+    let mut placed: Vec<PlacedFootprint> = Vec::with_capacity(labels.len());
     let mut ops = Vec::with_capacity(labels.len());
     for label in labels {
-        if placed.iter().any(|b| pixel_bbox_overlaps(*b, label.bbox_px)) {
+        let cand_md = label.style.min_distance.max(0.0);
+        if placed
+            .iter()
+            .any(|p| bboxes_within(label.bbox_px, p.bbox, cand_md.max(p.min_distance)))
+        {
             continue;
         }
-        placed.push(label.bbox_px);
+        placed.push(PlacedFootprint {
+            bbox: label.bbox_px,
+            min_distance: cand_md,
+        });
         ops.push(DrawOp::Label {
             anchor: label.anchor_px,
             text: label.text,
@@ -412,6 +422,20 @@ pub(super) fn collide_and_emit_labels(mut labels: Vec<PreparedLabel>, _w: u32, _
         });
     }
     ops
+}
+
+struct PlacedFootprint {
+    bbox: (f32, f32, f32, f32),
+    min_distance: f32,
+}
+
+/// `true` when `a` inflated by `pad` on every side overlaps `b`. equivalent
+/// to "the gap between the bboxes is < pad", so passing `pad == 0` reduces
+/// to a plain overlap test.
+fn bboxes_within(a: (f32, f32, f32, f32), b: (f32, f32, f32, f32), pad: f32) -> bool {
+    let pad = pad.max(0.0);
+    let inflated = (a.0 - pad, a.1 - pad, a.2 + pad, a.3 + pad);
+    pixel_bbox_overlaps(inflated, b)
 }
 
 fn pixel_bbox_overlaps(a: (f32, f32, f32, f32), b: (f32, f32, f32, f32)) -> bool {
@@ -469,5 +493,77 @@ mod tests {
         // 3 and -3 differ by 6 in the naive sense, but wrap to ~0.28 around
         // the circle.
         assert!(d.abs() < 0.5, "got {d}");
+    }
+
+    fn prepared(bbox: (f32, f32, f32, f32), priority: u16, min_distance: f32) -> PreparedLabel {
+        PreparedLabel {
+            anchor_px: (0.0, 0.0),
+            text: String::new(),
+            style: Arc::new(LabelStyle {
+                font_family: String::new(),
+                font_size: 12.0,
+                fill: mars_style::Colour::rgba(0, 0, 0, 255),
+                halo: None,
+                priority,
+                min_distance,
+                position: mars_style::AnchorPosition::default(),
+                offset_px: (0.0, 0.0),
+                angle_deg: None,
+                partials: false,
+                force: false,
+            }),
+            priority,
+            bbox_px: bbox,
+            angle_rad: 0.0,
+        }
+    }
+
+    #[test]
+    fn collision_drops_overlapping_bboxes() {
+        // both at the same bbox; second one (lower priority) drops.
+        let a = prepared((0.0, 0.0, 10.0, 10.0), 10, 0.0);
+        let b = prepared((0.0, 0.0, 10.0, 10.0), 5, 0.0);
+        let ops = collide_and_emit_labels(vec![a, b], 100, 100);
+        assert_eq!(ops.len(), 1, "second overlapping label must drop");
+    }
+
+    #[test]
+    fn mindistance_pad_drops_non_overlapping_but_close_bboxes() {
+        // 5 px gap between two 10x10 bboxes; with mindistance=10 the
+        // candidate is rejected (gap < 10). priority order matters; the
+        // first placed wins.
+        let a = prepared((0.0, 0.0, 10.0, 10.0), 10, 10.0);
+        let b = prepared((15.0, 0.0, 25.0, 10.0), 5, 10.0);
+        let ops = collide_and_emit_labels(vec![a, b], 100, 100);
+        assert_eq!(ops.len(), 1, "second label within mindistance must drop");
+    }
+
+    #[test]
+    fn mindistance_pad_allows_bboxes_outside_the_inflation() {
+        // 20 px gap > mindistance 10; both survive.
+        let a = prepared((0.0, 0.0, 10.0, 10.0), 10, 10.0);
+        let b = prepared((30.0, 0.0, 40.0, 10.0), 5, 10.0);
+        let ops = collide_and_emit_labels(vec![a, b], 100, 100);
+        assert_eq!(ops.len(), 2, "labels beyond mindistance must both place");
+    }
+
+    #[test]
+    fn mindistance_uses_max_of_the_two_values_per_pair() {
+        // placed label has mindistance 0; candidate has mindistance 12.
+        // gap is 10 < max(0, 12) = 12, so the candidate is rejected.
+        let a = prepared((0.0, 0.0, 10.0, 10.0), 10, 0.0);
+        let b = prepared((20.0, 0.0, 30.0, 10.0), 5, 12.0);
+        let ops = collide_and_emit_labels(vec![a, b], 100, 100);
+        assert_eq!(ops.len(), 1, "candidate's wider mindistance must apply");
+    }
+
+    #[test]
+    fn negative_mindistance_treated_as_zero() {
+        // gap is 1 px; with mindistance < 0 we behave as plain overlap test
+        // (both should place: no overlap, no padding).
+        let a = prepared((0.0, 0.0, 10.0, 10.0), 10, -5.0);
+        let b = prepared((11.0, 0.0, 21.0, 10.0), 5, -5.0);
+        let ops = collide_and_emit_labels(vec![a, b], 100, 100);
+        assert_eq!(ops.len(), 2, "negative mindistance clamps to 0");
     }
 }
