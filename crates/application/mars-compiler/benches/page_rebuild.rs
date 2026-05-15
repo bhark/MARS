@@ -6,11 +6,12 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::collections::HashMap;
+use std::hint::black_box;
 use std::sync::{Arc, Mutex as StdMutex};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use futures_core::stream::BoxStream;
 use futures_util::stream;
 use mars_compiler::incremental::IncrementalCycle;
@@ -280,5 +281,169 @@ fn bench_page_rebuild(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, bench_page_rebuild);
+/// rebuild a configurable fraction of pages in a single cycle. exercises
+/// the rebuild pipeline under bulk-turnover scenarios (eg. mass updates,
+/// bulk imports, or large change feeds). complements the single-page
+/// `bench_page_rebuild` above which is the steady-state hot path.
+fn bench_multi_page_rebuild(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+    let mut group = c.benchmark_group("compiler_multi_page_rebuild");
+    // small page budget so 200k point features split into ~16 pages,
+    // giving the 10%/50% sweep meaningful (and distinct) dirty counts.
+    let n_features = 200_000usize;
+    let page_size = 512 * 1024u64;
+    let fixture = rt.block_on(build_fixture(n_features, page_size));
+    let binding_id = BindingId::try_new("points").unwrap();
+    let binding_meta_map: HashMap<BindingId, BindingMetadata> = HashMap::from([(
+        binding_id.clone(),
+        fixture
+            .prior
+            .bindings
+            .iter()
+            .find(|b| b.binding_id == binding_id)
+            .unwrap()
+            .clone(),
+    )]);
+
+    let pages: Vec<PageEntry> = fixture
+        .prior
+        .pages
+        .iter()
+        .filter(|p| p.key.binding_id == binding_id)
+        .cloned()
+        .collect();
+    let total_pages = pages.len();
+
+    for &dirty_fraction in &[0.10_f32, 0.50] {
+        let dirty_count = ((total_pages as f32) * dirty_fraction).max(1.0) as usize;
+        // pick a feature inside each dirty page so the change-ingest step
+        // localises the dirty mark to that page.
+        let dirty_envelopes: Vec<(u64, GeometryEnvelope)> = pages
+            .iter()
+            .step_by((total_pages / dirty_count).max(1))
+            .take(dirty_count)
+            .enumerate()
+            .map(|(i, p)| {
+                let cx = (p.spatial_bbox.min_x + p.spatial_bbox.max_x) / 2.0;
+                let cy = (p.spatial_bbox.min_y + p.spatial_bbox.max_y) / 2.0;
+                (
+                    i as u64,
+                    GeometryEnvelope {
+                        centroid: [cx, cy],
+                        bbox: mars_types::Bbox::new(cx, cy, cx, cy),
+                    },
+                )
+            })
+            .collect();
+
+        group.throughput(Throughput::Elements(dirty_count as u64));
+        let id = BenchmarkId::from_parameter(format!("dirty_{dirty_count}_of_{total_pages}"));
+        group.bench_function(id, |b| {
+            b.iter(|| {
+                rt.block_on(async {
+                    let sidecar = SidecarReader::open(&fixture.sidecar_bytes).unwrap();
+                    let sidecars = HashMap::from([(binding_id.clone(), sidecar)]);
+                    let mut cycle = IncrementalCycle::new(&fixture.plan, &sidecars, &binding_meta_map);
+                    for (fid, env) in &dirty_envelopes {
+                        cycle
+                            .ingest(ChangeEvent::Update {
+                                collection: SourceCollectionId::new("points"),
+                                feature_id: *fid,
+                                new_envelope: env.clone(),
+                                old_envelope: Some(env.clone()),
+                            })
+                            .unwrap();
+                    }
+                    let dirty = cycle.finish();
+                    let _ = rebuild_pages(
+                        &fixture.deps,
+                        &fixture.plan,
+                        &fixture.prior,
+                        &sidecars,
+                        dirty,
+                        BENCH_WORKING_SET,
+                        BENCH_PLAN_BUDGET,
+                        BENCH_IN_FLIGHT_BUDGET,
+                        &std::env::temp_dir(),
+                        256,
+                        &mars_compiler::memory_governor::MemoryGovernor::new(u64::MAX),
+                        &mars_compiler::disk_governor::DiskGovernor::new(u64::MAX),
+                        mars_config::BindingFailurePolicy::FailCycle,
+                    )
+                    .await
+                    .unwrap();
+                });
+            });
+        });
+    }
+    group.finish();
+}
+
+/// full bootstrap: drive `run_snapshot_from_plan` from an empty store,
+/// emitting every page + sidecar from scratch. dataset size sweeps the
+/// page-emit and sidecar-emit cost together.
+fn bench_full_bootstrap(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+    let mut group = c.benchmark_group("compiler_full_bootstrap");
+    let page_size = 16 * 1024 * 1024u64;
+    for &n_features in &[10_000usize, 50_000, 200_000] {
+        group.throughput(Throughput::Elements(n_features as u64));
+        // pre-build the source corpus once outside iter; rebuild deps/plan
+        // per iter so each bootstrap starts from an empty store.
+        let initial: Vec<RowBytes> = (0..n_features as u64)
+            .map(|i| row(i, f64::from(i as u32) * 4.0, f64::from(i as u32) * 4.0))
+            .collect();
+        let plan = BootstrapPlan {
+            bindings: vec![binding_plan("points", page_size)],
+            layers: vec![],
+            raster_layers: vec![],
+        };
+
+        let id = BenchmarkId::from_parameter(format!("features_{n_features}"));
+        group.bench_function(id, |b| {
+            b.iter_with_setup(
+                || {
+                    let source = Arc::new(FakeSource::with_rows(initial.clone()));
+                    let store = Arc::new(InMemoryStore::new());
+                    let manifest_store: Arc<dyn ManifestStore> = Arc::new(InMemoryPublisher::new());
+                    Deps {
+                        source,
+                        change_feed: Arc::new(NopFeed),
+                        leader_lock: Arc::new(NopLock),
+                        store,
+                        manifest: manifest_store,
+                        metrics: Metrics::new().unwrap(),
+                    }
+                },
+                |deps| {
+                    let manifest = rt
+                        .block_on(run_snapshot_from_plan(
+                            &deps,
+                            &plan,
+                            "bench-bootstrap".into(),
+                            1,
+                            BENCH_WORKING_SET,
+                            BENCH_PLAN_BUDGET,
+                            BENCH_IN_FLIGHT_BUDGET,
+                            1,
+                            &std::env::temp_dir(),
+                            256,
+                            &mars_compiler::memory_governor::MemoryGovernor::new(u64::MAX),
+                            &mars_compiler::disk_governor::DiskGovernor::new(u64::MAX),
+                        ))
+                        .unwrap();
+                    black_box(manifest);
+                },
+            );
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_page_rebuild,
+    bench_multi_page_rebuild,
+    bench_full_bootstrap
+);
 criterion_main!(benches);
