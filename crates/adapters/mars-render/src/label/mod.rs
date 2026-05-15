@@ -6,6 +6,7 @@
 //! `RotatedSampler`.
 
 pub(crate) mod compose;
+pub(crate) mod follow;
 mod halo;
 
 use mars_render_port::RenderError;

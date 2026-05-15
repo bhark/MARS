@@ -145,6 +145,24 @@ pub enum DrawOp {
         /// labels (the common case); line labels carry a tangent angle.
         angle_rad: f32,
     },
+    /// Place a label glyph run along a polyline, rotating each glyph to
+    /// its own local tangent (ANGLE FOLLOW). distinct from [`DrawOp::Label`]
+    /// because the run is not a single affine transform; the renderer
+    /// shapes the run, walks per-glyph advances along the polyline, and
+    /// stamps each glyph individually.
+    FollowLabel {
+        /// Pixel-space polyline. already projected and CRS-transformed by
+        /// the runtime; the renderer just walks arc-lengths along it.
+        polyline_px: Vec<(f32, f32)>,
+        /// Arc-length along `polyline_px` (in pixels) at which the first
+        /// glyph's left edge sits. the run is centred by the runtime
+        /// setting this to `centre_arc - total_advance / 2`.
+        start_arc_px: f32,
+        /// Plain-text content; renderer shapes and rasterises per-glyph.
+        text: String,
+        /// Compiled label style.
+        style: Arc<LabelStyle>,
+    },
     /// Place a point-anchored marker symbol. Stub today: dispatch returns
     /// [`RenderError::NotImplemented`]. Use this from the runtime when a
     /// symbol cannot be tessellated to a [`DrawOp::Path`] (text glyphs,

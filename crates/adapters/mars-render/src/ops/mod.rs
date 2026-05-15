@@ -27,6 +27,12 @@ pub(crate) fn dispatch(
             style,
             angle_rad,
         } => label::draw(pm, *anchor, text, style, *angle_rad, fonts),
+        DrawOp::FollowLabel {
+            polyline_px,
+            start_arc_px,
+            text,
+            style,
+        } => label::draw_follow(pm, polyline_px, *start_arc_px, text, style, fonts),
         DrawOp::Symbol {
             anchor,
             rotation_rad,
