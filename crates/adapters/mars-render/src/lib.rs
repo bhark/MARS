@@ -71,8 +71,17 @@ impl Renderer for TinySkiaRenderer {
         }
 
         let mut unimplemented = crate::prepare::UnimplementedFeatures::default();
+        // canvas-sized scratch mask reused by hatch fills across ops. allocated
+        // lazily on first hatch use; ops that don't need it pay nothing.
+        let mut hatch_mask: Option<tiny_skia::Mask> = None;
         for op in ops {
-            unimplemented.merge(ops::dispatch(&mut pm, op, &self.fonts, self.images.as_ref())?);
+            unimplemented.merge(ops::dispatch(
+                &mut pm,
+                op,
+                &self.fonts,
+                self.images.as_ref(),
+                &mut hatch_mask,
+            )?);
         }
         if unimplemented.any() {
             for what in unimplemented.names() {

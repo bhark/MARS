@@ -8,7 +8,7 @@ mod pattern;
 
 use mars_render_port::{DrawOp, ImageRegistry, RenderError};
 use mars_text::Fonts;
-use tiny_skia::Pixmap;
+use tiny_skia::{Mask, Pixmap};
 
 use crate::prepare::UnimplementedFeatures;
 use crate::{raster, symbol};
@@ -18,9 +18,10 @@ pub(crate) fn dispatch(
     op: &DrawOp,
     fonts: &Fonts,
     images: &dyn ImageRegistry,
+    hatch_mask: &mut Option<Mask>,
 ) -> Result<UnimplementedFeatures, RenderError> {
     match op {
-        DrawOp::Path { path, style } => path::draw(pm, path, style),
+        DrawOp::Path { path, style } => path::draw(pm, path, style, hatch_mask),
         DrawOp::Label {
             anchor,
             text,
@@ -37,7 +38,7 @@ pub(crate) fn dispatch(
             anchor,
             rotation_rad,
             style,
-        } => symbol::dispatch(pm, *anchor, *rotation_rad, style, fonts),
+        } => symbol::dispatch(pm, *anchor, *rotation_rad, style, fonts, hatch_mask),
         DrawOp::Pattern { path, style } => pattern::draw(pm, path, style, images),
         DrawOp::Raster { tile, dst, opacity } => {
             raster::draw(pm, tile, *dst, *opacity).map(|()| UnimplementedFeatures::default())
@@ -182,7 +183,15 @@ mod tests {
                 ..Default::default()
             }),
         };
-        let flags = dispatch(&mut pm, &op, &fonts, &mars_render_port::EmptyImageRegistry).expect("dispatch ok");
+        let mut hatch_mask = None;
+        let flags = dispatch(
+            &mut pm,
+            &op,
+            &fonts,
+            &mars_render_port::EmptyImageRegistry,
+            &mut hatch_mask,
+        )
+        .expect("dispatch ok");
         assert!(
             !flags.any(),
             "glyph implementation must not surface unimplemented flags"
