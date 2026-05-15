@@ -90,7 +90,11 @@ pub(super) fn capabilities_xml(cfg: &Config, manifest: &Manifest) -> Result<Stri
         online_href,
     )?;
     write_request_op_111(&mut w, "GetMap", &getmap_formats, online_href)?;
-    if cfg.layers.iter().any(|l| l.enable_get_feature_info) {
+    if cfg
+        .layers
+        .iter()
+        .any(|l| l.permits_wms_op(mars_config::WmsOperation::GetFeatureInfo))
+    {
         write_request_op_111(&mut w, "GetFeatureInfo", &getfi_formats, online_href)?;
     }
     write_request_op_111(&mut w, "GetLegendGraphic", &getlegend_formats, online_href)?;
@@ -171,6 +175,9 @@ fn emit_children<W: std::io::Write>(
     }
     for child in &node.layer_children {
         if let Some(layer) = child.leaf {
+            if !layer.permits_wms_op(mars_config::WmsOperation::GetCapabilities) {
+                continue;
+            }
             emit_leaf(w, layer, cfg, layer_bboxes, formats)?;
         }
     }
@@ -199,8 +206,11 @@ fn emit_leaf<W: std::io::Write>(
     formats: &[ImageFormat],
 ) -> Result<(), WmsError> {
     let mut layer_tag = BytesStart::new("Layer");
-    if layer.enable_get_feature_info {
+    if layer.permits_wms_op(mars_config::WmsOperation::GetFeatureInfo) {
         layer_tag.push_attribute(("queryable", "1"));
+    }
+    if layer.opaque {
+        layer_tag.push_attribute(("opaque", "1"));
     }
     w.write_event(Event::Start(layer_tag)).map_err(xml_err)?;
     text_element(w, "Name", layer.name.as_str())?;
@@ -208,12 +218,95 @@ fn emit_leaf<W: std::io::Write>(
     if !layer.abstract_.is_empty() {
         text_element(w, "Abstract", &layer.abstract_)?;
     }
+    write_keyword_list(w, &layer.keywords)?;
+    // per-layer advertised SRS list; 1.1.1 uses <SRS> not <CRS>.
+    if let Some(srses) = layer.advertised_crs.as_ref() {
+        for s in srses {
+            text_element(w, "SRS", s)?;
+        }
+    }
     let bbox = layer_bboxes.get(&layer.name).copied().or(layer.bbox);
     if let Some(bb) = bbox {
         write_bbox(w, cfg.source.native_crs.as_str(), bb)?;
     }
+    // 1.1.1 layer-block ordering: MetadataURL before Attribution / AuthorityURL
+    // / Identifier (opposite of 1.3.0).
+    for mu in &layer.metadata_urls {
+        write_metadata_url_111(w, mu)?;
+    }
+    if let Some(attr) = layer.attribution.as_ref() {
+        write_attribution_111(w, attr)?;
+    }
+    for auth in &layer.authorities {
+        write_authority_url_111(w, &auth.name, &auth.href)?;
+    }
+    for ident in &layer.identifiers {
+        write_identifier_111(w, &ident.authority, &ident.value)?;
+    }
     write_default_style_with_legend_url(w, layer, formats)?;
     w.write_event(Event::End(BytesEnd::new("Layer"))).map_err(xml_err)?;
+    Ok(())
+}
+
+fn write_attribution_111<W: std::io::Write>(
+    w: &mut Writer<W>,
+    attr: &mars_config::Attribution,
+) -> Result<(), WmsError> {
+    w.write_event(Event::Start(BytesStart::new("Attribution")))
+        .map_err(xml_err)?;
+    if !attr.title.is_empty() {
+        text_element(w, "Title", &attr.title)?;
+    }
+    if let Some(href) = attr.online_resource.as_deref() {
+        write_online_resource(w, href)?;
+    }
+    if let Some(logo) = attr.logo.as_ref() {
+        let mut lu = BytesStart::new("LogoURL");
+        if let Some(width) = logo.width {
+            lu.push_attribute(("width", width.to_string().as_str()));
+        }
+        if let Some(height) = logo.height {
+            lu.push_attribute(("height", height.to_string().as_str()));
+        }
+        w.write_event(Event::Start(lu)).map_err(xml_err)?;
+        text_element(w, "Format", &logo.format)?;
+        write_online_resource(w, &logo.href)?;
+        w.write_event(Event::End(BytesEnd::new("LogoURL"))).map_err(xml_err)?;
+    }
+    w.write_event(Event::End(BytesEnd::new("Attribution")))
+        .map_err(xml_err)?;
+    Ok(())
+}
+
+fn write_metadata_url_111<W: std::io::Write>(w: &mut Writer<W>, mu: &mars_config::MetadataUrl) -> Result<(), WmsError> {
+    let mut tag = BytesStart::new("MetadataURL");
+    tag.push_attribute(("type", mu.type_.as_str()));
+    w.write_event(Event::Start(tag)).map_err(xml_err)?;
+    text_element(w, "Format", &mu.format)?;
+    write_online_resource(w, &mu.href)?;
+    w.write_event(Event::End(BytesEnd::new("MetadataURL")))
+        .map_err(xml_err)?;
+    Ok(())
+}
+
+fn write_authority_url_111<W: std::io::Write>(w: &mut Writer<W>, name: &str, href: &str) -> Result<(), WmsError> {
+    let mut au = BytesStart::new("AuthorityURL");
+    au.push_attribute(("name", name));
+    w.write_event(Event::Start(au)).map_err(xml_err)?;
+    write_online_resource(w, href)?;
+    w.write_event(Event::End(BytesEnd::new("AuthorityURL")))
+        .map_err(xml_err)?;
+    Ok(())
+}
+
+fn write_identifier_111<W: std::io::Write>(w: &mut Writer<W>, authority: &str, value: &str) -> Result<(), WmsError> {
+    let mut id = BytesStart::new("Identifier");
+    id.push_attribute(("authority", authority));
+    w.write_event(Event::Start(id)).map_err(xml_err)?;
+    w.write_event(Event::Text(quick_xml::events::BytesText::new(value)))
+        .map_err(xml_err)?;
+    w.write_event(Event::End(BytesEnd::new("Identifier")))
+        .map_err(xml_err)?;
     Ok(())
 }
 

@@ -75,9 +75,13 @@ pub(super) fn capabilities_xml(cfg: &Config, manifest: &Manifest) -> Result<Stri
     // shape so existing tests stay green when no override is configured.
     write_request_op(&mut w, "GetCapabilities", &getmap_formats, online_href)?;
     write_request_op(&mut w, "GetMap", &getmap_formats, online_href)?;
-    // gfi advertised when at least one layer opts in; emitting it
+    // gfi advertised when at least one layer permits the op; emitting it
     // unconditionally would invite identify clicks that always come back empty.
-    if cfg.layers.iter().any(|l| l.enable_get_feature_info) {
+    if cfg
+        .layers
+        .iter()
+        .any(|l| l.permits_wms_op(mars_config::WmsOperation::GetFeatureInfo))
+    {
         write_request_op(&mut w, "GetFeatureInfo", &getfi_formats, online_href)?;
     }
     // legend graphic is always available; the runtime can compose a default
@@ -191,6 +195,11 @@ fn emit_children<W: std::io::Write>(
     }
     for child in &node.layer_children {
         if let Some(layer) = child.leaf {
+            // request_gating.get_capabilities=Some(false) hides the layer
+            // entirely; permits_wms_op covers the default-allow case.
+            if !layer.permits_wms_op(mars_config::WmsOperation::GetCapabilities) {
+                continue;
+            }
             emit_leaf(w, layer, cfg, layer_bboxes, formats)?;
         }
     }
@@ -219,8 +228,11 @@ fn emit_leaf<W: std::io::Write>(
     formats: &[ImageFormat],
 ) -> Result<(), WmsError> {
     let mut layer_tag = BytesStart::new("Layer");
-    if layer.enable_get_feature_info {
+    if layer.permits_wms_op(mars_config::WmsOperation::GetFeatureInfo) {
         layer_tag.push_attribute(("queryable", "1"));
+    }
+    if layer.opaque {
+        layer_tag.push_attribute(("opaque", "1"));
     }
     w.write_event(Event::Start(layer_tag)).map_err(xml_err)?;
     text_element(w, "Name", layer.name.as_str())?;
@@ -228,9 +240,28 @@ fn emit_leaf<W: std::io::Write>(
     if !layer.abstract_.is_empty() {
         text_element(w, "Abstract", &layer.abstract_)?;
     }
+    write_keyword_list(w, &layer.keywords)?;
+    // per-layer advertised CRS override; absent = inherit from root layer.
+    if let Some(crses) = layer.advertised_crs.as_ref() {
+        for crs in crses {
+            text_element(w, "CRS", crs)?;
+        }
+    }
     let bbox = layer_bboxes.get(&layer.name).copied().or(layer.bbox);
     if let Some(bb) = bbox {
         write_bbox(w, cfg.source.native_crs.as_str(), bb)?;
+    }
+    if let Some(attr) = layer.attribution.as_ref() {
+        write_attribution(w, attr)?;
+    }
+    for auth in &layer.authorities {
+        write_authority_url(w, &auth.name, &auth.href)?;
+    }
+    for ident in &layer.identifiers {
+        write_identifier(w, &ident.authority, &ident.value)?;
+    }
+    for mu in &layer.metadata_urls {
+        write_metadata_url(w, mu)?;
     }
     if let Some(scale) = &layer.scale {
         if let Some(min) = scale.min {
@@ -242,6 +273,44 @@ fn emit_leaf<W: std::io::Write>(
     }
     write_default_style_with_legend_url(w, layer, formats)?;
     w.write_event(Event::End(BytesEnd::new("Layer"))).map_err(xml_err)?;
+    Ok(())
+}
+
+fn write_attribution<W: std::io::Write>(w: &mut Writer<W>, attr: &mars_config::Attribution) -> Result<(), WmsError> {
+    w.write_event(Event::Start(BytesStart::new("Attribution")))
+        .map_err(xml_err)?;
+    if !attr.title.is_empty() {
+        text_element(w, "Title", &attr.title)?;
+    }
+    if let Some(href) = attr.online_resource.as_deref() {
+        write_online_resource(w, href)?;
+    }
+    if let Some(logo) = attr.logo.as_ref() {
+        let mut lu = BytesStart::new("LogoURL");
+        if let Some(w_) = logo.width {
+            lu.push_attribute(("width", w_.to_string().as_str()));
+        }
+        if let Some(h) = logo.height {
+            lu.push_attribute(("height", h.to_string().as_str()));
+        }
+        w.write_event(Event::Start(lu)).map_err(xml_err)?;
+        text_element(w, "Format", &logo.format)?;
+        write_online_resource(w, &logo.href)?;
+        w.write_event(Event::End(BytesEnd::new("LogoURL"))).map_err(xml_err)?;
+    }
+    w.write_event(Event::End(BytesEnd::new("Attribution")))
+        .map_err(xml_err)?;
+    Ok(())
+}
+
+fn write_metadata_url<W: std::io::Write>(w: &mut Writer<W>, mu: &mars_config::MetadataUrl) -> Result<(), WmsError> {
+    let mut tag = BytesStart::new("MetadataURL");
+    tag.push_attribute(("type", mu.type_.as_str()));
+    w.write_event(Event::Start(tag)).map_err(xml_err)?;
+    text_element(w, "Format", &mu.format)?;
+    write_online_resource(w, &mu.href)?;
+    w.write_event(Event::End(BytesEnd::new("MetadataURL")))
+        .map_err(xml_err)?;
     Ok(())
 }
 
@@ -704,6 +773,102 @@ layers:
         assert_eq!(xml.matches("<CRS>EPSG:25832</CRS>").count(), 1);
         assert!(xml.contains("<CRS>EPSG:3857</CRS>"));
         assert!(xml.contains("<CRS>EPSG:4326</CRS>"));
+    }
+
+    #[test]
+    fn per_layer_keywords_and_metadata_url_emitted() {
+        let mut cfg = minimal_cfg();
+        cfg.layers[0].keywords = vec!["roads".into(), "transport".into()];
+        cfg.layers[0].metadata_urls = vec![mars_config::MetadataUrl {
+            type_: "ISO19115:2003".into(),
+            format: "text/xml".into(),
+            href: "https://example.org/md/roads.xml".into(),
+        }];
+        let m = Manifest::empty(1, cfg.service.name.clone());
+        let xml = capabilities_xml(&cfg, &m).unwrap();
+        assert!(xml.contains("<Keyword>roads</Keyword>"));
+        assert!(xml.contains(r#"<MetadataURL type="ISO19115:2003">"#));
+        assert!(xml.contains("<Format>text/xml</Format>"));
+        assert!(xml.contains("https://example.org/md/roads.xml"));
+    }
+
+    #[test]
+    fn per_layer_advertised_crs_overrides_root() {
+        let mut cfg = minimal_cfg();
+        cfg.layers[0].advertised_crs = Some(vec!["EPSG:3857".into(), "EPSG:4326".into()]);
+        let m = Manifest::empty(1, cfg.service.name.clone());
+        let xml = capabilities_xml(&cfg, &m).unwrap();
+        assert!(xml.contains("<CRS>EPSG:3857</CRS>"));
+        assert!(xml.contains("<CRS>EPSG:4326</CRS>"));
+    }
+
+    #[test]
+    fn opaque_attribute_emitted_when_set() {
+        let mut cfg = minimal_cfg();
+        cfg.layers[0].opaque = true;
+        let m = Manifest::empty(1, cfg.service.name.clone());
+        let xml = capabilities_xml(&cfg, &m).unwrap();
+        assert!(xml.contains(r#"opaque="1""#));
+    }
+
+    #[test]
+    fn attribution_block_emitted() {
+        let mut cfg = minimal_cfg();
+        cfg.layers[0].attribution = Some(mars_config::Attribution {
+            title: "Acme Maps".into(),
+            online_resource: Some("https://acme.example".into()),
+            logo: Some(mars_config::LogoUrl {
+                format: "image/png".into(),
+                href: "https://acme.example/logo.png".into(),
+                width: Some(120),
+                height: Some(80),
+            }),
+        });
+        let m = Manifest::empty(1, cfg.service.name.clone());
+        let xml = capabilities_xml(&cfg, &m).unwrap();
+        assert!(xml.contains("<Attribution>"));
+        assert!(xml.contains("<Title>Acme Maps</Title>"));
+        assert!(xml.contains("<LogoURL"));
+        assert!(xml.contains(r#"width="120""#));
+        assert!(xml.contains(r#"height="80""#));
+        assert!(xml.contains("<Format>image/png</Format>"));
+    }
+
+    #[test]
+    fn per_layer_authority_and_identifier_emitted() {
+        let mut cfg = minimal_cfg();
+        cfg.layers[0].authorities = vec![mars_config::AuthorityRef {
+            name: "isri".into(),
+            href: "https://example.org/isri".into(),
+        }];
+        cfg.layers[0].identifiers = vec![mars_config::IdentifierRef {
+            authority: "isri".into(),
+            value: "urn:layer:roads".into(),
+        }];
+        let m = Manifest::empty(1, cfg.service.name.clone());
+        let xml = capabilities_xml(&cfg, &m).unwrap();
+        assert!(xml.contains(r#"<AuthorityURL name="isri">"#));
+        assert!(xml.contains(r#"<Identifier authority="isri">urn:layer:roads</Identifier>"#));
+    }
+
+    #[test]
+    fn layer_with_capabilities_denied_is_hidden() {
+        let mut cfg = minimal_cfg();
+        cfg.layers[0].request_gating.get_capabilities = Some(false);
+        let m = Manifest::empty(1, cfg.service.name.clone());
+        let xml = capabilities_xml(&cfg, &m).unwrap();
+        assert!(!xml.contains("<Name>a</Name>"), "denied layer must not appear");
+    }
+
+    #[test]
+    fn gfi_gating_honors_explicit_request_gating_over_enable_flag() {
+        let mut cfg = minimal_cfg();
+        cfg.layers[0].enable_get_feature_info = false;
+        cfg.layers[0].request_gating.get_feature_info = Some(true);
+        let m = Manifest::empty(1, cfg.service.name.clone());
+        let xml = capabilities_xml(&cfg, &m).unwrap();
+        assert!(xml.contains(r#"<Layer queryable="1">"#));
+        assert!(xml.contains("<GetFeatureInfo>"));
     }
 
     #[test]
