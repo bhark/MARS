@@ -11,7 +11,7 @@
 use std::collections::HashMap;
 use std::io::Cursor;
 
-use mars_config::{Config, TileMatrixSet};
+use mars_config::{Config, ContactInfo, TileMatrixSet};
 use mars_types::{Bbox, ImageFormat, LayerId, Manifest};
 use quick_xml::Writer;
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
@@ -26,8 +26,12 @@ pub fn capabilities_xml(cfg: &Config, manifest: &Manifest) -> Result<String, Wmt
     let mut buf = Cursor::new(Vec::new());
     let mut w = Writer::new(&mut buf);
 
-    w.write_event(Event::Decl(BytesDecl::new("1.0", Some("UTF-8"), None)))
-        .map_err(xml_err)?;
+    w.write_event(Event::Decl(BytesDecl::new(
+        "1.0",
+        Some(cfg.service.xml_encoding()),
+        None,
+    )))
+    .map_err(xml_err)?;
 
     let mut root = BytesStart::new("Capabilities");
     root.push_attribute(("xmlns", "http://www.opengis.net/wmts/1.0"));
@@ -38,7 +42,7 @@ pub fn capabilities_xml(cfg: &Config, manifest: &Manifest) -> Result<String, Wmt
 
     write_service_identification(&mut w, cfg)?;
     write_service_provider(&mut w, cfg)?;
-    write_operations_metadata(&mut w)?;
+    write_operations_metadata(&mut w, cfg)?;
 
     // contents
     w.write_event(Event::Start(BytesStart::new("Contents")))
@@ -75,48 +79,154 @@ fn write_service_identification<W: std::io::Write>(w: &mut Writer<W>, cfg: &Conf
     if !cfg.service.abstract_.is_empty() {
         text_element(w, "ows:Abstract", &cfg.service.abstract_)?;
     }
+    if !cfg.service.keywords.is_empty() {
+        w.write_event(Event::Start(BytesStart::new("ows:Keywords")))
+            .map_err(xml_err)?;
+        for kw in &cfg.service.keywords {
+            text_element(w, "ows:Keyword", kw)?;
+        }
+        w.write_event(Event::End(BytesEnd::new("ows:Keywords")))
+            .map_err(xml_err)?;
+    }
     text_element(w, "ows:ServiceType", "OGC WMTS")?;
     text_element(w, "ows:ServiceTypeVersion", "1.0.0")?;
+    if let Some(fees) = cfg.service.fees.as_deref() {
+        text_element(w, "ows:Fees", fees)?;
+    }
+    if let Some(ac) = cfg.service.access_constraints.as_deref() {
+        text_element(w, "ows:AccessConstraints", ac)?;
+    }
     w.write_event(Event::End(BytesEnd::new("ows:ServiceIdentification")))
         .map_err(xml_err)?;
     Ok(())
 }
 
 fn write_service_provider<W: std::io::Write>(w: &mut Writer<W>, cfg: &Config) -> Result<(), WmtsError> {
-    if cfg.service.contact_email.is_empty() {
+    let contact = &cfg.service.contact;
+    let email = if !contact.email.is_empty() {
+        contact.email.as_str()
+    } else {
+        cfg.service.contact_email.as_str()
+    };
+    if contact.is_empty() && email.is_empty() {
         return Ok(());
     }
+    let provider_name = if !contact.organization.is_empty() {
+        contact.organization.as_str()
+    } else {
+        cfg.service.title.as_str()
+    };
     w.write_event(Event::Start(BytesStart::new("ows:ServiceProvider")))
         .map_err(xml_err)?;
-    text_element(w, "ows:ProviderName", &cfg.service.title)?;
-    w.write_event(Event::Start(BytesStart::new("ows:ServiceContact")))
-        .map_err(xml_err)?;
-    w.write_event(Event::Start(BytesStart::new("ows:ContactInfo")))
-        .map_err(xml_err)?;
-    w.write_event(Event::Start(BytesStart::new("ows:Address")))
-        .map_err(xml_err)?;
-    text_element(w, "ows:ElectronicMailAddress", &cfg.service.contact_email)?;
-    w.write_event(Event::End(BytesEnd::new("ows:Address")))
-        .map_err(xml_err)?;
-    w.write_event(Event::End(BytesEnd::new("ows:ContactInfo")))
-        .map_err(xml_err)?;
-    w.write_event(Event::End(BytesEnd::new("ows:ServiceContact")))
-        .map_err(xml_err)?;
+    text_element(w, "ows:ProviderName", provider_name)?;
+    if let Some(href) = cfg.service.online_resource.as_deref() {
+        let mut ps = BytesStart::new("ows:ProviderSite");
+        ps.push_attribute(("xlink:href", href));
+        w.write_event(Event::Empty(ps)).map_err(xml_err)?;
+    }
+    write_service_contact(w, contact, email, cfg.service.online_resource.as_deref())?;
     w.write_event(Event::End(BytesEnd::new("ows:ServiceProvider")))
         .map_err(xml_err)?;
     Ok(())
 }
 
-fn write_operations_metadata<W: std::io::Write>(w: &mut Writer<W>) -> Result<(), WmtsError> {
-    // list the operations served but do not advertise OnlineResource URLs -
-    // the bin doesn't know its public hostname. clients fall back to the
-    // request URL they reached the service on, which is the common practice.
+/// OWS Common 1.1 ServiceContact emit. Sub-elements that are empty are
+/// dropped so the document stays clean when only partial contact data is
+/// configured.
+fn write_service_contact<W: std::io::Write>(
+    w: &mut Writer<W>,
+    contact: &ContactInfo,
+    fallback_email: &str,
+    online_resource: Option<&str>,
+) -> Result<(), WmtsError> {
+    w.write_event(Event::Start(BytesStart::new("ows:ServiceContact")))
+        .map_err(xml_err)?;
+    if !contact.person.is_empty() {
+        text_element(w, "ows:IndividualName", &contact.person)?;
+    }
+    if !contact.position.is_empty() {
+        text_element(w, "ows:PositionName", &contact.position)?;
+    }
+    let need_contact_info = !contact.phone.is_empty()
+        || !contact.fax.is_empty()
+        || !contact.address.is_empty()
+        || !fallback_email.is_empty()
+        || online_resource.is_some();
+    if need_contact_info {
+        w.write_event(Event::Start(BytesStart::new("ows:ContactInfo")))
+            .map_err(xml_err)?;
+        if !contact.phone.is_empty() || !contact.fax.is_empty() {
+            w.write_event(Event::Start(BytesStart::new("ows:Phone")))
+                .map_err(xml_err)?;
+            if !contact.phone.is_empty() {
+                text_element(w, "ows:Voice", &contact.phone)?;
+            }
+            if !contact.fax.is_empty() {
+                text_element(w, "ows:Facsimile", &contact.fax)?;
+            }
+            w.write_event(Event::End(BytesEnd::new("ows:Phone"))).map_err(xml_err)?;
+        }
+        if !contact.address.is_empty() || !fallback_email.is_empty() {
+            let a = &contact.address;
+            w.write_event(Event::Start(BytesStart::new("ows:Address")))
+                .map_err(xml_err)?;
+            if !a.street.is_empty() {
+                text_element(w, "ows:DeliveryPoint", &a.street)?;
+            }
+            if !a.city.is_empty() {
+                text_element(w, "ows:City", &a.city)?;
+            }
+            if !a.state_or_province.is_empty() {
+                text_element(w, "ows:AdministrativeArea", &a.state_or_province)?;
+            }
+            if !a.postcode.is_empty() {
+                text_element(w, "ows:PostalCode", &a.postcode)?;
+            }
+            if !a.country.is_empty() {
+                text_element(w, "ows:Country", &a.country)?;
+            }
+            if !fallback_email.is_empty() {
+                text_element(w, "ows:ElectronicMailAddress", fallback_email)?;
+            }
+            w.write_event(Event::End(BytesEnd::new("ows:Address")))
+                .map_err(xml_err)?;
+        }
+        if let Some(href) = online_resource {
+            let mut or = BytesStart::new("ows:OnlineResource");
+            or.push_attribute(("xlink:href", href));
+            w.write_event(Event::Empty(or)).map_err(xml_err)?;
+        }
+        w.write_event(Event::End(BytesEnd::new("ows:ContactInfo")))
+            .map_err(xml_err)?;
+    }
+    w.write_event(Event::End(BytesEnd::new("ows:ServiceContact")))
+        .map_err(xml_err)?;
+    Ok(())
+}
+
+fn write_operations_metadata<W: std::io::Write>(w: &mut Writer<W>, cfg: &Config) -> Result<(), WmtsError> {
+    // when an online resource is configured, advertise the canonical
+    // DCP/HTTP/Get binding pointing at it. otherwise emit empty Operation
+    // elements - clients fall back to the request URL they reached the
+    // service on, which is the common WMTS deployment practice.
+    let online_href = cfg.service.online_resource.as_deref();
     w.write_event(Event::Start(BytesStart::new("ows:OperationsMetadata")))
         .map_err(xml_err)?;
     for op in ["GetCapabilities", "GetTile"] {
         let mut o = BytesStart::new("ows:Operation");
         o.push_attribute(("name", op));
         w.write_event(Event::Start(o)).map_err(xml_err)?;
+        if let Some(href) = online_href {
+            w.write_event(Event::Start(BytesStart::new("ows:DCP")))
+                .map_err(xml_err)?;
+            w.write_event(Event::Start(BytesStart::new("ows:HTTP")))
+                .map_err(xml_err)?;
+            let mut get = BytesStart::new("ows:Get");
+            get.push_attribute(("xlink:href", href));
+            w.write_event(Event::Empty(get)).map_err(xml_err)?;
+            w.write_event(Event::End(BytesEnd::new("ows:HTTP"))).map_err(xml_err)?;
+            w.write_event(Event::End(BytesEnd::new("ows:DCP"))).map_err(xml_err)?;
+        }
         w.write_event(Event::End(BytesEnd::new("ows:Operation")))
             .map_err(xml_err)?;
     }
@@ -422,6 +532,108 @@ layers:
         let xml = capabilities_xml(&cfg, &empty_manifest(&cfg)).unwrap();
         assert!(xml.contains("dk_25832"));
         assert!(!xml.contains("<ows:Identifier>extra</ows:Identifier>"));
+    }
+
+    #[test]
+    fn service_identification_emits_keywords_fees_access_constraints() {
+        let mut cfg = minimal_cfg();
+        cfg.service.keywords = vec!["tiles".into(), "raster".into()];
+        cfg.service.fees = Some("none".into());
+        cfg.service.access_constraints = Some("CC-BY 4.0".into());
+        let xml = capabilities_xml(&cfg, &empty_manifest(&cfg)).unwrap();
+        assert!(xml.contains("<ows:Keywords>"));
+        assert!(xml.contains("<ows:Keyword>tiles</ows:Keyword>"));
+        assert!(xml.contains("<ows:Keyword>raster</ows:Keyword>"));
+        assert!(xml.contains("<ows:Fees>none</ows:Fees>"));
+        assert!(xml.contains("<ows:AccessConstraints>CC-BY 4.0</ows:AccessConstraints>"));
+    }
+
+    #[test]
+    fn service_provider_uses_organization_when_set() {
+        let mut cfg = minimal_cfg();
+        cfg.service.contact = mars_config::ContactInfo {
+            organization: "Acme Maps".into(),
+            email: "ops@acme".into(),
+            ..Default::default()
+        };
+        cfg.service.contact_email = String::new();
+        let xml = capabilities_xml(&cfg, &empty_manifest(&cfg)).unwrap();
+        assert!(xml.contains("<ows:ProviderName>Acme Maps</ows:ProviderName>"));
+        assert!(xml.contains("<ows:ElectronicMailAddress>ops@acme</ows:ElectronicMailAddress>"));
+    }
+
+    #[test]
+    fn service_provider_falls_back_to_title_when_organization_empty() {
+        let cfg = minimal_cfg();
+        let xml = capabilities_xml(&cfg, &empty_manifest(&cfg)).unwrap();
+        assert!(xml.contains("<ows:ProviderName>T</ows:ProviderName>"));
+    }
+
+    #[test]
+    fn provider_site_emitted_when_online_resource_set() {
+        let mut cfg = minimal_cfg();
+        cfg.service.online_resource = Some("https://wmts.example/?".into());
+        let xml = capabilities_xml(&cfg, &empty_manifest(&cfg)).unwrap();
+        assert!(xml.contains(r#"<ows:ProviderSite xlink:href="https://wmts.example/?""#));
+    }
+
+    #[test]
+    fn full_contact_emits_ows_shape() {
+        let mut cfg = minimal_cfg();
+        cfg.service.contact_email = String::new();
+        cfg.service.contact = mars_config::ContactInfo {
+            person: "Pat".into(),
+            position: "Lead".into(),
+            organization: "Acme".into(),
+            phone: "+1-555-0100".into(),
+            fax: "+1-555-0101".into(),
+            email: "p@acme".into(),
+            address: mars_config::Address {
+                street: "1 Main".into(),
+                city: "Springfield".into(),
+                state_or_province: "IL".into(),
+                postcode: "62701".into(),
+                country: "US".into(),
+                ..Default::default()
+            },
+        };
+        let xml = capabilities_xml(&cfg, &empty_manifest(&cfg)).unwrap();
+        assert!(xml.contains("<ows:IndividualName>Pat</ows:IndividualName>"));
+        assert!(xml.contains("<ows:PositionName>Lead</ows:PositionName>"));
+        assert!(xml.contains("<ows:Voice>+1-555-0100</ows:Voice>"));
+        assert!(xml.contains("<ows:Facsimile>+1-555-0101</ows:Facsimile>"));
+        assert!(xml.contains("<ows:DeliveryPoint>1 Main</ows:DeliveryPoint>"));
+        assert!(xml.contains("<ows:City>Springfield</ows:City>"));
+        assert!(xml.contains("<ows:AdministrativeArea>IL</ows:AdministrativeArea>"));
+        assert!(xml.contains("<ows:PostalCode>62701</ows:PostalCode>"));
+        assert!(xml.contains("<ows:Country>US</ows:Country>"));
+        assert!(xml.contains("<ows:ElectronicMailAddress>p@acme</ows:ElectronicMailAddress>"));
+    }
+
+    #[test]
+    fn operations_metadata_emits_dcp_when_online_resource_set() {
+        let mut cfg = minimal_cfg();
+        cfg.service.online_resource = Some("https://wmts.example/?".into());
+        let xml = capabilities_xml(&cfg, &empty_manifest(&cfg)).unwrap();
+        assert!(xml.contains("<ows:DCP>"));
+        assert!(xml.contains("<ows:HTTP>"));
+        assert!(xml.contains(r#"<ows:Get xlink:href="https://wmts.example/?""#));
+    }
+
+    #[test]
+    fn operations_metadata_omits_dcp_when_no_online_resource() {
+        let cfg = minimal_cfg();
+        let xml = capabilities_xml(&cfg, &empty_manifest(&cfg)).unwrap();
+        assert!(!xml.contains("<ows:DCP>"));
+        assert!(xml.contains(r#"<ows:Operation name="GetCapabilities">"#));
+    }
+
+    #[test]
+    fn xml_encoding_honored_wmts() {
+        let mut cfg = minimal_cfg();
+        cfg.service.encoding = Some("ISO-8859-1".into());
+        let xml = capabilities_xml(&cfg, &empty_manifest(&cfg)).unwrap();
+        assert!(xml.starts_with(r#"<?xml version="1.0" encoding="ISO-8859-1""#));
     }
 
     #[test]
