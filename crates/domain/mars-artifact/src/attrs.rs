@@ -33,14 +33,14 @@ const TAG_STRING: u8 = 4;
 const SECTION_MAGIC: &[u8; 8] = b"MARSATTR";
 
 /// Per-entry size of the directory at the tail of the attributes section
-/// (`[u32 feature_idx][u32 byte_offset]`). v2: keyed on the per-page slot
+/// (`[u32 feature_idx][u32 byte_offset]`). keyed on the per-page slot
 /// index, not the source-supplied user_id (which may repeat).
 const DIR_ENTRY_LEN: usize = 8;
 
 /// Section header is `[magic 8][version u32][count u32][dir_offset u32]`.
 const SECTION_HEADER_LEN: usize = 8 + 4 + 4 + 4;
 
-const SECTION_VERSION: u32 = 2;
+const SECTION_VERSION: u32 = 1;
 
 /// Errors raised while decoding or encoding an attribute block.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
