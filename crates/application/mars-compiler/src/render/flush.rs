@@ -219,20 +219,46 @@ pub(crate) async fn emit_layer_sidecars(
         let mut labels: Vec<LabelCandidate> = Vec::new();
 
         let when_clauses: Vec<Option<mars_expr::Expr>> = layer.classes.iter().map(|c| c.when.clone()).collect();
-        let style_refs: Vec<String> = layer.classes.iter().map(|c| c.style_ref.clone()).collect();
-        // config validation enforces classes.len() <= u16::MAX so the label's
-        // style_ref_idx (which sits at position style_refs.len()) fits in u16
-        // without saturation. fail loud if that invariant ever breaks.
-        let label_spec = match layer.label.as_ref() {
-            Some(l) => Some(LabelSpec {
+        let LayerStyleRefs {
+            style_refs_full,
+            class_label_indices,
+            layer_label_index,
+        } = build_layer_style_refs(layer)?;
+
+        let class_label_specs: Vec<Option<LabelSpec>> = layer
+            .classes
+            .iter()
+            .zip(class_label_indices.iter())
+            .map(|(class, idx)| {
+                class.label.as_ref().zip(*idx).map(|(plan, style_ref_idx)| LabelSpec {
+                    priority: plan.style.priority,
+                    text: &plan.text,
+                    placement: &plan.placement,
+                    style_ref_idx,
+                })
+            })
+            .collect();
+        let layer_label_spec = layer
+            .label
+            .as_ref()
+            .zip(layer_label_index)
+            .map(|(l, style_ref_idx)| LabelSpec {
                 priority: l.style.priority,
                 text: &l.text,
                 placement: &l.placement,
-                style_ref_idx: u16::try_from(style_refs.len()).map_err(|_| CompilerError::InvariantViolation {
-                    what: "layer class count exceeds u16::MAX (config validation should have rejected this)",
-                })?,
-            }),
-            None => None,
+                style_ref_idx,
+            });
+
+        // class-overrides-layer: pick the per-class spec when set, else fall
+        // back to the layer-level spec. classes without their own label and
+        // no layer fallback contribute no label candidate.
+        let label_spec_for = |class_idx: Option<u16>| -> Option<&LabelSpec> {
+            if let Some(idx) = class_idx
+                && let Some(Some(spec)) = class_label_specs.get(idx as usize)
+            {
+                return Some(spec);
+            }
+            layer_label_spec.as_ref()
         };
 
         for (slot, r) in rows.iter().enumerate() {
@@ -240,10 +266,11 @@ pub(crate) async fn emit_layer_sidecars(
                 what: "page slot overflow",
             })?;
             let attrs = RowAttrs::new(r.attrs.as_ref());
-            if let Some(idx) = assign_class(&when_clauses, &attrs) {
+            let class_idx = assign_class(&when_clauses, &attrs);
+            if let Some(idx) = class_idx {
                 assignments.push((slot_u32, idx));
             }
-            if let Some(spec) = &label_spec
+            if let Some(spec) = label_spec_for(class_idx)
                 && let Some(c) = emit_label_candidate(
                     &r.feature,
                     Some(slot_u32),
@@ -272,25 +299,24 @@ pub(crate) async fn emit_layer_sidecars(
             });
         }
 
-        if let Some(spec) = &label_spec {
-            for r in pruned {
-                let attrs = RowAttrs::new(r.attrs.as_ref());
-                if let Some(c) = emit_label_candidate(
+        // pruned features keep the Independent-survival contract: evaluate
+        // their class too so per-class labels stick when the geometry was
+        // dropped by the level's size filter.
+        for r in pruned {
+            let attrs = RowAttrs::new(r.attrs.as_ref());
+            let class_idx = assign_class(&when_clauses, &attrs);
+            if let Some(spec) = label_spec_for(class_idx)
+                && let Some(c) = emit_label_candidate(
                     &r.feature,
                     None,
                     &attrs,
                     spec,
                     layer.label_survival,
                     level.label_min_priority,
-                ) {
-                    labels.push(c);
-                }
+                )
+            {
+                labels.push(c);
             }
-        }
-
-        let mut style_refs_full = style_refs;
-        if let Some(label_plan) = layer.label.as_ref() {
-            style_refs_full.push(label_plan.style_ref.clone());
         }
 
         let class_bytes = build_class_artifact(&assignments, &style_refs_full, page.spatial_bbox)?;
@@ -326,6 +352,53 @@ pub(crate) async fn emit_layer_sidecars(
         }
     }
     Ok(())
+}
+
+/// Layout of the per-layer `style_refs` array published in the class sidecar.
+/// Geometry style names come first (one per class, in class order); per-class
+/// label style names follow (one slot per class that carries a CLASS-level
+/// LABEL, in class order); finally the optional layer-level label style.
+///
+/// `class_label_indices[i]` is `Some(idx)` exactly when class i has a
+/// per-class label; `idx` is the position of that class's label style in
+/// `style_refs_full`. `layer_label_index` is `Some(idx)` exactly when the
+/// layer carries a layer-level label.
+struct LayerStyleRefs {
+    style_refs_full: Vec<String>,
+    class_label_indices: Vec<Option<u16>>,
+    layer_label_index: Option<u16>,
+}
+
+fn build_layer_style_refs(layer: &LayerPlan) -> Result<LayerStyleRefs, CompilerError> {
+    let mut style_refs_full: Vec<String> = layer.classes.iter().map(|c| c.style_ref.clone()).collect();
+    let mut class_label_indices: Vec<Option<u16>> = Vec::with_capacity(layer.classes.len());
+    for class in &layer.classes {
+        match &class.label {
+            Some(plan) => {
+                let idx = u16::try_from(style_refs_full.len()).map_err(|_| CompilerError::InvariantViolation {
+                    what: "per-class label style_ref_idx exceeds u16::MAX",
+                })?;
+                style_refs_full.push(plan.style_ref.clone());
+                class_label_indices.push(Some(idx));
+            }
+            None => class_label_indices.push(None),
+        }
+    }
+    let layer_label_index = match layer.label.as_ref() {
+        Some(l) => {
+            let idx = u16::try_from(style_refs_full.len()).map_err(|_| CompilerError::InvariantViolation {
+                what: "layer label style_ref_idx exceeds u16::MAX (config validation should have rejected this)",
+            })?;
+            style_refs_full.push(l.style_ref.clone());
+            Some(idx)
+        }
+        None => None,
+    };
+    Ok(LayerStyleRefs {
+        style_refs_full,
+        class_label_indices,
+        layer_label_index,
+    })
 }
 
 fn build_class_artifact(
@@ -382,6 +455,7 @@ mod tests {
                 name: format!("c{i}"),
                 when: w.map(|s| mars_expr::parse(s).unwrap()),
                 style_ref: format!("{name}__c{i}"),
+                label: None,
             })
             .collect();
         crate::plan::LayerPlan {
@@ -456,5 +530,74 @@ mod tests {
         let (kept, dropped) = filter_unmatched_rows(rows, &layers);
         assert_eq!(dropped, 0);
         assert_eq!(kept.len(), 2);
+    }
+
+    fn label_plan(style_ref: &str) -> crate::plan::LayerLabelPlan {
+        crate::plan::LayerLabelPlan {
+            style_ref: style_ref.into(),
+            style: mars_style::LabelStyle {
+                font_family: "DejaVu Sans".into(),
+                font_size: 12.0,
+                fill: mars_style::Colour::rgb(0, 0, 0),
+                halo: None,
+                priority: 0,
+                min_distance: 0.0,
+                position: mars_style::AnchorPosition::default(),
+                offset_px: (0.0, 0.0),
+                angle_deg: None,
+                partials: false,
+                force: false,
+            },
+            text: mars_expr::parse_template("{name}").unwrap(),
+            placement: mars_style::Placement::Point,
+        }
+    }
+
+    #[test]
+    fn style_refs_layout_geom_then_class_labels_then_layer_label() {
+        // shape: 3 classes; class 0 and class 2 have per-class labels; layer
+        // has a fallback label. expected style_refs order:
+        // [geom0, geom1, geom2, classlabel0, classlabel2, layerlabel].
+        let mut layer = layer_with_classes("vejnavne", &[Some("kind = 'major'"), None, None]);
+        layer.classes[0].label = Some(label_plan("vejnavne__major__label"));
+        layer.classes[2].label = Some(label_plan("vejnavne__other__label"));
+        layer.label = Some(label_plan("vejnavne__label"));
+
+        let refs = build_layer_style_refs(&layer).unwrap();
+        assert_eq!(
+            refs.style_refs_full,
+            vec![
+                "vejnavne__c0".to_string(),
+                "vejnavne__c1".to_string(),
+                "vejnavne__c2".to_string(),
+                "vejnavne__major__label".to_string(),
+                "vejnavne__other__label".to_string(),
+                "vejnavne__label".to_string(),
+            ]
+        );
+        assert_eq!(refs.class_label_indices, vec![Some(3), None, Some(4)]);
+        assert_eq!(refs.layer_label_index, Some(5));
+    }
+
+    #[test]
+    fn style_refs_layout_no_labels_omits_label_slots() {
+        let layer = layer_with_classes("roads", &[Some("kind = 'main'"), None]);
+        let refs = build_layer_style_refs(&layer).unwrap();
+        assert_eq!(refs.style_refs_full, vec!["roads__c0".to_string(), "roads__c1".to_string()]);
+        assert_eq!(refs.class_label_indices, vec![None, None]);
+        assert_eq!(refs.layer_label_index, None);
+    }
+
+    #[test]
+    fn style_refs_layout_only_layer_label_keeps_today_layout() {
+        // pre-existing shape: classes have no labels, only the layer does.
+        // the layer-label idx must still equal classes.len() (today's
+        // invariant) so existing label sidecars decode unchanged.
+        let mut layer = layer_with_classes("a", &[Some("k = '1'"), Some("k = '2'")]);
+        layer.label = Some(label_plan("a__label"));
+        let refs = build_layer_style_refs(&layer).unwrap();
+        assert_eq!(refs.style_refs_full.len(), 3);
+        assert_eq!(refs.class_label_indices, vec![None, None]);
+        assert_eq!(refs.layer_label_index, Some(2));
     }
 }

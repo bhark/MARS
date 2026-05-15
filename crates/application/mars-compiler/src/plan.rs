@@ -134,11 +134,17 @@ pub struct BindingPlan {
 /// section: a `ClassStyle::Ref { name }` keeps the operator's name; an
 /// inline style synthesises `<layer>__<class>` so the runtime can dereference
 /// it through the published style artifact.
+///
+/// `label` is the per-class label override (mapfile CLASS-level LABEL).
+/// When the class matches, this label fully replaces the layer-level label
+/// for the feature; classes without a per-class label fall back to
+/// `LayerPlan.label`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClassPlan {
     pub name: String,
     pub when: Option<Expr>,
     pub style_ref: String,
+    pub label: Option<LayerLabelPlan>,
 }
 
 /// Pre-parsed label spec. `text` is the parsed template; `placement` is the
@@ -300,10 +306,16 @@ fn build_layer_plan(cfg: &Config, layer: &CfgLayer, binding_id: &BindingId) -> R
             mars_config::ClassStyle::Ref { name } => name.clone(),
             mars_config::ClassStyle::Inline(_) => format!("{layer}__{class}", layer = layer.name, class = class.name),
         };
+        let label = class
+            .label
+            .as_ref()
+            .map(|l| build_class_label_plan(cfg, layer, &class.name, l))
+            .transpose()?;
         classes.push(ClassPlan {
             name: class.name.clone(),
             when,
             style_ref,
+            label,
         });
     }
 
@@ -332,7 +344,8 @@ fn build_label_plan(
         layer: layer.name.clone(),
         source,
     })?;
-    let (style_ref, style) = resolve_label_style(cfg, layer, &label.style);
+    let inline_style_ref = format!("{layer}__label", layer = layer.name);
+    let (style_ref, style) = resolve_label_style(cfg, &inline_style_ref, &label.style);
     let placement = label.placement.clone().unwrap_or_else(|| {
         let kind = mars_style::LayerGeomKind::parse(layer.kind.as_str()).unwrap_or(mars_style::LayerGeomKind::Point);
         default_placement(kind)
@@ -345,7 +358,31 @@ fn build_label_plan(
     })
 }
 
-fn resolve_label_style(cfg: &Config, layer: &CfgLayer, attach: &LabelStyleAttach) -> (String, LabelStyle) {
+fn build_class_label_plan(
+    cfg: &Config,
+    layer: &CfgLayer,
+    class_name: &str,
+    label: &mars_config::LayerLabel,
+) -> Result<LayerLabelPlan, PlanError> {
+    let template = parse_template(&label.text).map_err(|source| PlanError::LabelTemplateParse {
+        layer: layer.name.clone(),
+        source,
+    })?;
+    let inline_style_ref = format!("{layer}__{class_name}__label", layer = layer.name);
+    let (style_ref, style) = resolve_label_style(cfg, &inline_style_ref, &label.style);
+    let placement = label.placement.clone().unwrap_or_else(|| {
+        let kind = mars_style::LayerGeomKind::parse(layer.kind.as_str()).unwrap_or(mars_style::LayerGeomKind::Point);
+        default_placement(kind)
+    });
+    Ok(LayerLabelPlan {
+        style_ref,
+        style,
+        text: template,
+        placement,
+    })
+}
+
+fn resolve_label_style(cfg: &Config, inline_style_ref: &str, attach: &LabelStyleAttach) -> (String, LabelStyle) {
     match attach {
         LabelStyleAttach::Ref { name } => {
             let style = cfg.styles.get(name).and_then(|e| e.as_label().cloned()).unwrap_or_else(
@@ -356,7 +393,7 @@ fn resolve_label_style(cfg: &Config, layer: &CfgLayer, attach: &LabelStyleAttach
             );
             (name.clone(), style)
         }
-        LabelStyleAttach::Inline(style) => (format!("{layer}__label", layer = layer.name), style.clone()),
+        LabelStyleAttach::Inline(style) => (inline_style_ref.to_string(), style.clone()),
     }
 }
 
@@ -1000,5 +1037,77 @@ mod tests {
         let plan = build_bootstrap_plan(&cfg).unwrap();
         assert_eq!(plan.bindings.len(), 2);
         assert_ne!(plan.bindings[0].binding_id, plan.bindings[1].binding_id);
+    }
+
+    /// per-class LABEL plumbs through the plan layer with a deterministic
+    /// inline style_ref name so the page sidecar can address it by index.
+    /// classes without their own label leave ClassPlan.label = None so
+    /// emit_layer_sidecars can fall back to the layer-level label.
+    #[test]
+    fn class_label_lands_on_class_plan_with_scoped_style_ref() {
+        use mars_config::{LabelStyleAttach, LayerLabel};
+        let mut b = binding("vejnavne");
+        b.attributes = vec!["kind".into(), "name".into()];
+        let inline = LayerLabel {
+            style: LabelStyleAttach::Inline(mars_style::LabelStyle {
+                font_family: "DejaVu Sans".into(),
+                font_size: 12.0,
+                fill: mars_style::Colour::rgb(0, 0, 0),
+                halo: None,
+                priority: 0,
+                min_distance: 0.0,
+                position: mars_style::AnchorPosition::default(),
+                offset_px: (0.0, 0.0),
+                angle_deg: None,
+                partials: false,
+                force: false,
+            }),
+            text: "{name}".into(),
+            placement: None,
+        };
+        let l = mars_config::Layer {
+            name: LayerId::new("vejnavne"),
+            title: String::new(),
+            abstract_: String::new(),
+            kind: "line".into(),
+            scale: None,
+            group: None,
+            enable_get_feature_info: false,
+            bbox: None,
+            sources: vec![b],
+            classes: vec![
+                mars_config::Class {
+                    name: "major".into(),
+                    title: String::new(),
+                    when: Some("kind = 'major'".into()),
+                    scale: None,
+                    style: ClassStyle::Inline(Default::default()),
+                    label: Some(inline.clone()),
+                },
+                mars_config::Class {
+                    name: "default".into(),
+                    title: String::new(),
+                    when: None,
+                    scale: None,
+                    style: ClassStyle::Inline(Default::default()),
+                    label: None,
+                },
+            ],
+            label: Some(inline),
+            label_survival: mars_config::LabelSurvival::Independent,
+            raster: None,
+        };
+        let cfg = config_with(vec![l]);
+        let plan = build_bootstrap_plan(&cfg).unwrap();
+        let layer = &plan.layers[0];
+        let major = &layer.classes[0];
+        let default = &layer.classes[1];
+        let major_label = major.label.as_ref().expect("class label survives plan build");
+        assert_eq!(major_label.style_ref, "vejnavne__major__label");
+        assert!(default.label.is_none(), "class without LABEL stays empty");
+        assert_eq!(
+            layer.label.as_ref().expect("layer label still present").style_ref,
+            "vejnavne__label"
+        );
     }
 }
