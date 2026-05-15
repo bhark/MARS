@@ -115,11 +115,11 @@ pub struct Compiler {
     #[serde(default = "default_dirty_page_ceiling_per_binding")]
     pub incremental_dirty_page_ceiling_per_binding: Option<usize>,
     /// What to do when one binding's rebuild fails mid-cycle. The default
-    /// ([`BindingFailurePolicy::Isolate`]) keeps the failure local: log
-    /// + meter the failure, leave the binding's prior pages in the
-    /// published manifest, continue with other bindings. `FailCycle`
-    /// makes the first failure abort the whole cycle. See
-    /// [`BindingFailurePolicy`] for the trade-offs.
+    /// ([`BindingFailurePolicy::Isolate`]) keeps the failure local (logs,
+    /// meters, leaves the binding's prior pages in the published manifest,
+    /// continues with other bindings); `FailCycle` makes the first failure
+    /// abort the whole cycle. See [`BindingFailurePolicy`] for the
+    /// trade-offs.
     #[serde(default)]
     pub binding_failure_policy: BindingFailurePolicy,
 }
