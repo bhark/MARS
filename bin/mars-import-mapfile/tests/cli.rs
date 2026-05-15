@@ -107,6 +107,11 @@ fn geomtransform_fixture_matches() {
 }
 
 #[test]
+fn service_metadata_fixture_matches() {
+    assert_fixture_matches("service_metadata");
+}
+
+#[test]
 fn strict_exits_two_on_unsupported() {
     let out = Command::new(bin_path())
         .arg("--strict")

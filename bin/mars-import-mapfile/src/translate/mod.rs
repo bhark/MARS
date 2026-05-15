@@ -29,16 +29,22 @@ use crate::scanner::{Token, block_range, is_block_opener};
 
 use self::emit::emit_symbol;
 use self::layer::handle_layer;
+use self::map_metadata::parse_map_metadata;
 use self::resolved::resolve_symbol;
 use self::symbol::parse_symbol;
 
+mod map_metadata;
+
 /// keywords whose presence we don't translate yet. some are block openers,
 /// some are scalar directives - `walk` handles both.
+///
+/// METADATA is intentionally absent: MAP-level METADATA flows through
+/// `parse_map_metadata` (service-side OWS keys) and LAYER-level METADATA
+/// flows through `parse_layer_metadata` (per-layer WMS keys).
 const UNSUPPORTED: &[&str] = &[
     "FONTSET",
     "LEGEND",
     "PROJECTION",
-    "METADATA",
     "OUTPUTFORMAT",
     "FEATURE",
     "JOIN",
@@ -115,6 +121,17 @@ fn walk(tokens: &[Token], skel: &mut Skeleton, include_layers: Option<&HashSet<S
                 if let Some(resolved) = resolve_symbol(parse_symbol(body)) {
                     emit_symbol(resolved, skel);
                 }
+                i = range.end;
+                continue;
+            }
+            MapDirective::Metadata => {
+                let range = block_range(tokens, i).unwrap_or(i..i + 1);
+                let body: &[Token] = if range.end > range.start + 1 {
+                    &tokens[range.start + 1..range.end - 1]
+                } else {
+                    &[]
+                };
+                parse_map_metadata(body, &mut skel.service_meta);
                 i = range.end;
                 continue;
             }

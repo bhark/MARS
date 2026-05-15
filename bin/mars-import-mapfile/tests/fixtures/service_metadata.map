@@ -1,0 +1,48 @@
+# service-level METADATA fixture: exercises the MAP METADATA -> service.*
+# emit path. covers keywords, online_resource, fees, access_constraints,
+# encoding, sld_enabled, advertised CRS list, full contact + address block,
+# authority and identifier refs (indexed pairs), and per-operation format
+# overrides.
+MAP
+  NAME "svc_meta"
+  TITLE "Service Metadata Coverage"
+  METADATA
+    "ows_title"           "WMS metadata title"
+    "ows_abstract"        "Demo service for metadata coverage"
+    "ows_keywordlist"     "roads, buildings, parks"
+    "ows_onlineresource"  "https://wms.example.org/?"
+    "ows_fees"            "none"
+    "ows_accessconstraints" "CC-BY 4.0"
+    "ows_encoding"        "UTF-8"
+    "ows_bbox_extended"   "true"
+    "wms_sld_enabled"     "true"
+    "ows_srs"             "EPSG:25832 EPSG:3857 EPSG:4326"
+    "ows_contactperson"   "Pat Operator"
+    "ows_contactposition" "Lead"
+    "ows_contactorganization" "Acme Maps"
+    "ows_contactvoicetelephone" "+1-555-0100"
+    "ows_contactfacsimiletelephone" "+1-555-0101"
+    "ows_contactelectronicmailaddress" "ops@acme.example"
+    "ows_addresstype"     "postal"
+    "ows_address"         "1 Main St"
+    "ows_city"            "Springfield"
+    "ows_stateorprovince" "IL"
+    "ows_postcode"        "62701"
+    "ows_country"         "US"
+    "ows_authorityurl_name"  "primary"
+    "ows_authorityurl_href"  "https://example.org/auth/primary"
+    "ows_authorityurl_name1" "secondary"
+    "ows_authorityurl_href1" "https://example.org/auth/secondary"
+    "ows_identifier_authority" "primary"
+    "ows_identifier_value"     "urn:demo:svc"
+    "wms_getmap_formatlist"        "image/png,image/jpeg,image/webp"
+    "wms_feature_info_mime_type"   "text/html"
+    "wms_getlegendgraphic_formatlist" "image/png"
+  END
+
+  LAYER
+    NAME "roads"
+    TYPE LINE
+    DATA "geom FROM roads"
+  END
+END

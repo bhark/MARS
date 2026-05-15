@@ -12,6 +12,11 @@ use tracing::warn;
 pub(crate) struct Skeleton {
     pub(crate) service_name: Option<String>,
     pub(crate) service_title: Option<String>,
+    /// MAP-level METADATA harvested from `ows_*` / `wms_*` keys. Populated by
+    /// `parse_map_metadata`; consumed by `render` when emitting the service
+    /// block. Empty defaults preserve the placeholder-only output for inputs
+    /// without metadata.
+    pub(crate) service_meta: ServiceMetaSkeleton,
     pub(crate) layers: Vec<LayerSkeleton>,
     pub(crate) styles: Vec<StyleDef>,
     /// mapfile-level SYMBOL definitions keyed by name. consumed by STYLE
@@ -19,6 +24,59 @@ pub(crate) struct Skeleton {
     /// each STYLE that uses a symbol carries the resolved marker/fill on
     /// its `StyleDef`.
     pub(crate) symbols: HashMap<String, SymbolDef>,
+}
+
+/// MAP-level service metadata harvested from the mapfile METADATA block.
+/// Each field carries either a parsed value or the absent state; the emitter
+/// is responsible for falling back to placeholders when nothing is set.
+#[derive(Debug, Default)]
+pub(crate) struct ServiceMetaSkeleton {
+    pub(crate) title_override: Option<String>,
+    pub(crate) abstract_: Option<String>,
+    pub(crate) keywords: Vec<String>,
+    pub(crate) online_resource: Option<String>,
+    pub(crate) fees: Option<String>,
+    pub(crate) access_constraints: Option<String>,
+    pub(crate) encoding: Option<String>,
+    pub(crate) bbox_extended: Option<bool>,
+    pub(crate) sld_enabled: Option<bool>,
+    pub(crate) advertised_crs: Vec<String>,
+    pub(crate) contact_person: Option<String>,
+    pub(crate) contact_position: Option<String>,
+    pub(crate) contact_organization: Option<String>,
+    pub(crate) contact_phone: Option<String>,
+    pub(crate) contact_fax: Option<String>,
+    pub(crate) contact_email: Option<String>,
+    pub(crate) address_type: Option<String>,
+    pub(crate) address_street: Option<String>,
+    pub(crate) address_city: Option<String>,
+    pub(crate) address_state: Option<String>,
+    pub(crate) address_postcode: Option<String>,
+    pub(crate) address_country: Option<String>,
+    pub(crate) getmap_formats: Vec<String>,
+    pub(crate) getfeatureinfo_formats: Vec<String>,
+    pub(crate) getlegend_formats: Vec<String>,
+    pub(crate) authorities: Vec<(String, String)>,
+    pub(crate) identifiers: Vec<(String, String)>,
+}
+
+impl ServiceMetaSkeleton {
+    /// True when any structured contact sub-field is set. Drives whether the
+    /// emitter writes a full `contact:` block or keeps the top-level
+    /// `contact_email` shorthand.
+    pub(crate) fn has_structured_contact(&self) -> bool {
+        self.contact_person.is_some()
+            || self.contact_position.is_some()
+            || self.contact_organization.is_some()
+            || self.contact_phone.is_some()
+            || self.contact_fax.is_some()
+            || self.address_type.is_some()
+            || self.address_street.is_some()
+            || self.address_city.is_some()
+            || self.address_state.is_some()
+            || self.address_postcode.is_some()
+            || self.address_country.is_some()
+    }
 }
 
 /// Marker shape recognised by [`mars_style::MarkerSymbol`]. Kept as a small
@@ -275,6 +333,126 @@ fn yaml_quote(s: &str) -> String {
 /// quote a `Colour` as a YAML string (`"#rrggbb"` or `"#rrggbbaa"`).
 fn quote_colour(c: Colour) -> String {
     yaml_quote(&c.to_string())
+}
+
+/// Emit the optional `service.*` fields harvested from MAP-level METADATA.
+/// Each field is written only when set. Empty list fields are skipped.
+fn write_service_meta(out: &mut String, svc: &ServiceMetaSkeleton) {
+    if !svc.keywords.is_empty() {
+        let _ = writeln!(out, "  keywords:");
+        for kw in &svc.keywords {
+            let _ = writeln!(out, "    - {}", yaml_quote(kw));
+        }
+    }
+    if let Some(v) = &svc.online_resource {
+        let _ = writeln!(out, "  online_resource: {}", yaml_quote(v));
+    }
+    if let Some(v) = &svc.fees {
+        let _ = writeln!(out, "  fees: {}", yaml_quote(v));
+    }
+    if let Some(v) = &svc.access_constraints {
+        let _ = writeln!(out, "  access_constraints: {}", yaml_quote(v));
+    }
+    if let Some(v) = &svc.encoding {
+        let _ = writeln!(out, "  encoding: {}", yaml_quote(v));
+    }
+    if let Some(b) = svc.bbox_extended {
+        let _ = writeln!(out, "  bbox_extended: {b}");
+    }
+    if let Some(b) = svc.sld_enabled {
+        let _ = writeln!(out, "  sld_enabled: {b}");
+    }
+    if !svc.advertised_crs.is_empty() {
+        let _ = writeln!(out, "  advertised_crs:");
+        for crs in &svc.advertised_crs {
+            let _ = writeln!(out, "    - {}", yaml_quote(crs));
+        }
+    }
+    if svc.has_structured_contact() || svc.contact_email.is_some() {
+        let _ = writeln!(out, "  contact:");
+        if let Some(v) = &svc.contact_person {
+            let _ = writeln!(out, "    person: {}", yaml_quote(v));
+        }
+        if let Some(v) = &svc.contact_position {
+            let _ = writeln!(out, "    position: {}", yaml_quote(v));
+        }
+        if let Some(v) = &svc.contact_organization {
+            let _ = writeln!(out, "    organization: {}", yaml_quote(v));
+        }
+        if let Some(v) = &svc.contact_phone {
+            let _ = writeln!(out, "    phone: {}", yaml_quote(v));
+        }
+        if let Some(v) = &svc.contact_fax {
+            let _ = writeln!(out, "    fax: {}", yaml_quote(v));
+        }
+        if let Some(v) = &svc.contact_email {
+            let _ = writeln!(out, "    email: {}", yaml_quote(v));
+        }
+        let any_addr = svc.address_type.is_some()
+            || svc.address_street.is_some()
+            || svc.address_city.is_some()
+            || svc.address_state.is_some()
+            || svc.address_postcode.is_some()
+            || svc.address_country.is_some();
+        if any_addr {
+            let _ = writeln!(out, "    address:");
+            if let Some(v) = &svc.address_type {
+                let _ = writeln!(out, "      type: {}", yaml_quote(v));
+            }
+            if let Some(v) = &svc.address_street {
+                let _ = writeln!(out, "      street: {}", yaml_quote(v));
+            }
+            if let Some(v) = &svc.address_city {
+                let _ = writeln!(out, "      city: {}", yaml_quote(v));
+            }
+            if let Some(v) = &svc.address_state {
+                let _ = writeln!(out, "      state_or_province: {}", yaml_quote(v));
+            }
+            if let Some(v) = &svc.address_postcode {
+                let _ = writeln!(out, "      postcode: {}", yaml_quote(v));
+            }
+            if let Some(v) = &svc.address_country {
+                let _ = writeln!(out, "      country: {}", yaml_quote(v));
+            }
+        }
+    }
+    if !svc.authorities.is_empty() {
+        let _ = writeln!(out, "  authorities:");
+        for (n, h) in &svc.authorities {
+            let _ = writeln!(out, "    - name: {}", yaml_quote(n));
+            let _ = writeln!(out, "      href: {}", yaml_quote(h));
+        }
+    }
+    if !svc.identifiers.is_empty() {
+        let _ = writeln!(out, "  identifiers:");
+        for (a, v) in &svc.identifiers {
+            let _ = writeln!(out, "    - authority: {}", yaml_quote(a));
+            let _ = writeln!(out, "      value: {}", yaml_quote(v));
+        }
+    }
+    let any_fmt =
+        !svc.getmap_formats.is_empty() || !svc.getfeatureinfo_formats.is_empty() || !svc.getlegend_formats.is_empty();
+    if any_fmt {
+        let _ = writeln!(out, "  formats:");
+        if !svc.getmap_formats.is_empty() {
+            let _ = writeln!(out, "    get_map:");
+            for v in &svc.getmap_formats {
+                let _ = writeln!(out, "      - {}", yaml_quote(v));
+            }
+        }
+        if !svc.getfeatureinfo_formats.is_empty() {
+            let _ = writeln!(out, "    get_feature_info:");
+            for v in &svc.getfeatureinfo_formats {
+                let _ = writeln!(out, "      - {}", yaml_quote(v));
+            }
+        }
+        if !svc.getlegend_formats.is_empty() {
+            let _ = writeln!(out, "    get_legend_graphic:");
+            for v in &svc.getlegend_formats {
+                let _ = writeln!(out, "      - {}", yaml_quote(v));
+            }
+        }
+    }
 }
 
 /// YAML wire spelling for `mars_style::AnchorPosition` (snake_case enum).
@@ -538,13 +716,38 @@ pub(crate) fn render(skel: &Skeleton, bands: &[(String, u64)]) -> String {
     out.push_str("# Review and replace before production use.\n\n");
 
     let name = skel.service_name.as_deref().unwrap_or("unnamed");
-    let title = skel.service_title.as_deref().unwrap_or(name);
+    let title = skel
+        .service_meta
+        .title_override
+        .as_deref()
+        .or(skel.service_title.as_deref())
+        .unwrap_or(name);
+    let svc = &skel.service_meta;
+    let abstract_text = svc.abstract_.as_deref().unwrap_or("Imported from mapfile");
 
     let _ = writeln!(out, "service:");
     let _ = writeln!(out, "  name: {}", yaml_quote(name));
     let _ = writeln!(out, "  title: {}", yaml_quote(title));
-    let _ = writeln!(out, "  abstract: \"Imported from mapfile\"");
-    let _ = writeln!(out, "  contact_email: ops@example.org");
+    if svc.abstract_.is_some() {
+        let _ = writeln!(out, "  abstract: {}", yaml_quote(abstract_text));
+    } else {
+        // legacy placeholder; emitted with the same quoted spelling existing
+        // fixtures lock down. parsed abstract_ values take precedence via the
+        // branch above and route through yaml_quote for safety.
+        let _ = writeln!(out, "  abstract: \"Imported from mapfile\"");
+    }
+    // top-level shorthand only when no structured contact block is emitted.
+    // a structured contact (set below) carries the email under `contact.email`
+    // and takes precedence at capabilities-emit time.
+    if !svc.has_structured_contact() {
+        if let Some(email) = svc.contact_email.as_deref() {
+            let _ = writeln!(out, "  contact_email: {}", yaml_quote(email));
+        } else {
+            // legacy placeholder unquoted to match existing fixture goldens
+            let _ = writeln!(out, "  contact_email: ops@example.org");
+        }
+    }
+    write_service_meta(&mut out, svc);
     let _ = writeln!(out);
 
     let _ = writeln!(out, "source:");

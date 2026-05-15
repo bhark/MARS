@@ -15,6 +15,10 @@ pub(crate) enum MapDirective<'a> {
     Title(&'a Token),
     Layer(&'a Token),
     Symbol,
+    /// `METADATA` block at MAP scope. Carries `ows_*` / `wms_*` keys that
+    /// drive WMS / WMTS capabilities metadata (online resource, contact,
+    /// keywords, fees, authority refs, etc.).
+    Metadata,
     /// Keyword present in the `UNSUPPORTED` list - the parser warns at use
     /// site and skips a matching block range when applicable.
     Unsupported(&'a Token),
@@ -28,6 +32,7 @@ impl<'a> MapDirective<'a> {
             "TITLE" => Self::Title(t),
             "LAYER" => Self::Layer(t),
             "SYMBOL" => Self::Symbol,
+            "METADATA" => Self::Metadata,
             other if is_unsupported(other) => Self::Unsupported(t),
             _ => Self::Unknown,
         }
