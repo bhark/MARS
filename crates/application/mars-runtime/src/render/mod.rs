@@ -13,7 +13,10 @@
 //! `RUST_LOG=mars_runtime::render=info`.
 
 mod decode;
-mod labels;
+// `pub(crate)` so the `bench-internals` feature can re-export the collision
+// API. without the feature this is effectively private (parent `render`
+// module is itself `mod`, not `pub mod`).
+pub(crate) mod labels;
 mod marker;
 mod project;
 mod raster;

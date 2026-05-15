@@ -17,6 +17,10 @@ workspace = true
 # pages) for tests and benches. activated for all dev/test/bench targets
 # via the self-dev-dep below; not enabled in production builds.
 test-fixtures = ["mars-store/test-utils"]
+# exposes `mars_runtime::bench_internals` re-exporting collision internals
+# so the label-collision bench can drive them. opt-in per bench target via
+# `required-features`; never enabled in production builds.
+bench-internals = []
 
 [dependencies]
 mars-types         = { workspace = true }

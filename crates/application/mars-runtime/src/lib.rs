@@ -35,6 +35,18 @@ mod state;
 #[cfg(feature = "test-fixtures")]
 pub mod test_fixtures;
 
+#[cfg(feature = "bench-internals")]
+#[doc(hidden)]
+pub mod bench_internals {
+    //! non-default re-exports of `pub(super)` collision internals so the
+    //! label-collision bench can drive them directly. enabled only via
+    //! `--features bench-internals`; never compiled in release builds.
+    pub use crate::render::labels::{
+        PositionCandidate, PreparedLabel, PreparedPlacement, collide_and_emit_labels, new_position_candidate,
+        new_prepared_label,
+    };
+}
+
 pub use fetch::{fetch_page, fetch_sidecar};
 pub use gfi::LayerFeatureInfo;
 pub use legend::{LegendPlan, render_legend};
