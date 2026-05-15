@@ -11,7 +11,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use mars_artifact::{ArtifactReader, LabelCandidate, LabelShape, SectionKind, decode_label_candidates};
 use mars_render_port::{DrawOp, Renderer};
-use mars_style::{AnchorPosition, LabelStyle, Placement, Stylesheet};
+use mars_style::{AnchorPosition, LabelStyle, LineAngleMode, Placement, Stylesheet};
 use mars_types::BindingMetadata;
 
 use crate::{RenderPlan, RuntimeError};
@@ -41,7 +41,9 @@ pub(super) struct PreparedLabel {
 
 /// resolved POSITION decision for a single `PreparedLabel`. `Fixed` carries
 /// the only bbox the collision pass should consider; `Auto` carries the
-/// ordered set of candidate placements to try.
+/// ordered set of candidate placements to try; `Follow` carries the
+/// polyline + starting arc-length so the renderer can lay out the glyphs
+/// per-character along the curve.
 pub(super) enum PreparedPlacement {
     Fixed {
         anchor_offset_px: (f32, f32),
@@ -49,6 +51,11 @@ pub(super) enum PreparedPlacement {
     },
     Auto {
         candidates: Vec<PositionCandidate>,
+    },
+    Follow {
+        polyline_px: Vec<(f32, f32)>,
+        start_arc_px: f32,
+        bbox_px: (f32, f32, f32, f32),
     },
 }
 
@@ -111,7 +118,7 @@ pub(super) fn prepare_labels(
             Placement::Line {
                 repeat_m,
                 max_angle_delta_deg,
-                ..
+                angle_mode,
             },
         ) = (&c.shape, placement)
         {
@@ -121,6 +128,7 @@ pub(super) fn prepare_labels(
                 plan,
                 *repeat_m,
                 *max_angle_delta_deg,
+                *angle_mode,
                 &c.text,
                 c.priority,
                 &style,
@@ -174,6 +182,7 @@ fn sample_polyline_labels(
     plan: &RenderPlan,
     repeat_m: f64,
     max_angle_delta_deg: f32,
+    angle_mode: LineAngleMode,
     text: &str,
     priority: u16,
     style: &Arc<LabelStyle>,
@@ -255,6 +264,37 @@ fn sample_polyline_labels(
         // mapserver: explicit `ANGLE <deg>` overrides AUTO/FOLLOW.
         let angle = effective_angle_rad(style, angle);
         if !inside_pixel_canvas(centre.pos, plan.width, plan.height) {
+            continue;
+        }
+        // FOLLOW: per-glyph placement along the polyline. POSITION/OFFSET
+        // do not compose with FOLLOW in v1 - the polyline path itself
+        // anchors each glyph. numeric ANGLE also wins back to AUTO
+        // semantics (one fixed orientation makes per-glyph rotation
+        // meaningless) - drop to the block path when angle_deg is set.
+        let use_follow = matches!(angle_mode, LineAngleMode::Follow) && style.angle_deg.is_none();
+        if use_follow {
+            // bbox for collision: the same rotated AABB the AUTO path uses,
+            // sized by the run's centre tangent. tight enough at moderate
+            // curvatures (the max_angle_delta_deg gate above already
+            // rejects sharp bends across the label footprint).
+            let half_h = metrics.ascent.max(metrics.descent);
+            let bbox_px = rotated_label_bbox(centre.pos, half_advance, half_h, angle);
+            let placement = PreparedPlacement::Follow {
+                polyline_px: pixel_pts.clone(),
+                start_arc_px: pos - half_advance,
+                bbox_px,
+            };
+            let Some(placement) = filter_for_partials(placement, style.partials, plan.width, plan.height) else {
+                continue;
+            };
+            out.push(PreparedLabel {
+                raw_anchor_px: centre.pos,
+                text: text.to_owned(),
+                style: style.clone(),
+                priority,
+                angle_rad: angle,
+                placement,
+            });
             continue;
         }
         let placement = build_placement(centre.pos, &metrics, style, angle);
@@ -525,6 +565,21 @@ fn filter_for_partials(placement: PreparedPlacement, partials: bool, w: u32, h: 
                 Some(PreparedPlacement::Auto { candidates: kept })
             }
         }
+        PreparedPlacement::Follow {
+            polyline_px,
+            start_arc_px,
+            bbox_px,
+        } => {
+            if bbox_inside_canvas(bbox_px, w, h) {
+                Some(PreparedPlacement::Follow {
+                    polyline_px,
+                    start_arc_px,
+                    bbox_px,
+                })
+            } else {
+                None
+            }
+        }
     }
 }
 
@@ -601,31 +656,59 @@ pub(super) fn collide_and_emit_labels(mut labels: Vec<PreparedLabel>, _w: u32, _
     let mut ops = Vec::with_capacity(labels.len());
     for label in labels {
         let cand_md = label.style.min_distance.max(0.0);
-        let chosen = if label.style.force {
-            force_pick(&label.placement)
-        } else {
-            pick_placement(&label.placement, cand_md, &placed)
-        };
-        let Some((anchor_offset, bbox_used)) = chosen else {
-            continue;
-        };
-        let anchor = apply_offset(label.raw_anchor_px, anchor_offset, label.angle_rad);
-        placed.push(PlacedFootprint {
-            bbox: bbox_used,
-            min_distance: cand_md,
-        });
-        ops.push(DrawOp::Label {
-            anchor,
-            text: label.text,
-            style: label.style,
-            angle_rad: label.angle_rad,
-        });
+        let force = label.style.force;
+        // Follow labels emit a different DrawOp variant, so split the
+        // collision + emit path off here. block placements (Fixed/Auto)
+        // share the existing pick_placement helper.
+        match label.placement {
+            PreparedPlacement::Follow {
+                polyline_px,
+                start_arc_px,
+                bbox_px,
+            } => {
+                if !force && collides(bbox_px, cand_md, &placed) {
+                    continue;
+                }
+                placed.push(PlacedFootprint {
+                    bbox: bbox_px,
+                    min_distance: cand_md,
+                });
+                ops.push(DrawOp::FollowLabel {
+                    polyline_px,
+                    start_arc_px,
+                    text: label.text,
+                    style: label.style,
+                });
+            }
+            placement @ (PreparedPlacement::Fixed { .. } | PreparedPlacement::Auto { .. }) => {
+                let chosen = if force {
+                    force_pick(&placement)
+                } else {
+                    pick_placement(&placement, cand_md, &placed)
+                };
+                let Some((anchor_offset, bbox_used)) = chosen else {
+                    continue;
+                };
+                let anchor = apply_offset(label.raw_anchor_px, anchor_offset, label.angle_rad);
+                placed.push(PlacedFootprint {
+                    bbox: bbox_used,
+                    min_distance: cand_md,
+                });
+                ops.push(DrawOp::Label {
+                    anchor,
+                    text: label.text,
+                    style: label.style,
+                    angle_rad: label.angle_rad,
+                });
+            }
+        }
     }
     ops
 }
 
-/// FORCE bypass: take the only `Fixed` slot or the first `Auto` candidate.
-/// no collision test, no AUTO dodging - mapserver semantics for `FORCE`.
+/// FORCE bypass for block (non-FOLLOW) placements: take the only `Fixed`
+/// slot or the first `Auto` candidate. no collision test, no AUTO dodging.
+/// mirrors mapserver `FORCE`.
 fn force_pick(placement: &PreparedPlacement) -> Option<ChosenPlacement> {
     match placement {
         PreparedPlacement::Fixed {
@@ -633,6 +716,8 @@ fn force_pick(placement: &PreparedPlacement) -> Option<ChosenPlacement> {
             bbox_px,
         } => Some((*anchor_offset_px, *bbox_px)),
         PreparedPlacement::Auto { candidates } => candidates.first().map(|c| (c.anchor_offset_px, c.bbox_px)),
+        // Follow handled inline in the loop above; should never reach here.
+        PreparedPlacement::Follow { .. } => None,
     }
 }
 
@@ -663,6 +748,9 @@ fn pick_placement(
             .iter()
             .find(|c| !collides(c.bbox_px, cand_md, placed))
             .map(|c| (c.anchor_offset_px, c.bbox_px)),
+        // Follow is handled inline in `collide_and_emit_labels`; should
+        // never reach pick_placement.
+        PreparedPlacement::Follow { .. } => None,
     }
 }
 
@@ -1043,6 +1131,97 @@ mod tests {
         ];
         let placement = PreparedPlacement::Auto { candidates };
         assert!(filter_for_partials(placement, false, 100, 100).is_none());
+    }
+
+    #[test]
+    fn follow_placement_emits_follow_label_drawop() {
+        let label = PreparedLabel {
+            raw_anchor_px: (50.0, 50.0),
+            text: "ROAD".into(),
+            style: Arc::new(LabelStyle {
+                font_family: String::new(),
+                font_size: 12.0,
+                fill: mars_style::Colour::rgba(0, 0, 0, 255),
+                halo: None,
+                priority: 10,
+                min_distance: 0.0,
+                position: AnchorPosition::default(),
+                offset_px: (0.0, 0.0),
+                angle_deg: None,
+                partials: true,
+                force: false,
+            }),
+            priority: 10,
+            angle_rad: 0.0,
+            placement: PreparedPlacement::Follow {
+                polyline_px: vec![(0.0, 50.0), (100.0, 50.0)],
+                start_arc_px: 25.0,
+                bbox_px: (25.0, 45.0, 75.0, 55.0),
+            },
+        };
+        let ops = collide_and_emit_labels(vec![label], 200, 200);
+        assert_eq!(ops.len(), 1);
+        match &ops[0] {
+            DrawOp::FollowLabel {
+                polyline_px,
+                start_arc_px,
+                text,
+                ..
+            } => {
+                assert_eq!(polyline_px.len(), 2);
+                assert!((start_arc_px - 25.0).abs() < 1e-6);
+                assert_eq!(text, "ROAD");
+            }
+            other => panic!("expected FollowLabel, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn follow_placement_drops_on_collision_with_higher_priority() {
+        // pre-occupy the bbox region with a high-priority axis label, then
+        // a lower-priority Follow label aimed at the same bbox: the Follow
+        // label drops.
+        let blocker = prepared((25.0, 45.0, 75.0, 55.0), 100, 0.0);
+        let follow = PreparedLabel {
+            raw_anchor_px: (50.0, 50.0),
+            text: "ROAD".into(),
+            style: blocker.style.clone(),
+            priority: 1,
+            angle_rad: 0.0,
+            placement: PreparedPlacement::Follow {
+                polyline_px: vec![(0.0, 50.0), (100.0, 50.0)],
+                start_arc_px: 25.0,
+                bbox_px: (25.0, 45.0, 75.0, 55.0),
+            },
+        };
+        let ops = collide_and_emit_labels(vec![blocker, follow], 200, 200);
+        assert_eq!(ops.len(), 1, "Follow label collides with blocker and drops");
+        assert!(matches!(ops[0], DrawOp::Label { .. }), "blocker survives");
+    }
+
+    #[test]
+    fn force_follow_bypasses_collision() {
+        let blocker = prepared((25.0, 45.0, 75.0, 55.0), 100, 0.0);
+        let mut style = (*blocker.style).clone();
+        style.force = true;
+        style.priority = 1;
+        let follow = PreparedLabel {
+            raw_anchor_px: (50.0, 50.0),
+            text: "ROAD".into(),
+            style: Arc::new(style),
+            priority: 1,
+            angle_rad: 0.0,
+            placement: PreparedPlacement::Follow {
+                polyline_px: vec![(0.0, 50.0), (100.0, 50.0)],
+                start_arc_px: 25.0,
+                bbox_px: (25.0, 45.0, 75.0, 55.0),
+            },
+        };
+        let ops = collide_and_emit_labels(vec![blocker, follow], 200, 200);
+        // both survive: forced Follow places ahead of blocker (force-first
+        // sort), then blocker's high priority collides with it and drops.
+        // verify the Follow is among the survivors.
+        assert!(ops.iter().any(|op| matches!(op, DrawOp::FollowLabel { .. })));
     }
 
     #[test]
