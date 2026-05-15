@@ -17,19 +17,28 @@ an external reference renderer's output.
 - `goldens/*.png` (and `*.jpg`) - one reference image per case in the matrix.
   Filenames match the `Case::name` in `tests/parity/tests/osm.rs`.
 
-## Required fixture (not committed)
+## Hosting
 
 The fixture is a `pg_dump`-format snapshot of a Liechtenstein OSM extract
-loaded via `osm2pgsql`. The harness expects to find it at:
+loaded via `osm2pgsql` (~9-10 MiB compressed). It is published as an asset
+on a GitHub Release of `bhark/MARS`; the canonical URL and sha256 are pinned
+in `manifest.sha256` beside this file.
+
+`scripts/run-parity.sh` and `tests/parity/scripts/fetch-fixture.sh` both
+read that manifest and stage the dump at:
 
 ```
 target/parity-fixtures/osm-parity.sql.gz
 ```
 
-The dump is 9-10 MiB compressed and is intentionally out of git. Operators
-producing fresh goldens should reproduce the snapshot offline; the goldens in
-this directory are the canonical reference and do not need regenerating in the
-common case.
+Set `MARS_PARITY_FIXTURE_URL` to override the source (forks / mirrors /
+air-gapped dev). Set `MARS_PARITY_FIXTURE_PATH` to skip the fetch and use a
+local dump in-place. Maintainers cut new fixture versions via
+`scripts/release-fixtures.sh`.
+
+The asset contains data (C) OpenStreetMap contributors and is distributed
+under the Open Database License (ODbL). See the GitHub Release notes for
+the full attribution text.
 
 ## Goldens
 

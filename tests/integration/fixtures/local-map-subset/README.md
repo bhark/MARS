@@ -5,6 +5,18 @@ kind-based e2e suite. The e2e harness fetches the gzip-compressed SQL dump to
 `target/e2e-fixtures/local-map-subset.sql.gz` via `tests/e2e/scripts/fetch-fixture.sh`
 (see `tests/e2e/README.md`).
 
+## Hosting
+
+The dump is published as an asset on a GitHub Release of `bhark/MARS`. The
+canonical URL and sha256 live in `manifest.sha256` beside this file; the
+fetcher reads both. To override the source (forks / mirrors / air-gapped
+dev) set `MARS_E2E_FIXTURE_URL`. To skip fetching and stage a local dump set
+`MARS_E2E_FIXTURE_PATH`.
+
+Maintainers cut new fixture versions via `scripts/release-fixtures.sh`.
+
+## Schema
+
 The dump must create the `e2e_source` schema and these tables:
 
 | table | geometry | id | attributes |

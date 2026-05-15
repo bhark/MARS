@@ -62,8 +62,9 @@ intentionally **not** committed.
 `scripts/fetch-fixture.sh` resolves the dump in this order:
 
 1. `target/e2e-fixtures/local-map-subset.sql.gz` if present and the SHA256
-   matches `tests/e2e/fixtures/manifest.sha256`.
-2. Otherwise fetch from `${MARS_E2E_FIXTURE_URL}`.
+   matches `tests/integration/fixtures/local-map-subset/manifest.sha256`.
+2. Otherwise fetch from `${MARS_E2E_FIXTURE_URL}` (env override) or the
+   `# source:` URL pinned in the same manifest.
 3. Otherwise error with a pointer back to this README.
 
 To skip the fetch and use a local dump:
