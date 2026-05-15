@@ -1,0 +1,23 @@
+# Layer-level FILTER on top of an inline-subquery DATA (gap #4). The
+# resolver AND-combines the FILTER body with the inline WHERE clause.
+MAP
+  NAME "layer_filter_and_subquery"
+  TITLE "Layer FILTER + Inline WHERE"
+
+  LAYER
+    NAME "streams"
+    TYPE LINE
+    STATUS ON
+    DATA "geom FROM (SELECT * FROM simplified.streams WHERE midtebredde IN ('12-', '2.5-12')) AS s"
+    PROCESSING "ITEMS=ogc_fid,vandloebstype,midtebredde"
+    FILTER ( [vandloebstype] = 'Gennem sø' )
+
+    CLASS
+      NAME "default"
+      STYLE
+        COLOR 100 150 220
+        WIDTH 0.6
+      END
+    END
+  END
+END

@@ -29,6 +29,10 @@ pub(crate) struct ParsedLayer {
     pub title: Option<String>,
     pub layer_type: Option<String>,
     pub data: Option<String>,
+    /// Mapfile `FILTER ( <expr> )` outside DATA - applied to every source on
+    /// the layer. The raw body is preserved here; resolve-time parses it as
+    /// a mapfile expression and AND-combines with any inline-subquery WHERE.
+    pub filter: Option<(String, usize)>,
     pub class_item: Option<String>,
     pub label_item: Option<String>,
     pub min_scale_denom: Option<u64>,
@@ -92,6 +96,9 @@ pub(crate) fn parse_layer(body: &[Token]) -> ParsedLayer {
             LayerDirective::Title(t) if p.title.is_none() => p.title = t.args.first().cloned(),
             LayerDirective::Type(t) if p.layer_type.is_none() => p.layer_type = t.args.first().cloned(),
             LayerDirective::Data(t) if p.data.is_none() => p.data = Some(t.args.join(" ")),
+            LayerDirective::Filter(t) if p.filter.is_none() => {
+                p.filter = Some((t.args.join(" "), t.line));
+            }
             LayerDirective::ClassItem(t) if p.class_item.is_none() => p.class_item = parsing::first_unquoted(t),
             LayerDirective::LabelItem(t) if p.label_item.is_none() => p.label_item = parsing::first_unquoted(t),
             LayerDirective::MinScaleDenom(t) => {
@@ -172,12 +179,13 @@ pub(crate) fn parse_layer(body: &[Token]) -> ParsedLayer {
                 }
             }
             // re-occurrence of a wins-once scalar (NAME / TITLE / TYPE / DATA
-            // / CLASSITEM / LABELITEM / GROUP) after the first is ignored;
-            // same for anything outside the known directive set.
+            // / FILTER / CLASSITEM / LABELITEM / GROUP) after the first is
+            // ignored; same for anything outside the known directive set.
             LayerDirective::Name(_)
             | LayerDirective::Title(_)
             | LayerDirective::Type(_)
             | LayerDirective::Data(_)
+            | LayerDirective::Filter(_)
             | LayerDirective::ClassItem(_)
             | LayerDirective::LabelItem(_)
             | LayerDirective::Group(_)

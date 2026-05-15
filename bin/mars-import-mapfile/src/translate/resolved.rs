@@ -12,6 +12,7 @@ use mars_style::Colour;
 use tracing::warn;
 
 use crate::emitter::{EmitLinePlacement, MarkerKind, SymbolDef, slugify};
+use crate::expression::parse_mapfile_expression;
 
 use super::class::{ParsedClass, ParsedExpression};
 use super::label::ParsedLabel;
@@ -160,6 +161,7 @@ pub(crate) fn resolve_layer(
         &p.scale_token_values,
         p.max_scale_denom,
         p.processing_items.as_deref(),
+        p.filter.as_ref(),
     );
 
     // attribute idents from class predicates, per-tier filters and label-text
@@ -252,9 +254,31 @@ fn resolve_sources(
     scale_token_values: &[(u64, String)],
     max_scale_denom: Option<u64>,
     processing_items: Option<&str>,
+    layer_filter: Option<&(String, usize)>,
 ) -> Vec<ResolvedSource> {
     let (geom_col, from_table) = parse_data(data);
     let id_col = processing_items.and_then(guess_id_column);
+
+    // parse the layer-level FILTER body once. Ok = normalised DSL string;
+    // Err = a TODO comment surfacing the raw text so the operator notices
+    // rather than have the predicate silently dropped.
+    let layer_filter: Option<Result<String, String>> =
+        layer_filter.map(|(raw, line)| match parse_mapfile_expression(raw, *line) {
+            Ok(expr) => Ok(format!("{expr}")),
+            Err(e) => {
+                warn!(line = *line, error = %e, "could not parse layer FILTER");
+                Err(format!("# TODO: hand-translate FILTER: {raw}"))
+            }
+        });
+
+    let combine = |inline: Option<String>| -> Option<String> {
+        match (&layer_filter, inline) {
+            (Some(Ok(layer)), Some(inline)) => Some(format!("({layer}) AND ({inline})")),
+            (Some(Ok(layer)), None) => Some(layer.clone()),
+            (Some(Err(todo)), _) => Some(todo.clone()),
+            (None, inline) => inline,
+        }
+    };
 
     if !scale_token_values.is_empty() {
         let gc = geom_col.unwrap_or_else(|| "geometri".into());
@@ -267,10 +291,10 @@ fn resolve_sources(
                 } else {
                     max_scale_denom
                 };
-                let (source, filter) = lifted_to_source(lift_inline_subquery(table));
+                let (source, inline_filter) = lifted_to_source(lift_inline_subquery(table));
                 ResolvedSource {
                     source,
-                    filter,
+                    filter: combine(inline_filter),
                     geometry_column: gc.clone(),
                     id_column: id_col.clone(),
                     max_denom_exclusive: max_denom,
@@ -278,10 +302,10 @@ fn resolve_sources(
             })
             .collect()
     } else if let Some(table) = from_table {
-        let (source, filter) = lifted_to_source(lift_inline_subquery(&table));
+        let (source, inline_filter) = lifted_to_source(lift_inline_subquery(&table));
         vec![ResolvedSource {
             source,
-            filter,
+            filter: combine(inline_filter),
             geometry_column: geom_col.unwrap_or_else(|| "geometri".into()),
             id_column: id_col,
             max_denom_exclusive: max_scale_denom,

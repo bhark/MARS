@@ -92,6 +92,16 @@ fn classitem_expression_fixture_matches() {
 }
 
 #[test]
+fn layer_filter_fixture_matches() {
+    assert_fixture_matches("layer_filter");
+}
+
+#[test]
+fn layer_filter_and_subquery_fixture_matches() {
+    assert_fixture_matches("layer_filter_and_subquery");
+}
+
+#[test]
 fn geomtransform_fixture_matches() {
     assert_fixture_matches("geomtransform");
 }

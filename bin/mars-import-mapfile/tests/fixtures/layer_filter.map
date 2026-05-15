@@ -1,0 +1,24 @@
+# Layer-level FILTER outside DATA (gap #4). The FILTER body uses MapServer's
+# `[col]` attribute-reference syntax; resolve-time parses it as a mapfile
+# expression and emits the mars-expr DSL equivalent.
+MAP
+  NAME "layer_filter"
+  TITLE "Layer FILTER Coverage"
+
+  LAYER
+    NAME "streams"
+    TYPE LINE
+    STATUS ON
+    DATA "geom FROM streams"
+    PROCESSING "ITEMS=ogc_fid,vandloebstype,navn"
+    FILTER ( [vandloebstype] = 'Gennem sø' )
+
+    CLASS
+      NAME "default"
+      STYLE
+        COLOR 100 150 220
+        WIDTH 0.6
+      END
+    END
+  END
+END
