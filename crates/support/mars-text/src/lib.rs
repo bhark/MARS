@@ -140,6 +140,23 @@ struct ShapedGlyph {
     /// pixel offset from run origin to glyph origin.
     x: f32,
     y: f32,
+    /// horizontal advance of this glyph, pixels.
+    advance_x: f32,
+}
+
+/// per-glyph layout exposed to callers walking a [`ShapedRun`] (e.g. a
+/// FOLLOW renderer that places each glyph along a curve). values are in
+/// the same pixel-space coordinate system as the run's metrics.
+#[derive(Debug, Clone, Copy)]
+pub struct GlyphLayout {
+    /// glyph id within the resolved font face.
+    pub glyph_id: u16,
+    /// pixel offset from the run origin to this glyph's origin.
+    pub x: f32,
+    /// pixel offset from the run origin to this glyph's origin.
+    pub y: f32,
+    /// horizontal advance of this glyph, pixels.
+    pub advance_x: f32,
 }
 
 struct FaceHandle {
@@ -187,12 +204,14 @@ pub fn measure(text: &str, style: &LabelStyle, fonts: &Fonts) -> Result<ShapedRu
     for (info, pos) in infos.iter().zip(positions.iter()) {
         let glyph_x = cursor_x + pos.x_offset as f32 * pixels_per_unit;
         let glyph_y = cursor_y + pos.y_offset as f32 * pixels_per_unit;
+        let advance_x = pos.x_advance as f32 * pixels_per_unit;
         glyphs.push(ShapedGlyph {
             glyph_id: info.glyph_id as u16,
             x: glyph_x,
             y: glyph_y,
+            advance_x,
         });
-        cursor_x += pos.x_advance as f32 * pixels_per_unit;
+        cursor_x += advance_x;
         cursor_y += pos.y_advance as f32 * pixels_per_unit;
     }
 
@@ -204,6 +223,26 @@ pub fn measure(text: &str, style: &LabelStyle, fonts: &Fonts) -> Result<ShapedRu
         face: Arc::new(FaceHandle { data, index }),
         pixels_per_unit,
     })
+}
+
+impl ShapedRun {
+    /// Borrow the per-glyph layout produced by shaping. one entry per
+    /// post-shaping glyph (clusters may differ in count from the source
+    /// `&str` for ligatures / complex scripts).
+    pub fn glyphs(&self) -> impl Iterator<Item = GlyphLayout> + '_ {
+        self.glyphs.iter().map(|g| GlyphLayout {
+            glyph_id: g.glyph_id,
+            x: g.x,
+            y: g.y,
+            advance_x: g.advance_x,
+        })
+    }
+
+    /// number of shaped glyphs.
+    #[must_use]
+    pub fn glyph_count(&self) -> usize {
+        self.glyphs.len()
+    }
 }
 
 /// rasterised glyph mask covering an entire shaped run.
@@ -307,6 +346,92 @@ pub fn rasterise(run: &ShapedRun) -> Result<GlyphMask, FontError> {
     }
 
     // extract alpha channel only.
+    let coverage: Vec<u8> = pm.data().chunks_exact(4).map(|p| p[3]).collect();
+    Ok(GlyphMask {
+        width,
+        height,
+        origin_x: mask_x0,
+        origin_y: mask_y0,
+        coverage,
+    })
+}
+
+/// rasterise a single glyph from a shaped run. the returned mask is tightly
+/// cropped to the glyph's bounding box, with `origin_x` / `origin_y` giving
+/// the pixel offset from the glyph's own origin (not the run origin) to the
+/// mask's top-left.
+///
+/// FOLLOW labels use this to stamp glyphs individually along a curve, each
+/// rotated to its own local tangent.
+pub fn rasterise_glyph(run: &ShapedRun, glyph_idx: usize) -> Result<GlyphMask, FontError> {
+    let g = match run.glyphs.get(glyph_idx) {
+        Some(g) => *g,
+        None => {
+            return Ok(GlyphMask {
+                width: 0,
+                height: 0,
+                origin_x: 0,
+                origin_y: 0,
+                coverage: Vec::new(),
+            });
+        }
+    };
+    let face = ttf_parser::Face::parse(run.face.data.as_ref().as_ref(), run.face.index)
+        .map_err(|e| FontError::FaceParse(format!("{e:?}")))?;
+    let gid = ttf_parser::GlyphId(g.glyph_id);
+    let Some(bbox) = face.glyph_bounding_box(gid) else {
+        return Ok(GlyphMask {
+            width: 0,
+            height: 0,
+            origin_x: 0,
+            origin_y: 0,
+            coverage: Vec::new(),
+        });
+    };
+
+    // glyph-local pixel-space bbox; pad by 1 pixel for AA tails.
+    let pad = 1.0f32;
+    let x0_p = f32::from(bbox.x_min) * run.pixels_per_unit;
+    let x1_p = f32::from(bbox.x_max) * run.pixels_per_unit;
+    let y0_p = -f32::from(bbox.y_max) * run.pixels_per_unit;
+    let y1_p = -f32::from(bbox.y_min) * run.pixels_per_unit;
+    let mask_x0 = (x0_p - pad).floor() as i32;
+    let mask_y0 = (y0_p - pad).floor() as i32;
+    let mask_x1 = (x1_p + pad).ceil() as i32;
+    let mask_y1 = (y1_p + pad).ceil() as i32;
+    let width = (mask_x1 - mask_x0).max(1) as u32;
+    let height = (mask_y1 - mask_y0).max(1) as u32;
+
+    let mut pm = Pixmap::new(width, height).ok_or_else(|| FontError::FaceParse(format!("pixmap {width}x{height}")))?;
+    let mut paint = Paint::default();
+    paint.set_color_rgba8(255, 255, 255, 255);
+    paint.anti_alias = true;
+
+    let mut builder = PathBuilderAdapter {
+        inner: PathBuilder::new(),
+        scale: run.pixels_per_unit,
+        x: -mask_x0 as f32,
+        y: -mask_y0 as f32,
+    };
+    if face.outline_glyph(gid, &mut builder).is_none() {
+        return Ok(GlyphMask {
+            width: 0,
+            height: 0,
+            origin_x: 0,
+            origin_y: 0,
+            coverage: Vec::new(),
+        });
+    }
+    let Some(path) = builder.inner.finish() else {
+        return Ok(GlyphMask {
+            width: 0,
+            height: 0,
+            origin_x: 0,
+            origin_y: 0,
+            coverage: Vec::new(),
+        });
+    };
+    pm.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
     let coverage: Vec<u8> = pm.data().chunks_exact(4).map(|p| p[3]).collect();
     Ok(GlyphMask {
         width,
@@ -436,5 +561,48 @@ mod tests {
         let run = measure("", &lbl("DejaVu Sans", 12.0), &fonts).unwrap();
         assert_eq!(run.glyphs.len(), 0);
         assert_eq!(run.advance_x, 0.0);
+    }
+
+    #[test]
+    fn glyphs_iter_advances_monotonically_and_sums_to_run_advance() {
+        let fonts = Fonts::with_default();
+        let run = measure("Hello", &lbl("DejaVu Sans", 16.0), &fonts).unwrap();
+        assert!(run.glyph_count() >= 5, "got {}", run.glyph_count());
+        let layouts: Vec<_> = run.glyphs().collect();
+        // x positions are monotonic non-decreasing.
+        for w in layouts.windows(2) {
+            assert!(w[1].x >= w[0].x, "non-monotonic: {} then {}", w[0].x, w[1].x);
+        }
+        // advances are positive for visible glyphs.
+        for g in &layouts {
+            assert!(g.advance_x >= 0.0);
+        }
+        // sum of per-glyph advances ≈ total run advance.
+        let sum: f32 = layouts.iter().map(|g| g.advance_x).sum();
+        assert!(
+            (sum - run.advance_x).abs() < 1e-3,
+            "sum {sum} vs run {}",
+            run.advance_x
+        );
+    }
+
+    #[test]
+    fn rasterise_glyph_paints_a_visible_letter() {
+        let fonts = Fonts::with_default();
+        let run = measure("A", &lbl("DejaVu Sans", 24.0), &fonts).unwrap();
+        let mask = rasterise_glyph(&run, 0).unwrap();
+        assert!(mask.width > 0 && mask.height > 0);
+        let lit = mask.coverage.iter().filter(|&&a| a > 0).count();
+        assert!(lit > 0, "expected some lit pixels for 'A'");
+    }
+
+    #[test]
+    fn rasterise_glyph_out_of_bounds_returns_empty_mask() {
+        let fonts = Fonts::with_default();
+        let run = measure("x", &lbl("DejaVu Sans", 16.0), &fonts).unwrap();
+        let mask = rasterise_glyph(&run, 99).unwrap();
+        assert_eq!(mask.width, 0);
+        assert_eq!(mask.height, 0);
+        assert!(mask.coverage.is_empty());
     }
 }
