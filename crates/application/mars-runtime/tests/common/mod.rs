@@ -480,7 +480,8 @@ fn build_minimal_stylesheet() -> Stylesheet {
             position: mars_style::AnchorPosition::default(),
             offset_px: (0.0, 0.0),
             angle_deg: None,
-            partials: false,
+            // fixture labels are pixel-rough; let them touch the canvas edge.
+            partials: true,
             force: false,
         }),
     );

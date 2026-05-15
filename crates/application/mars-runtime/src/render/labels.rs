@@ -148,6 +148,9 @@ pub(super) fn prepare_labels(
         // placement-derived angle (which is zero for the point/polygon path).
         let angle_rad = effective_angle_rad(&style, 0.0);
         let placement = build_placement(raw_anchor_px, &metrics, &style, angle_rad);
+        let Some(placement) = filter_for_partials(placement, style.partials, plan.width, plan.height) else {
+            continue;
+        };
         out.push(PreparedLabel {
             raw_anchor_px,
             text: c.text,
@@ -255,6 +258,9 @@ fn sample_polyline_labels(
             continue;
         }
         let placement = build_placement(centre.pos, &metrics, style, angle);
+        let Some(placement) = filter_for_partials(placement, style.partials, plan.width, plan.height) else {
+            continue;
+        };
         out.push(PreparedLabel {
             raw_anchor_px: centre.pos,
             text: text.to_owned(),
@@ -481,6 +487,47 @@ const AUTO_POSITIONS: [AnchorPosition; 8] = [
     AnchorPosition::Lr,
 ];
 
+/// `true` when `bbox` lies fully inside the `(0, 0)..(w, h)` canvas.
+fn bbox_inside_canvas(bbox: (f32, f32, f32, f32), w: u32, h: u32) -> bool {
+    let (w, h) = (w as f32, h as f32);
+    bbox.0 >= 0.0 && bbox.1 >= 0.0 && bbox.2 <= w && bbox.3 <= h
+}
+
+/// drop candidates whose bbox doesn't fit inside the canvas. mirrors
+/// mapserver's `PARTIALS FALSE`. for AUTO, filter the candidate list and
+/// drop the whole label if nothing survives.
+fn filter_for_partials(placement: PreparedPlacement, partials: bool, w: u32, h: u32) -> Option<PreparedPlacement> {
+    if partials {
+        return Some(placement);
+    }
+    match placement {
+        PreparedPlacement::Fixed {
+            anchor_offset_px,
+            bbox_px,
+        } => {
+            if bbox_inside_canvas(bbox_px, w, h) {
+                Some(PreparedPlacement::Fixed {
+                    anchor_offset_px,
+                    bbox_px,
+                })
+            } else {
+                None
+            }
+        }
+        PreparedPlacement::Auto { candidates } => {
+            let kept: Vec<_> = candidates
+                .into_iter()
+                .filter(|c| bbox_inside_canvas(c.bbox_px, w, h))
+                .collect();
+            if kept.is_empty() {
+                None
+            } else {
+                Some(PreparedPlacement::Auto { candidates: kept })
+            }
+        }
+    }
+}
+
 /// build the [`PreparedPlacement`] for a candidate from its style POSITION
 /// keyword + OFFSET. all bboxes are in canvas frame and ready for the
 /// collision pass; the chosen offset gets re-applied via [`apply_offset`]
@@ -546,13 +593,19 @@ pub(super) fn collide_and_emit_labels(mut labels: Vec<PreparedLabel>, _w: u32, _
     if labels.is_empty() {
         return Vec::new();
     }
-    // priority desc → place high-priority labels first, drop conflicts.
-    labels.sort_by_key(|l| std::cmp::Reverse(l.priority));
+    // force-first, then priority desc. forced labels are placed regardless
+    // of collision; sorting them up front means subsequent labels see them
+    // as obstacles and can dodge.
+    labels.sort_by_key(|l| (std::cmp::Reverse(l.style.force), std::cmp::Reverse(l.priority)));
     let mut placed: Vec<PlacedFootprint> = Vec::with_capacity(labels.len());
     let mut ops = Vec::with_capacity(labels.len());
     for label in labels {
         let cand_md = label.style.min_distance.max(0.0);
-        let chosen = pick_placement(&label.placement, cand_md, &placed);
+        let chosen = if label.style.force {
+            force_pick(&label.placement)
+        } else {
+            pick_placement(&label.placement, cand_md, &placed)
+        };
         let Some((anchor_offset, bbox_used)) = chosen else {
             continue;
         };
@@ -569,6 +622,18 @@ pub(super) fn collide_and_emit_labels(mut labels: Vec<PreparedLabel>, _w: u32, _
         });
     }
     ops
+}
+
+/// FORCE bypass: take the only `Fixed` slot or the first `Auto` candidate.
+/// no collision test, no AUTO dodging - mapserver semantics for `FORCE`.
+fn force_pick(placement: &PreparedPlacement) -> Option<ChosenPlacement> {
+    match placement {
+        PreparedPlacement::Fixed {
+            anchor_offset_px,
+            bbox_px,
+        } => Some((*anchor_offset_px, *bbox_px)),
+        PreparedPlacement::Auto { candidates } => candidates.first().map(|c| (c.anchor_offset_px, c.bbox_px)),
+    }
 }
 
 /// chosen placement output: `(label-local-frame anchor offset, bbox in
@@ -876,6 +941,108 @@ mod tests {
         };
         let ops = collide_and_emit_labels(vec![occupier, candidate], 200, 200);
         assert_eq!(ops.len(), 1, "all AUTO candidates inside the occupier must drop");
+    }
+
+    fn label_with(force: bool, partials: bool, priority: u16, bbox: (f32, f32, f32, f32)) -> PreparedLabel {
+        let mut lbl = prepared(bbox, priority, 0.0);
+        let mut style = (*lbl.style).clone();
+        style.force = force;
+        style.partials = partials;
+        lbl.style = Arc::new(style);
+        lbl
+    }
+
+    #[test]
+    fn force_label_outranks_priority_when_competing_for_the_same_bbox() {
+        // forced low-priority sorts ahead of the high-priority normal label
+        // (force-first rule), places, and acts as an obstacle so the normal
+        // label drops. matches mapserver `FORCE` semantics: forced labels
+        // are unconditional; everyone else still tests against them.
+        let high = label_with(false, true, 100, (0.0, 0.0, 10.0, 10.0));
+        let forced_low = label_with(true, true, 1, (0.0, 0.0, 10.0, 10.0));
+        let ops = collide_and_emit_labels(vec![high, forced_low], 100, 100);
+        assert_eq!(ops.len(), 1, "forced label wins the slot");
+    }
+
+    #[test]
+    fn force_label_survives_when_added_to_already_occupied_slot() {
+        // pre-place a high-priority label, then a forced one at the same
+        // bbox arrives. force is sorted first so it actually places
+        // *before* the high-priority one - but the placement itself
+        // bypasses collision. result: both survive, with the forced one
+        // first in placement order.
+        let forced_low = label_with(true, true, 1, (0.0, 0.0, 10.0, 10.0));
+        let mid = label_with(false, true, 50, (20.0, 0.0, 30.0, 10.0));
+        let ops = collide_and_emit_labels(vec![forced_low, mid], 100, 100);
+        assert_eq!(ops.len(), 2);
+    }
+
+    #[test]
+    fn force_label_blocks_subsequent_normal_label_at_same_bbox() {
+        // forced low-priority sorts ahead of normal high-priority and
+        // occupies the bbox; the normal label then collides and drops.
+        let forced = label_with(true, true, 1, (0.0, 0.0, 10.0, 10.0));
+        let normal = label_with(false, true, 100, (0.0, 0.0, 10.0, 10.0));
+        let ops = collide_and_emit_labels(vec![forced, normal], 100, 100);
+        assert_eq!(ops.len(), 1, "forced label is still a collision obstacle");
+    }
+
+    #[test]
+    fn partials_false_drops_bbox_crossing_canvas_edge() {
+        // canvas-internal: kept.
+        let inside = PreparedPlacement::Fixed {
+            anchor_offset_px: (0.0, 0.0),
+            bbox_px: (1.0, 1.0, 9.0, 9.0),
+        };
+        assert!(filter_for_partials(inside, false, 10, 10).is_some());
+        // touches the right edge by 1 px: dropped.
+        let crossing = PreparedPlacement::Fixed {
+            anchor_offset_px: (0.0, 0.0),
+            bbox_px: (5.0, 5.0, 11.0, 9.0),
+        };
+        assert!(filter_for_partials(crossing, false, 10, 10).is_none());
+        // partials=true: kept even when crossing.
+        let crossing2 = PreparedPlacement::Fixed {
+            anchor_offset_px: (0.0, 0.0),
+            bbox_px: (5.0, 5.0, 11.0, 9.0),
+        };
+        assert!(filter_for_partials(crossing2, true, 10, 10).is_some());
+    }
+
+    #[test]
+    fn partials_false_filters_auto_candidates_per_slot() {
+        let candidates = vec![
+            PositionCandidate {
+                anchor_offset_px: (0.0, -10.0),
+                bbox_px: (-5.0, -10.0, 5.0, 0.0), // off-canvas top
+            },
+            PositionCandidate {
+                anchor_offset_px: (0.0, 10.0),
+                bbox_px: (10.0, 30.0, 20.0, 40.0), // fully inside
+            },
+        ];
+        let placement = PreparedPlacement::Auto { candidates };
+        let kept = filter_for_partials(placement, false, 100, 100).expect("one candidate fits");
+        match kept {
+            PreparedPlacement::Auto { candidates } => assert_eq!(candidates.len(), 1),
+            _ => panic!("expected Auto"),
+        }
+    }
+
+    #[test]
+    fn partials_false_drops_label_when_all_auto_candidates_off_canvas() {
+        let candidates = vec![
+            PositionCandidate {
+                anchor_offset_px: (0.0, 0.0),
+                bbox_px: (-5.0, -5.0, 5.0, 5.0),
+            },
+            PositionCandidate {
+                anchor_offset_px: (0.0, 0.0),
+                bbox_px: (95.0, 95.0, 105.0, 105.0),
+            },
+        ];
+        let placement = PreparedPlacement::Auto { candidates };
+        assert!(filter_for_partials(placement, false, 100, 100).is_none());
     }
 
     #[test]
