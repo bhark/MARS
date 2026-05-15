@@ -65,10 +65,10 @@ async fn incremental_cycle_propagates() -> Result<()> {
     )
     .await?;
 
-    // re-render. the mutated rows are inside the bbox, so the output must
-    // differ. tolerate identical bytes only if the affected pixels are below
-    // the antialias floor — in practice with a 512x512 over the test bbox an
-    // insert/update/delete on poi rows produces a clear bytewise diff.
+    // re-render. mutate-source.sql edits e2e_source.settlements (a `mid`-band
+    // layer) inside the bbox; at the request's scale_denom (~88k) the poi
+    // layer's `hi`-band source is out of window, so changes there would be
+    // invisible. settlements changes produce a clear bytewise diff.
     let after = http::get(client.clone(), ns, "mars-e2e-runtime", 8080, RENDER_QUERY).await?;
     if after.status != 200 {
         return Err(anyhow!("post-edit render status {}", after.status));
