@@ -19,7 +19,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, SystemTime};
 
-use mars_source::ChangeEvent;
+use mars_source::{BindingHealth, ChangeEvent, RebindReason};
 use mars_types::{BindingId, BindingMetadata};
 
 use crate::plan::BindingPlan;
@@ -69,9 +69,47 @@ pub(crate) async fn run(
         due
     };
 
+    // publication-membership probe: backstop for the "binding silently
+    // dropped from the publication" case the in-band Relation messages
+    // cannot deliver. one query covers every due binding; sources with
+    // no publication concept return Healthy via the default impl.
+    let due_ids: Vec<_> = due
+        .iter()
+        .map(|b| mars_source::SourceCollectionId::new(b.binding_id.as_str()))
+        .collect();
+    let unpublished: HashSet<BindingId> = if due_ids.is_empty() {
+        HashSet::new()
+    } else {
+        c.deps
+            .source
+            .probe_binding_health(&due_ids)
+            .await?
+            .into_iter()
+            .filter_map(|h| match h {
+                BindingHealth::Healthy(_) => None,
+                BindingHealth::Unpublished(id) => BindingId::try_new(id.as_str()).ok(),
+            })
+            .collect()
+    };
+
     let mut events: Vec<ChangeEvent> = Vec::new();
     let mut reconciled: HashSet<BindingId> = HashSet::new();
     for binding_plan in &due {
+        if unpublished.contains(&binding_plan.binding_id) {
+            // unpublished bindings get a Rebind { BindingUnpublished }
+            // synthesised straight into the cycle's event stream; the
+            // compiler degrades them via the failure-isolation path so
+            // prior pages stay served.
+            tracing::warn!(
+                binding = binding_plan.binding_id.as_str(),
+                "binding absent from publication; surfacing as Rebind"
+            );
+            events.push(ChangeEvent::Rebind {
+                collection: mars_source::SourceCollectionId::new(binding_plan.binding_id.as_str()),
+                reason: RebindReason::BindingUnpublished,
+            });
+            continue;
+        }
         let Some(sc) = sidecars.get(&binding_plan.binding_id) else {
             continue;
         };
