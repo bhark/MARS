@@ -7,8 +7,22 @@ use std::collections::BTreeMap;
 
 pub(crate) const COMPONENT_COMPILER: &str = "compiler";
 pub(crate) const COMPONENT_RUNTIME: &str = "runtime";
+pub(crate) const COMPONENT_BOOTSTRAP: &str = "bootstrap";
+pub(crate) const COMPONENT_TEARDOWN: &str = "teardown";
 
 pub(crate) const CONFIG_CHECKSUM_ANNOTATION: &str = "mars.forn.dk/config-checksum";
+
+pub(crate) fn bootstrap_service_account_name(svc: &str) -> String {
+    format!("{svc}-bootstrap")
+}
+
+pub(crate) fn bootstrap_job_name(svc: &str, hash: &str) -> String {
+    format!("{svc}-bootstrap-{hash}")
+}
+
+pub(crate) fn teardown_job_name(svc: &str) -> String {
+    format!("{svc}-teardown")
+}
 
 pub(crate) fn config_map_name(svc: &str) -> String {
     format!("{svc}-config")

@@ -6,7 +6,8 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use futures_util::StreamExt;
 use k8s_openapi::api::apps::v1::Deployment;
-use k8s_openapi::api::core::v1::{ConfigMap, PersistentVolumeClaim, Service};
+use k8s_openapi::api::batch::v1::Job;
+use k8s_openapi::api::core::v1::{ConfigMap, PersistentVolumeClaim, Service, ServiceAccount};
 use kube::Client;
 use kube::api::Api;
 use kube::runtime::Controller;
@@ -65,12 +66,16 @@ pub(crate) async fn run(cli: Cli) -> Result<()> {
     let deps: Api<Deployment> = Api::all(client.clone());
     let svcs: Api<Service> = Api::all(client.clone());
     let pvcs: Api<PersistentVolumeClaim> = Api::all(client.clone());
+    let jobs: Api<Job> = Api::all(client.clone());
+    let sas: Api<ServiceAccount> = Api::all(client.clone());
 
     let controller = Controller::new(crs, WatcherConfig::default())
         .owns(cms, WatcherConfig::default())
         .owns(deps, WatcherConfig::default())
         .owns(svcs, WatcherConfig::default())
         .owns(pvcs, WatcherConfig::default())
+        .owns(jobs, WatcherConfig::default())
+        .owns(sas, WatcherConfig::default())
         .shutdown_on_signal()
         .run(reconcile::reconcile, reconcile::error_policy, ctx)
         .for_each(|res| async move {

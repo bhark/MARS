@@ -51,6 +51,7 @@ pub(crate) fn cr(name: &str, namespace: &str) -> MarsService {
                 env_from: Vec::new(),
             },
             artifact_store: None,
+            bootstrap: None,
             config: serde_json::json!({
                 "service": { "name": "demo" },
                 "source":  { "kind": "stub" },

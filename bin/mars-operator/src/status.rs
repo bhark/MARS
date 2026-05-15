@@ -114,6 +114,39 @@ pub(crate) struct StatusInputs<'a> {
     pub(crate) compiler_ready: bool,
     pub(crate) runtime_ready: bool,
     pub(crate) degraded: Option<&'a str>,
+    /// Postgres bootstrap state. `None` means the CR does not declare a
+    /// `spec.bootstrap` block, in which case no `BootstrapReady` condition is
+    /// emitted at all so cluster operators see exactly the conditions that
+    /// apply to their setup.
+    pub(crate) bootstrap: Option<BootstrapStatus<'a>>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct BootstrapStatus<'a> {
+    pub(crate) ready: bool,
+    pub(crate) reason: BootstrapReason,
+    pub(crate) message: &'a str,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum BootstrapReason {
+    Ready,
+    ManualVerified,
+    InProgress,
+    Failed,
+    ManualSetupIncomplete,
+}
+
+impl BootstrapReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "Ready",
+            Self::ManualVerified => "ManualVerified",
+            Self::InProgress => "InProgress",
+            Self::Failed => "Failed",
+            Self::ManualSetupIncomplete => "ManualSetupIncomplete",
+        }
+    }
 }
 
 pub(crate) fn compute(inputs: StatusInputs<'_>) -> MarsServiceStatus {
@@ -124,6 +157,14 @@ pub(crate) fn compute(inputs: StatusInputs<'_>) -> MarsServiceStatus {
         if inputs.config_valid { "Validated" } else { "Invalid" },
         inputs.config_message,
     ));
+    if let Some(bs) = inputs.bootstrap {
+        conditions.push(condition(
+            "BootstrapReady",
+            bs.ready,
+            bs.reason.as_str(),
+            bs.message,
+        ));
+    }
     conditions.push(condition(
         "ChildrenApplied",
         inputs.children_applied,
@@ -174,11 +215,13 @@ pub(crate) fn compute(inputs: StatusInputs<'_>) -> MarsServiceStatus {
         degraded_msg,
     ));
 
-    let phase = if !inputs.config_valid {
+    let bootstrap_blocking = matches!(inputs.bootstrap, Some(bs) if !bs.ready);
+    let bootstrap_failed = matches!(inputs.bootstrap, Some(bs) if matches!(bs.reason, BootstrapReason::Failed));
+    let phase = if !inputs.config_valid || bootstrap_failed {
         "Failed"
     } else if inputs.degraded.is_some() {
         "Degraded"
-    } else if !inputs.children_applied {
+    } else if bootstrap_blocking || !inputs.children_applied {
         "Reconciling"
     } else if inputs.compiler_ready && inputs.runtime_ready {
         "Ready"

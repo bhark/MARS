@@ -9,6 +9,7 @@
 
 #![forbid(unsafe_code)]
 
+mod bootstrap;
 mod children;
 mod cli;
 mod config;

@@ -6,7 +6,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use k8s_openapi::api::apps::v1::Deployment;
-use k8s_openapi::api::core::v1::{ConfigMap, PersistentVolumeClaim, Service};
+use k8s_openapi::api::batch::v1::Job;
+use k8s_openapi::api::core::v1::{ConfigMap, PersistentVolumeClaim, Secret, Service, ServiceAccount};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::OwnerReference;
 use kube::Resource;
 use kube::api::{Api, Patch, PatchParams};
@@ -14,13 +15,14 @@ use kube::runtime::controller::Action;
 use serde_json::json;
 use tracing::{error, info, warn};
 
+use crate::bootstrap::{self, BOOTSTRAP_FINALIZER, PlanInputs};
 use crate::children::labels::artifact_store_pvc_name;
 use crate::children::pvc::{self, PvcSpec};
 use crate::children::{compiler, configmap, runtime, service};
 use crate::crd::{ArtifactStoreSpec, MarsService};
 use crate::error::{OperatorError, Result};
 use crate::metrics::Metrics;
-use crate::status::{self, StatusInputs};
+use crate::status::{self, BootstrapReason, BootstrapStatus, StatusInputs};
 
 pub(crate) struct Ctx {
     pub(crate) client: kube::Client,
@@ -76,6 +78,13 @@ async fn reconcile_inner(cr: Arc<MarsService>, ctx: Arc<Ctx>) -> Result<Action> 
 
     let owner_ref = owner_reference(&cr)?;
 
+    // deletion handling runs before anything else: we must run a teardown
+    // Job (if needed) and remove the finalizer before kube cascade-deletes
+    // the children. nothing else can succeed once deletionTimestamp is set.
+    if cr.metadata.deletion_timestamp.is_some() {
+        return reconcile_deletion(cr.clone(), &ctx, &svc_name, &ns).await;
+    }
+
     let (config_valid, config_message) = match crate::config::validate(&cr.spec.config) {
         Ok(()) => (true, "spec.config validated".to_string()),
         Err(e) => (false, e.to_string()),
@@ -92,6 +101,7 @@ async fn reconcile_inner(cr: Arc<MarsService>, ctx: Arc<Ctx>) -> Result<Action> 
             compiler_ready: false,
             runtime_ready: false,
             degraded: None,
+            bootstrap: None,
         });
         patch_status(&ctx, &svc_name, &ns, status_body).await?;
         return Ok(Action::requeue(Duration::from_secs(30)));
@@ -110,13 +120,33 @@ async fn reconcile_inner(cr: Arc<MarsService>, ctx: Arc<Ctx>) -> Result<Action> 
             compiler_ready: false,
             runtime_ready: false,
             degraded: Some(&reason),
+            bootstrap: None,
         });
         patch_status(&ctx, &svc_name, &ns, status_body).await?;
         return Ok(Action::requeue(Duration::from_secs(30)));
     }
 
+    // configmap must exist before the bootstrap Job pod can mount it. PVCs
+    // come later because the bootstrap Job does not need them.
     let (cm, checksum) = configmap::build(&cr, owner_ref.clone())?;
     apply_configmap(&ctx, &ns, &cm).await?;
+
+    let bootstrap_outcome = reconcile_bootstrap(&ctx, &cr, &svc_name, &ns, owner_ref.clone()).await?;
+    if !bootstrap_outcome.proceed {
+        let status_body = status::compute(StatusInputs {
+            observed_generation: generation,
+            config_valid: true,
+            config_message: &config_message,
+            children_applied: false,
+            children_message: "skipped: bootstrap not ready",
+            compiler_ready: false,
+            runtime_ready: false,
+            degraded: None,
+            bootstrap: Some(bootstrap_outcome.status),
+        });
+        patch_status(&ctx, &svc_name, &ns, status_body).await?;
+        return Ok(Action::requeue(bootstrap_outcome.requeue));
+    }
 
     if let Some(art) = &fs_store {
         let art_pvc = pvc::build(
@@ -165,11 +195,285 @@ async fn reconcile_inner(cr: Arc<MarsService>, ctx: Arc<Ctx>) -> Result<Action> 
         compiler_ready,
         runtime_ready,
         degraded: None,
+        bootstrap: Some(bootstrap_outcome.status),
     });
     patch_status(&ctx, &svc_name, &ns, status_body).await?;
 
     Ok(Action::requeue(Duration::from_secs(30)))
 }
+
+/// Outcome of the bootstrap reconciliation step. `proceed = false` halts the
+/// reconcile here and surfaces the condition to the user without applying
+/// compiler/runtime children.
+struct BootstrapOutcome {
+    proceed: bool,
+    status: BootstrapStatus<'static>,
+    requeue: Duration,
+}
+
+async fn reconcile_bootstrap(
+    ctx: &Ctx,
+    cr: &MarsService,
+    svc_name: &str,
+    ns: &str,
+    owner: OwnerReference,
+) -> Result<BootstrapOutcome> {
+    let bs_spec = match cr.spec.bootstrap.as_ref() {
+        Some(b) => b,
+        None => {
+            // no bootstrap declared: legacy path. emit no condition (Some
+            // would be misleading - we have nothing to report) and proceed.
+            return Ok(BootstrapOutcome {
+                proceed: true,
+                status: BootstrapStatus {
+                    ready: true,
+                    reason: BootstrapReason::ManualVerified,
+                    message: "no spec.bootstrap declared",
+                },
+                requeue: Duration::from_secs(30),
+            });
+        }
+    };
+    let source_bs = match bootstrap::extract_source_bootstrap(&cr.spec.config) {
+        Some(s) => s,
+        None => {
+            return Ok(BootstrapOutcome {
+                proceed: false,
+                status: BootstrapStatus {
+                    ready: false,
+                    reason: BootstrapReason::ManualSetupIncomplete,
+                    message: "spec.bootstrap is set but spec.config.source.bootstrap is missing",
+                },
+                requeue: Duration::from_secs(30),
+            });
+        }
+    };
+
+    if !bs_spec.enabled {
+        // manual mode. trust the user; the runtime/compiler will surface
+        // any actual prerequisite mismatch via their own startup logs.
+        return Ok(BootstrapOutcome {
+            proceed: true,
+            status: BootstrapStatus {
+                ready: true,
+                reason: BootstrapReason::ManualVerified,
+                message: "bootstrap.enabled=false; assuming manual setup is in place",
+            },
+            requeue: Duration::from_secs(60),
+        });
+    }
+
+    // resolve admin + runtime secret resourceVersions so the plan hash rolls
+    // when either secret is rotated.
+    let admin_ref = bs_spec
+        .admin_secret_ref
+        .as_ref()
+        .ok_or_else(|| OperatorError::ConfigInvalid("bootstrap.adminSecretRef is required".into()))?;
+    let runtime_ref = bs_spec
+        .runtime_password_secret_ref
+        .as_ref()
+        .ok_or_else(|| OperatorError::ConfigInvalid(
+            "bootstrap.runtimePasswordSecretRef is required".into(),
+        ))?;
+    let secret_api: Api<Secret> = Api::namespaced(ctx.client.clone(), ns);
+    let admin_rv = secret_api
+        .get_opt(&admin_ref.name)
+        .await?
+        .and_then(|s| s.metadata.resource_version.clone())
+        .unwrap_or_default();
+    let runtime_rv = secret_api
+        .get_opt(&runtime_ref.name)
+        .await?
+        .and_then(|s| s.metadata.resource_version.clone())
+        .unwrap_or_default();
+
+    let inputs = PlanInputs {
+        bootstrap: bs_spec,
+        source_bootstrap: source_bs,
+        admin_secret_resource_version: admin_rv,
+        runtime_secret_resource_version: runtime_rv,
+    };
+    let hash = bootstrap::plan_hash(&inputs);
+
+    // ServiceAccount for the Job. SSA so re-applies are no-ops.
+    let sa = bootstrap::render_service_account(svc_name, ns, owner.clone());
+    apply_service_account(ctx, ns, &sa).await?;
+
+    // ensure or observe the Job for this hash.
+    let job_name = crate::children::labels::bootstrap_job_name(svc_name, &hash);
+    let job_api: Api<Job> = Api::namespaced(ctx.client.clone(), ns);
+    let existing = job_api.get_opt(&job_name).await?;
+
+    let job = bootstrap::render_bootstrap_job(cr, &ctx.runtime_image, &inputs, &hash, owner)?;
+    let Some(existing) = existing else {
+        job_api
+            .patch(
+                &job_name,
+                &PatchParams::apply(&ctx.field_manager).force(),
+                &Patch::Apply(&job),
+            )
+            .await?;
+        return Ok(BootstrapOutcome {
+            proceed: false,
+            status: BootstrapStatus {
+                ready: false,
+                reason: BootstrapReason::InProgress,
+                message: "bootstrap Job created; waiting for completion",
+            },
+            requeue: Duration::from_secs(10),
+        });
+    };
+    let st = existing.status.as_ref();
+    let succeeded = st.and_then(|s| s.succeeded).unwrap_or(0);
+    let failed = st.and_then(|s| s.failed).unwrap_or(0);
+
+    if succeeded >= 1 {
+        // mark the finalizer so a future delete runs teardown.
+        ensure_finalizer(ctx, cr, svc_name, ns).await?;
+        Ok(BootstrapOutcome {
+            proceed: true,
+            status: BootstrapStatus {
+                ready: true,
+                reason: BootstrapReason::Ready,
+                message: "bootstrap Job succeeded",
+            },
+            requeue: Duration::from_secs(60),
+        })
+    } else if failed >= 3 {
+        Ok(BootstrapOutcome {
+            proceed: false,
+            status: BootstrapStatus {
+                ready: false,
+                reason: BootstrapReason::Failed,
+                message: "bootstrap Job failed; inspect Job pods for logs",
+            },
+            requeue: Duration::from_secs(60),
+        })
+    } else {
+        Ok(BootstrapOutcome {
+            proceed: false,
+            status: BootstrapStatus {
+                ready: false,
+                reason: BootstrapReason::InProgress,
+                message: "bootstrap Job in progress",
+            },
+            requeue: Duration::from_secs(10),
+        })
+    }
+}
+
+async fn reconcile_deletion(
+    cr: Arc<MarsService>,
+    ctx: &Ctx,
+    svc_name: &str,
+    ns: &str,
+) -> std::result::Result<Action, OperatorError> {
+    let has_finalizer = cr
+        .metadata
+        .finalizers
+        .as_ref()
+        .map(|f| f.iter().any(|s| s == BOOTSTRAP_FINALIZER))
+        .unwrap_or(false);
+    if !has_finalizer {
+        // nothing to clean up; let the cascade complete.
+        return Ok(Action::await_change());
+    }
+    let Some(bs_spec) = cr.spec.bootstrap.as_ref() else {
+        // finalizer present but spec.bootstrap removed: just drop the
+        // finalizer; nothing to roll back.
+        remove_finalizer(ctx, cr.as_ref(), svc_name, ns).await?;
+        return Ok(Action::await_change());
+    };
+    let policy = &bs_spec.teardown_on_delete;
+    let nothing_to_drop = !policy.slot && !policy.publication && !policy.role;
+    if nothing_to_drop || bs_spec.admin_secret_ref.is_none() {
+        remove_finalizer(ctx, cr.as_ref(), svc_name, ns).await?;
+        return Ok(Action::await_change());
+    }
+
+    let owner = owner_reference(cr.as_ref())?;
+    // ServiceAccount may have been GCed already; SSA recreates it idempotently.
+    let sa = bootstrap::render_service_account(svc_name, ns, owner.clone());
+    apply_service_account(ctx, ns, &sa).await?;
+
+    let job_name = crate::children::labels::teardown_job_name(svc_name);
+    let job_api: Api<Job> = Api::namespaced(ctx.client.clone(), ns);
+    let existing = job_api.get_opt(&job_name).await?;
+    let job = bootstrap::render_teardown_job(cr.as_ref(), &ctx.runtime_image, bs_spec, policy, owner)?;
+    let Some(existing) = existing else {
+        job_api
+            .patch(
+                &job_name,
+                &PatchParams::apply(&ctx.field_manager).force(),
+                &Patch::Apply(&job),
+            )
+            .await?;
+        return Ok(Action::requeue(Duration::from_secs(10)));
+    };
+    let succeeded = existing
+        .status
+        .as_ref()
+        .and_then(|s| s.succeeded)
+        .unwrap_or(0);
+    if succeeded >= 1 {
+        remove_finalizer(ctx, cr.as_ref(), svc_name, ns).await?;
+        return Ok(Action::await_change());
+    }
+    Ok(Action::requeue(Duration::from_secs(10)))
+}
+
+async fn ensure_finalizer(ctx: &Ctx, cr: &MarsService, svc_name: &str, ns: &str) -> Result<()> {
+    let already = cr
+        .metadata
+        .finalizers
+        .as_ref()
+        .map(|f| f.iter().any(|s| s == BOOTSTRAP_FINALIZER))
+        .unwrap_or(false);
+    if already {
+        return Ok(());
+    }
+    let api: Api<MarsService> = Api::namespaced(ctx.client.clone(), ns);
+    let patch = json!({
+        "metadata": {
+            "finalizers": [BOOTSTRAP_FINALIZER]
+        }
+    });
+    api.patch(svc_name, &PatchParams::default(), &Patch::Merge(&patch))
+        .await?;
+    Ok(())
+}
+
+async fn remove_finalizer(ctx: &Ctx, cr: &MarsService, svc_name: &str, ns: &str) -> Result<()> {
+    let mut remaining: Vec<String> = cr
+        .metadata
+        .finalizers
+        .clone()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|f| f != BOOTSTRAP_FINALIZER)
+        .collect();
+    // serialize_json::Value doesn't differentiate empty Vec from None for the
+    // PATCH. Use null when empty so the field is cleared.
+    let api: Api<MarsService> = Api::namespaced(ctx.client.clone(), ns);
+    let value = if remaining.is_empty() {
+        json!({ "metadata": { "finalizers": serde_json::Value::Null } })
+    } else {
+        remaining.sort();
+        json!({ "metadata": { "finalizers": remaining } })
+    };
+    api.patch(svc_name, &PatchParams::default(), &Patch::Merge(&value))
+        .await?;
+    Ok(())
+}
+
+async fn apply_service_account(ctx: &Ctx, ns: &str, sa: &ServiceAccount) -> Result<()> {
+    let api: Api<ServiceAccount> = Api::namespaced(ctx.client.clone(), ns);
+    let name = sa.metadata.name.as_deref().unwrap_or("");
+    api.patch(name, &PatchParams::apply(&ctx.field_manager).force(), &Patch::Apply(sa))
+        .await?;
+    Ok(())
+}
+
 
 fn owner_reference(cr: &MarsService) -> Result<OwnerReference> {
     let uid = cr

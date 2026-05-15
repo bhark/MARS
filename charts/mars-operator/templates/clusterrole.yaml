@@ -22,8 +22,17 @@ rules:
     resources: ["deployments"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
-    resources: ["services", "configmaps", "persistentvolumeclaims"]
+    resources: ["services", "configmaps", "persistentvolumeclaims", "serviceaccounts"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # Bootstrap admin/runtime credentials are mounted into the bootstrap Job
+  # pod via secretKeyRef; reads only, the operator never creates secrets.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch"]
 
   # Events (for surfacing reconcile failures).
   - apiGroups: [""]
