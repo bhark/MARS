@@ -691,6 +691,18 @@ where
         binding_ids.push(binding_id);
     }
 
+    // pages must satisfy the manifest sort invariant
+    // (binding_id, level, hilbert_range.0). binding_ids generated from a
+    // numeric loop ("binding_10" < "binding_2" lex) break that order at
+    // n_layers >= 10, so sort once here.
+    pages.sort_by(|a, b| {
+        a.key
+            .binding_id
+            .cmp(&b.key.binding_id)
+            .then(a.key.level.cmp(&b.key.level))
+            .then(a.hilbert_range.0.cmp(&b.hilbert_range.0))
+    });
+
     let manifest = Manifest {
         format_version: MANIFEST_FORMAT_VERSION,
         version: 1,
