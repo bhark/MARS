@@ -225,6 +225,7 @@ pub(crate) struct ClassSkeleton {
     pub(crate) min_scale_denom: Option<u64>,
     pub(crate) max_scale_denom: Option<u64>,
     pub(crate) style_ref: String,
+    pub(crate) label: Option<LabelSkeleton>,
 }
 
 #[derive(Debug, Clone)]
@@ -339,6 +340,70 @@ fn write_marker(out: &mut String, m: &EmitMarker) {
             let _ = writeln!(out, "      filled: {filled}");
             let _ = writeln!(out, "      size: {size}");
         }
+    }
+}
+
+/// render one class entry under `    classes:`. compact flow-mapping when the
+/// class has no per-class label; expanded block-mapping when it does, so the
+/// label sub-tree can be rendered on its own lines.
+fn write_class(out: &mut String, cls: &ClassSkeleton) {
+    let mut parts = vec![format!("name: {}", yaml_quote(&cls.name))];
+    if let Some(title) = &cls.title {
+        parts.push(format!("title: {}", yaml_quote(title)));
+    }
+    if let Some(when) = &cls.when {
+        parts.push(format!("when: {}", yaml_quote(when)));
+    }
+    if cls.min_scale_denom.is_some() || cls.max_scale_denom.is_some() {
+        let mut scale_parts: Vec<String> = Vec::new();
+        if let Some(m) = cls.min_scale_denom {
+            scale_parts.push(format!("min: {m}"));
+        }
+        if let Some(m) = cls.max_scale_denom {
+            scale_parts.push(format!("max: {m}"));
+        }
+        parts.push(format!("scale: {{ {} }}", scale_parts.join(", ")));
+    }
+    parts.push(format!("style: {{ type: ref, name: {} }}", yaml_quote(&cls.style_ref)));
+
+    let Some(lbl) = cls.label.as_ref() else {
+        let _ = writeln!(out, "      - {{ {} }}", parts.join(", "));
+        return;
+    };
+
+    // expanded form: scalars + style on their own lines, then label: block.
+    let mut iter = parts.into_iter();
+    if let Some(first) = iter.next() {
+        let _ = writeln!(out, "      - {first}");
+    }
+    for p in iter {
+        let _ = writeln!(out, "        {p}");
+    }
+    let _ = writeln!(out, "        label:");
+    write_label_body(out, lbl, "          ");
+}
+
+/// render a [`LabelSkeleton`] under an externally-emitted `label:` key at
+/// `indent`. shared between the layer-level and class-level label paths.
+fn write_label_body(out: &mut String, lbl: &LabelSkeleton, indent: &str) {
+    let _ = writeln!(out, "{indent}text: {}", yaml_quote(&lbl.text));
+    let _ = writeln!(
+        out,
+        "{indent}style: {{ type: ref, name: {} }}",
+        yaml_quote(&lbl.style_ref)
+    );
+    if let Some(p) = lbl.placement_line {
+        let mut parts = vec!["kind: line".to_string()];
+        if let Some(r) = p.repeat_m {
+            parts.push(format!("repeat_m: {r}"));
+        }
+        if let Some(a) = p.max_angle_delta_deg {
+            parts.push(format!("max_angle_delta_deg: {a}"));
+        }
+        if let Some(m) = p.angle_mode {
+            parts.push(format!("angle_mode: {}", line_angle_mode_yaml(m)));
+        }
+        let _ = writeln!(out, "{indent}placement: {{ {} }}", parts.join(", "));
     }
 }
 
@@ -682,49 +747,13 @@ pub(crate) fn render(skel: &Skeleton, bands: &[(String, u64)]) -> String {
             if !layer.classes.is_empty() {
                 let _ = writeln!(out, "    classes:");
                 for cls in &layer.classes {
-                    let mut parts = vec![format!("name: {}", yaml_quote(&cls.name))];
-                    if let Some(title) = &cls.title {
-                        parts.push(format!("title: {}", yaml_quote(title)));
-                    }
-                    if let Some(when) = &cls.when {
-                        parts.push(format!("when: {}", yaml_quote(when)));
-                    }
-                    if cls.min_scale_denom.is_some() || cls.max_scale_denom.is_some() {
-                        let mut scale_parts: Vec<String> = Vec::new();
-                        if let Some(m) = cls.min_scale_denom {
-                            scale_parts.push(format!("min: {m}"));
-                        }
-                        if let Some(m) = cls.max_scale_denom {
-                            scale_parts.push(format!("max: {m}"));
-                        }
-                        parts.push(format!("scale: {{ {} }}", scale_parts.join(", ")));
-                    }
-                    parts.push(format!("style: {{ type: ref, name: {} }}", yaml_quote(&cls.style_ref)));
-                    let _ = writeln!(out, "      - {{ {} }}", parts.join(", "));
+                    write_class(&mut out, cls);
                 }
             }
 
             if let Some(ref lbl) = layer.label {
                 let _ = writeln!(out, "    label:");
-                let _ = writeln!(out, "      text: {}", yaml_quote(&lbl.text));
-                let _ = writeln!(
-                    out,
-                    "      style: {{ type: ref, name: {} }}",
-                    yaml_quote(&lbl.style_ref)
-                );
-                if let Some(p) = lbl.placement_line {
-                    let mut parts = vec!["kind: line".to_string()];
-                    if let Some(r) = p.repeat_m {
-                        parts.push(format!("repeat_m: {r}"));
-                    }
-                    if let Some(a) = p.max_angle_delta_deg {
-                        parts.push(format!("max_angle_delta_deg: {a}"));
-                    }
-                    if let Some(m) = p.angle_mode {
-                        parts.push(format!("angle_mode: {}", line_angle_mode_yaml(m)));
-                    }
-                    let _ = writeln!(out, "      placement: {{ {} }}", parts.join(", "));
-                }
+                write_label_body(&mut out, lbl, "      ");
             }
         }
     }

@@ -111,6 +111,8 @@ fn emit_class(r: ResolvedClass, skel: &mut Skeleton) -> ClassSkeleton {
         r.style_name
     };
 
+    let label = r.label.map(|rl| emit_label(rl, skel));
+
     ClassSkeleton {
         name: r.class_name,
         title: r.title,
@@ -118,6 +120,7 @@ fn emit_class(r: ResolvedClass, skel: &mut Skeleton) -> ClassSkeleton {
         min_scale_denom: r.min_scale_denom,
         max_scale_denom: r.max_scale_denom,
         style_ref,
+        label,
     }
 }
 

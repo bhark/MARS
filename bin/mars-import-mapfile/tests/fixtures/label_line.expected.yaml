@@ -65,13 +65,13 @@ layers:
   - name: "streets"
     type: line
     sources:
-      - { band: detail, from: "streets", geometry_column: "geom", id_column: "OGC_FID" }
-      - { band: hi, from: "streets", geometry_column: "geom", id_column: "OGC_FID" }
-      - { band: mid, from: "streets", geometry_column: "geom", id_column: "OGC_FID" }
-      - { band: lo, from: "streets", geometry_column: "geom", id_column: "OGC_FID" }
-      - { band: overview, from: "streets", geometry_column: "geom", id_column: "OGC_FID" }
+      - { band: detail, from: "streets", geometry_column: "geom", id_column: "OGC_FID", attributes: ["name"] }
+      - { band: hi, from: "streets", geometry_column: "geom", id_column: "OGC_FID", attributes: ["name"] }
+      - { band: mid, from: "streets", geometry_column: "geom", id_column: "OGC_FID", attributes: ["name"] }
+      - { band: lo, from: "streets", geometry_column: "geom", id_column: "OGC_FID", attributes: ["name"] }
+      - { band: overview, from: "streets", geometry_column: "geom", id_column: "OGC_FID", attributes: ["name"] }
     label:
-      text: "[name]"
+      text: "{name}"
       style: { type: ref, name: "label_streets" }
       placement: { kind: line, repeat_m: 250, max_angle_delta_deg: 25, angle_mode: follow }
 

@@ -8,6 +8,7 @@ use crate::directive::ClassDirective;
 use crate::scanner::{Token, block_range, is_block_opener};
 
 use super::is_unsupported;
+use super::label::{ParsedLabel, parse_label};
 use super::style_block::{StyleBlock, parse_style_block};
 
 #[derive(Debug, Default)]
@@ -18,6 +19,7 @@ pub(crate) struct ParsedClass {
     pub styles: Vec<StyleBlock>,
     pub min_scale_denom: Option<u64>,
     pub max_scale_denom: Option<u64>,
+    pub label: Option<ParsedLabel>,
 }
 
 pub(crate) fn parse_class(body: &[Token], class_line: usize) -> ParsedClass {
@@ -56,6 +58,14 @@ pub(crate) fn parse_class(body: &[Token], class_line: usize) -> ParsedClass {
             ClassDirective::Style => {
                 if let Some(r) = block_range(body, i) {
                     p.styles.push(parse_style_block(&body[r.start + 1..r.end - 1]));
+                    i = r.end;
+                    continue;
+                }
+            }
+            ClassDirective::Label(_t) => {
+                if let Some(r) = block_range(body, i) {
+                    // last LABEL wins on repeat, mirroring the layer-level path.
+                    p.label = Some(parse_label(&body[r.start + 1..r.end - 1]));
                     i = r.end;
                     continue;
                 }

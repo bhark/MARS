@@ -72,6 +72,11 @@ fn label_position_fixture_matches() {
 }
 
 #[test]
+fn label_class_fixture_matches() {
+    assert_fixture_matches("label_class");
+}
+
+#[test]
 fn expression_ops_fixture_matches() {
     assert_fixture_matches("expression_ops");
 }

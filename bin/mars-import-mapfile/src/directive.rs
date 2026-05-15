@@ -84,6 +84,7 @@ pub(crate) enum ClassDirective<'a> {
     MaxScaleDenom(&'a Token),
     Expression(&'a Token),
     Style,
+    Label(&'a Token),
     Unsupported(&'a Token),
     Unknown,
 }
@@ -96,6 +97,7 @@ impl<'a> ClassDirective<'a> {
             "MAXSCALEDENOM" => Self::MaxScaleDenom(t),
             "EXPRESSION" => Self::Expression(t),
             "STYLE" => Self::Style,
+            "LABEL" => Self::Label(t),
             other if is_unsupported(other) => Self::Unsupported(t),
             _ => Self::Unknown,
         }

@@ -79,7 +79,7 @@ layers:
       - { name: "main", title: "main", when: "vejkategori = 'main'", style: { type: ref, name: "line_roads_main" } }
       - { name: "other", title: "other", when: "vejkategori IN ('other', 'local')", style: { type: ref, name: "line_roads_other" } }
     label:
-      text: "[vejkategori]"
+      text: "{vejkategori}"
       style: { type: ref, name: "label_roads" }
 
 observability:

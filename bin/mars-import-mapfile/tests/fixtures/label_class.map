@@ -1,0 +1,53 @@
+# Per-class LABEL fixture. Two classes carry distinct LABEL blocks (one with
+# inline TEXT, one falling back to LABELITEM); the layer-level LABEL stays as
+# the fallback for any catch-all class that doesn't declare its own.
+MAP
+  NAME "label_class"
+  TITLE "Per-class label coverage"
+
+  LAYER
+    NAME "roads"
+    TYPE LINE
+    STATUS ON
+    DATA "geom FROM roads"
+    PROCESSING "ITEMS=ogc_fid,kind,name,short_name"
+    CLASSITEM "kind"
+    LABELITEM "name"
+
+    CLASS
+      NAME "major"
+      STYLE
+        COLOR 220 100 100
+        WIDTH 2
+      END
+      LABEL
+        TEXT ([short_name])
+        FONT "sans"
+        SIZE 11
+        COLOR 0 0 0
+        OUTLINECOLOR 255 255 255
+        OUTLINEWIDTH 2
+        PRIORITY 8
+      END
+    END
+
+    CLASS
+      NAME "minor"
+      STYLE
+        COLOR 160 160 160
+        WIDTH 1
+      END
+      LABEL
+        FONT "sans"
+        SIZE 9
+        COLOR 64 64 64
+      END
+    END
+
+    LABEL
+      FONT "sans"
+      SIZE 10
+      COLOR 32 32 32
+    END
+  END
+END

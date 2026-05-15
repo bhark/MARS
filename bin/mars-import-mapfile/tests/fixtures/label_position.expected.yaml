@@ -69,13 +69,13 @@ layers:
   - name: "city"
     type: point
     sources:
-      - { band: detail, from: "city", geometry_column: "geom", id_column: "OGC_FID" }
-      - { band: hi, from: "city", geometry_column: "geom", id_column: "OGC_FID" }
-      - { band: mid, from: "city", geometry_column: "geom", id_column: "OGC_FID" }
-      - { band: lo, from: "city", geometry_column: "geom", id_column: "OGC_FID" }
-      - { band: overview, from: "city", geometry_column: "geom", id_column: "OGC_FID" }
+      - { band: detail, from: "city", geometry_column: "geom", id_column: "OGC_FID", attributes: ["name"] }
+      - { band: hi, from: "city", geometry_column: "geom", id_column: "OGC_FID", attributes: ["name"] }
+      - { band: mid, from: "city", geometry_column: "geom", id_column: "OGC_FID", attributes: ["name"] }
+      - { band: lo, from: "city", geometry_column: "geom", id_column: "OGC_FID", attributes: ["name"] }
+      - { band: overview, from: "city", geometry_column: "geom", id_column: "OGC_FID", attributes: ["name"] }
     label:
-      text: "[name]"
+      text: "{name}"
       style: { type: ref, name: "label_city" }
 
 observability:

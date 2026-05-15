@@ -52,6 +52,7 @@ pub(crate) struct ResolvedClass {
     pub style_type: String,
     pub style_name: String,
     pub collapsed: CollapsedStyle,
+    pub label: Option<ResolvedLabel>,
     pub unimplemented: Vec<&'static str>,
 }
 
@@ -126,10 +127,12 @@ pub(crate) fn resolve_layer(
     let classes: Vec<ResolvedClass> = p
         .classes
         .into_iter()
-        .map(|pc| resolve_class(pc, &name, geom_for_classes, class_item, symbols))
+        .map(|pc| resolve_class(pc, &name, geom_for_classes, class_item, label_item, symbols))
         .collect();
 
-    let label = p.label.map(|pl| resolve_label(pl, &name, label_item));
+    let label = p
+        .label
+        .map(|pl| resolve_label(pl, &layer_label_style_name(&name), label_item));
 
     let sources = resolve_sources(
         p.data.as_deref(),
@@ -138,8 +141,9 @@ pub(crate) fn resolve_layer(
         p.processing_items.as_deref(),
     );
 
-    // attribute idents from class predicates + per-tier filters - config
-    // validation requires every filter ident to be declared on the binding.
+    // attribute idents from class predicates, per-tier filters and label-text
+    // templates - config validation requires every ident referenced by these
+    // to be declared on the binding.
     let mut all_attrs: BTreeSet<String> = BTreeSet::new();
     for cls in &classes {
         if let Some(ref when) = cls.when
@@ -147,6 +151,12 @@ pub(crate) fn resolve_layer(
         {
             mars_expr::collect_idents(&expr, &mut all_attrs);
         }
+        if let Some(ref l) = cls.label {
+            collect_template_idents(&l.text, &mut all_attrs);
+        }
+    }
+    if let Some(ref l) = label {
+        collect_template_idents(&l.text, &mut all_attrs);
     }
     for src in &sources {
         if let Some(ref f) = src.filter
@@ -164,6 +174,13 @@ pub(crate) fn resolve_layer(
         for u in &c.unimplemented {
             if !unimplemented.contains(u) {
                 unimplemented.push(*u);
+            }
+        }
+        if let Some(ref l) = c.label {
+            for u in &l.unimplemented {
+                if !unimplemented.contains(u) {
+                    unimplemented.push(*u);
+                }
             }
         }
     }
@@ -236,6 +253,7 @@ fn resolve_class(
     layer_name: &str,
     geom_kind: &str,
     class_item: Option<&str>,
+    label_item: Option<&str>,
     symbols: &HashMap<String, SymbolDef>,
 ) -> ResolvedClass {
     let title = p.name.clone();
@@ -251,6 +269,10 @@ fn resolve_class(
         (Some(item), Some(value)) => Some(format!("{item} = '{}'", value.replace('\'', "''"))),
         _ => None,
     });
+
+    let label = p
+        .label
+        .map(|pl| resolve_label(pl, &class_label_style_name(layer_name, &class_name), label_item));
 
     let mut unimplemented: Vec<&'static str> = Vec::new();
     for sb in &p.styles {
@@ -275,24 +297,101 @@ fn resolve_class(
         style_type: geom_kind.to_string(),
         style_name,
         collapsed,
+        label,
         unimplemented,
     }
 }
 
-fn resolve_label(p: ParsedLabel, layer_name: &str, label_item: Option<&str>) -> ResolvedLabel {
+fn layer_label_style_name(layer: &str) -> String {
+    format!("label_{}", slugify(layer))
+}
+
+fn class_label_style_name(layer: &str, class: &str) -> String {
+    format!("label_{}__{}", slugify(layer), class)
+}
+
+fn collect_template_idents(text: &str, out: &mut BTreeSet<String>) {
+    if let Ok(t) = mars_expr::parse_template(text) {
+        for seg in &t.segments {
+            if let mars_expr::Segment::Ident(name) = seg {
+                out.insert(name.clone());
+            }
+        }
+    }
+}
+
+// Lower a mapfile LABEL TEXT arg into a MARS template string. Recognises:
+// `[col]` column refs -> `{col}`, and a single `(expr)` wrapper -> strip
+// outer parens (mapfile expression form). Anything else passes through
+// verbatim. The translation is intentionally minimal; complex expressions
+// like `(tostring([col],"%fmt"))` stay verbatim so the operator notices.
+fn mapfile_text_to_template(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let stripped = if trimmed.starts_with('(') && trimmed.ends_with(')') {
+        &trimmed[1..trimmed.len() - 1]
+    } else {
+        trimmed
+    };
+    bracket_refs_to_braces(stripped)
+}
+
+fn bracket_refs_to_braces(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '[' {
+            out.push(c);
+            continue;
+        }
+        // peek for an ident-shaped run terminated by ']'. fall back to
+        // verbatim on anything else so we never turn unrelated bracket
+        // syntax into a malformed template.
+        let mut ident = String::new();
+        let mut closed = false;
+        while let Some(&nc) = chars.peek() {
+            if nc == ']' {
+                chars.next();
+                closed = true;
+                break;
+            }
+            if nc.is_ascii_alphanumeric() || nc == '_' {
+                ident.push(nc);
+                chars.next();
+            } else {
+                break;
+            }
+        }
+        if closed && !ident.is_empty() {
+            out.push('{');
+            out.push_str(&ident);
+            out.push('}');
+        } else {
+            out.push('[');
+            out.push_str(&ident);
+            if closed {
+                out.push(']');
+            }
+        }
+    }
+    out
+}
+
+fn resolve_label(p: ParsedLabel, style_name: &str, label_item: Option<&str>) -> ResolvedLabel {
     // LABELITEM: if the LABEL block had no TEXT, the layer's labelitem
     // becomes a `{<col>}` template referencing the column. when neither
     // TEXT nor LABELITEM is set we leave text empty so the operator gets a
-    // clean `text:` slot to fill in.
+    // clean `text:` slot to fill in. Explicit TEXT args go through
+    // [`mapfile_text_to_template`] so MapServer's `[col]` column-ref form
+    // (and the `(expr)` wrapper) lowers into MARS's `{col}` template form.
     let text = match (p.text.filter(|s| !s.is_empty()), label_item) {
-        (Some(t), _) => t,
+        (Some(t), _) => mapfile_text_to_template(&t),
         (None, Some(item)) => format!("{{{item}}}"),
         (None, None) => String::new(),
     };
 
     ResolvedLabel {
         text,
-        style_name: format!("label_{}", slugify(layer_name)),
+        style_name: style_name.to_string(),
         fill: p.color.unwrap_or(Colour::rgb(0, 0, 0)),
         font_family: p.font.unwrap_or_else(|| "sans-serif".into()),
         font_size: p.size.unwrap_or(12.0),
@@ -340,4 +439,34 @@ pub(crate) fn resolve_symbol(p: ParsedSymbol) -> Option<ResolvedSymbol> {
         },
     };
     Some(ResolvedSymbol { name, def })
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mapfile_text_lowers_bracket_refs() {
+        assert_eq!(mapfile_text_to_template("[name]"), "{name}");
+        assert_eq!(mapfile_text_to_template("([name])"), "{name}");
+        assert_eq!(
+            mapfile_text_to_template("[short_name] - [city]"),
+            "{short_name} - {city}"
+        );
+    }
+
+    #[test]
+    fn mapfile_text_passes_unknown_forms_through() {
+        // unmatched bracket: leave intact rather than emit a half-template.
+        assert_eq!(mapfile_text_to_template("[unclosed"), "[unclosed");
+        // empty brackets: not an ident, pass through.
+        assert_eq!(mapfile_text_to_template("[]"), "[]");
+        // function-call expression form stays verbatim (operator must
+        // translate the surrounding call by hand).
+        assert_eq!(
+            mapfile_text_to_template("(tostring([col],\"%f\"))"),
+            "tostring({col},\"%f\")"
+        );
+    }
 }
