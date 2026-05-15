@@ -1038,7 +1038,7 @@ checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
 name = "mars-e2e-kind"
-version = "0.0.1"
+version = "0.0.0-dev"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1061,7 +1061,7 @@ dependencies = [
 
 [[package]]
 name = "mars-test-support"
-version = "0.0.1"
+version = "0.0.0-dev"
 dependencies = [
  "png",
  "zune-jpeg",
