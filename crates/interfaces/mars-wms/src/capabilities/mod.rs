@@ -124,8 +124,7 @@ pub(super) fn write_dcp_type<W: std::io::Write>(w: &mut Writer<W>, href: &str) -
     write_online_resource(w, href)?;
     w.write_event(Event::End(BytesEnd::new("Get"))).map_err(xml_err)?;
     w.write_event(Event::End(BytesEnd::new("HTTP"))).map_err(xml_err)?;
-    w.write_event(Event::End(BytesEnd::new("DCPType")))
-        .map_err(xml_err)?;
+    w.write_event(Event::End(BytesEnd::new("DCPType"))).map_err(xml_err)?;
     Ok(())
 }
 

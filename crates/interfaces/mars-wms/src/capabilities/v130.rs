@@ -8,9 +8,9 @@ use quick_xml::Writer;
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
 
 use super::{
-    INFO_FORMATS, LayerNode, build_layer_tree, configured_formats, derive_layer_bboxes,
-    resolved_request_formats, text_element, union_bbox, write_contact_information, write_dcp_type,
-    write_keyword_list, write_online_resource, xml_err,
+    INFO_FORMATS, LayerNode, build_layer_tree, configured_formats, derive_layer_bboxes, resolved_request_formats,
+    text_element, union_bbox, write_contact_information, write_dcp_type, write_keyword_list, write_online_resource,
+    xml_err,
 };
 use crate::WmsError;
 
@@ -22,8 +22,12 @@ pub(super) fn capabilities_xml(cfg: &Config, manifest: &Manifest) -> Result<Stri
     let mut buf = Cursor::new(Vec::new());
     let mut w = Writer::new(&mut buf);
 
-    w.write_event(Event::Decl(BytesDecl::new("1.0", Some(cfg.service.xml_encoding()), None)))
-        .map_err(xml_err)?;
+    w.write_event(Event::Decl(BytesDecl::new(
+        "1.0",
+        Some(cfg.service.xml_encoding()),
+        None,
+    )))
+    .map_err(xml_err)?;
 
     let mut root = BytesStart::new("WMS_Capabilities");
     root.push_attribute(("version", "1.3.0"));
@@ -681,10 +685,9 @@ layers:
         let mut cfg = minimal_cfg();
         cfg.service.formats.get_map = vec!["image/svg+xml".into(), "application/pdf".into()];
         cfg.service.formats.get_feature_info = vec!["application/gml+xml".into()];
-        let m = Manifest::empty(1, cfg.service.name.clone());
         // mark layer queryable so GetFeatureInfo block emits
-        let mut cfg = cfg;
         cfg.layers[0].enable_get_feature_info = true;
+        let m = Manifest::empty(1, cfg.service.name.clone());
         let xml = capabilities_xml(&cfg, &m).unwrap();
         assert!(xml.contains("<Format>image/svg+xml</Format>"));
         assert!(xml.contains("<Format>application/pdf</Format>"));
