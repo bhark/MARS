@@ -1,12 +1,13 @@
 //! cycle pipeline orchestrator.
 //!
 //! sequence: plan -> reconcile_cadence -> ingest -> admission (dirty-page
-//! ceiling) -> (no-op bump if empty) -> rebuild -> merge -> publish. each
-//! stage is one module below.
+//! ceiling) -> missing_page (policy escalation) -> (no-op bump if empty)
+//! -> rebuild -> merge -> publish. each stage is one module below.
 
 mod admission;
 mod ingest;
 mod merge;
+mod missing_page;
 mod plan;
 mod rebuild;
 mod reconcile_cadence;
@@ -44,6 +45,10 @@ pub(crate) async fn run(
     for w in &dirty.warnings {
         tracing::warn!(?w, "incremental cycle warning");
     }
+    // missing-page policy escalation. may return CompilerError::MissingPageEscalation
+    // under MissingPagePolicy::Fail; otherwise mutates `dirty` in place
+    // (Truncate path) or is a no-op (Warn path).
+    missing_page::apply(&mut dirty, &ctx.plan, &c.deps.metrics)?;
     c.deps.metrics.inc_compiler_dirty_cells(
         dirty
             .per_binding

@@ -140,6 +140,7 @@ fn build_two_band_config() -> Config {
         reconcile_every_cycles: None,
         sidecar_size_warn_bytes: None,
         simplifier: None,
+        on_missing_page: None,
     };
     Config {
         service: ServiceMeta {

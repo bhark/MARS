@@ -10,7 +10,9 @@
 //! the planner does NOT walk source rows or talk to postgres -- it only
 //! decides what set of (binding, level) slices the snapshot has to emit.
 
-use mars_config::{Config, DecimationLevelConfig, LabelStyleAttach, Layer as CfgLayer, SimplifierKind};
+use mars_config::{
+    Config, DecimationLevelConfig, LabelStyleAttach, Layer as CfgLayer, MissingPagePolicy, SimplifierKind,
+};
 use mars_expr::{Expr, Template, parse, parse_template};
 use mars_style::{LabelStyle, LabelSurvival, Placement, default_placement};
 use mars_types::{BindingId, BindingIdError, CrsCode, DecimationLevel, LayerId, RasterLayerEntry};
@@ -120,6 +122,10 @@ pub struct BindingPlan {
     /// rebuild. Resolved from
     /// [`mars_config::SourceBinding::resolved_simplifier`].
     pub simplifier: SimplifierKind,
+    /// What to do when an incremental change event's hilbert key falls
+    /// outside every page range. Resolved from
+    /// [`mars_config::SourceBinding::resolved_missing_page_policy`].
+    pub missing_page_policy: MissingPagePolicy,
 }
 
 /// One pre-parsed class entry on a [`LayerPlan`]. `when` parses once at
@@ -228,6 +234,7 @@ pub fn build_bootstrap_plan(cfg: &Config) -> Result<BootstrapPlan, PlanError> {
                 sidecar_size_warn_bytes: sidecar_warn,
                 reconcile_every_cycles: binding.resolved_reconcile_every_cycles(),
                 simplifier: binding.resolved_simplifier(),
+                missing_page_policy: binding.resolved_missing_page_policy(),
             };
 
             if let Some(existing) = bindings.iter().find(|b| b.binding_id == id) {
@@ -590,6 +597,7 @@ mod tests {
             reconcile_every_cycles: None,
             sidecar_size_warn_bytes: None,
             simplifier: None,
+            on_missing_page: None,
         }
     }
 

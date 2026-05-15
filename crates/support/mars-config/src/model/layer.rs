@@ -177,6 +177,13 @@ pub struct SourceBinding {
     /// without further plumbing once the spike lands.
     #[serde(default)]
     pub simplifier: Option<SimplifierKind>,
+    /// Policy for change events whose hilbert key falls outside every page
+    /// range (i.e. the feature's centroid lies outside the bootstrap
+    /// `combined_bbox`). `None` resolves to the substrate default
+    /// ([`MissingPagePolicy::Truncate`]). See [`MissingPagePolicy`] for the
+    /// trade-offs.
+    #[serde(default)]
+    pub on_missing_page: Option<MissingPagePolicy>,
 }
 
 /// Default byte-budget target per page artifact (~5 MiB).
@@ -188,6 +195,33 @@ pub const DEFAULT_RECONCILE_EVERY_CYCLES: u32 = 24;
 /// Default sidecar size warning threshold (`8 GiB`). Above this the bailout
 /// recommends switching the binding to `REPLICA IDENTITY FULL`.
 pub const DEFAULT_SIDECAR_SIZE_WARN_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+
+/// Policy for an incremental change event whose hilbert key falls outside
+/// every page range. This happens when a feature's centroid sits outside
+/// the bootstrap `combined_bbox` of its binding - inserts at the edge of
+/// the world, source-side coordinate drift, geometry-column reprojection
+/// gone wrong.
+///
+/// The default is [`MissingPagePolicy::Truncate`] because it restores
+/// correctness immediately. `Warn` is retained as the historical
+/// behaviour for environments that can tolerate up to one reconcile cycle
+/// of drift. `Fail` is for strict environments where any drift is an
+/// incident.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MissingPagePolicy {
+    /// Log a warning and proceed; the next reconciliation pass will heal
+    /// the binding when it scans the source.
+    Warn,
+    /// Escalate the affected binding to a full truncate-class rebuild this
+    /// cycle. Re-derives `combined_bbox` from source and re-emits every
+    /// page. Recommended default.
+    #[default]
+    Truncate,
+    /// Return a typed [`crate::ConfigError`]-equivalent at compile time;
+    /// the cycle fails and operator alarms fire.
+    Fail,
+}
 
 /// Geometry simplifier strategy. The strategy is per-binding because it
 /// reflects *how* simplification is performed; per-level *aggressiveness*
@@ -269,6 +303,13 @@ impl SourceBinding {
     #[must_use]
     pub fn resolved_simplifier(&self) -> SimplifierKind {
         self.simplifier.unwrap_or_default()
+    }
+
+    /// Resolve `on_missing_page` against the default
+    /// ([`MissingPagePolicy::Truncate`]).
+    #[must_use]
+    pub fn resolved_missing_page_policy(&self) -> MissingPagePolicy {
+        self.on_missing_page.unwrap_or_default()
     }
 }
 

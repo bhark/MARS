@@ -77,6 +77,7 @@ pub(crate) fn binding(from: &str) -> SourceBinding {
         reconcile_every_cycles: None,
         sidecar_size_warn_bytes: None,
         simplifier: None,
+        on_missing_page: None,
     }
 }
 

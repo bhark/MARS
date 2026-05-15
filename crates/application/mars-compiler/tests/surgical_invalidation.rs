@@ -167,6 +167,7 @@ fn binding_plan(id: &str, page_size: u64) -> BindingPlan {
         sidecar_size_warn_bytes: u64::MAX,
         reconcile_every_cycles: 24,
         simplifier: mars_config::SimplifierKind::Naive,
+        missing_page_policy: mars_config::MissingPagePolicy::Truncate,
     }
 }
 

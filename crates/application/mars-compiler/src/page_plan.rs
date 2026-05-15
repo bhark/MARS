@@ -303,7 +303,7 @@ mod tests {
     use async_trait::async_trait;
     use futures_core::stream::BoxStream;
     use futures_util::stream;
-    use mars_config::SimplifierKind;
+    use mars_config::{MissingPagePolicy, SimplifierKind};
     use mars_source::{RowBytes, SourceError};
     use mars_types::{BindingId, CrsCode};
 
@@ -349,6 +349,7 @@ mod tests {
             sidecar_size_warn_bytes: u64::MAX,
             reconcile_every_cycles: 24,
             simplifier: SimplifierKind::Naive,
+            missing_page_policy: MissingPagePolicy::Truncate,
         }
     }
 

@@ -137,6 +137,21 @@ pub enum CompilerError {
         /// Offending binding identifier.
         binding: String,
     },
+    /// An incremental change event's hilbert key fell outside every page
+    /// range and the binding's `MissingPagePolicy::Fail` policy elected to
+    /// surface this as a cycle-failing error.
+    #[error(
+        "missing-page escalation: binding {binding} level {level} key {key:?} outside any page range; \
+         hint: switch on_missing_page to `truncate` to auto-heal, or `warn` to defer to reconcile."
+    )]
+    MissingPageEscalation {
+        /// Affected binding.
+        binding: String,
+        /// Affected decimation level.
+        level: u8,
+        /// The unresolved hilbert key (raw 64-bit value).
+        key: u64,
+    },
     /// Per-page hydrated working set crossed the configured ceiling. The
     /// rebuild path fetches a bounded feature-id set per page and asserts
     /// the hydrated rows stay under `compile_page_working_set_bytes`.

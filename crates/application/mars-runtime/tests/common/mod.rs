@@ -441,6 +441,7 @@ fn build_minimal_config(layer_id: &LayerId, binding_id: &BindingId, label_surviv
                 reconcile_every_cycles: None,
                 sidecar_size_warn_bytes: None,
                 simplifier: None,
+                on_missing_page: None,
             }],
             classes: vec![Class {
                 name: "main".into(),
@@ -766,6 +767,7 @@ fn build_multi_layer_config(layer_ids: &[LayerId], binding_ids: &[BindingId]) ->
                 reconcile_every_cycles: None,
                 sidecar_size_warn_bytes: None,
                 simplifier: None,
+                on_missing_page: None,
             }],
             classes: vec![Class {
                 name: "main".into(),

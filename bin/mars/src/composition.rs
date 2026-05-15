@@ -256,6 +256,7 @@ mod tests {
                     reconcile_every_cycles: None,
                     sidecar_size_warn_bytes: None,
                     simplifier: None,
+                    on_missing_page: None,
                 })
                 .collect(),
             classes: vec![Class {
@@ -366,6 +367,7 @@ mod tests {
                     reconcile_every_cycles: None,
                     sidecar_size_warn_bytes: None,
                     simplifier: None,
+                    on_missing_page: None,
                 },
                 CfgBinding {
                     scale: None,
@@ -382,6 +384,7 @@ mod tests {
                     reconcile_every_cycles: None,
                     sidecar_size_warn_bytes: None,
                     simplifier: None,
+                    on_missing_page: None,
                 },
                 CfgBinding {
                     scale: None,
@@ -398,6 +401,7 @@ mod tests {
                     reconcile_every_cycles: None,
                     sidecar_size_warn_bytes: None,
                     simplifier: None,
+                    on_missing_page: None,
                 },
             ],
             classes: vec![Class {
