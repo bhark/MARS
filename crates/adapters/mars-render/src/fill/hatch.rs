@@ -7,14 +7,14 @@
 //! degenerate inputs (non-finite or non-positive numerics) silently produce no
 //! fill - config-load validation rejects these before they reach here.
 //!
-//! perf: the clip mask is canvas-sized and reused across polygons in a render
-//! call via the `scratch` parameter (allocated once at the render entry, then
-//! cleared per-polygon). per-polygon cost is therefore the polygon-rasterise
-//! into the mask + a `bbox_extent / spacing` stroke pass. a future
-//! optimisation: pre-render one period of the hatch into a small tileable
-//! pixmap and stamp it under the mask, trading the per-polygon stroke ops for
-//! a single textured fill. landed only if hatch turns up in a hot cadastral
-//! tile path.
+//! perf: per-polygon cost is one full-canvas Mask allocation + scan-line
+//! rasterisation of the polygon into the mask + stroke-path along
+//! `bbox_extent / spacing` lines. on 1024x1024 canvases this measures ~6-7x
+//! slower than `FillPaint::Solid` (benches/hatch.rs). a future optimisation:
+//! pre-render one period of the hatch into a small tileable pixmap and stamp
+//! it under the mask, trading the per-polygon stroke ops for a single textured
+//! fill. landed only if hatch turns up in a hot cadastral tile path; the
+//! current cost is acceptable for beta.
 
 use mars_style::Colour;
 use tiny_skia::{FillRule, LineCap, LineJoin, Mask, Paint, PathBuilder, Pixmap, Stroke, Transform};
@@ -30,26 +30,14 @@ pub(crate) fn draw(
     line_width: f32,
     colour: Colour,
     alpha: f32,
-    scratch: &mut Option<Mask>,
 ) {
     if !(spacing.is_finite() && spacing > 0.0 && line_width.is_finite() && line_width > 0.0 && angle_deg.is_finite()) {
         return;
     }
 
-    // lazily allocate the canvas-sized clip mask; reuse on subsequent calls.
-    // a dimension mismatch can only happen if the renderer is somehow asked
-    // to render two pixmaps in one scratch lifetime, which the current entry
-    // doesn't do; the guard is cheap and defensive.
-    let need_alloc = scratch
-        .as_ref()
-        .is_none_or(|m| m.width() != pm.width() || m.height() != pm.height());
-    if need_alloc {
-        *scratch = Mask::new(pm.width(), pm.height());
-    }
-    let Some(mask) = scratch.as_mut() else {
+    let Some(mut mask) = Mask::new(pm.width(), pm.height()) else {
         return;
     };
-    mask.clear();
     mask.fill_path(path, FillRule::EvenOdd, true, Transform::identity());
 
     // strokes are emitted in the path's local frame and oriented by
@@ -125,7 +113,7 @@ pub(crate) fn draw(
         line_join: LineJoin::Miter,
         ..Stroke::default()
     };
-    pm.stroke_path(&stroke_path, &paint, &stroke, Transform::identity(), Some(&*mask));
+    pm.stroke_path(&stroke_path, &paint, &stroke, Transform::identity(), Some(&mask));
 }
 
 #[cfg(test)]

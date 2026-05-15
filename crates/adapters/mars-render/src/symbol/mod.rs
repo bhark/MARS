@@ -20,7 +20,7 @@ mod x;
 use mars_render_port::{Path as PortPath, RenderError};
 use mars_style::{MarkerSymbol, Style};
 use mars_text::Fonts;
-use tiny_skia::{Mask, Pixmap};
+use tiny_skia::Pixmap;
 
 use crate::prepare::UnimplementedFeatures;
 
@@ -30,7 +30,6 @@ pub(crate) fn dispatch(
     rotation_rad: f32,
     style: &Style,
     fonts: &Fonts,
-    hatch_mask: &mut Option<Mask>,
 ) -> Result<UnimplementedFeatures, RenderError> {
     let Some(marker) = &style.marker else {
         return Ok(UnimplementedFeatures::default());
@@ -40,14 +39,12 @@ pub(crate) fn dispatch(
             glyph::draw(pm, anchor, rotation_rad, font_family, ch, *size, style, fonts)
                 .map(|()| UnimplementedFeatures::default())
         }
-        MarkerSymbol::Circle { size } => render(pm, circle::build_path(*size), anchor, rotation_rad, style, hatch_mask),
-        MarkerSymbol::Square { size } => render(pm, square::build_path(*size), anchor, rotation_rad, style, hatch_mask),
-        MarkerSymbol::Triangle { size } => {
-            render(pm, triangle::build_path(*size), anchor, rotation_rad, style, hatch_mask)
-        }
-        MarkerSymbol::Cross { size } => render(pm, cross::build_path(*size), anchor, rotation_rad, style, hatch_mask),
-        MarkerSymbol::X { size } => render(pm, x::build_path(*size), anchor, rotation_rad, style, hatch_mask),
-        MarkerSymbol::Pin { size } => render(pm, pin::build_path(*size), anchor, rotation_rad, style, hatch_mask),
+        MarkerSymbol::Circle { size } => render(pm, circle::build_path(*size), anchor, rotation_rad, style),
+        MarkerSymbol::Square { size } => render(pm, square::build_path(*size), anchor, rotation_rad, style),
+        MarkerSymbol::Triangle { size } => render(pm, triangle::build_path(*size), anchor, rotation_rad, style),
+        MarkerSymbol::Cross { size } => render(pm, cross::build_path(*size), anchor, rotation_rad, style),
+        MarkerSymbol::X { size } => render(pm, x::build_path(*size), anchor, rotation_rad, style),
+        MarkerSymbol::Pin { size } => render(pm, pin::build_path(*size), anchor, rotation_rad, style),
         MarkerSymbol::VectorShape {
             points,
             anchor: local_anchor,
@@ -56,14 +53,14 @@ pub(crate) fn dispatch(
         } => {
             let path = vector_shape::build_path(points, *local_anchor, *filled, *size);
             if *filled {
-                render(pm, path, anchor, rotation_rad, style, hatch_mask)
+                render(pm, path, anchor, rotation_rad, style)
             } else {
                 // open polyline: clear fill so the polygon pipeline is bypassed.
                 // a fill paint on an open path would be auto-closed by
                 // tiny-skia, which is the wrong semantics.
                 let mut s = style.clone();
                 s.fill = None;
-                render(pm, path, anchor, rotation_rad, &s, hatch_mask)
+                render(pm, path, anchor, rotation_rad, &s)
             }
         }
     }
@@ -79,7 +76,6 @@ fn render(
     anchor: (f32, f32),
     rotation_rad: f32,
     style: &Style,
-    hatch_mask: &mut Option<Mask>,
 ) -> Result<UnimplementedFeatures, RenderError> {
     let (sin_r, cos_r) = rotation_rad.sin_cos();
     for sub in &mut local.subpaths {
@@ -88,7 +84,7 @@ fn render(
             *p = (anchor.0 + cos_r * x - sin_r * y, anchor.1 + sin_r * x + cos_r * y);
         }
     }
-    crate::ops::path::draw(pm, &local, style, hatch_mask)
+    crate::ops::path::draw(pm, &local, style)
 }
 
 #[cfg(test)]
@@ -179,8 +175,7 @@ mod tests {
     fn none_marker_is_silent_no_op() {
         let style = Style::default();
         let fonts = mars_text::Fonts::with_default();
-        let mut hatch_mask = None;
-        let flags = dispatch(&mut pm(), (8.0, 8.0), 0.0, &style, &fonts, &mut hatch_mask).expect("ok");
+        let flags = dispatch(&mut pm(), (8.0, 8.0), 0.0, &style, &fonts).expect("ok");
         assert!(!flags.any(), "no-op must not flag");
     }
 
@@ -236,8 +231,7 @@ mod tests {
             ..Default::default()
         };
         let fonts = mars_text::Fonts::with_default();
-        let mut hatch_mask = None;
-        let err = dispatch(&mut pm(), (8.0, 8.0), 0.0, &style, &fonts, &mut hatch_mask).expect_err("must error");
+        let err = dispatch(&mut pm(), (8.0, 8.0), 0.0, &style, &fonts).expect_err("must error");
         assert!(matches!(err, RenderError::Backend(msg) if msg.contains("empty ch")));
     }
 
@@ -253,8 +247,7 @@ mod tests {
             ..Default::default()
         };
         let fonts = mars_text::Fonts::with_default();
-        let mut hatch_mask = None;
-        let err = dispatch(&mut pm(), (8.0, 8.0), 0.0, &style, &fonts, &mut hatch_mask).expect_err("must error");
+        let err = dispatch(&mut pm(), (8.0, 8.0), 0.0, &style, &fonts).expect_err("must error");
         assert!(matches!(err, RenderError::Backend(msg) if msg.contains("solid fill")));
     }
 
