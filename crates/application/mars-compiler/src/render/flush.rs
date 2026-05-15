@@ -583,7 +583,10 @@ mod tests {
     fn style_refs_layout_no_labels_omits_label_slots() {
         let layer = layer_with_classes("roads", &[Some("kind = 'main'"), None]);
         let refs = build_layer_style_refs(&layer).unwrap();
-        assert_eq!(refs.style_refs_full, vec!["roads__c0".to_string(), "roads__c1".to_string()]);
+        assert_eq!(
+            refs.style_refs_full,
+            vec!["roads__c0".to_string(), "roads__c1".to_string()]
+        );
         assert_eq!(refs.class_label_indices, vec![None, None]);
         assert_eq!(refs.layer_label_index, None);
     }
