@@ -268,12 +268,149 @@ layers:
     }
 
     #[test]
-    fn bbox_attribute_uses_srs_not_crs() {
+    fn bbox_attribute_uses_srs_and_lowercase_attrs() {
+        // 1.1.1 BoundingBox uses lowercase minx/miny/maxx/maxy. v130 uses
+        // the same spellings but with a CRS= attribute - we lock both so an
+        // accidental cross-pollination of attribute shape between emitters
+        // shows up here.
         let mut cfg = minimal_cfg();
         cfg.layers[0].bbox = Some(mars_types::Bbox::new(0.0, 0.0, 10.0, 10.0));
         let m = Manifest::empty(1, cfg.service.name.clone());
         let xml = capabilities_xml(&cfg, &m).unwrap();
         assert!(xml.contains(r#"SRS="EPSG:25832""#));
         assert!(!xml.contains(r#"CRS="EPSG:25832""#));
+        for attr in ["minx=", "miny=", "maxx=", "maxy="] {
+            assert!(xml.contains(attr), "missing attr {attr} in {xml}");
+        }
+    }
+
+    #[test]
+    fn escapes_xml_special_chars_111() {
+        let mut cfg = minimal_cfg();
+        cfg.layers[0].title = "A & B <C>".into();
+        let m = Manifest::empty(1, cfg.service.name.clone());
+        let xml = capabilities_xml(&cfg, &m).unwrap();
+        assert!(!xml.contains("A & B <C>"), "raw unescaped special chars found");
+        assert!(xml.contains("A &amp; B &lt;C&gt;"), "expected escaped entities");
+    }
+
+    #[test]
+    fn empty_layers_produces_valid_xml_111() {
+        let mut cfg = minimal_cfg();
+        cfg.layers.clear();
+        let m = Manifest::empty(1, cfg.service.name.clone());
+        let xml = capabilities_xml(&cfg, &m).unwrap();
+        assert!(xml.contains("<Layer>"));
+        assert!(xml.contains("</Layer>"));
+
+        let mut r = Reader::from_str(&xml);
+        let mut depth: i32 = 0;
+        let mut buf = Vec::new();
+        loop {
+            match r.read_event_into(&mut buf).unwrap() {
+                Event::Start(_) => depth += 1,
+                Event::End(_) => depth -= 1,
+                Event::Eof => break,
+                _ => {}
+            }
+            buf.clear();
+        }
+        assert_eq!(depth, 0);
+    }
+
+    #[test]
+    fn queryable_layer_emits_queryable_attribute_111() {
+        let mut cfg = minimal_cfg();
+        cfg.layers[0].enable_get_feature_info = true;
+        let m = Manifest::empty(1, cfg.service.name.clone());
+        let xml = capabilities_xml(&cfg, &m).unwrap();
+        assert!(xml.contains(r#"<Layer queryable="1">"#));
+        assert!(xml.contains("<GetFeatureInfo>"));
+        assert!(xml.contains("text/plain"));
+        assert!(xml.contains("application/json"));
+    }
+
+    #[test]
+    fn no_queryable_layers_skips_get_feature_info_111() {
+        let cfg = minimal_cfg();
+        let m = Manifest::empty(1, cfg.service.name.clone());
+        let xml = capabilities_xml(&cfg, &m).unwrap();
+        assert!(!xml.contains("<GetFeatureInfo>"));
+        assert!(!xml.contains(r#"queryable="1""#));
+    }
+
+    #[test]
+    fn legend_advertised_in_request_block_and_per_layer_111() {
+        let cfg = minimal_cfg();
+        let m = Manifest::empty(1, cfg.service.name.clone());
+        let xml = capabilities_xml(&cfg, &m).unwrap();
+        assert!(xml.contains("<GetLegendGraphic>"));
+        assert!(xml.contains("<LegendURL"));
+        assert!(xml.contains("request=GetLegendGraphic"));
+        assert!(xml.contains("layer=a"));
+        // 1.1.1-specific: the LegendURL must round-trip the negotiated
+        // version, not the 1.3.0 default.
+        assert!(xml.contains("version=1.1.1"));
+    }
+
+    #[test]
+    fn advertises_only_canonical_srs_111() {
+        // mirror of v130's advertises_only_canonical_crs but pinned to the
+        // 1.1.1 <SRS> spelling; the reprojection allowlist includes
+        // EPSG:4326 yet we must only advertise the native crs.
+        let cfg = minimal_cfg();
+        let m = Manifest::empty(1, cfg.service.name.clone());
+        let xml = capabilities_xml(&cfg, &m).unwrap();
+        assert!(xml.contains("<SRS>EPSG:25832</SRS>"));
+        assert!(!xml.contains("<SRS>EPSG:4326</SRS>"));
+        assert!(!xml.contains(r#"SRS="EPSG:4326""#));
+        assert!(!xml.contains("<CRS>"));
+    }
+
+    #[test]
+    fn omits_contact_when_email_empty_111() {
+        let mut cfg = minimal_cfg();
+        cfg.service.contact_email = String::new();
+        let m = Manifest::empty(1, cfg.service.name.clone());
+        let xml = capabilities_xml(&cfg, &m).unwrap();
+        assert!(
+            !xml.contains("ContactInformation"),
+            "expected no contact block when email empty"
+        );
+    }
+
+    #[test]
+    fn advertises_configured_formats_111() {
+        let yaml = r#"
+service: { name: t, title: T, abstract: A, contact_email: "" }
+source: { type: postgis, dsn: "postgres://x", native_crs: EPSG:25832 }
+artifacts:
+  store: { type: fs, path: /tmp }
+  cache: { path: /tmp/c, max_size: 1GiB }
+scales:
+  bands: [{ name: hi, max_denom_exclusive: 25000 }]
+cells:
+  grid: regular
+  origin: [0, 0]
+  size_per_band: { hi: 1024m }
+interfaces:
+  wms:
+    enabled: true
+    formats: ["image/png", "image/jpeg", "image/webp"]
+reprojection:
+  allowlist: [EPSG:25832]
+layers:
+  - { name: a, title: A, type: polygon, sources: [{ from: t, geometry_column: g }] }
+"#;
+        let cfg: Config = serde_yaml_ng::from_str(yaml).unwrap();
+        let m = Manifest::empty(1, cfg.service.name.clone());
+        let xml = capabilities_xml(&cfg, &m).unwrap();
+        assert!(xml.contains("<Format>image/png</Format>"));
+        assert!(xml.contains("<Format>image/jpeg</Format>"));
+        assert!(xml.contains("<Format>image/webp</Format>"));
+        // 1.1.1 also advertises the wms_xml capabilities document format
+        // under <GetCapabilities>; assert it survives the configured-format
+        // override path.
+        assert!(xml.contains("application/vnd.ogc.wms_xml"));
     }
 }

@@ -62,17 +62,29 @@ mod tests {
     }
 
     #[test]
-    fn escapes_xml_special_chars() {
-        let xml = service_exception_report(WmsVersion::V130, Some("X"), "a & b <c>");
-        assert!(!xml.contains("a & b <c>"));
-        assert!(xml.contains("a &amp; b &lt;c&gt;"));
+    fn escapes_special_chars_per_version() {
+        // escaping must not depend on the negotiated version; assert both.
+        for version in [WmsVersion::V111, WmsVersion::V130] {
+            let xml = service_exception_report(version, Some("X"), "a & b <c>");
+            assert!(!xml.contains("a & b <c>"), "{}", version.as_str());
+            assert!(xml.contains("a &amp; b &lt;c&gt;"), "{}", version.as_str());
+        }
     }
 
     #[test]
-    fn root_version_matches_negotiated() {
-        let xml_130 = service_exception_report(WmsVersion::V130, None, "x");
-        let xml_111 = service_exception_report(WmsVersion::V111, None, "x");
-        assert!(xml_130.contains(r#"version="1.3.0""#));
-        assert!(xml_111.contains(r#"version="1.1.1""#));
+    fn version_attribute_and_namespace_per_version() {
+        // root carries the negotiated version and the ogc namespace
+        // unconditionally; the latter is required by the spec on both 1.1.1
+        // and 1.3.0 ServiceExceptionReport envelopes.
+        for version in [WmsVersion::V111, WmsVersion::V130] {
+            let xml = service_exception_report(version, None, "x");
+            let expected = format!(r#"version="{}""#, version.as_str());
+            assert!(xml.contains(&expected), "{}: {xml}", version.as_str());
+            assert!(
+                xml.contains(r#"xmlns="http://www.opengis.net/ogc""#),
+                "{}: {xml}",
+                version.as_str()
+            );
+        }
     }
 }

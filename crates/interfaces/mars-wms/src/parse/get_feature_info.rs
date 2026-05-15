@@ -75,6 +75,9 @@ mod tests {
         }
     }
 
+    // (version_str, crs_key, i_key, j_key)
+    const VERSION_AXIS: &[(&str, &str, &str, &str)] = &[("1.3.0", "crs", "i", "j"), ("1.1.1", "srs", "x", "y")];
+
     #[test]
     fn gfi_happy_path() {
         let q = "request=GetFeatureInfo&version=1.3.0&layers=a,b&styles=&crs=EPSG:25832&\
@@ -90,27 +93,41 @@ mod tests {
     }
 
     #[test]
-    fn gfi_query_layers_must_be_subset_of_layers() {
-        let q = "request=GetFeatureInfo&version=1.3.0&layers=a&styles=&crs=EPSG:25832&\
+    fn gfi_query_layers_invalid_per_version() {
+        for (version, crs_key, i_key, j_key) in VERSION_AXIS {
+            let q = format!(
+                "request=GetFeatureInfo&version={version}&layers=a&styles=&{crs_key}=EPSG:25832&\
                  bbox=0,0,100,100&width=10&height=10&format=image/png&\
-                 query_layers=z&info_format=text/plain&i=0&j=0";
-        let err = parse_request(q, &cfg()).unwrap_err();
-        assert!(matches!(
-            err,
-            WmsError::InvalidParam {
-                name: "query_layers",
-                ..
-            }
-        ));
+                 query_layers=z&info_format=text/plain&{i_key}=0&{j_key}=0"
+            );
+            let err = parse_request(&q, &cfg()).unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    WmsError::InvalidParam {
+                        name: "query_layers",
+                        ..
+                    }
+                ),
+                "{version}: {err:?}"
+            );
+        }
     }
 
     #[test]
-    fn gfi_pixel_out_of_viewport_rejected() {
-        let q = "request=GetFeatureInfo&version=1.3.0&layers=a&styles=&crs=EPSG:25832&\
+    fn gfi_pixel_out_of_viewport_per_version() {
+        for (version, crs_key, i_key, j_key) in VERSION_AXIS {
+            let q = format!(
+                "request=GetFeatureInfo&version={version}&layers=a&styles=&{crs_key}=EPSG:25832&\
                  bbox=0,0,100,100&width=10&height=10&format=image/png&\
-                 query_layers=a&info_format=text/plain&i=10&j=0";
-        let err = parse_request(q, &cfg()).unwrap_err();
-        assert!(matches!(err, WmsError::InvalidParam { name: "i|j", .. }));
+                 query_layers=a&info_format=text/plain&{i_key}=10&{j_key}=0"
+            );
+            let err = parse_request(&q, &cfg()).unwrap_err();
+            assert!(
+                matches!(err, WmsError::InvalidParam { name: "i|j", .. }),
+                "{version}: {err:?}"
+            );
+        }
     }
 
     #[test]
@@ -156,26 +173,35 @@ mod tests {
     }
 
     #[test]
-    fn gfi_111_accepts_xy_with_srs_and_east_north_bbox() {
-        // 1.1.1: SRS=, X/Y=, BBOX always east/north on the wire.
-        let q = "request=GetFeatureInfo&version=1.1.1&layers=a&styles=&srs=EPSG:25832&\
+    fn gfi_pixel_key_primary_per_version() {
+        // 1.3.0 expects I/J with CRS=; 1.1.1 expects X/Y with SRS=. Both
+        // round-trip through the same resolver and land on gfi.i / gfi.j.
+        for (version, crs_key, i_key, j_key) in VERSION_AXIS {
+            let q = format!(
+                "request=GetFeatureInfo&version={version}&layers=a&styles=&{crs_key}=EPSG:25832&\
                  bbox=0,0,100,100&width=10&height=10&format=image/png&\
-                 query_layers=a&info_format=text/plain&x=5&y=7";
-        let gfi = parse_get_feature_info(q, &cfg()).unwrap();
-        assert_eq!(gfi.i, 5);
-        assert_eq!(gfi.j, 7);
-        assert_eq!(gfi.plan.layers[0].as_str(), "a");
+                 query_layers=a&info_format=text/plain&{i_key}=5&{j_key}=7"
+            );
+            let gfi = parse_get_feature_info(&q, &cfg()).unwrap();
+            assert_eq!(gfi.i, 5, "{version}");
+            assert_eq!(gfi.j, 7, "{version}");
+            assert_eq!(gfi.plan.layers[0].as_str(), "a", "{version}");
+        }
     }
 
     #[test]
-    fn gfi_130_falls_back_to_xy_when_ij_missing() {
-        // permissive fallback: a 1.3.0 client that mistakenly sends X/Y
-        // still gets a useful answer rather than a Missing error.
-        let q = "request=GetFeatureInfo&version=1.3.0&layers=a&styles=&crs=EPSG:25832&\
+    fn gfi_pixel_key_fallback_per_version() {
+        // permissive fallback in both directions: a 1.3.0 client sending X/Y
+        // and a 1.1.1 client sending I/J both resolve rather than 400.
+        for (version, crs_key, fallback_i, fallback_j) in [("1.3.0", "crs", "x", "y"), ("1.1.1", "srs", "i", "j")] {
+            let q = format!(
+                "request=GetFeatureInfo&version={version}&layers=a&styles=&{crs_key}=EPSG:25832&\
                  bbox=0,0,100,100&width=10&height=10&format=image/png&\
-                 query_layers=a&info_format=text/plain&x=3&y=4";
-        let gfi = parse_get_feature_info(q, &cfg()).unwrap();
-        assert_eq!(gfi.i, 3);
-        assert_eq!(gfi.j, 4);
+                 query_layers=a&info_format=text/plain&{fallback_i}=3&{fallback_j}=4"
+            );
+            let gfi = parse_get_feature_info(&q, &cfg()).unwrap();
+            assert_eq!(gfi.i, 3, "{version}");
+            assert_eq!(gfi.j, 4, "{version}");
+        }
     }
 }
