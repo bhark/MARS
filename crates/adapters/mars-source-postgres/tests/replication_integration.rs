@@ -14,7 +14,7 @@
 
 use std::time::Duration;
 
-use mars_source::{ChangeEvent, ChangeFeed, SourceError};
+use mars_source::{BindingHealth, ChangeEvent, ChangeFeed, RebindReason, Source, SourceCollectionId};
 use mars_source_postgres::{CollectionTopology, PgConfig, PgSource, ReplicationTopology};
 use rand::distr::{Alphanumeric, SampleString};
 use testcontainers::{
@@ -205,40 +205,245 @@ async fn insert_update_delete_round_trip() {
 }
 
 #[tokio::test]
-async fn delete_without_full_identity_is_a_hard_error() {
+async fn bind_without_full_identity_degrades_binding_instead_of_killing_feed() {
     let (_c, dsn) = boot_postgis().await;
     let src = PgSource::connect(pg_cfg(&dsn)).await.unwrap();
-    // table without REPLICA IDENTITY FULL: DELETE will arrive with key-only old.
-    setup_schema(&src, &[], &["leaky"]).await;
+    // mix one table without REPLICA IDENTITY FULL with one that has it, to
+    // assert the failure is scoped per-binding: the healthy table keeps
+    // emitting normal events while the degraded one signals via Rebind.
+    setup_schema(&src, &["roads"], &["leaky"]).await;
 
-    let topology = topology_for(&[("leaky_c", "leaky")]);
+    let topology = topology_for(&[("leaky_c", "leaky"), ("roads_c", "roads")]);
     let src = PgSource::connect(pg_cfg(&dsn)).await.unwrap().with_topology(topology);
     let mut sub = src.subscribe().await.unwrap();
 
     let writer = PgSource::connect(pg_cfg(&dsn)).await.unwrap();
     let client = writer.pool().get().await.unwrap();
-    // separate batch_execute calls keep these in their own implicit
-    // transactions; otherwise the simple-query protocol bundles them as one.
+
+    // first dml on the degraded table: Relation arrives at the head of the
+    // xlog stream, preflight rejects it, the Insert that follows is
+    // dropped. batch carries just the Rebind PreflightFailed.
     client
         .batch_execute("INSERT INTO leaky VALUES (1, ST_SetSRID(ST_MakePoint(50, 50), 25832));")
         .await
         .unwrap();
-    client.batch_execute("DELETE FROM leaky WHERE gid = 1;").await.unwrap();
+    let b = next_batch_or_timeout(&mut sub).await.unwrap();
+    match b.events.as_slice() {
+        [
+            ChangeEvent::Rebind {
+                collection,
+                reason: RebindReason::PreflightFailed { reason },
+            },
+        ] => {
+            assert_eq!(collection.as_str(), "leaky_c");
+            assert!(reason.contains("REPLICA IDENTITY FULL"), "reason = {reason}");
+        }
+        other => panic!("expected single Rebind PreflightFailed, got {other:?}"),
+    }
 
-    // first batch is the INSERT (FULL not required for inserts).
+    // subsequent dml on the rejected table drops silently. the healthy
+    // sibling keeps emitting events, proving the subscription stayed up.
+    client.batch_execute("DELETE FROM leaky WHERE gid = 1;").await.unwrap();
+    client
+        .batch_execute("INSERT INTO roads VALUES (7, ST_SetSRID(ST_MakePoint(10, 10), 25832));")
+        .await
+        .unwrap();
+
+    // drain batches until we see the roads insert; the leaky delete may
+    // arrive as an empty batch in between.
+    let mut saw_roads_insert = false;
+    for _ in 0..3 {
+        let b = next_batch_or_timeout(&mut sub).await.unwrap();
+        for ev in &b.events {
+            match ev {
+                ChangeEvent::Insert { collection, feature_id, .. } if collection.as_str() == "roads_c" => {
+                    assert_eq!(*feature_id, 7);
+                    saw_roads_insert = true;
+                }
+                ChangeEvent::Rebind { .. } => panic!("unexpected re-emit of Rebind: {ev:?}"),
+                other => panic!("unexpected event: {other:?}"),
+            }
+        }
+        if saw_roads_insert {
+            break;
+        }
+    }
+    assert!(saw_roads_insert, "healthy sibling should keep emitting events");
+}
+
+#[tokio::test]
+async fn rebind_after_table_swap_emits_oid_changed() {
+    let (_c, dsn) = boot_postgis().await;
+    let src = PgSource::connect(pg_cfg(&dsn)).await.unwrap();
+    setup_schema(&src, &["roads"], &[]).await;
+
+    let topology = topology_for(&[("roads_c", "roads")]);
+    let src = PgSource::connect(pg_cfg(&dsn)).await.unwrap().with_topology(topology);
+    let mut sub = src.subscribe().await.unwrap();
+
+    let writer = PgSource::connect(pg_cfg(&dsn)).await.unwrap();
+    let client = writer.pool().get().await.unwrap();
+
+    // initial bind via first dml.
+    client
+        .batch_execute("INSERT INTO roads VALUES (1, ST_SetSRID(ST_MakePoint(50, 50), 25832));")
+        .await
+        .unwrap();
     let b = next_batch_or_timeout(&mut sub).await.unwrap();
     assert!(matches!(b.events.as_slice(), [ChangeEvent::Insert { .. }]));
 
-    // second batch should surface a Backend error citing REPLICA IDENTITY FULL.
-    let res = tokio::time::timeout(Duration::from_secs(15), sub.next_batch()).await;
-    let next = res.expect("timeout").expect("feed closed");
-    match next {
-        Err(SourceError::Backend { source, .. }) => {
-            let msg = source.to_string();
-            assert!(msg.contains("REPLICA IDENTITY FULL"), "msg = {msg}");
+    // operator-side swap-and-rename pipeline: drop the old table out of the
+    // publication, rebuild it, add the new one back in. fresh table carries
+    // REPLICA IDENTITY FULL so preflight passes.
+    client
+        .batch_execute(
+            "ALTER PUBLICATION mars_e2e_pub DROP TABLE roads;\
+             ALTER TABLE roads RENAME TO roads_old;\
+             CREATE TABLE roads (gid INT4 PRIMARY KEY, geom geometry(Point, 25832));\
+             ALTER TABLE roads REPLICA IDENTITY FULL;\
+             ALTER PUBLICATION mars_e2e_pub ADD TABLE roads;",
+        )
+        .await
+        .unwrap();
+    // first dml on the new oid triggers pgoutput to emit a Relation for it.
+    client
+        .batch_execute("INSERT INTO roads VALUES (2, ST_SetSRID(ST_MakePoint(100, 100), 25832));")
+        .await
+        .unwrap();
+
+    // drain batches: the rebind event lands in the same batch as the
+    // insert that triggered the new Relation message.
+    let mut saw_rebind = false;
+    let mut saw_new_insert = false;
+    for _ in 0..3 {
+        let b = next_batch_or_timeout(&mut sub).await.unwrap();
+        for ev in &b.events {
+            match ev {
+                ChangeEvent::Rebind {
+                    collection,
+                    reason: RebindReason::OidChanged { old_oid, new_oid },
+                } => {
+                    assert_eq!(collection.as_str(), "roads_c");
+                    assert_ne!(old_oid, new_oid, "rebind must carry distinct oids");
+                    saw_rebind = true;
+                }
+                ChangeEvent::Insert { collection, feature_id, .. } if collection.as_str() == "roads_c" => {
+                    assert_eq!(*feature_id, 2);
+                    saw_new_insert = true;
+                }
+                other => panic!("unexpected event: {other:?}"),
+            }
         }
-        other => panic!("expected Backend error, got {other:?}"),
+        if saw_rebind && saw_new_insert {
+            break;
+        }
     }
+    assert!(saw_rebind, "expected Rebind OidChanged");
+    assert!(saw_new_insert, "expected Insert against the new oid");
+}
+
+#[tokio::test]
+async fn rebind_to_table_without_full_identity_emits_preflight_failed() {
+    let (_c, dsn) = boot_postgis().await;
+    let src = PgSource::connect(pg_cfg(&dsn)).await.unwrap();
+    setup_schema(&src, &["roads"], &[]).await;
+
+    let topology = topology_for(&[("roads_c", "roads")]);
+    let src = PgSource::connect(pg_cfg(&dsn)).await.unwrap().with_topology(topology);
+    let mut sub = src.subscribe().await.unwrap();
+
+    let writer = PgSource::connect(pg_cfg(&dsn)).await.unwrap();
+    let client = writer.pool().get().await.unwrap();
+
+    // initial bind succeeds.
+    client
+        .batch_execute("INSERT INTO roads VALUES (1, ST_SetSRID(ST_MakePoint(50, 50), 25832));")
+        .await
+        .unwrap();
+    let _ = next_batch_or_timeout(&mut sub).await.unwrap();
+
+    // replacement table forgets REPLICA IDENTITY FULL; the rebind must
+    // refuse and the binding must degrade. subscription stays alive.
+    client
+        .batch_execute(
+            "ALTER PUBLICATION mars_e2e_pub DROP TABLE roads;\
+             ALTER TABLE roads RENAME TO roads_old;\
+             CREATE TABLE roads (gid INT4 PRIMARY KEY, geom geometry(Point, 25832));\
+             ALTER PUBLICATION mars_e2e_pub ADD TABLE roads;",
+        )
+        .await
+        .unwrap();
+    client
+        .batch_execute("INSERT INTO roads VALUES (2, ST_SetSRID(ST_MakePoint(100, 100), 25832));")
+        .await
+        .unwrap();
+
+    let mut saw_preflight_failed = false;
+    for _ in 0..3 {
+        let b = next_batch_or_timeout(&mut sub).await.unwrap();
+        for ev in &b.events {
+            match ev {
+                ChangeEvent::Rebind {
+                    collection,
+                    reason: RebindReason::PreflightFailed { reason },
+                } => {
+                    assert_eq!(collection.as_str(), "roads_c");
+                    assert!(reason.contains("REPLICA IDENTITY FULL"), "reason = {reason}");
+                    saw_preflight_failed = true;
+                }
+                ChangeEvent::Insert { .. } => panic!("rejected oid must not emit row events: {ev:?}"),
+                other => panic!("unexpected event: {other:?}"),
+            }
+        }
+        if saw_preflight_failed {
+            break;
+        }
+    }
+    assert!(saw_preflight_failed, "expected Rebind PreflightFailed");
+}
+
+#[tokio::test]
+async fn probe_binding_health_reports_unpublished_when_table_dropped() {
+    let (_c, dsn) = boot_postgis().await;
+    let src = PgSource::connect(pg_cfg(&dsn)).await.unwrap();
+    setup_schema(&src, &["roads", "buildings"], &[]).await;
+
+    let topology = topology_for(&[("roads_c", "roads"), ("buildings_c", "buildings")]);
+    let src = PgSource::connect(pg_cfg(&dsn)).await.unwrap().with_topology(topology);
+
+    // baseline: both healthy.
+    let report = src
+        .probe_binding_health(&[
+            SourceCollectionId::new("roads_c"),
+            SourceCollectionId::new("buildings_c"),
+        ])
+        .await
+        .unwrap();
+    assert_eq!(report.len(), 2);
+    assert!(report.iter().all(|h| matches!(h, BindingHealth::Healthy(_))));
+
+    // drop one out of the publication: it should now report Unpublished
+    // while the survivor stays Healthy.
+    let writer = PgSource::connect(pg_cfg(&dsn)).await.unwrap();
+    let client = writer.pool().get().await.unwrap();
+    client
+        .batch_execute("ALTER PUBLICATION mars_e2e_pub DROP TABLE buildings;")
+        .await
+        .unwrap();
+
+    let report = src
+        .probe_binding_health(&[
+            SourceCollectionId::new("roads_c"),
+            SourceCollectionId::new("buildings_c"),
+        ])
+        .await
+        .unwrap();
+    let roads = report.iter().find(|h| matches!(h, BindingHealth::Healthy(c) if c.as_str() == "roads_c"));
+    let buildings = report
+        .iter()
+        .find(|h| matches!(h, BindingHealth::Unpublished(c) if c.as_str() == "buildings_c"));
+    assert!(roads.is_some(), "roads_c should still be Healthy, got {report:?}");
+    assert!(buildings.is_some(), "buildings_c should be Unpublished, got {report:?}");
 }
 
 #[tokio::test]
