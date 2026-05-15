@@ -111,21 +111,21 @@ impl<'a> IncrementalCycle<'a> {
                 collection,
                 feature_id,
                 new_envelope,
-                old_envelope,
+                old_envelope: _,
             } => {
                 let binding_id = self.binding_id_for(&collection)?;
                 self.observe(&binding_id, feature_id);
                 self.mark_envelope(&binding_id, &new_envelope)?;
-                self.mark_old_side(&binding_id, feature_id, old_envelope.as_ref())?;
+                self.mark_old_side(&binding_id, feature_id)?;
             }
             ChangeEvent::Delete {
                 collection,
                 feature_id,
-                old_envelope,
+                old_envelope: _,
             } => {
                 let binding_id = self.binding_id_for(&collection)?;
                 self.observe(&binding_id, feature_id);
-                self.mark_old_side(&binding_id, feature_id, old_envelope.as_ref())?;
+                self.mark_old_side(&binding_id, feature_id)?;
             }
             ChangeEvent::Truncate { collection } => {
                 let binding_id = self.binding_id_for(&collection)?;
@@ -182,18 +182,14 @@ impl<'a> IncrementalCycle<'a> {
             .ok_or_else(|| IncrementalError::UnknownCollection(collection.as_str().to_string()))
     }
 
-    fn mark_old_side(
-        &mut self,
-        binding_id: &BindingId,
-        feature_id: u64,
-        old_envelope: Option<&GeometryEnvelope>,
-    ) -> Result<(), IncrementalError> {
-        if let Some(envelope) = old_envelope {
-            return self.mark_envelope(binding_id, envelope);
-        }
-        // sidecar is a multimap on user_id; a single change-feed event
-        // covers every part the row exploded into, so dirty every page
-        // that any of its sidecar entries touches.
+    fn mark_old_side(&mut self, binding_id: &BindingId, feature_id: u64) -> Result<(), IncrementalError> {
+        // sidecar is a multimap on feature_id; a row that exploded into
+        // N parts produced N entries in the prior snapshot, so dirty
+        // every page that any of its sidecar entries touches. when the
+        // feature has no sidecar coverage (e.g. inserted this cycle and
+        // not yet folded into a snapshot) we surface a non-fatal warning
+        // and move on; the new-side mark already covered the row's
+        // current pages.
         let keys: Vec<HilbertKey> = self
             .sidecars
             .get(binding_id)
@@ -384,8 +380,13 @@ mod tests {
             ),
         ]);
 
-        let sidecar_key = key_from_centroid(30.0, 30.0, Bbox::new(0.0, 0.0, 100.0, 100.0));
-        let mut sidecar_entries = vec![(77, sidecar_key)];
+        // sidecar carries the prior-snapshot page membership for each
+        // feature the cycle will revisit on its old side. roads fid 2/3
+        // last lived at (40,40); fid 77 last lived at (30,30).
+        let bbox = Bbox::new(0.0, 0.0, 100.0, 100.0);
+        let key_30 = key_from_centroid(30.0, 30.0, bbox);
+        let key_40 = key_from_centroid(40.0, 40.0, bbox);
+        let mut sidecar_entries = vec![(2, key_40), (3, key_40), (77, key_30)];
         let sidecar_bytes: Bytes = encode_sidecar(&mut sidecar_entries).unwrap();
         let sidecar = SidecarReader::open(&sidecar_bytes).unwrap();
         let sidecars = HashMap::from([(BindingId::try_new("roads").unwrap(), sidecar)]);
@@ -403,7 +404,7 @@ mod tests {
                 collection: "roads".into(),
                 feature_id: 2,
                 new_envelope: envelope(20.0, 20.0),
-                old_envelope: Some(envelope(40.0, 40.0)),
+                old_envelope: None,
             })
             .unwrap();
         cycle
@@ -426,7 +427,7 @@ mod tests {
             .ingest(ChangeEvent::Delete {
                 collection: "roads".into(),
                 feature_id: 3,
-                old_envelope: Some(envelope(40.0, 40.0)),
+                old_envelope: None,
             })
             .unwrap();
         cycle
