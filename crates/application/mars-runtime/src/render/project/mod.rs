@@ -10,6 +10,7 @@
 //! `ring_to_subpath`). adding a `GeomKind` variant breaks the build at
 //! the two match arms below and forces a new file alongside.
 
+mod geom_transform;
 mod linestring;
 mod multilinestring;
 mod multipoint;
@@ -74,13 +75,21 @@ fn project_geom(g: &GeomKind, xform: &mars_proj::Transformer) -> Result<GeomKind
 }
 
 pub(super) fn feature_to_drawop(g: &GeomKind, viewport: Bbox, w: u32, h: u32, style: Arc<Style>) -> Option<DrawOp> {
-    let subpaths: Vec<Subpath> = match g {
-        GeomKind::Point(c) => point::subpaths(*c, viewport, w, h, style.marker.as_ref()),
-        GeomKind::LineString(coords) => linestring::subpaths(coords, viewport, w, h),
-        GeomKind::Polygon(rings) => polygon::subpaths(rings, viewport, w, h),
-        GeomKind::MultiPoint(coords) => multipoint::subpaths(coords, viewport, w, h, style.marker.as_ref()),
-        GeomKind::MultiLineString(parts) => multilinestring::subpaths(parts, viewport, w, h),
-        GeomKind::MultiPolygon(parts) => multipolygon::subpaths(parts, viewport, w, h),
+    // geom_transform short-circuits the per-kind dispatch: we derive a
+    // synthetic point set from the input and route through multipoint::subpaths
+    // so the existing marker pipeline stamps each derived position.
+    let subpaths: Vec<Subpath> = if let Some(t) = style.geom_transform {
+        let pts = geom_transform::derived_points(g, t);
+        multipoint::subpaths(&pts, viewport, w, h, style.marker.as_ref())
+    } else {
+        match g {
+            GeomKind::Point(c) => point::subpaths(*c, viewport, w, h, style.marker.as_ref()),
+            GeomKind::LineString(coords) => linestring::subpaths(coords, viewport, w, h),
+            GeomKind::Polygon(rings) => polygon::subpaths(rings, viewport, w, h),
+            GeomKind::MultiPoint(coords) => multipoint::subpaths(coords, viewport, w, h, style.marker.as_ref()),
+            GeomKind::MultiLineString(parts) => multilinestring::subpaths(parts, viewport, w, h),
+            GeomKind::MultiPolygon(parts) => multipolygon::subpaths(parts, viewport, w, h),
+        }
     };
     if subpaths.is_empty() {
         return None;
@@ -145,5 +154,78 @@ mod tests {
     fn world_to_pixel_clamps_degenerate_viewport() {
         let v = Bbox::new(0.0, 0.0, 0.0, 0.0);
         assert_eq!(world_to_pixel((1.0, 1.0), v, 10, 10), (0.0, 0.0));
+    }
+
+    use mars_style::{Colour, FillPaint, GeomTransform, MarkerSymbol};
+
+    fn marker_style(t: GeomTransform) -> Arc<Style> {
+        Arc::new(Style {
+            fill: Some(FillPaint::Solid(Colour::rgba(0, 0, 0, 0xff))),
+            marker: Some(MarkerSymbol::Square { size: 4.0 }),
+            geom_transform: Some(t),
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn geom_transform_vertices_on_linestring_stamps_marker_per_vertex() {
+        let g = GeomKind::LineString(vec![(0.0, 0.0), (5.0, 5.0), (10.0, 10.0)]);
+        let v = Bbox::new(0.0, 0.0, 10.0, 10.0);
+        let op = feature_to_drawop(&g, v, 100, 100, marker_style(GeomTransform::Vertices)).unwrap();
+        let DrawOp::Path { path, .. } = op else {
+            panic!("expected path");
+        };
+        // one closed square subpath per vertex.
+        assert_eq!(path.subpaths.len(), 3);
+        for sp in &path.subpaths {
+            assert!(sp.closed);
+        }
+    }
+
+    #[test]
+    fn geom_transform_start_on_linestring_yields_one_marker() {
+        let g = GeomKind::LineString(vec![(0.0, 0.0), (5.0, 5.0), (10.0, 10.0)]);
+        let v = Bbox::new(0.0, 0.0, 10.0, 10.0);
+        let op = feature_to_drawop(&g, v, 100, 100, marker_style(GeomTransform::Start)).unwrap();
+        let DrawOp::Path { path, .. } = op else {
+            panic!("expected path");
+        };
+        assert_eq!(path.subpaths.len(), 1);
+    }
+
+    #[test]
+    fn geom_transform_end_on_linestring_yields_one_marker() {
+        let g = GeomKind::LineString(vec![(0.0, 0.0), (5.0, 5.0), (10.0, 10.0)]);
+        let v = Bbox::new(0.0, 0.0, 10.0, 10.0);
+        let op = feature_to_drawop(&g, v, 100, 100, marker_style(GeomTransform::End)).unwrap();
+        let DrawOp::Path { path, .. } = op else {
+            panic!("expected path");
+        };
+        assert_eq!(path.subpaths.len(), 1);
+    }
+
+    #[test]
+    fn geom_transform_vertices_on_polygon_flattens_rings() {
+        let g = GeomKind::Polygon(vec![vec![
+            (0.0, 0.0),
+            (10.0, 0.0),
+            (10.0, 10.0),
+            (0.0, 10.0),
+            (0.0, 0.0),
+        ]]);
+        let v = Bbox::new(0.0, 0.0, 10.0, 10.0);
+        let op = feature_to_drawop(&g, v, 100, 100, marker_style(GeomTransform::Vertices)).unwrap();
+        let DrawOp::Path { path, .. } = op else {
+            panic!("expected path");
+        };
+        // 5 ring coords -> 5 marker subpaths.
+        assert_eq!(path.subpaths.len(), 5);
+    }
+
+    #[test]
+    fn geom_transform_returns_none_on_empty_geometry() {
+        let g = GeomKind::LineString(vec![]);
+        let v = Bbox::new(0.0, 0.0, 10.0, 10.0);
+        assert!(feature_to_drawop(&g, v, 100, 100, marker_style(GeomTransform::Start)).is_none());
     }
 }
