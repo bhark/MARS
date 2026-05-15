@@ -40,6 +40,7 @@ pub(crate) async fn run(
         &ctx.mem_governor,
         &ctx.disk_governor,
         ctx.failure_policy,
+        ctx.knobs.binding_parallelism,
     )
     .await?;
     metrics.observe_compiler_rebuild_duration(started.elapsed());

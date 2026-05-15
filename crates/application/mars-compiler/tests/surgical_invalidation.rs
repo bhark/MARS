@@ -389,6 +389,7 @@ async fn surgical_invalidation_rebuilds_only_dirty_pages() {
         &mars_compiler::memory_governor::MemoryGovernor::new(u64::MAX),
         &mars_compiler::disk_governor::DiskGovernor::new(u64::MAX),
         mars_config::BindingFailurePolicy::FailCycle,
+        1,
     )
     .await
     .unwrap();

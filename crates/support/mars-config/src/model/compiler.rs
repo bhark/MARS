@@ -33,11 +33,16 @@ pub struct Compiler {
     /// [`CompilerError::BootstrapPlanTooLarge`]: https://docs.rs/mars-compiler
     #[serde(default = "default_compile_plan_budget")]
     pub compile_plan_budget_bytes: String,
-    /// Number of bindings the snapshot pipeline compiles concurrently.
-    /// Each in-flight binding holds one `CompileSession` (one pooled
-    /// connection in `REPEATABLE READ`), so `source.pool.max_size` must
-    /// allow at least this many concurrent checkouts plus headroom for
-    /// sidecar / object-store I/O.
+    /// Number of bindings compiled concurrently. Governs both the snapshot
+    /// pipeline (whole-binding compile) and the incremental cycle's
+    /// per-binding rebuild dispatch (truncate-class and incremental
+    /// rebuilds inside one cycle). Each in-flight binding holds one
+    /// pooled source connection (`REPEATABLE READ` for snapshot's
+    /// `CompileSession`, a short-lived checkout for incremental
+    /// `stream_rows_by_id`), so `source.pool.max_size` must allow at
+    /// least this many concurrent checkouts plus headroom for sidecar /
+    /// object-store I/O. Snapshot and cycle never co-execute, so one
+    /// budget covers both.
     #[serde(default = "default_compile_binding_parallelism")]
     pub compile_binding_parallelism: usize,
     /// Hard ceiling on pass-2 RAM allocation, summed across the whole

@@ -522,6 +522,7 @@ async fn run_one_rebuild_cycle(
         &mars_compiler::memory_governor::MemoryGovernor::new(u64::MAX),
         &mars_compiler::disk_governor::DiskGovernor::new(u64::MAX),
         mars_config::BindingFailurePolicy::FailCycle,
+        1,
     )
     .await?;
     Ok(merge(prior, &outcome, prior.version + 1))

@@ -21,10 +21,11 @@ use crate::memory_governor::MemoryGovernor;
 use crate::plan::BootstrapPlan;
 use crate::stages::shared::sidecars::OwnedSidecars;
 
-/// shared compile knobs read off config. snapshot uses every field;
-/// cycle uses every field except `binding_parallelism` (cycle does not
-/// run the unified compile pipeline directly; only the truncate fallback
-/// inside the rebuild stage does).
+/// shared compile knobs read off config. snapshot and cycle both honour
+/// every field: `binding_parallelism` bounds whole-binding compile
+/// concurrency in the snapshot pipeline and per-binding rebuild
+/// concurrency inside the cycle's rebuild stage (truncate and
+/// incremental alike).
 pub(crate) struct CompileKnobs {
     pub(crate) working_set_bytes: u64,
     pub(crate) plan_budget_bytes: u64,

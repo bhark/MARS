@@ -226,12 +226,21 @@ pub(crate) fn drain_pruned_through<'a>(pruned: &'a [KeyedRow], idx: &mut usize, 
 /// `plan_budget_bytes` caps the pass-1 page-planner allocation when the
 /// truncate path runs the unified compile pipeline against a binding.
 ///
+/// `binding_parallelism` bounds the number of bindings rebuilt
+/// concurrently within this pass. `1` reproduces the prior sequential
+/// behaviour; higher values turn thundering-herd events
+/// (schema flips, large reconciliations) into max-of-binding wall-clock
+/// instead of sum-of-bindings. Memory and disk governors admit across
+/// concurrent bindings, so the budgets stay enforced.
+///
 /// Each binding's rebuild writes into a local [`RebuildOutcome`] which is
 /// only merged into the shared outcome on success. Under
 /// [`BindingFailurePolicy::Isolate`] a per-binding error is logged,
 /// metered, and discarded so the cycle still publishes the other
 /// bindings' progress; under [`BindingFailurePolicy::FailCycle`] the
-/// first error aborts the pass.
+/// first error aborts the pass (under concurrent execution, "first" is
+/// whichever in-flight rebuild errors first - non-deterministic across
+/// runs).
 #[allow(clippy::too_many_arguments)]
 pub async fn rebuild_pages(
     deps: &Deps,
@@ -247,12 +256,21 @@ pub async fn rebuild_pages(
     governor: &MemoryGovernor,
     disk_governor: &DiskGovernor,
     failure_policy: mars_config::BindingFailurePolicy,
+    binding_parallelism: usize,
 ) -> Result<RebuildOutcome, CompilerError> {
+    use mars_observability::binding_rebuild_kind;
+
+    let DirtyPages {
+        per_binding,
+        warnings: _,
+        failed,
+    } = dirty;
+
     let mut outcome = RebuildOutcome::default();
     // bindings the source flagged as degraded this cycle: skip the
     // rebuild dispatch so prior pages keep being served, and surface a
     // bounded healthcheck metric so operators see the gap.
-    for (binding_id, reason) in &dirty.failed {
+    for (binding_id, reason) in &failed {
         deps.metrics.inc_compiler_binding_rebuild_failure(
             binding_id.as_str(),
             mars_observability::binding_rebuild_failure_reason::BINDING_UNHEALTHY,
@@ -263,50 +281,65 @@ pub async fn rebuild_pages(
             "binding degraded by source; skipping rebuild, prior pages preserved"
         );
     }
-    for (binding_id, binding_dirty) in dirty.per_binding {
-        if dirty.failed.contains_key(&binding_id) {
-            continue;
+
+    let parallelism = binding_parallelism.max(1);
+    let mut work_iter = per_binding
+        .into_iter()
+        .filter(|(binding_id, _)| !failed.contains_key(binding_id));
+    let mut pending = futures_util::stream::FuturesUnordered::new();
+    loop {
+        while pending.len() < parallelism
+            && let Some((binding_id, binding_dirty)) = work_iter.next()
+        {
+            pending.push(async move {
+                let started = std::time::Instant::now();
+                let mut local = RebuildOutcome::default();
+                let (kind, res) = if binding_dirty.truncated {
+                    let res = rebuild_binding_truncate(
+                        deps,
+                        plan,
+                        prior,
+                        &binding_id,
+                        working_set_bytes,
+                        plan_budget_bytes,
+                        in_flight_budget_bytes,
+                        spill_dir,
+                        spill_open_file_limit,
+                        governor,
+                        disk_governor,
+                        &mut local,
+                    )
+                    .await;
+                    (binding_rebuild_kind::TRUNCATE, res)
+                } else {
+                    let sidecar_warn = plan
+                        .bindings
+                        .iter()
+                        .find(|b| b.binding_id == binding_id)
+                        .map(|b| b.sidecar_size_warn_bytes)
+                        .unwrap_or(u64::MAX);
+                    let res = rebuild_binding_incremental(
+                        deps,
+                        plan,
+                        prior,
+                        sidecars.get(&binding_id),
+                        &binding_id,
+                        &binding_dirty,
+                        working_set_bytes,
+                        sidecar_warn,
+                        &mut local,
+                    )
+                    .await;
+                    (binding_rebuild_kind::INCREMENTAL, res)
+                };
+                deps.metrics
+                    .observe_compiler_binding_rebuild_duration(kind, started.elapsed());
+                (binding_id, local, res)
+            });
         }
-        let mut local = RebuildOutcome::default();
-        let res = if binding_dirty.truncated {
-            rebuild_binding_truncate(
-                deps,
-                plan,
-                prior,
-                &binding_id,
-                working_set_bytes,
-                plan_budget_bytes,
-                in_flight_budget_bytes,
-                spill_dir,
-                spill_open_file_limit,
-                governor,
-                disk_governor,
-                &mut local,
-            )
-            .await
-        } else {
-            let sidecar_warn = plan
-                .bindings
-                .iter()
-                .find(|b| b.binding_id == binding_id)
-                .map(|b| b.sidecar_size_warn_bytes)
-                .unwrap_or(u64::MAX);
-            rebuild_binding_incremental(
-                deps,
-                plan,
-                prior,
-                sidecars.get(&binding_id),
-                &binding_id,
-                &binding_dirty,
-                working_set_bytes,
-                sidecar_warn,
-                &mut local,
-            )
-            .await
-        };
-        match res {
-            Ok(()) => outcome.absorb(local),
-            Err(err) => match failure_policy {
+        match pending.next().await {
+            Some((_, local, Ok(()))) => outcome.absorb(local),
+            Some((binding_id, _local, Err(err))) => match failure_policy {
                 mars_config::BindingFailurePolicy::FailCycle => return Err(err),
                 mars_config::BindingFailurePolicy::Isolate => {
                     let reason = classify_compiler_error(&err);
@@ -321,6 +354,7 @@ pub async fn rebuild_pages(
                     // drop `local`: its partial writes never reach the outer outcome.
                 }
             },
+            None => break,
         }
     }
     Ok(outcome)
