@@ -2,6 +2,7 @@ use mars_style::{LabelStyle, LabelSurvival, Placement, Style};
 use mars_types::{Bbox, CrsCode, LayerId, SourceCollectionId};
 use serde::{Deserialize, Serialize};
 
+use super::service::{AuthorityRef, IdentifierRef};
 use crate::ConfigError;
 use crate::units;
 
@@ -49,6 +50,241 @@ pub struct Layer {
     /// otherwise. Mutually exclusive with `sources`, `classes`, and `label`.
     #[serde(default)]
     pub raster: Option<RasterLayerSpec>,
+
+    /// Per-layer keywords surfaced in WMS `<KeywordList>`. Empty = element
+    /// omitted.
+    #[serde(default)]
+    pub keywords: Vec<String>,
+    /// `wms_metadataurl_*` entries surfaced as `<MetadataURL>` blocks on the
+    /// layer. Each entry pairs a content type with a format and href.
+    #[serde(default)]
+    pub metadata_urls: Vec<MetadataUrl>,
+    /// Per-layer `<AuthorityURL>` entries. Override the service-level set on a
+    /// per-layer basis; an empty list keeps the service-scoped behavior in
+    /// WMS 1.3.0 (root-layer inheritance).
+    #[serde(default)]
+    pub authorities: Vec<AuthorityRef>,
+    /// Per-layer `<Identifier>` entries (1.3.0 inherits these from the root
+    /// layer by default; per-layer entries override).
+    #[serde(default)]
+    pub identifiers: Vec<IdentifierRef>,
+    /// MapServer `wms_opaque`. When true the layer is advertised as
+    /// non-transparent (clients composite it as a base layer).
+    #[serde(default)]
+    pub opaque: bool,
+    /// Per-layer advertised CRS list. None = inherit `service.advertised_crs`
+    /// (in 1.3.0 layers inherit root-layer CRSes when this is empty).
+    #[serde(default)]
+    pub advertised_crs: Option<Vec<String>>,
+    /// MapServer `wms_attribution_*` block surfaced as `<Attribution>` on the
+    /// layer.
+    #[serde(default)]
+    pub attribution: Option<Attribution>,
+    /// MapServer `ows_include_items`: which attributes flow into
+    /// GetFeatureInfo (and future WFS) output. Default = `All`.
+    #[serde(default)]
+    pub include_items: IncludeItems,
+    /// Per-operation allow/deny gating. An explicit `Some(false)` for an
+    /// operation denies it for this layer; `None` falls back to default-allow
+    /// (with the exception of `GetFeatureInfo`, where `enable_get_feature_info`
+    /// remains the legacy opt-in default for backward compatibility).
+    #[serde(default)]
+    pub request_gating: RequestGating,
+}
+
+impl Layer {
+    /// Resolved gating decision for `op`. `GetFeatureInfo` keeps the legacy
+    /// opt-in default via [`Self::enable_get_feature_info`] when no explicit
+    /// override is present; all other ops default-allow.
+    #[must_use]
+    pub fn permits_wms_op(&self, op: WmsOperation) -> bool {
+        match op {
+            WmsOperation::GetFeatureInfo => self.request_gating.allowed(op).unwrap_or(self.enable_get_feature_info),
+            other => self.request_gating.allowed(other).unwrap_or(true),
+        }
+    }
+}
+
+/// `<MetadataURL>` entry for a layer. `type_` carries the content-spec
+/// (e.g., `"ISO19115:2003"`, `"FGDC:1998"`), `format` the MIME type of the
+/// linked document, and `href` the URL. Mirrors MapServer
+/// `wms_metadataurl_type` / `_format` / `_href` triples.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MetadataUrl {
+    #[serde(rename = "type")]
+    pub type_: String,
+    pub format: String,
+    pub href: String,
+}
+
+/// `<Attribution>` block for a layer. All fields optional.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Attribution {
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub online_resource: Option<String>,
+    #[serde(default)]
+    pub logo: Option<LogoUrl>,
+}
+
+/// `<LogoURL format="..." width="..." height="..."><OnlineResource ../></LogoURL>`
+/// surfaced from MapServer `wms_attribution_logourl_*` keys.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LogoUrl {
+    pub format: String,
+    pub href: String,
+    #[serde(default)]
+    pub width: Option<u32>,
+    #[serde(default)]
+    pub height: Option<u32>,
+}
+
+/// `ows_include_items` policy controlling which attributes flow into
+/// GetFeatureInfo (and future WFS) output. Default is `All`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IncludeItems {
+    #[serde(default)]
+    pub mode: IncludeMode,
+    /// Attribute names; only meaningful when `mode == Explicit`.
+    #[serde(default)]
+    pub names: Vec<String>,
+}
+
+impl Default for IncludeItems {
+    fn default() -> Self {
+        Self {
+            mode: IncludeMode::All,
+            names: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum IncludeMode {
+    #[default]
+    All,
+    None,
+    Explicit,
+}
+
+/// WMS operations subject to per-layer gating. Wire form matches the
+/// MapServer `wms_enable_request` token names (case-insensitive on parse).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WmsOperation {
+    GetCapabilities,
+    GetMap,
+    GetFeatureInfo,
+    GetLegendGraphic,
+    GetStyles,
+    DescribeLayer,
+}
+
+/// Per-operation allow/deny set. `Some(true)` allows, `Some(false)` denies,
+/// `None` falls through to the layer's default-allow (or
+/// `enable_get_feature_info` for GFI). Wire form: a single block with named
+/// boolean keys per operation.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RequestGating {
+    #[serde(default)]
+    pub get_capabilities: Option<bool>,
+    #[serde(default)]
+    pub get_map: Option<bool>,
+    #[serde(default)]
+    pub get_feature_info: Option<bool>,
+    #[serde(default)]
+    pub get_legend_graphic: Option<bool>,
+    #[serde(default)]
+    pub get_styles: Option<bool>,
+    #[serde(default)]
+    pub describe_layer: Option<bool>,
+}
+
+impl RequestGating {
+    /// Returns the explicit gating decision for `op`. `None` means no override
+    /// was set in config - callers fall through to the operation's default.
+    #[must_use]
+    pub fn allowed(&self, op: WmsOperation) -> Option<bool> {
+        match op {
+            WmsOperation::GetCapabilities => self.get_capabilities,
+            WmsOperation::GetMap => self.get_map,
+            WmsOperation::GetFeatureInfo => self.get_feature_info,
+            WmsOperation::GetLegendGraphic => self.get_legend_graphic,
+            WmsOperation::GetStyles => self.get_styles,
+            WmsOperation::DescribeLayer => self.describe_layer,
+        }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    fn bare_layer() -> Layer {
+        Layer {
+            name: LayerId::new("l"),
+            title: String::new(),
+            abstract_: String::new(),
+            kind: "polygon".into(),
+            scale: None,
+            group: None,
+            enable_get_feature_info: false,
+            bbox: None,
+            sources: Vec::new(),
+            classes: Vec::new(),
+            label: None,
+            label_survival: mars_style::LabelSurvival::Independent,
+            raster: None,
+            keywords: Vec::new(),
+            metadata_urls: Vec::new(),
+            authorities: Vec::new(),
+            identifiers: Vec::new(),
+            opaque: false,
+            advertised_crs: None,
+            attribution: None,
+            include_items: IncludeItems::default(),
+            request_gating: RequestGating::default(),
+        }
+    }
+
+    #[test]
+    fn default_gating_allows_getmap_and_blocks_gfi() {
+        let l = bare_layer();
+        // default-allow for GetMap, GetCapabilities, GetLegendGraphic etc.
+        assert!(l.permits_wms_op(WmsOperation::GetMap));
+        assert!(l.permits_wms_op(WmsOperation::GetCapabilities));
+        assert!(l.permits_wms_op(WmsOperation::GetLegendGraphic));
+        // GFI keeps the legacy opt-in default (false) when no override is set
+        assert!(!l.permits_wms_op(WmsOperation::GetFeatureInfo));
+    }
+
+    #[test]
+    fn enable_gfi_flips_default_gfi_gating() {
+        let mut l = bare_layer();
+        l.enable_get_feature_info = true;
+        assert!(l.permits_wms_op(WmsOperation::GetFeatureInfo));
+    }
+
+    #[test]
+    fn explicit_gating_overrides_defaults() {
+        let mut l = bare_layer();
+        // override GFI=true even though enable_get_feature_info=false
+        l.request_gating.get_feature_info = Some(true);
+        assert!(l.permits_wms_op(WmsOperation::GetFeatureInfo));
+        // explicit deny for GetMap
+        l.request_gating.get_map = Some(false);
+        assert!(!l.permits_wms_op(WmsOperation::GetMap));
+    }
+
+    #[test]
+    fn deny_get_capabilities_is_explicit() {
+        let mut l = bare_layer();
+        l.request_gating.get_capabilities = Some(false);
+        assert!(!l.permits_wms_op(WmsOperation::GetCapabilities));
+    }
 }
 
 /// Raster layer body. Carries the tile source binding plus per-layer

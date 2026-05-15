@@ -673,6 +673,15 @@ mod tests {
             label: None,
             label_survival: mars_config::LabelSurvival::Independent,
             raster: None,
+            keywords: Vec::new(),
+            metadata_urls: Vec::new(),
+            authorities: Vec::new(),
+            identifiers: Vec::new(),
+            opaque: false,
+            advertised_crs: None,
+            attribution: None,
+            include_items: Default::default(),
+            request_gating: Default::default(),
         }
     }
 
@@ -814,6 +823,15 @@ mod tests {
             label: None,
             label_survival: mars_config::LabelSurvival::Independent,
             raster: None,
+            keywords: Vec::new(),
+            metadata_urls: Vec::new(),
+            authorities: Vec::new(),
+            identifiers: Vec::new(),
+            opaque: false,
+            advertised_crs: None,
+            attribution: None,
+            include_items: Default::default(),
+            request_gating: Default::default(),
         };
         let cfg = config_with(vec![l]);
         let plan = build_bootstrap_plan(&cfg).unwrap();
@@ -1097,6 +1115,15 @@ mod tests {
             label: Some(inline),
             label_survival: mars_config::LabelSurvival::Independent,
             raster: None,
+            keywords: Vec::new(),
+            metadata_urls: Vec::new(),
+            authorities: Vec::new(),
+            identifiers: Vec::new(),
+            opaque: false,
+            advertised_crs: None,
+            attribution: None,
+            include_items: Default::default(),
+            request_gating: Default::default(),
         };
         let cfg = config_with(vec![l]);
         let plan = build_bootstrap_plan(&cfg).unwrap();

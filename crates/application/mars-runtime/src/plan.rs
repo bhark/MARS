@@ -260,6 +260,15 @@ mod tests {
             label: None,
             label_survival: LabelSurvival::default(),
             raster: None,
+            keywords: Vec::new(),
+            metadata_urls: Vec::new(),
+            authorities: Vec::new(),
+            identifiers: Vec::new(),
+            opaque: false,
+            advertised_crs: None,
+            attribution: None,
+            include_items: Default::default(),
+            request_gating: Default::default(),
         }
     }
 
