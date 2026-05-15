@@ -57,9 +57,11 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
 
 FROM gcr.io/distroless/cc-debian12:nonroot
 
-# proj-sys links sqlite dynamically; distroless/cc doesn't ship it
-COPY --from=builder /usr/lib/x86_64-linux-gnu/libsqlite3.so.0 \
-                    /usr/lib/x86_64-linux-gnu/libsqlite3.so.0
+# proj-sys links sqlite dynamically; distroless/cc doesn't ship it.
+# wildcard so the COPY resolves under both x86_64-linux-gnu and
+# aarch64-linux-gnu when buildx builds multi-arch.
+COPY --from=builder /usr/lib/*-linux-gnu/libsqlite3.so.0 \
+                    /usr/lib/
 # Final stage uses a single fixed entrypoint path so ENTRYPOINT (JSON exec
 # form, no shell) does not need to resolve a build-arg at runtime. The
 # binary inside is whichever `-p ${BIN}` was built above.
