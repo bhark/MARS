@@ -9,10 +9,6 @@ metadata:
   name: example-fs
   namespace: maps
 spec:
-  image:
-    repository: ghcr.io/bhark/mars
-    tag: v0.1.0
-
   compiler:
     storage:
       cacheSize: 2Gi

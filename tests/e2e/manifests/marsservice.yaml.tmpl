@@ -6,10 +6,6 @@ kind: MarsService
 metadata:
   name: mars-e2e
 spec:
-  image:
-    repository: {{IMAGE_REPOSITORY}}
-    tag: {{IMAGE_TAG}}
-    pullPolicy: Never
   compiler:
     resources:
       requests: { cpu: "100m", memory: "256Mi" }

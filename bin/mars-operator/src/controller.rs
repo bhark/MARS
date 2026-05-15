@@ -47,10 +47,17 @@ pub(crate) async fn run(cli: Cli) -> Result<()> {
         None
     };
 
+    // operator vX.Y.Z always spawns mars vX.Y.Z. CARGO_PKG_VERSION is baked
+    // at compile time; under the tag-driven release flow CI patches the
+    // workspace version to the tag before build.
+    let runtime_image = format!("{}:{}", cli.runtime_image_repository, env!("CARGO_PKG_VERSION"));
+    info!(image = %runtime_image, "runtime/compiler image");
+
     let ctx = Arc::new(Ctx {
         client: client.clone(),
         field_manager: cli.field_manager.clone(),
         metrics: metrics_svc,
+        runtime_image,
     });
 
     let crs: Api<MarsService> = Api::all(client.clone());

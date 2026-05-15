@@ -1,10 +1,16 @@
 # Helm values for the mars-operator chart in kind. images are loaded via
-# `kind load docker-image`, hence pullPolicy: Never. single replica, no
-# leader election needed for a single-tenant test cluster.
+# `kind load docker-image` under tags matching Chart.AppVersion (the workspace
+# version, post run-e2e.sh's set-version step). Non-:latest tags resolve to
+# the local image under the default IfNotPresent policy.
 image:
   repository: localhost/mars-operator
-  tag: e2e
-  pullPolicy: Never
+  # tag intentionally empty: defers to Chart.AppVersion, which run-e2e.sh
+  # sets to the workspace version before `helm install`.
+  tag: ""
+
+# Operator constructs runtime/compiler image refs as `${marsImage.repository}:${Chart.AppVersion}`.
+marsImage:
+  repository: localhost/mars
 
 replicaCount: 1
 

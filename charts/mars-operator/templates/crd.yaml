@@ -186,19 +186,6 @@ spec:
                   schema; parsed and validated server-side at reconcile.
                 type: object
                 x-kubernetes-preserve-unknown-fields: true
-              image:
-                properties:
-                  pullPolicy:
-                    default: IfNotPresent
-                    type: string
-                  repository:
-                    type: string
-                  tag:
-                    type: string
-                required:
-                - repository
-                - tag
-                type: object
               runtime:
                 properties:
                   cache:
@@ -336,7 +323,6 @@ spec:
             required:
             - compiler
             - config
-            - image
             - runtime
             type: object
           status:

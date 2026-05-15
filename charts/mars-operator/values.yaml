@@ -6,6 +6,13 @@ image:
   tag: ""
   pullPolicy: IfNotPresent
 
+# Repository for the runtime/compiler pods the operator spawns. The tag is
+# always the operator's own version (Chart.appVersion); operator vX.Y.Z
+# always runs mars vX.Y.Z. Override only for air-gapped or mirrored
+# registries.
+marsImage:
+  repository: ghcr.io/bhark/mars
+
 # imagePullSecrets are merged into the operator's serviceAccount.
 imagePullSecrets: []
 

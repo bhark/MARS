@@ -5,9 +5,12 @@
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, OwnerReference};
 
 use crate::crd::{
-    CompilerSpec, CompilerStorageSpec, ImageSpec, MarsService, MarsServiceSpec, RuntimeCacheSpec, RuntimeServiceSpec,
-    RuntimeSpec,
+    CompilerSpec, CompilerStorageSpec, MarsService, MarsServiceSpec, RuntimeCacheSpec, RuntimeServiceSpec, RuntimeSpec,
 };
+
+/// `repo:tag` passed to child builders in tests; production builds it once
+/// from CLI + CARGO_PKG_VERSION at startup, so tests just need a stable string.
+pub(crate) const TEST_IMAGE: &str = "ghcr.io/example/mars:0.0.0-test";
 
 pub(crate) fn owner_ref() -> OwnerReference {
     OwnerReference {
@@ -28,11 +31,6 @@ pub(crate) fn cr(name: &str, namespace: &str) -> MarsService {
             ..Default::default()
         },
         spec: MarsServiceSpec {
-            image: ImageSpec {
-                repository: "ghcr.io/example/mars".into(),
-                tag: "v0.0.1".into(),
-                pull_policy: "IfNotPresent".into(),
-            },
             compiler: CompilerSpec {
                 resources: None,
                 storage: CompilerStorageSpec {

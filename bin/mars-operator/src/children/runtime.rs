@@ -27,6 +27,7 @@ pub(crate) fn build(
     cr: &MarsService,
     config_checksum: &str,
     fs_store: Option<&ArtifactStoreSpec>,
+    image: &str,
     owner_ref: OwnerReference,
 ) -> Result<Deployment> {
     let svc = cr
@@ -132,8 +133,7 @@ pub(crate) fn build(
 
     let container = Container {
         name: "runtime".into(),
-        image: Some(format!("{}:{}", cr.spec.image.repository, cr.spec.image.tag)),
-        image_pull_policy: Some(cr.spec.image.pull_policy.clone()),
+        image: Some(image.to_string()),
         args: Some(vec![
             "--mode".into(),
             "runtime".into(),
@@ -203,7 +203,7 @@ mod tests {
     #[test]
     fn build_sets_replicas_and_selector() {
         let cr = test_support::cr("demo", "svc-ns");
-        let dep = build(&cr, "abc123", None, test_support::owner_ref()).unwrap();
+        let dep = build(&cr, "abc123", None, test_support::TEST_IMAGE, test_support::owner_ref()).unwrap();
         let spec = dep.spec.unwrap();
         assert_eq!(spec.replicas, Some(2));
         let match_labels = spec.selector.match_labels.unwrap();
@@ -222,7 +222,7 @@ mod tests {
     #[test]
     fn build_propagates_config_checksum_to_pod_template_annotation() {
         let cr = test_support::cr("demo", "svc-ns");
-        let dep = build(&cr, "deadbeef", None, test_support::owner_ref()).unwrap();
+        let dep = build(&cr, "deadbeef", None, test_support::TEST_IMAGE, test_support::owner_ref()).unwrap();
         let template = dep.spec.unwrap().template;
         let annotations = template.metadata.unwrap().annotations.unwrap();
         assert_eq!(

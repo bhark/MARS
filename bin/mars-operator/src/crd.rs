@@ -26,8 +26,6 @@ use serde::{Deserialize, Serialize};
 )]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct MarsServiceSpec {
-    pub(crate) image: ImageSpec,
-
     pub(crate) compiler: CompilerSpec,
 
     pub(crate) runtime: RuntimeSpec,
@@ -40,19 +38,6 @@ pub(crate) struct MarsServiceSpec {
     /// schema; parsed and validated server-side at reconcile.
     #[schemars(schema_with = "preserve_unknown_fields")]
     pub(crate) config: serde_json::Value,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct ImageSpec {
-    pub(crate) repository: String,
-    pub(crate) tag: String,
-    #[serde(default = "default_pull_policy")]
-    pub(crate) pull_policy: String,
-}
-
-fn default_pull_policy() -> String {
-    "IfNotPresent".into()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, Default)]

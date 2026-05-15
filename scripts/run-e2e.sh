@@ -101,10 +101,19 @@ if [[ "${NO_FETCH}" != "1" ]]; then
   "${ROOT}/tests/e2e/scripts/fetch-fixture.sh"
 fi
 
+# operator vX.Y.Z runs mars vX.Y.Z (chart appVersion == operator
+# CARGO_PKG_VERSION). pin the e2e image tag to the workspace version so
+# kind-loaded images resolve under the same name the chart picks.
+WORKSPACE_VERSION="$(awk -F'"' '/^version[[:space:]]*=/ { print $2; exit }' "${ROOT}/Cargo.toml")"
+[[ -n "${WORKSPACE_VERSION}" ]] || { echo "could not read workspace version from Cargo.toml" >&2; exit 2; }
+MARS_TAG="${WORKSPACE_VERSION}"
+MARS_IMAGE="localhost/mars:${MARS_TAG}"
+OPERATOR_IMAGE="localhost/mars-operator:${MARS_TAG}"
+
 if [[ "${SKIP_BUILD}" != "1" ]]; then
-  log "building mars + mars-operator images"
-  docker build --build-arg BIN=mars          -t localhost/mars:e2e          "${ROOT}"
-  docker build --build-arg BIN=mars-operator -t localhost/mars-operator:e2e "${ROOT}"
+  log "building mars + mars-operator images at ${MARS_TAG}"
+  docker build --build-arg BIN=mars          -t "${MARS_IMAGE}"     "${ROOT}"
+  docker build --build-arg BIN=mars-operator -t "${OPERATOR_IMAGE}" "${ROOT}"
 fi
 
 if ! kind get clusters | grep -qx "${CLUSTER}"; then
@@ -121,12 +130,15 @@ else
 fi
 
 log "loading images into kind"
-kind load docker-image --name "${CLUSTER}" localhost/mars:e2e localhost/mars-operator:e2e
+kind load docker-image --name "${CLUSTER}" "${MARS_IMAGE}" "${OPERATOR_IMAGE}"
 
-log "installing mars-operator chart into ${OPERATOR_NS}"
+# pin chart appVersion to the workspace version so the chart-rendered
+# operator-image tag matches what kind has loaded.
+log "installing mars-operator chart into ${OPERATOR_NS} (appVersion=${MARS_TAG})"
 helm upgrade --install mars-operator "${ROOT}/charts/mars-operator" \
   --namespace "${OPERATOR_NS}" --create-namespace \
   --values "${ROOT}/tests/e2e/manifests/operator-values.yaml" \
+  --set-string image.tag="${MARS_TAG}" \
   --wait --timeout 5m
 
 log "running rust e2e suite (tests/e2e)"

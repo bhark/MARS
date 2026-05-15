@@ -30,6 +30,7 @@ pub(crate) fn build(
     cr: &MarsService,
     config_checksum: &str,
     fs_store: Option<&ArtifactStoreSpec>,
+    image: &str,
     owner_ref: OwnerReference,
 ) -> Result<CompilerChildren> {
     let svc = cr
@@ -147,8 +148,7 @@ pub(crate) fn build(
 
     let container = Container {
         name: "compiler".into(),
-        image: Some(format!("{}:{}", cr.spec.image.repository, cr.spec.image.tag)),
-        image_pull_policy: Some(cr.spec.image.pull_policy.clone()),
+        image: Some(image.to_string()),
         args: Some(vec![
             "--mode".into(),
             "compiler".into(),
@@ -305,7 +305,7 @@ mod tests {
     #[test]
     fn build_yields_three_children_named_per_instance() {
         let cr = test_support::cr("demo", "svc-ns");
-        let kids = build(&cr, "deadbeef", None, test_support::owner_ref()).unwrap();
+        let kids = build(&cr, "deadbeef", None, test_support::TEST_IMAGE, test_support::owner_ref()).unwrap();
         assert_eq!(kids.deployment.metadata.name.as_deref(), Some("demo-compiler"));
         assert_eq!(kids.cache_pvc.metadata.name.as_deref(), Some("demo-compiler-cache"));
         assert_eq!(kids.work_pvc.metadata.name.as_deref(), Some("demo-compiler-work"));
@@ -322,7 +322,7 @@ mod tests {
     #[test]
     fn build_propagates_config_checksum_to_pod_template_annotation() {
         let cr = test_support::cr("demo", "svc-ns");
-        let kids = build(&cr, "abc123", None, test_support::owner_ref()).unwrap();
+        let kids = build(&cr, "abc123", None, test_support::TEST_IMAGE, test_support::owner_ref()).unwrap();
         let template = kids.deployment.spec.unwrap().template;
         let annotations = template.metadata.unwrap().annotations.unwrap();
         assert_eq!(
@@ -336,7 +336,7 @@ mod tests {
         let mut cr = test_support::cr("demo", "svc-ns");
         cr.metadata.name = None;
         // CompilerChildren is intentionally not Debug; use match to extract the err.
-        match build(&cr, "abc123", None, test_support::owner_ref()) {
+        match build(&cr, "abc123", None, test_support::TEST_IMAGE, test_support::owner_ref()) {
             Err(crate::error::OperatorError::MissingField(f)) => assert_eq!(f, "metadata.name"),
             Err(other) => panic!("expected MissingField, got {other:?}"),
             Ok(_) => panic!("expected error, got Ok"),
@@ -346,7 +346,7 @@ mod tests {
     #[test]
     fn build_without_images_config_map_omits_images_volume() {
         let cr = test_support::cr("demo", "svc-ns");
-        let kids = build(&cr, "deadbeef", None, test_support::owner_ref()).unwrap();
+        let kids = build(&cr, "deadbeef", None, test_support::TEST_IMAGE, test_support::owner_ref()).unwrap();
         let pod = kids.deployment.spec.unwrap().template.spec.unwrap();
         assert!(pod.volumes.unwrap().iter().all(|v| v.name != "images"));
         let mounts = pod.containers[0].volume_mounts.as_ref().unwrap();
@@ -357,7 +357,7 @@ mod tests {
     fn build_with_images_config_map_mounts_read_only() {
         let mut cr = test_support::cr("demo", "svc-ns");
         cr.spec.compiler.images_config_map = Some("mars-images".into());
-        let kids = build(&cr, "deadbeef", None, test_support::owner_ref()).unwrap();
+        let kids = build(&cr, "deadbeef", None, test_support::TEST_IMAGE, test_support::owner_ref()).unwrap();
         let pod = kids.deployment.spec.unwrap().template.spec.unwrap();
         let vol = pod.volumes.unwrap().into_iter().find(|v| v.name == "images").unwrap();
         let cm = vol.config_map.unwrap();

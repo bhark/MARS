@@ -35,9 +35,6 @@ impl Scenario {
     pub(crate) async fn up_with(prefix: &str, opts: ScenarioOptions) -> Result<Self> {
         let client = cluster::client().await?;
         let ns = NamespaceGuard::create(client.clone(), prefix).await?;
-        let mars_image_repo =
-            std::env::var("MARS_E2E_IMAGE_REPOSITORY").unwrap_or_else(|_| "localhost/mars".to_string());
-        let mars_image_tag = std::env::var("MARS_E2E_IMAGE_TAG").unwrap_or_else(|_| "e2e".to_string());
 
         let disc = deploy::discovery(client.clone()).await?;
         let mtmpl = manifests_dir();
@@ -100,10 +97,10 @@ impl Scenario {
 
         // MarsService — the operator (already running cluster-wide) reconciles
         // this into ConfigMap + PVCs + compiler/runtime Deployments + Service.
+        // The operator owns image construction now; only runtime replicas
+        // remain template-substituted.
         let runtime_replicas = opts.runtime_replicas.to_string();
         let mut vars = HashMap::new();
-        vars.insert("IMAGE_REPOSITORY", mars_image_repo.as_str());
-        vars.insert("IMAGE_TAG", mars_image_tag.as_str());
         vars.insert("RUNTIME_REPLICAS", runtime_replicas.as_str());
         deploy::apply_template(
             client.clone(),

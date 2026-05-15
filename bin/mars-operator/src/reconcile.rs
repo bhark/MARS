@@ -26,6 +26,10 @@ pub(crate) struct Ctx {
     pub(crate) client: kube::Client,
     pub(crate) field_manager: String,
     pub(crate) metrics: Metrics,
+    /// `repo:version` for the runtime/compiler containers. Built once at
+    /// startup from CLI/env + operator's own CARGO_PKG_VERSION; identical
+    /// for every reconcile.
+    pub(crate) runtime_image: String,
 }
 
 pub(crate) async fn reconcile(cr: Arc<MarsService>, ctx: Arc<Ctx>) -> std::result::Result<Action, OperatorError> {
@@ -129,12 +133,12 @@ async fn reconcile_inner(cr: Arc<MarsService>, ctx: Arc<Ctx>) -> Result<Action> 
         apply_pvc(&ctx, &ns, &art_pvc).await?;
     }
 
-    let compiler_children = compiler::build(&cr, &checksum, fs_store.as_ref(), owner_ref.clone())?;
+    let compiler_children = compiler::build(&cr, &checksum, fs_store.as_ref(), &ctx.runtime_image, owner_ref.clone())?;
     apply_pvc(&ctx, &ns, &compiler_children.cache_pvc).await?;
     apply_pvc(&ctx, &ns, &compiler_children.work_pvc).await?;
     apply_deployment(&ctx, &ns, &compiler_children.deployment).await?;
 
-    let runtime_deployment = runtime::build(&cr, &checksum, fs_store.as_ref(), owner_ref.clone())?;
+    let runtime_deployment = runtime::build(&cr, &checksum, fs_store.as_ref(), &ctx.runtime_image, owner_ref.clone())?;
     apply_deployment(&ctx, &ns, &runtime_deployment).await?;
 
     let runtime_service = service::build(&cr, owner_ref)?;
