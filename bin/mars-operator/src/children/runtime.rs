@@ -222,7 +222,14 @@ mod tests {
     #[test]
     fn build_propagates_config_checksum_to_pod_template_annotation() {
         let cr = test_support::cr("demo", "svc-ns");
-        let dep = build(&cr, "deadbeef", None, test_support::TEST_IMAGE, test_support::owner_ref()).unwrap();
+        let dep = build(
+            &cr,
+            "deadbeef",
+            None,
+            test_support::TEST_IMAGE,
+            test_support::owner_ref(),
+        )
+        .unwrap();
         let template = dep.spec.unwrap().template;
         let annotations = template.metadata.unwrap().annotations.unwrap();
         assert_eq!(

@@ -59,11 +59,7 @@ pub(crate) struct Cli {
     /// Container repository the operator constructs runtime/compiler image
     /// references against. The tag is always the operator's own version, so
     /// operator vX.Y.Z runs mars vX.Y.Z. Override only for air-gap mirrors.
-    #[arg(
-        long,
-        env = "MARS_RUNTIME_IMAGE_REPOSITORY",
-        default_value = "ghcr.io/bhark/mars"
-    )]
+    #[arg(long, env = "MARS_RUNTIME_IMAGE_REPOSITORY", default_value = "ghcr.io/bhark/mars")]
     pub(crate) runtime_image_repository: String,
 
     #[command(subcommand)]

@@ -305,7 +305,14 @@ mod tests {
     #[test]
     fn build_yields_three_children_named_per_instance() {
         let cr = test_support::cr("demo", "svc-ns");
-        let kids = build(&cr, "deadbeef", None, test_support::TEST_IMAGE, test_support::owner_ref()).unwrap();
+        let kids = build(
+            &cr,
+            "deadbeef",
+            None,
+            test_support::TEST_IMAGE,
+            test_support::owner_ref(),
+        )
+        .unwrap();
         assert_eq!(kids.deployment.metadata.name.as_deref(), Some("demo-compiler"));
         assert_eq!(kids.cache_pvc.metadata.name.as_deref(), Some("demo-compiler-cache"));
         assert_eq!(kids.work_pvc.metadata.name.as_deref(), Some("demo-compiler-work"));
@@ -346,7 +353,14 @@ mod tests {
     #[test]
     fn build_without_images_config_map_omits_images_volume() {
         let cr = test_support::cr("demo", "svc-ns");
-        let kids = build(&cr, "deadbeef", None, test_support::TEST_IMAGE, test_support::owner_ref()).unwrap();
+        let kids = build(
+            &cr,
+            "deadbeef",
+            None,
+            test_support::TEST_IMAGE,
+            test_support::owner_ref(),
+        )
+        .unwrap();
         let pod = kids.deployment.spec.unwrap().template.spec.unwrap();
         assert!(pod.volumes.unwrap().iter().all(|v| v.name != "images"));
         let mounts = pod.containers[0].volume_mounts.as_ref().unwrap();
@@ -357,7 +371,14 @@ mod tests {
     fn build_with_images_config_map_mounts_read_only() {
         let mut cr = test_support::cr("demo", "svc-ns");
         cr.spec.compiler.images_config_map = Some("mars-images".into());
-        let kids = build(&cr, "deadbeef", None, test_support::TEST_IMAGE, test_support::owner_ref()).unwrap();
+        let kids = build(
+            &cr,
+            "deadbeef",
+            None,
+            test_support::TEST_IMAGE,
+            test_support::owner_ref(),
+        )
+        .unwrap();
         let pod = kids.deployment.spec.unwrap().template.spec.unwrap();
         let vol = pod.volumes.unwrap().into_iter().find(|v| v.name == "images").unwrap();
         let cm = vol.config_map.unwrap();
