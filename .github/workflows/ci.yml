@@ -132,3 +132,22 @@ jobs:
             echo "::error::CRD drifted. Run scripts/generate-crd.sh and commit the result."
             exit 1
           fi
+
+  clusterrole-drift:
+    name: ClusterRole drift check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: rui314/setup-mold@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: workspace
+      - name: regenerate ClusterRole
+        run: ./scripts/generate-clusterrole.sh
+      - name: fail on drift
+        run: |
+          if ! git diff --exit-code charts/mars-operator/templates/clusterrole.yaml; then
+            echo "::error::ClusterRole drifted. Run scripts/generate-clusterrole.sh and commit the result."
+            exit 1
+          fi

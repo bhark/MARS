@@ -12,6 +12,7 @@
 mod bootstrap;
 mod children;
 mod cli;
+mod clusterrole;
 mod config;
 mod controller;
 mod crd;
@@ -29,10 +30,12 @@ use crate::cli::{Cli, Command};
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // print-crd is pure and synchronous; run before touching tokio so the
-    // CI drift check works in minimal environments.
-    if let Some(Command::PrintCrd) = cli.command {
-        return crd::print_crd();
+    // print-* subcommands are pure and synchronous; run before touching tokio
+    // so the CI drift checks work in minimal environments.
+    match cli.command {
+        Some(Command::PrintCrd) => return crd::print_crd(),
+        Some(Command::PrintClusterRole) => return clusterrole::print_clusterrole(),
+        None => {}
     }
 
     mars_observability::init_tracing(cli.log_format.is_json(), Some(&cli.log_level)).context("init tracing")?;

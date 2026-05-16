@@ -1,4 +1,5 @@
-//! CLI surface: long-running operator + `print-crd` for chart drift checks.
+//! CLI surface: long-running operator + `print-crd` / `print-clusterrole`
+//! for chart drift checks.
 
 use std::net::SocketAddr;
 
@@ -70,4 +71,7 @@ pub(crate) struct Cli {
 pub(crate) enum Command {
     /// Print the MarsService CRD to stdout as YAML.
     PrintCrd,
+    /// Print the operator ClusterRole (Helm template) to stdout as YAML.
+    #[command(name = "print-clusterrole")]
+    PrintClusterRole,
 }
