@@ -5,6 +5,9 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+#[cfg(feature = "docker")]
+pub mod postgis;
+
 use std::fmt;
 
 #[derive(Debug, Clone)]

@@ -12,6 +12,15 @@ description = "Test support utilities for MARS: image-diff helpers for golden-PN
 [lints]
 workspace = true
 
+[features]
+default = []
+# docker-backed helpers (postgis, seaweedfs). pulls testcontainers + rand.
+# off by default so plain `cargo test` skips docker entirely.
+docker = ["dep:testcontainers", "dep:rand"]
+
 [dependencies]
 png       = { workspace = true }
 zune-jpeg = { workspace = true }
+
+testcontainers = { workspace = true, optional = true }
+rand           = { workspace = true, optional = true }
