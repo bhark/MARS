@@ -302,6 +302,11 @@ pub(crate) struct RuntimeServiceSpec {
     pub(crate) service_type: String,
     #[serde(default = "default_service_port")]
     pub(crate) port: i32,
+    /// Extra annotations to set on the runtime Service. Useful for ingress
+    /// controllers, scrape overrides, cloud-LB hints. Merged on top of any
+    /// operator-managed defaults (user keys win on collision).
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub(crate) annotations: std::collections::BTreeMap<String, String>,
 }
 
 impl Default for RuntimeServiceSpec {
@@ -309,6 +314,7 @@ impl Default for RuntimeServiceSpec {
         Self {
             service_type: default_service_type(),
             port: default_service_port(),
+            annotations: std::collections::BTreeMap::new(),
         }
     }
 }

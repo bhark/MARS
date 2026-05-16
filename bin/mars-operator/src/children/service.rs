@@ -16,12 +16,19 @@ pub(crate) fn build(cr: &MarsService, owner_ref: OwnerReference) -> Result<Servi
         .ok_or_else(|| crate::error::OperatorError::MissingField("metadata.name".into()))?;
     let ns = cr.metadata.namespace.clone();
     let labels_map = labels::labels(&svc, COMPONENT_RUNTIME);
+    let user_annotations = cr.spec.runtime.service.annotations.clone();
+    let annotations = if user_annotations.is_empty() {
+        None
+    } else {
+        Some(user_annotations)
+    };
 
     Ok(Service {
         metadata: ObjectMeta {
             name: Some(runtime_service_name(&svc)),
             namespace: ns,
             labels: Some(labels_map),
+            annotations,
             owner_references: Some(vec![owner_ref]),
             ..Default::default()
         },
@@ -68,5 +75,28 @@ mod tests {
         // target_port must reference the container port by name so the runtime
         // container can rename its port without breaking the service.
         assert!(matches!(&ports[0].target_port, Some(IntOrString::String(s)) if s == "http"));
+    }
+
+    #[test]
+    fn build_omits_annotations_when_unset() {
+        let cr = test_support::cr("demo", "svc-ns");
+        let svc = build(&cr, test_support::owner_ref()).unwrap();
+        assert!(svc.metadata.annotations.is_none());
+    }
+
+    #[test]
+    fn build_propagates_user_annotations() {
+        let mut cr = test_support::cr("demo", "svc-ns");
+        cr.spec.runtime.service.annotations.insert(
+            "traefik.ingress.kubernetes.io/router.entrypoints".into(),
+            "websecure".into(),
+        );
+        let svc = build(&cr, test_support::owner_ref()).unwrap();
+        let ann = svc.metadata.annotations.unwrap();
+        assert_eq!(
+            ann.get("traefik.ingress.kubernetes.io/router.entrypoints")
+                .map(String::as_str),
+            Some("websecure")
+        );
     }
 }
