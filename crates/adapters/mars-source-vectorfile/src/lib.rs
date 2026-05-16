@@ -41,7 +41,6 @@ use mars_source::{
 use mars_types::CrsCode;
 
 pub mod cache;
-pub mod change_feed;
 pub mod decoder;
 pub mod error;
 pub mod fetch;
