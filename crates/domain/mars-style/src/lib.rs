@@ -106,6 +106,22 @@ pub enum LineJoin {
     Bevel,
 }
 
+/// Per-pass compositing operator. Mirrors mapserver's `COMPOSITE COMPOP`
+/// scalar. `SourceOver` is the canonical "draw on top" default and is
+/// omitted from authored YAML. The renderer maps these onto the underlying
+/// rasteriser's blend-mode enum (tiny-skia today).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum BlendMode {
+    #[default]
+    SourceOver,
+    Multiply,
+    Screen,
+    Overlay,
+    Darken,
+    Lighten,
+}
+
 /// Point marker symbol: a shape (`MarkerShape`) plus a pixel size. The wire
 /// form is a flat tagged map (`kind: <shape>`, `size: <f32>`, plus shape-
 /// specific fields) so existing configs and goldens stay diff-clean across
@@ -531,6 +547,11 @@ pub struct Style {
     /// `MINFEATURESIZE`.
     #[serde(default)]
     pub min_feature_size_px: Option<f32>,
+    /// Compositing operator for this pass. `None` means inherit the
+    /// rasteriser default (source-over). mirrors mapserver's
+    /// `COMPOSITE COMPOP <name>`.
+    #[serde(default)]
+    pub blend_mode: Option<BlendMode>,
 }
 
 impl Style {
@@ -563,6 +584,7 @@ impl Style {
             stroke_offset_px: self.stroke_offset_px,
             stroke_gap: self.stroke_gap,
             geom_transform: self.geom_transform,
+            blend_mode: self.blend_mode,
         }
     }
 
@@ -599,6 +621,7 @@ pub struct ResolvedStyle {
     pub stroke_offset_px: Option<f32>,
     pub stroke_gap: Option<StrokeGap>,
     pub geom_transform: Option<GeomTransform>,
+    pub blend_mode: Option<BlendMode>,
 }
 
 /// Resolved marker: shape unchanged from authored form, `size` collapsed
@@ -1195,6 +1218,28 @@ mod tests {
         let g = s.stroke_gap.unwrap();
         assert!((g.interval_px - 12.0).abs() < f32::EPSILON);
         assert!((g.initial_px - 3.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn style_blend_mode_defaults_to_none_and_round_trips() {
+        let s = Style::default();
+        assert!(s.blend_mode.is_none());
+
+        let yaml = "blend_mode: multiply\n";
+        let s: Style = serde_yaml_ng::from_str(yaml).unwrap();
+        assert_eq!(s.blend_mode, Some(BlendMode::Multiply));
+
+        // resolve passes blend_mode through unchanged.
+        let r = s.resolve(1000);
+        assert_eq!(r.blend_mode, Some(BlendMode::Multiply));
+    }
+
+    #[test]
+    fn blend_mode_serializes_kebab_case() {
+        let yaml = serde_yaml_ng::to_string(&BlendMode::SourceOver).unwrap();
+        assert!(yaml.trim() == "source-over");
+        let parsed: BlendMode = serde_yaml_ng::from_str("source-over").unwrap();
+        assert_eq!(parsed, BlendMode::SourceOver);
     }
 
     #[test]
