@@ -16,11 +16,19 @@ pub(crate) fn build(cr: &MarsService, owner_ref: OwnerReference) -> Result<Servi
         .ok_or_else(|| crate::error::OperatorError::MissingField("metadata.name".into()))?;
     let ns = cr.metadata.namespace.clone();
     let labels_map = labels::labels(&svc, COMPONENT_RUNTIME);
-    let user_annotations = cr.spec.runtime.service.annotations.clone();
-    let annotations = if user_annotations.is_empty() {
+
+    // scrape defaults first; user-supplied annotations win on key collision.
+    let mut annotations_map = std::collections::BTreeMap::new();
+    if cr.spec.runtime.service.metrics_scrape {
+        annotations_map.insert("prometheus.io/scrape".into(), "true".into());
+        annotations_map.insert("prometheus.io/port".into(), cr.spec.runtime.service.port.to_string());
+        annotations_map.insert("prometheus.io/path".into(), "/metrics".into());
+    }
+    annotations_map.extend(cr.spec.runtime.service.annotations.clone());
+    let annotations = if annotations_map.is_empty() {
         None
     } else {
-        Some(user_annotations)
+        Some(annotations_map)
     };
 
     Ok(Service {
@@ -78,8 +86,19 @@ mod tests {
     }
 
     #[test]
-    fn build_omits_annotations_when_unset() {
+    fn build_emits_default_prometheus_scrape_annotations() {
         let cr = test_support::cr("demo", "svc-ns");
+        let svc = build(&cr, test_support::owner_ref()).unwrap();
+        let ann = svc.metadata.annotations.unwrap();
+        assert_eq!(ann.get("prometheus.io/scrape").map(String::as_str), Some("true"));
+        assert_eq!(ann.get("prometheus.io/port").map(String::as_str), Some("8080"));
+        assert_eq!(ann.get("prometheus.io/path").map(String::as_str), Some("/metrics"));
+    }
+
+    #[test]
+    fn build_omits_annotations_when_scrape_disabled_and_no_user_annotations() {
+        let mut cr = test_support::cr("demo", "svc-ns");
+        cr.spec.runtime.service.metrics_scrape = false;
         let svc = build(&cr, test_support::owner_ref()).unwrap();
         assert!(svc.metadata.annotations.is_none());
     }
@@ -87,6 +106,7 @@ mod tests {
     #[test]
     fn build_propagates_user_annotations() {
         let mut cr = test_support::cr("demo", "svc-ns");
+        cr.spec.runtime.service.metrics_scrape = false;
         cr.spec.runtime.service.annotations.insert(
             "traefik.ingress.kubernetes.io/router.entrypoints".into(),
             "websecure".into(),
@@ -98,5 +118,22 @@ mod tests {
                 .map(String::as_str),
             Some("websecure")
         );
+        // disabling scrape suppresses all three defaults.
+        assert!(!ann.contains_key("prometheus.io/scrape"));
+    }
+
+    #[test]
+    fn build_user_annotations_override_scrape_defaults() {
+        let mut cr = test_support::cr("demo", "svc-ns");
+        cr.spec
+            .runtime
+            .service
+            .annotations
+            .insert("prometheus.io/path".into(), "/foo".into());
+        let svc = build(&cr, test_support::owner_ref()).unwrap();
+        let ann = svc.metadata.annotations.unwrap();
+        assert_eq!(ann.get("prometheus.io/path").map(String::as_str), Some("/foo"));
+        // the other two defaults still fire.
+        assert_eq!(ann.get("prometheus.io/scrape").map(String::as_str), Some("true"));
     }
 }

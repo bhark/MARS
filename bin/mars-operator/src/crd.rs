@@ -307,6 +307,12 @@ pub(crate) struct RuntimeServiceSpec {
     /// operator-managed defaults (user keys win on collision).
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub(crate) annotations: std::collections::BTreeMap<String, String>,
+    /// Emit the standard `prometheus.io/{scrape,port,path}` annotations on
+    /// the runtime Service so Prometheus pod/service-monitor scrape discovers
+    /// it out of the box. User-supplied `annotations` win on key collision,
+    /// so this stays compatible with non-Prometheus stacks (Datadog, etc.).
+    #[serde(default = "default_true")]
+    pub(crate) metrics_scrape: bool,
 }
 
 impl Default for RuntimeServiceSpec {
@@ -315,6 +321,7 @@ impl Default for RuntimeServiceSpec {
             service_type: default_service_type(),
             port: default_service_port(),
             annotations: std::collections::BTreeMap::new(),
+            metrics_scrape: true,
         }
     }
 }
