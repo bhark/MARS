@@ -171,6 +171,9 @@ pub(crate) struct StyleDef {
     pub(crate) stroke_gap: Option<EmitStrokeGap>,
     /// `mars_style::GeomTransform` wire value (`"start" | "end" | "vertices"`).
     pub(crate) geom_transform: Option<&'static str>,
+    /// `MINFEATURESIZE` threshold in pixels. Per-pass gate dropped at render
+    /// time when the feature's pixel-bbox extent falls below the value.
+    pub(crate) min_feature_size_px: Option<f32>,
     pub(crate) font_family: Option<String>,
     pub(crate) font_size: Option<f32>,
     pub(crate) halo_color: Option<Colour>,
@@ -850,6 +853,9 @@ fn write_geometry_style_body(out: &mut String, st: &StyleDef, indent: &str) {
     }
     if let Some(gt) = st.geom_transform {
         let _ = writeln!(out, "{indent}geom_transform: {gt}");
+    }
+    if let Some(t) = st.min_feature_size_px {
+        let _ = writeln!(out, "{indent}min_feature_size_px: {t}");
     }
     if let Some(m) = st.marker.as_ref() {
         write_marker_at(out, m, indent);

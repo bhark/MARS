@@ -122,6 +122,61 @@ fn ring_to_subpath(coords: &[(f64, f64)], viewport: Bbox, w: u32, h: u32, closed
     }
 }
 
+/// Longer pixel-space side of `geom`'s axis-aligned bbox. Returns `0.0` for
+/// the degenerate viewport. Used by the per-pass `MINFEATURESIZE` gate, so
+/// the bbox is taken from the geometry's actual vertices rather than the
+/// stored feature bbox (which may be stale post-reproject).
+pub(super) fn pixel_extent(geom: &GeomKind, viewport: Bbox, w: u32, h: u32) -> f32 {
+    let mut min_x = f32::INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    let mut visit = |c: (f64, f64)| {
+        let (px, py) = world_to_pixel(c, viewport, w, h);
+        if px < min_x {
+            min_x = px;
+        }
+        if py < min_y {
+            min_y = py;
+        }
+        if px > max_x {
+            max_x = px;
+        }
+        if py > max_y {
+            max_y = py;
+        }
+    };
+    walk_coords(geom, &mut visit);
+    if !(min_x.is_finite() && max_x.is_finite()) {
+        return 0.0;
+    }
+    (max_x - min_x).max(max_y - min_y)
+}
+
+fn walk_coords(g: &GeomKind, visit: &mut impl FnMut((f64, f64))) {
+    match g {
+        GeomKind::Point(c) => visit(*c),
+        GeomKind::LineString(coords) | GeomKind::MultiPoint(coords) => coords.iter().copied().for_each(visit),
+        GeomKind::Polygon(rings) => {
+            for ring in rings {
+                ring.iter().copied().for_each(&mut *visit);
+            }
+        }
+        GeomKind::MultiLineString(parts) => {
+            for part in parts {
+                part.iter().copied().for_each(&mut *visit);
+            }
+        }
+        GeomKind::MultiPolygon(parts) => {
+            for poly in parts {
+                for ring in poly {
+                    ring.iter().copied().for_each(&mut *visit);
+                }
+            }
+        }
+    }
+}
+
 pub(super) fn world_to_pixel(c: (f64, f64), viewport: Bbox, w: u32, h: u32) -> (f32, f32) {
     let dx = viewport.width();
     let dy = viewport.height();

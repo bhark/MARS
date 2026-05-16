@@ -32,6 +32,13 @@ pub(super) fn validate_styles(styles: &BTreeMap<String, StyleEntry>) -> Result<(
                 if let Some(g) = &s.stroke_gap {
                     validate_stroke_gap(name, g, s.marker.is_some())?;
                 }
+                if let Some(t) = s.min_feature_size_px
+                    && !(t.is_finite() && t > 0.0)
+                {
+                    return Err(ConfigError::Invalid(format!(
+                        "style {name:?} min_feature_size_px must be a finite positive number, got {t}"
+                    )));
+                }
             }
         }
         if let Some(label) = entry.as_label() {

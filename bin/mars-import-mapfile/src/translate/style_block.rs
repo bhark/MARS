@@ -50,6 +50,8 @@ pub(crate) struct StyleBlock {
     /// Carries the lowercase wire string ("start" | "end" | "vertices") so
     /// emission stays stringly-typed alongside `linejoin`.
     pub(crate) geom_transform: Option<&'static str>,
+    /// STYLE.MINFEATURESIZE <px> -> mars min_feature_size_px wire value.
+    pub(crate) min_feature_size_px: Option<f32>,
     /// Recognised-but-not-implemented STYLE directive names. Aggregated at
     /// resolve time so the parser stays a pure data sink; `emit_layer` fires
     /// one warn per layer summarising what was dropped.
@@ -127,6 +129,14 @@ pub(crate) fn parse_style_block(body: &[Token]) -> StyleBlock {
                     }
                 }
             }
+            StyleDirective::MinFeatureSize(t) => {
+                if let Some(v) = parsing::first_parsed::<f32>(t)
+                    && v.is_finite()
+                    && v > 0.0
+                {
+                    st.min_feature_size_px = Some(v);
+                }
+            }
             StyleDirective::NotImplementedAttenuation(t) => {
                 // record the dropped directive as a typed signal; the
                 // layer-level warn fires once at emit time.
@@ -160,6 +170,7 @@ pub(crate) struct SinglePass {
     pub(crate) stroke_gap: Option<EmitStrokeGap>,
     pub(crate) stroke_linejoin: Option<&'static str>,
     pub(crate) geom_transform: Option<&'static str>,
+    pub(crate) min_feature_size_px: Option<f32>,
     pub(crate) unimplemented: Vec<&'static str>,
 }
 
@@ -264,6 +275,7 @@ pub(crate) fn style_block_to_pass(s: &StyleBlock, symbols: &HashMap<String, Symb
     });
     let stroke_linejoin = s.linejoin;
     let geom_transform = s.geom_transform;
+    let min_feature_size_px = s.min_feature_size_px;
 
     SinglePass {
         fill,
@@ -276,6 +288,7 @@ pub(crate) fn style_block_to_pass(s: &StyleBlock, symbols: &HashMap<String, Symb
         stroke_gap,
         stroke_linejoin,
         geom_transform,
+        min_feature_size_px,
         unimplemented,
     }
 }
@@ -293,6 +306,7 @@ pub(crate) fn canonical_signature(
     stroke_gap: Option<&EmitStrokeGap>,
     stroke_linejoin: Option<&'static str>,
     geom_transform: Option<&'static str>,
+    min_feature_size_px: Option<f32>,
 ) -> String {
     use std::fmt::Write as _;
     let mut s = String::new();
@@ -360,6 +374,9 @@ pub(crate) fn canonical_signature(
     }
     if let Some(gt) = geom_transform {
         let _ = write!(s, ",geom_transform={gt}");
+    }
+    if let Some(t) = min_feature_size_px {
+        let _ = write!(s, ",min_feature_size_px={t}");
     }
     s
 }
@@ -674,6 +691,7 @@ mod tests {
             None,
             None,
             Some("start"),
+            None,
         );
         let b = canonical_signature(
             "polygon",
@@ -687,8 +705,48 @@ mod tests {
             None,
             None,
             Some("vertices"),
+            None,
         );
-        let none = canonical_signature("polygon", None, None, None, None, None, None, None, None, None, None);
+        let none = canonical_signature(
+            "polygon", None, None, None, None, None, None, None, None, None, None, None,
+        );
+        assert_ne!(a, b);
+        assert_ne!(a, none);
+    }
+
+    #[test]
+    fn canonical_signature_differs_per_min_feature_size() {
+        let a = canonical_signature(
+            "polygon",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(2.0),
+        );
+        let b = canonical_signature(
+            "polygon",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(8.0),
+        );
+        let none = canonical_signature(
+            "polygon", None, None, None, None, None, None, None, None, None, None, None,
+        );
         assert_ne!(a, b);
         assert_ne!(a, none);
     }

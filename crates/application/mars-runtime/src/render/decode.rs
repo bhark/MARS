@@ -21,7 +21,7 @@ use mars_types::{BindingMetadata, LayerId, PageEntry};
 use crate::{RenderPlan, RuntimeError};
 
 use super::map_artifact_err;
-use super::project::{bbox_native, bbox_to_f32, feature_to_drawop, project_paired_features};
+use super::project::{bbox_native, bbox_to_f32, feature_to_drawop, pixel_extent, project_paired_features};
 
 /// per-page render output. `rendered_slots[i]` is true when slot `i`'s
 /// geometry survived the spatial-index hit-test for this page; the runtime
@@ -194,10 +194,19 @@ pub(super) fn decode_page_to_ops(
                 name: name.to_owned(),
             });
         };
+        // pixel-bbox extent: shared across passes so we pay the geom walk
+        // once. MINFEATURESIZE is computed lazily on demand.
+        let mut extent_px: Option<f32> = None;
         // ordered multi-pass emit: one DrawOp per pass, declared order. each
         // pass resolves against the request denom before crossing the
         // renderer port - the renderer never sees `ScaledSize` directly.
         for pass in passes.iter() {
+            if let Some(threshold) = pass.min_feature_size_px {
+                let ext = *extent_px.get_or_insert_with(|| pixel_extent(&f.geom, plan.bbox, plan.width, plan.height));
+                if ext < threshold {
+                    continue;
+                }
+            }
             let style = Arc::new(pass.resolve(denom));
             if let Some(op) = feature_to_drawop(&f.geom, plan.bbox, plan.width, plan.height, style) {
                 ops.push(op);
@@ -374,6 +383,68 @@ mod tests {
         let plan = render_plan_for(bbox);
         let meta = binding_meta(bbox);
         let pe = page_entry(bbox, &page_bytes);
+        let decoded = decode_page_to_ops(
+            page_bytes,
+            Some(class_bytes),
+            &pe,
+            &plan,
+            &meta,
+            &LayerId::new("L"),
+            &ss,
+            true,
+            &[true],
+            0,
+        )
+        .unwrap();
+        assert_eq!(decoded.ops.len(), 1);
+    }
+
+    #[test]
+    fn min_feature_size_gate_drops_pass_below_threshold() {
+        // 10x10 metre feature rendered into a 64-px canvas covering 1000x1000
+        // metres -> pixel extent 0.64, below an 8 px threshold.
+        let (page_bytes, class_bytes, _bbox) = build_single_feature_page("gated");
+        let view = Bbox::new(0.0, 0.0, 1000.0, 1000.0);
+        let mut ss = Stylesheet::default();
+        let mut gated = solid(0, 0, 0);
+        gated.min_feature_size_px = Some(8.0);
+        let always = solid(0xff, 0xff, 0xff);
+        ss.geometry.insert("gated".into(), Arc::from(vec![always, gated]));
+
+        let plan = render_plan_for(view);
+        let meta = binding_meta(view);
+        let pe = page_entry(view, &page_bytes);
+        let decoded = decode_page_to_ops(
+            page_bytes,
+            Some(class_bytes),
+            &pe,
+            &plan,
+            &meta,
+            &LayerId::new("L"),
+            &ss,
+            true,
+            &[true],
+            0,
+        )
+        .unwrap();
+        // gated pass dropped; unconditional pass survives.
+        assert_eq!(decoded.ops.len(), 1);
+    }
+
+    #[test]
+    fn min_feature_size_gate_keeps_pass_above_threshold() {
+        // 10x10 metre feature rendered into a 64-px canvas covering 20x20
+        // metres -> pixel extent 32, above a 4 px threshold.
+        let (page_bytes, class_bytes, _bbox) = build_single_feature_page("gated");
+        let view = Bbox::new(0.0, 0.0, 20.0, 20.0);
+        let mut ss = Stylesheet::default();
+        let mut gated = solid(0, 0, 0);
+        gated.min_feature_size_px = Some(4.0);
+        ss.geometry.insert("gated".into(), Arc::from(vec![gated]));
+
+        let plan = render_plan_for(view);
+        let meta = binding_meta(view);
+        let pe = page_entry(view, &page_bytes);
         let decoded = decode_page_to_ops(
             page_bytes,
             Some(class_bytes),

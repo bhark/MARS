@@ -105,6 +105,7 @@ fn emit_single_pass_to_registry(style_type: &str, style_name: &str, pass: Single
         pass.stroke_gap.as_ref(),
         pass.stroke_linejoin,
         pass.geom_transform,
+        pass.min_feature_size_px,
     );
     if let Some(st) = skel.styles.iter().find(|s| {
         canonical_signature(
@@ -119,6 +120,7 @@ fn emit_single_pass_to_registry(style_type: &str, style_name: &str, pass: Single
             s.stroke_gap.as_ref(),
             s.stroke_linejoin,
             s.geom_transform,
+            s.min_feature_size_px,
         ) == canonical
     }) {
         return st.name.clone();
@@ -144,6 +146,7 @@ fn single_pass_to_style_def(style_type: &str, name: String, pass: SinglePass) ->
         stroke_offset_px: pass.stroke_offset_px,
         stroke_gap: pass.stroke_gap,
         geom_transform: pass.geom_transform,
+        min_feature_size_px: pass.min_feature_size_px,
         font_family: None,
         font_size: None,
         halo_color: None,
@@ -172,6 +175,7 @@ fn emit_label(r: ResolvedLabel, skel: &mut Skeleton) -> LabelSkeleton {
         stroke_offset_px: None,
         stroke_gap: None,
         geom_transform: None,
+        min_feature_size_px: None,
         font_family: Some(r.font_family),
         font_size: Some(r.font_size),
         halo_color: r.halo_color,

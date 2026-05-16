@@ -137,6 +137,11 @@ fn multi_pass_fixture_matches() {
 }
 
 #[test]
+fn min_feature_size_fixture_matches() {
+    assert_fixture_matches("min_feature_size");
+}
+
+#[test]
 fn multi_pass_does_not_emit_collapse_warning() {
     // the legacy importer collapsed multi-STYLE classes into one fill+stroke
     // and warned per occurrence. multi-pass attachments now preserve order

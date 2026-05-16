@@ -203,6 +203,9 @@ pub(crate) enum StyleDirective<'a> {
     /// `GEOMTRANSFORM "<variant>"`: vertex-extraction subset (start | end |
     /// vertices). Unknown variants land in the layer-level unimplemented bag.
     GeomTransform(&'a Token),
+    /// `MINFEATURESIZE <px>`: suppress this style pass when the feature's
+    /// pixel-space bbox extent is below the threshold.
+    MinFeatureSize(&'a Token),
     /// `MINWIDTH` / `MAXWIDTH`: typed signal that a style attenuation
     /// directive is not yet implemented. The parser warns at use site.
     NotImplementedAttenuation(&'a Token),
@@ -226,6 +229,7 @@ impl<'a> StyleDirective<'a> {
             "INITIALGAP" => Self::InitialGap(t),
             "LINEJOIN" => Self::LineJoin(t),
             "GEOMTRANSFORM" => Self::GeomTransform(t),
+            "MINFEATURESIZE" => Self::MinFeatureSize(t),
             "MINWIDTH" | "MAXWIDTH" => Self::NotImplementedAttenuation(t),
             _ => Self::Unknown,
         }

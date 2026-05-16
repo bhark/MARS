@@ -507,6 +507,12 @@ pub struct Style {
     /// `GEOMTRANSFORM` (start | end | vertices subset).
     #[serde(default)]
     pub geom_transform: Option<GeomTransform>,
+    /// Suppress this pass when the feature's pixel-space bbox extent (the
+    /// longer of width / height in pixels) falls below this threshold.
+    /// Applied per-pass before the renderer is invoked. Mirrors mapserver's
+    /// `MINFEATURESIZE`.
+    #[serde(default)]
+    pub min_feature_size_px: Option<f32>,
 }
 
 impl Style {

@@ -1,0 +1,27 @@
+# MINFEATURESIZE coverage: a CLASS with two passes where the second pass
+# carries a pixel-extent gate. Mirrors the mapserver pattern of "draw the
+# fill always, but only stamp the casing when the feature is large enough
+# in pixel space".
+MAP
+  NAME "min_feature_size"
+  TITLE "MinFeatureSize Coverage"
+
+  LAYER
+    NAME "buildings"
+    TYPE POLYGON
+    STATUS ON
+    DATA "geom FROM buildings"
+
+    CLASS
+      NAME "all"
+      STYLE
+        COLOR 200 180 140
+      END
+      STYLE
+        OUTLINECOLOR 40 40 40
+        WIDTH 1
+        MINFEATURESIZE 8
+      END
+    END
+  END
+END
