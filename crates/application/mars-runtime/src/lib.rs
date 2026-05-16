@@ -8,7 +8,7 @@
 
 #![forbid(unsafe_code)]
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -135,6 +135,65 @@ pub enum RuntimeError {
     RasterSource(#[from] mars_source::SourceError),
 }
 
+/// Lookup table mapping a raster collection id to its constructed adapter.
+/// Bins build one of these via composition and the runtime routes each
+/// `RasterLayerEntry` through its declared collection. Mirrors
+/// `mars_compiler::SourceRegistry` for the vector side.
+#[derive(Clone, Default)]
+pub struct RasterSourceRegistry {
+    by_id: BTreeMap<SourceCollectionId, Arc<dyn RasterSource>>,
+}
+
+impl RasterSourceRegistry {
+    /// Empty registry. Use [`Self::insert`] to populate.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Insert a source. Replaces any prior entry for the same id.
+    pub fn insert(&mut self, id: SourceCollectionId, source: Arc<dyn RasterSource>) {
+        self.by_id.insert(id, source);
+    }
+
+    /// Borrow the source registered under `id`, if any.
+    #[must_use]
+    pub fn get(&self, id: &SourceCollectionId) -> Option<Arc<dyn RasterSource>> {
+        self.by_id.get(id).cloned()
+    }
+
+    /// True when no sources are registered.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.by_id.is_empty()
+    }
+
+    /// Number of registered sources.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.by_id.len()
+    }
+
+    /// True when an entry exists for `id`.
+    #[must_use]
+    pub fn contains_key(&self, id: &SourceCollectionId) -> bool {
+        self.by_id.contains_key(id)
+    }
+
+    /// Iterate over `(id, source)` pairs in id-ascending order.
+    pub fn iter(&self) -> impl Iterator<Item = (&SourceCollectionId, &Arc<dyn RasterSource>)> {
+        self.by_id.iter()
+    }
+}
+
+impl std::fmt::Debug for RasterSourceRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RasterSourceRegistry")
+            .field("ids", &self.by_id.keys().collect::<Vec<_>>())
+            .finish()
+    }
+}
+
 /// All ports the runtime needs.
 #[derive(Clone)]
 pub struct Deps {
@@ -158,7 +217,7 @@ pub struct Deps {
     /// Raster source registry keyed by collection id. Looked up per
     /// `RasterLayerEntry` to dispatch tile fetches. Empty when no raster
     /// layers are declared.
-    pub raster_sources: HashMap<SourceCollectionId, Arc<dyn RasterSource>>,
+    pub raster_sources: RasterSourceRegistry,
 }
 
 /// The render plan as produced by the interface adapter (WMS / WMTS).

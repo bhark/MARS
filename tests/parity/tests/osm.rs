@@ -15,7 +15,6 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -26,7 +25,7 @@ use mars_compiler::{Compiler, Deps as CompilerDeps, SourceRegistry};
 use mars_config::{Config, config_dir};
 use mars_parity::diff_pngs_with_radius;
 use mars_render::{TinySkiaEncoder, TinySkiaRenderer};
-use mars_runtime::{Deps as RuntimeDeps, RenderPlan, Runtime, RuntimeState};
+use mars_runtime::{Deps as RuntimeDeps, RasterSourceRegistry, RenderPlan, Runtime, RuntimeState};
 use mars_source_postgres::{PgConfig, PgSource};
 use mars_store::ManifestStore;
 use mars_store_fs::{FsCache, FsPublisher, FsStore};
@@ -465,7 +464,7 @@ async fn osm_parity_matrix() -> Result<()> {
             metrics: mars_observability::Metrics::new().expect("metrics"),
             fonts,
             images,
-            raster_sources: HashMap::new(),
+            raster_sources: RasterSourceRegistry::new(),
         },
     );
 

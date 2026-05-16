@@ -4,11 +4,12 @@
 //! `mars_source_postgres::ReplicationTopology`) are concrete; library crates
 //! must not name them directly per the hexagonal-architecture rules.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use mars_config::Config;
+use mars_runtime::RasterSourceRegistry;
 use mars_source::RasterSource;
 use mars_source_postgres::{CollectionTopology, ReplicationTopology, SourceCollectionId};
 use mars_source_xyz::XyzRasterSource;
@@ -114,10 +115,11 @@ pub(crate) fn validate_change_feed_config(cfg: &Config) -> Result<()> {
 /// raster render path. One shared [`reqwest::Client`] backs every XYZ
 /// collection (connection pooling per upstream host is reqwest's job). The
 /// client honours `render.xyz_client` for timeouts and User-Agent. The
-/// returned map is keyed by `RasterLayerEntry.collection`; an empty config
-/// (no raster layers) yields an empty map and zero adapter allocations.
-pub(crate) fn build_raster_sources(cfg: &Config) -> Result<HashMap<SourceCollectionId, Arc<dyn RasterSource>>> {
-    let mut out: HashMap<SourceCollectionId, Arc<dyn RasterSource>> = HashMap::new();
+/// returned registry is keyed by `RasterLayerEntry.collection`; an empty
+/// config (no raster layers) yields an empty registry and zero adapter
+/// allocations.
+pub(crate) fn build_raster_sources(cfg: &Config) -> Result<RasterSourceRegistry> {
+    let mut out = RasterSourceRegistry::new();
     let mut xyz_source: Option<Arc<dyn RasterSource>> = None;
     for layer in &cfg.layers {
         let Some(raster) = layer.raster.as_ref() else {
@@ -545,8 +547,8 @@ mod tests {
         let cfg = cfg_with_layers(vec![raster_layer("a", "osm"), raster_layer("b", "stamen")]);
         let sources = build_raster_sources(&cfg).unwrap();
         assert_eq!(sources.len(), 2);
-        assert!(sources.contains_key(&SourceCollectionId::new("osm")));
-        assert!(sources.contains_key(&SourceCollectionId::new("stamen")));
+        assert!(sources.get(&SourceCollectionId::new("osm")).is_some());
+        assert!(sources.get(&SourceCollectionId::new("stamen")).is_some());
     }
 
     #[test]

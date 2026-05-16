@@ -10,7 +10,6 @@
 #![cfg(feature = "integration")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -20,7 +19,7 @@ use mars_bin_shared::build_stylesheet;
 use mars_compiler::{Compiler, Deps as CompilerDeps, SourceRegistry};
 use mars_config::{Config, SourceId, config_dir};
 use mars_render::{TinySkiaEncoder, TinySkiaRenderer};
-use mars_runtime::{Deps as RuntimeDeps, Fonts, RenderPlan, Runtime, RuntimeState};
+use mars_runtime::{Deps as RuntimeDeps, Fonts, RasterSourceRegistry, RenderPlan, Runtime, RuntimeState};
 use mars_source::{LeaderLock, LeaderLockGuard, SourceError};
 use mars_source_postgres::{PgConfig, PgSource};
 use mars_store::ManifestStore;
@@ -112,7 +111,7 @@ async fn snapshot_compile_then_runtime_renders_decodable_png() -> Result<()> {
         metrics: mars_observability::Metrics::new().context("runtime metrics")?,
         fonts,
         images,
-        raster_sources: HashMap::new(),
+        raster_sources: RasterSourceRegistry::new(),
     }));
     let stylesheet = build_stylesheet(&cfg);
     let state = RuntimeState::from_config_and_manifest(&cfg, stylesheet, manifest).context("build runtime state")?;

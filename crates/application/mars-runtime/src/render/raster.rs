@@ -42,11 +42,12 @@ pub(crate) async fn render_raster_layer(
         let entry = lookup_entry(state, layer_id)?;
         ensure_supported_crs(&plan.crs, &entry.source_crs)?;
 
-        let source = deps.raster_sources.get(&entry.collection).cloned().ok_or_else(|| {
-            RuntimeError::RasterSourceNotRegistered {
-                collection: entry.collection.clone(),
-            }
-        })?;
+        let source =
+            deps.raster_sources
+                .get(&entry.collection)
+                .ok_or_else(|| RuntimeError::RasterSourceNotRegistered {
+                    collection: entry.collection.clone(),
+                })?;
 
         let plan_m_per_pixel = plan.bbox.width() / f64::from(plan.width.max(1));
         let zoom = pick_zoom(plan_m_per_pixel, entry.tile_size, entry.max_level);
@@ -245,7 +246,6 @@ impl MercatorPlanOrigin {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
-    use std::collections::HashMap;
     use std::sync::Arc;
 
     use async_trait::async_trait;
@@ -256,9 +256,9 @@ mod tests {
     use mars_types::{Bbox, ImageFormat, Manifest, SourceCollectionId};
 
     use super::*;
-    use crate::Deps;
     use crate::images::MutableImageRegistry;
     use crate::state::{PageIndex, RuntimeState};
+    use crate::{Deps, RasterSourceRegistry};
 
     #[test]
     fn z0_full_world_picks_zoom_zero() {
@@ -410,7 +410,7 @@ mod tests {
         }
     }
 
-    fn fake_deps(raster_sources: HashMap<SourceCollectionId, Arc<dyn RasterSource>>) -> Deps {
+    fn fake_deps(raster_sources: RasterSourceRegistry) -> Deps {
         Deps {
             store: Arc::new(NotImplementedStore),
             cache: Arc::new(NotImplementedCache),
@@ -470,7 +470,7 @@ mod tests {
             tile_size: 256,
             calls: std::sync::Mutex::new(Vec::new()),
         });
-        let mut srcs: HashMap<SourceCollectionId, Arc<dyn RasterSource>> = HashMap::new();
+        let mut srcs = RasterSourceRegistry::new();
         srcs.insert(SourceCollectionId::new("osm"), fake.clone());
         let deps = fake_deps(srcs);
 
@@ -502,7 +502,7 @@ mod tests {
         let entry = raster_entry("r", "osm");
         let state = state_with_raster_entry(entry);
         let plan = webmercator_plan();
-        let deps = fake_deps(HashMap::new()); // empty registry
+        let deps = fake_deps(RasterSourceRegistry::new()); // empty registry
         let err = render_raster_layer(&state, &deps, &plan, &layer, 4)
             .await
             .expect_err("missing collection");
@@ -520,7 +520,7 @@ mod tests {
             tile_size: 256,
             calls: std::sync::Mutex::new(Vec::new()),
         });
-        let mut srcs: HashMap<SourceCollectionId, Arc<dyn RasterSource>> = HashMap::new();
+        let mut srcs = RasterSourceRegistry::new();
         srcs.insert(SourceCollectionId::new("osm"), fake);
         let deps = fake_deps(srcs);
         let err = render_raster_layer(&state, &deps, &plan, &layer, 4)
@@ -546,7 +546,7 @@ mod tests {
         let state = state_with_raster_entry(entry);
         let plan = webmercator_plan();
         let src: Arc<dyn RasterSource> = Arc::new(AbsentRasterSource);
-        let mut srcs: HashMap<SourceCollectionId, Arc<dyn RasterSource>> = HashMap::new();
+        let mut srcs = RasterSourceRegistry::new();
         srcs.insert(SourceCollectionId::new("osm"), src);
         let deps = fake_deps(srcs);
         let ops = render_raster_layer(&state, &deps, &plan, &layer, 4).await.unwrap();
@@ -566,7 +566,7 @@ mod tests {
             config: None,
         };
         let plan = webmercator_plan();
-        let deps = fake_deps(HashMap::new());
+        let deps = fake_deps(RasterSourceRegistry::new());
         let err = render_raster_layer(&state, &deps, &plan, &layer, 4)
             .await
             .expect_err("no manifest entry");

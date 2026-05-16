@@ -335,7 +335,7 @@ mod tests {
             metrics,
             fonts: Arc::new(Fonts::with_default()),
             images: Arc::new(crate::images::MutableImageRegistry::new()),
-            raster_sources: std::collections::HashMap::new(),
+            raster_sources: crate::RasterSourceRegistry::new(),
         }
     }
 
