@@ -983,10 +983,7 @@ mod tests {
             "layer",
             1,
         );
-        assert_eq!(
-            w.as_deref(),
-            Some("# TODO: regex EXPRESSION requires CLASSITEM: /foo/"),
-        );
+        assert_eq!(w.as_deref(), Some("# TODO: regex EXPRESSION requires CLASSITEM: /foo/"),);
     }
 
     #[test]

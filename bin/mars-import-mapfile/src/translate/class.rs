@@ -267,7 +267,10 @@ mod tests {
     #[test]
     fn regex_shorthand_lifts_pattern() {
         match parse_class_expression(&tok("/Hovedrute/")) {
-            ParsedExpression::Regex { pattern, case_insensitive } => {
+            ParsedExpression::Regex {
+                pattern,
+                case_insensitive,
+            } => {
                 assert_eq!(pattern, "Hovedrute");
                 assert!(!case_insensitive);
             }
