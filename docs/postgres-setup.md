@@ -40,19 +40,20 @@ spec:
       publication: true
       role: false
   config:
-    source:
-      type: postgis
-      dsn: "${PG_DSN}"
-      native_crs: "EPSG:25832"
-      change_feed:
-        type: pgoutput
-        publication: mars_pub
-        slot: mars_slot
-      bootstrap:
-        role: mars_replicator
-        schemas:
-          - public
-          - geo
+    sources:
+      - id: default
+        type: postgis
+        dsn: "${PG_DSN}"
+        native_crs: "EPSG:25832"
+        change_feed:
+          type: pgoutput
+          publication: mars_pub
+          slot: mars_slot
+        bootstrap:
+          role: mars_replicator
+          schemas:
+            - public
+            - geo
     # ... rest of mars-config
 ```
 
@@ -78,11 +79,12 @@ spec:
   bootstrap:
     enabled: false
   config:
-    source:
-      # same as Path A; bootstrap.role and bootstrap.schemas are still
-      # consulted by `mars setup --dry-run` if you want a paste-ready SQL
-      # reference.
-      ...
+    sources:
+      - id: default
+        # same as Path A; bootstrap.role and bootstrap.schemas are still
+        # consulted by `mars setup --dry-run` if you want a paste-ready SQL
+        # reference.
+        ...
 ```
 
 Run the equivalent SQL by hand (these are exactly the statements `mars setup --dry-run` prints):
@@ -114,7 +116,7 @@ CREATE PUBLICATION "mars_pub" FOR TABLES IN SCHEMA "public", "geo";
 SELECT pg_create_logical_replication_slot('mars_slot', 'pgoutput');
 ```
 
-Bare-metal deployments of MARS (no operator) use the same `mars setup` CLI: provide the admin DSN via env or `--admin-dsn`, the runtime password via env or `--runtime-password`, and a config file with `source.bootstrap` set. `mars teardown --drop-slot --drop-publication` is the inverse.
+Bare-metal deployments of MARS (no operator) use the same `mars setup` CLI: provide the admin DSN via env or `--admin-dsn`, the runtime password via env or `--runtime-password`, and a config file with `sources[].bootstrap` set. `mars teardown --drop-slot --drop-publication` is the inverse.
 
 ## Day-2 diagnostics
 
@@ -143,7 +145,7 @@ WHERE p.pubname = 'mars_pub'
 ORDER BY 1;
 ```
 
-The list should match `source.bootstrap.schemas`. The automated path reconciles this on every apply via `ALTER PUBLICATION ... ADD/DROP TABLES IN SCHEMA`; the manual path is the operator's responsibility.
+The list should match `sources[].bootstrap.schemas`. The automated path reconciles this on every apply via `ALTER PUBLICATION ... ADD/DROP TABLES IN SCHEMA`; the manual path is the operator's responsibility.
 
 ### Replica identity
 
