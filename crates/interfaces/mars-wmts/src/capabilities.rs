@@ -28,7 +28,7 @@ pub fn capabilities_xml(cfg: &Config, manifest: &Manifest) -> Result<String, Wmt
 
     w.write_event(Event::Decl(BytesDecl::new(
         "1.0",
-        Some(cfg.service.xml_encoding()),
+        Some(cfg.service.ows.xml_encoding()),
         None,
     )))
     .map_err(xml_err)?;
@@ -79,10 +79,10 @@ fn write_service_identification<W: std::io::Write>(w: &mut Writer<W>, cfg: &Conf
     if !cfg.service.abstract_.is_empty() {
         text_element(w, "ows:Abstract", &cfg.service.abstract_)?;
     }
-    if !cfg.service.keywords.is_empty() {
+    if !cfg.service.ows.keywords.is_empty() {
         w.write_event(Event::Start(BytesStart::new("ows:Keywords")))
             .map_err(xml_err)?;
-        for kw in &cfg.service.keywords {
+        for kw in &cfg.service.ows.keywords {
             text_element(w, "ows:Keyword", kw)?;
         }
         w.write_event(Event::End(BytesEnd::new("ows:Keywords")))
@@ -90,10 +90,10 @@ fn write_service_identification<W: std::io::Write>(w: &mut Writer<W>, cfg: &Conf
     }
     text_element(w, "ows:ServiceType", "OGC WMTS")?;
     text_element(w, "ows:ServiceTypeVersion", "1.0.0")?;
-    if let Some(fees) = cfg.service.fees.as_deref() {
+    if let Some(fees) = cfg.service.ows.fees.as_deref() {
         text_element(w, "ows:Fees", fees)?;
     }
-    if let Some(ac) = cfg.service.access_constraints.as_deref() {
+    if let Some(ac) = cfg.service.ows.access_constraints.as_deref() {
         text_element(w, "ows:AccessConstraints", ac)?;
     }
     w.write_event(Event::End(BytesEnd::new("ows:ServiceIdentification")))
@@ -119,12 +119,12 @@ fn write_service_provider<W: std::io::Write>(w: &mut Writer<W>, cfg: &Config) ->
     w.write_event(Event::Start(BytesStart::new("ows:ServiceProvider")))
         .map_err(xml_err)?;
     text_element(w, "ows:ProviderName", provider_name)?;
-    if let Some(href) = cfg.service.online_resource.as_deref() {
+    if let Some(href) = cfg.service.ows.online_resource.as_deref() {
         let mut ps = BytesStart::new("ows:ProviderSite");
         ps.push_attribute(("xlink:href", href));
         w.write_event(Event::Empty(ps)).map_err(xml_err)?;
     }
-    write_service_contact(w, contact, email, cfg.service.online_resource.as_deref())?;
+    write_service_contact(w, contact, email, cfg.service.ows.online_resource.as_deref())?;
     w.write_event(Event::End(BytesEnd::new("ows:ServiceProvider")))
         .map_err(xml_err)?;
     Ok(())
@@ -209,7 +209,7 @@ fn write_operations_metadata<W: std::io::Write>(w: &mut Writer<W>, cfg: &Config)
     // DCP/HTTP/Get binding pointing at it. otherwise emit empty Operation
     // elements - clients fall back to the request URL they reached the
     // service on, which is the common WMTS deployment practice.
-    let online_href = cfg.service.online_resource.as_deref();
+    let online_href = cfg.service.ows.online_resource.as_deref();
     w.write_event(Event::Start(BytesStart::new("ows:OperationsMetadata")))
         .map_err(xml_err)?;
     for op in ["GetCapabilities", "GetTile"] {
@@ -552,9 +552,9 @@ layers:
     #[test]
     fn service_identification_emits_keywords_fees_access_constraints() {
         let mut cfg = minimal_cfg();
-        cfg.service.keywords = vec!["tiles".into(), "raster".into()];
-        cfg.service.fees = Some("none".into());
-        cfg.service.access_constraints = Some("CC-BY 4.0".into());
+        cfg.service.ows.keywords = vec!["tiles".into(), "raster".into()];
+        cfg.service.ows.fees = Some("none".into());
+        cfg.service.ows.access_constraints = Some("CC-BY 4.0".into());
         let xml = capabilities_xml(&cfg, &empty_manifest(&cfg)).unwrap();
         assert!(xml.contains("<ows:Keywords>"));
         assert!(xml.contains("<ows:Keyword>tiles</ows:Keyword>"));
@@ -587,7 +587,7 @@ layers:
     #[test]
     fn provider_site_emitted_when_online_resource_set() {
         let mut cfg = minimal_cfg();
-        cfg.service.online_resource = Some("https://wmts.example/?".into());
+        cfg.service.ows.online_resource = Some("https://wmts.example/?".into());
         let xml = capabilities_xml(&cfg, &empty_manifest(&cfg)).unwrap();
         assert!(xml.contains(r#"<ows:ProviderSite xlink:href="https://wmts.example/?""#));
     }
@@ -628,7 +628,7 @@ layers:
     #[test]
     fn operations_metadata_emits_dcp_when_online_resource_set() {
         let mut cfg = minimal_cfg();
-        cfg.service.online_resource = Some("https://wmts.example/?".into());
+        cfg.service.ows.online_resource = Some("https://wmts.example/?".into());
         let xml = capabilities_xml(&cfg, &empty_manifest(&cfg)).unwrap();
         assert!(xml.contains("<ows:DCP>"));
         assert!(xml.contains("<ows:HTTP>"));
@@ -646,7 +646,7 @@ layers:
     #[test]
     fn xml_encoding_honored_wmts() {
         let mut cfg = minimal_cfg();
-        cfg.service.encoding = Some("ISO-8859-1".into());
+        cfg.service.ows.encoding = Some("ISO-8859-1".into());
         let xml = capabilities_xml(&cfg, &empty_manifest(&cfg)).unwrap();
         assert!(xml.starts_with(r#"<?xml version="1.0" encoding="ISO-8859-1""#));
     }

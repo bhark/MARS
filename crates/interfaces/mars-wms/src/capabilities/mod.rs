@@ -126,7 +126,7 @@ pub(super) fn text_element<W: std::io::Write>(w: &mut Writer<W>, name: &str, tex
 }
 
 /// Emit a `<KeywordList>` block with one `<Keyword>` child per entry. No-op
-/// when the slice is empty so callers can pass `&cfg.service.keywords`
+/// when the slice is empty so callers can pass `&cfg.service.ows.keywords`
 /// unconditionally.
 pub(super) fn write_keyword_list<W: std::io::Write>(w: &mut Writer<W>, keywords: &[String]) -> Result<(), WmsError> {
     if keywords.is_empty() {

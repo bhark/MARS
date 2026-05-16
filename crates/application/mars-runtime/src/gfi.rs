@@ -56,7 +56,7 @@ pub(crate) async fn get_feature_info(
     let mut hits: Vec<LayerFeatureInfo> = Vec::new();
     for layer_id in &plan.layers {
         let layer_cfg = lookup_layer(config, layer_id)?;
-        if !layer_cfg.enable_get_feature_info {
+        if !layer_cfg.wms.enable_get_feature_info {
             continue;
         }
         let denom = crate::denom_from_plan(plan.bbox.width(), plan.width, plan.scale_pixel_size_m);

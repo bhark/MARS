@@ -56,44 +56,45 @@ layers:
     title: "Road network"
     abstract: "Major and minor roads"
     type: line
-    enable_get_feature_info: true
-    keywords:
-      - "roads"
-      - "transport"
-      - "network"
-    metadata_urls:
-      - type: "ISO19115:2003"
-        format: "text/xml"
-        href: "https://example.org/md/roads.xml"
-    authorities:
-      - name: "isri"
-        href: "https://example.org/isri"
-    identifiers:
-      - authority: "isri"
-        value: "urn:layer:roads"
-    opaque: false
-    advertised_crs:
-      - "EPSG:25832"
-      - "EPSG:3857"
-    attribution:
-      title: "Acme Roads"
-      online_resource: "https://acme.example/"
-      logo:
-        format: "image/png"
-        href: "https://acme.example/logo.png"
-        width: 120
-        height: 80
-    include_items:
-      mode: explicit
-      names:
-        - "name"
-        - "kind"
-    request_gating:
-      get_capabilities: true
-      get_map: true
-      get_legend_graphic: true
-      get_styles: false
-      describe_layer: false
+    wms:
+      enable_get_feature_info: true
+      keywords:
+        - "roads"
+        - "transport"
+        - "network"
+      metadata_urls:
+        - type: "ISO19115:2003"
+          format: "text/xml"
+          href: "https://example.org/md/roads.xml"
+      authorities:
+        - name: "isri"
+          href: "https://example.org/isri"
+      identifiers:
+        - authority: "isri"
+          value: "urn:layer:roads"
+      opaque: false
+      advertised_crs:
+        - "EPSG:25832"
+        - "EPSG:3857"
+      attribution:
+        title: "Acme Roads"
+        online_resource: "https://acme.example/"
+        logo:
+          format: "image/png"
+          href: "https://acme.example/logo.png"
+          width: 120
+          height: 80
+      include_items:
+        mode: explicit
+        names:
+          - "name"
+          - "kind"
+      request_gating:
+        get_capabilities: true
+        get_map: true
+        get_legend_graphic: true
+        get_styles: false
+        describe_layer: false
     sources:
       - { band: detail, from: "roads", geometry_column: "geom" }
       - { band: hi, from: "roads", geometry_column: "geom" }

@@ -428,7 +428,6 @@ pub fn build_minimal_config(layer_id: &LayerId, binding_id: &BindingId, label_su
             kind: "polygon".into(),
             scale: None,
             group: None,
-            enable_get_feature_info: true,
             bbox: None,
             sources: vec![SourceBinding {
                 source: mars_config::SourceId::new("default"),
@@ -462,15 +461,10 @@ pub fn build_minimal_config(layer_id: &LayerId, binding_id: &BindingId, label_su
             label: None,
             label_survival,
             raster: None,
-            keywords: Vec::new(),
-            metadata_urls: Vec::new(),
-            authorities: Vec::new(),
-            identifiers: Vec::new(),
-            opaque: false,
-            advertised_crs: None,
-            attribution: None,
-            include_items: Default::default(),
-            request_gating: Default::default(),
+            wms: mars_config::LayerWms {
+                enable_get_feature_info: true,
+                ..Default::default()
+            },
         }],
         observability: Observability::default(),
         render: Render::default(),
@@ -785,7 +779,6 @@ pub fn build_multi_layer_config(layer_ids: &[LayerId], binding_ids: &[BindingId]
             kind: "polygon".into(),
             scale: None,
             group: None,
-            enable_get_feature_info: true,
             bbox: None,
             sources: vec![SourceBinding {
                 source: mars_config::SourceId::new("default"),
@@ -819,15 +812,7 @@ pub fn build_multi_layer_config(layer_ids: &[LayerId], binding_ids: &[BindingId]
             label: None,
             label_survival: LabelSurvival::Independent,
             raster: None,
-            keywords: Vec::new(),
-            metadata_urls: Vec::new(),
-            authorities: Vec::new(),
-            identifiers: Vec::new(),
-            opaque: false,
-            advertised_crs: None,
-            attribution: None,
-            include_items: Default::default(),
-            request_gating: Default::default(),
+            wms: Default::default(),
         })
         .collect();
     Config {

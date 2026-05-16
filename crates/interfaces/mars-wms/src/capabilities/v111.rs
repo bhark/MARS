@@ -34,7 +34,7 @@ pub(super) fn capabilities_xml(cfg: &Config, manifest: &Manifest) -> Result<Stri
 
     w.write_event(Event::Decl(BytesDecl::new(
         "1.0",
-        Some(cfg.service.xml_encoding()),
+        Some(cfg.service.ows.xml_encoding()),
         None,
     )))
     .map_err(xml_err)?;
@@ -50,15 +50,15 @@ pub(super) fn capabilities_xml(cfg: &Config, manifest: &Manifest) -> Result<Stri
     text_element(&mut w, "Name", "OGC:WMS")?;
     text_element(&mut w, "Title", &cfg.service.title)?;
     text_element(&mut w, "Abstract", &cfg.service.abstract_)?;
-    write_keyword_list(&mut w, &cfg.service.keywords)?;
-    if let Some(href) = cfg.service.online_resource.as_deref() {
+    write_keyword_list(&mut w, &cfg.service.ows.keywords)?;
+    if let Some(href) = cfg.service.ows.online_resource.as_deref() {
         write_online_resource(&mut w, href)?;
     }
     write_contact_information(&mut w, &cfg.service.contact, &cfg.service.contact_email)?;
-    if let Some(fees) = cfg.service.fees.as_deref() {
+    if let Some(fees) = cfg.service.ows.fees.as_deref() {
         text_element(&mut w, "Fees", fees)?;
     }
-    if let Some(ac) = cfg.service.access_constraints.as_deref() {
+    if let Some(ac) = cfg.service.ows.access_constraints.as_deref() {
         text_element(&mut w, "AccessConstraints", ac)?;
     }
     w.write_event(Event::End(BytesEnd::new("Service"))).map_err(xml_err)?;
@@ -70,13 +70,13 @@ pub(super) fn capabilities_xml(cfg: &Config, manifest: &Manifest) -> Result<Stri
     w.write_event(Event::Start(BytesStart::new("Request")))
         .map_err(xml_err)?;
     let advertised_formats = configured_formats(cfg);
-    let online_href = cfg.service.online_resource.as_deref();
-    let getmap_formats = resolved_request_formats(&cfg.service.formats.get_map, &advertised_formats);
-    let getlegend_formats = resolved_request_formats(&cfg.service.formats.get_legend_graphic, &advertised_formats);
-    let getfi_formats: Vec<String> = if cfg.service.formats.get_feature_info.is_empty() {
+    let online_href = cfg.service.ows.online_resource.as_deref();
+    let getmap_formats = resolved_request_formats(&cfg.service.wms.formats.get_map, &advertised_formats);
+    let getlegend_formats = resolved_request_formats(&cfg.service.wms.formats.get_legend_graphic, &advertised_formats);
+    let getfi_formats: Vec<String> = if cfg.service.wms.formats.get_feature_info.is_empty() {
         INFO_FORMATS.iter().map(|s| (*s).to_string()).collect()
     } else {
-        cfg.service.formats.get_feature_info.clone()
+        cfg.service.wms.formats.get_feature_info.clone()
     };
     // 1.1.1 GetCapabilities advertises the wms_xml capabilities document
     // format so clients can negotiate the metadata response; emitted before
@@ -112,7 +112,7 @@ pub(super) fn capabilities_xml(cfg: &Config, manifest: &Manifest) -> Result<Stri
         text_element(&mut w, "SRS", srs)?;
     }
     let root_crs = super::service_root_native_crs(cfg);
-    for srs in &cfg.service.advertised_crs {
+    for srs in &cfg.service.wms.advertised_crs {
         if super::distinct_native_crses(cfg).contains(&srs.as_str()) {
             continue;
         }
@@ -125,7 +125,7 @@ pub(super) fn capabilities_xml(cfg: &Config, manifest: &Manifest) -> Result<Stri
 
     // 1.1.1 has no inheritable root-layer AuthorityURL or Identifier - those
     // elements exist only at per-layer scope in this version (1.3.0 added
-    // the root-layer inheritance). service.authorities and service.identifiers
+    // the root-layer inheritance). service.wms.authorities and service.wms.identifiers
     // therefore have no 1.1.1 surface.
 
     // child layers: walk the path-derived tree so configured `group` values
@@ -213,7 +213,7 @@ fn emit_leaf<W: std::io::Write>(
     if layer.permits_wms_op(mars_config::WmsOperation::GetFeatureInfo) {
         layer_tag.push_attribute(("queryable", "1"));
     }
-    if layer.opaque {
+    if layer.wms.opaque {
         layer_tag.push_attribute(("opaque", "1"));
     }
     w.write_event(Event::Start(layer_tag)).map_err(xml_err)?;
@@ -222,9 +222,9 @@ fn emit_leaf<W: std::io::Write>(
     if !layer.abstract_.is_empty() {
         text_element(w, "Abstract", &layer.abstract_)?;
     }
-    write_keyword_list(w, &layer.keywords)?;
+    write_keyword_list(w, &layer.wms.keywords)?;
     // per-layer advertised SRS list; 1.1.1 uses <SRS> not <CRS>.
-    if let Some(srses) = layer.advertised_crs.as_ref() {
+    if let Some(srses) = layer.wms.advertised_crs.as_ref() {
         for s in srses {
             text_element(w, "SRS", s)?;
         }
@@ -235,16 +235,16 @@ fn emit_leaf<W: std::io::Write>(
     }
     // 1.1.1 layer-block ordering: MetadataURL before Attribution / AuthorityURL
     // / Identifier (opposite of 1.3.0).
-    for mu in &layer.metadata_urls {
+    for mu in &layer.wms.metadata_urls {
         write_metadata_url_111(w, mu)?;
     }
-    if let Some(attr) = layer.attribution.as_ref() {
+    if let Some(attr) = layer.wms.attribution.as_ref() {
         write_attribution_111(w, attr)?;
     }
-    for auth in &layer.authorities {
+    for auth in &layer.wms.authorities {
         write_authority_url_111(w, &auth.name, &auth.href)?;
     }
-    for ident in &layer.identifiers {
+    for ident in &layer.wms.identifiers {
         write_identifier_111(w, &ident.authority, &ident.value)?;
     }
     write_default_style_with_legend_url(w, layer, formats)?;
@@ -502,7 +502,7 @@ layers:
     #[test]
     fn queryable_layer_emits_queryable_attribute_111() {
         let mut cfg = minimal_cfg();
-        cfg.layers[0].enable_get_feature_info = true;
+        cfg.layers[0].wms.enable_get_feature_info = true;
         let m = Manifest::empty(1, cfg.service.name.clone());
         let xml = capabilities_xml(&cfg, &m).unwrap();
         assert!(xml.contains(r#"<Layer queryable="1">"#));
@@ -563,10 +563,10 @@ layers:
     #[test]
     fn keywords_online_resource_fees_access_constraints_111() {
         let mut cfg = minimal_cfg();
-        cfg.service.keywords = vec!["a".into(), "b".into()];
-        cfg.service.online_resource = Some("https://w.example/?".into());
-        cfg.service.fees = Some("none".into());
-        cfg.service.access_constraints = Some("CC0".into());
+        cfg.service.ows.keywords = vec!["a".into(), "b".into()];
+        cfg.service.ows.online_resource = Some("https://w.example/?".into());
+        cfg.service.ows.fees = Some("none".into());
+        cfg.service.ows.access_constraints = Some("CC0".into());
         let m = Manifest::empty(1, cfg.service.name.clone());
         let xml = capabilities_xml(&cfg, &m).unwrap();
         assert!(xml.contains("<KeywordList>"));
@@ -596,7 +596,7 @@ layers:
     #[test]
     fn xml_encoding_honored_111() {
         let mut cfg = minimal_cfg();
-        cfg.service.encoding = Some("ISO-8859-1".into());
+        cfg.service.ows.encoding = Some("ISO-8859-1".into());
         let m = Manifest::empty(1, cfg.service.name.clone());
         let xml = capabilities_xml(&cfg, &m).unwrap();
         assert!(xml.starts_with(r#"<?xml version="1.0" encoding="ISO-8859-1""#));
@@ -605,7 +605,7 @@ layers:
     #[test]
     fn dcp_type_emitted_when_online_resource_set_111() {
         let mut cfg = minimal_cfg();
-        cfg.service.online_resource = Some("https://w.example/?".into());
+        cfg.service.ows.online_resource = Some("https://w.example/?".into());
         let m = Manifest::empty(1, cfg.service.name.clone());
         let xml = capabilities_xml(&cfg, &m).unwrap();
         assert!(xml.contains("<DCPType>"));
@@ -619,11 +619,11 @@ layers:
         // layer. 1.1.1 has no equivalent root-scope inheritance, so the
         // service-level refs must not surface here.
         let mut cfg = minimal_cfg();
-        cfg.service.authorities = vec![mars_config::AuthorityRef {
+        cfg.service.wms.authorities = vec![mars_config::AuthorityRef {
             name: "iso".into(),
             href: "https://example.org/auth".into(),
         }];
-        cfg.service.identifiers = vec![mars_config::IdentifierRef {
+        cfg.service.wms.identifiers = vec![mars_config::IdentifierRef {
             authority: "iso".into(),
             value: "urn:abc".into(),
         }];
@@ -636,7 +636,7 @@ layers:
     #[test]
     fn advertised_srs_adds_to_root_layer_dedup_against_native_111() {
         let mut cfg = minimal_cfg();
-        cfg.service.advertised_crs = vec!["EPSG:25832".into(), "EPSG:3857".into()];
+        cfg.service.wms.advertised_crs = vec!["EPSG:25832".into(), "EPSG:3857".into()];
         let m = Manifest::empty(1, cfg.service.name.clone());
         let xml = capabilities_xml(&cfg, &m).unwrap();
         assert_eq!(xml.matches("<SRS>EPSG:25832</SRS>").count(), 1);

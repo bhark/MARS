@@ -719,7 +719,6 @@ mod tests {
             kind: "polygon".into(),
             scale: None,
             group: None,
-            enable_get_feature_info: false,
             bbox: None,
             sources,
             classes: vec![mars_config::Class {
@@ -733,15 +732,7 @@ mod tests {
             label: None,
             label_survival: mars_config::LabelSurvival::Independent,
             raster: None,
-            keywords: Vec::new(),
-            metadata_urls: Vec::new(),
-            authorities: Vec::new(),
-            identifiers: Vec::new(),
-            opaque: false,
-            advertised_crs: None,
-            attribution: None,
-            include_items: Default::default(),
-            request_gating: Default::default(),
+            wms: Default::default(),
         }
     }
 
@@ -859,7 +850,6 @@ mod tests {
             kind: "polygon".into(),
             scale: None,
             group: None,
-            enable_get_feature_info: false,
             bbox: None,
             sources: vec![b],
             classes: vec![
@@ -883,15 +873,7 @@ mod tests {
             label: None,
             label_survival: mars_config::LabelSurvival::Independent,
             raster: None,
-            keywords: Vec::new(),
-            metadata_urls: Vec::new(),
-            authorities: Vec::new(),
-            identifiers: Vec::new(),
-            opaque: false,
-            advertised_crs: None,
-            attribution: None,
-            include_items: Default::default(),
-            request_gating: Default::default(),
+            wms: Default::default(),
         };
         let cfg = config_with(vec![l]);
         let plan = build_bootstrap_plan(&cfg).unwrap();
@@ -1151,7 +1133,6 @@ mod tests {
             kind: "line".into(),
             scale: None,
             group: None,
-            enable_get_feature_info: false,
             bbox: None,
             sources: vec![b],
             classes: vec![
@@ -1175,15 +1156,7 @@ mod tests {
             label: Some(inline),
             label_survival: mars_config::LabelSurvival::Independent,
             raster: None,
-            keywords: Vec::new(),
-            metadata_urls: Vec::new(),
-            authorities: Vec::new(),
-            identifiers: Vec::new(),
-            opaque: false,
-            advertised_crs: None,
-            attribution: None,
-            include_items: Default::default(),
-            request_gating: Default::default(),
+            wms: Default::default(),
         };
         let cfg = config_with(vec![l]);
         let plan = build_bootstrap_plan(&cfg).unwrap();

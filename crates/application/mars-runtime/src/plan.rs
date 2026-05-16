@@ -253,22 +253,13 @@ mod tests {
             kind: "polygon".into(),
             scale: None,
             group: None,
-            enable_get_feature_info: false,
             bbox: None,
             sources,
             classes: Vec::<Class>::new(),
             label: None,
             label_survival: LabelSurvival::default(),
             raster: None,
-            keywords: Vec::new(),
-            metadata_urls: Vec::new(),
-            authorities: Vec::new(),
-            identifiers: Vec::new(),
-            opaque: false,
-            advertised_crs: None,
-            attribution: None,
-            include_items: Default::default(),
-            request_gating: Default::default(),
+            wms: Default::default(),
         }
     }
 

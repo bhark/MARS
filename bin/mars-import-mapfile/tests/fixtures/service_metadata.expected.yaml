@@ -6,20 +6,6 @@ service:
   name: "svc_meta"
   title: "WMS metadata title"
   abstract: "Demo service for metadata coverage"
-  keywords:
-    - "roads"
-    - "buildings"
-    - "parks"
-  online_resource: "https://wms.example.org/?"
-  fees: "none"
-  access_constraints: "CC-BY 4.0"
-  encoding: "UTF-8"
-  bbox_extended: true
-  sld_enabled: true
-  advertised_crs:
-    - "EPSG:25832"
-    - "EPSG:3857"
-    - "EPSG:4326"
   contact:
     person: "Pat Operator"
     position: "Lead"
@@ -34,23 +20,39 @@ service:
       state_or_province: "IL"
       postcode: "62701"
       country: "US"
-  authorities:
-    - name: "primary"
-      href: "https://example.org/auth/primary"
-    - name: "secondary"
-      href: "https://example.org/auth/secondary"
-  identifiers:
-    - authority: "primary"
-      value: "urn:demo:svc"
-  formats:
-    get_map:
-      - "image/png"
-      - "image/jpeg"
-      - "image/webp"
-    get_feature_info:
-      - "text/html"
-    get_legend_graphic:
-      - "image/png"
+  ows:
+    keywords:
+      - "roads"
+      - "buildings"
+      - "parks"
+    online_resource: "https://wms.example.org/?"
+    fees: "none"
+    access_constraints: "CC-BY 4.0"
+    encoding: "UTF-8"
+  wms:
+    bbox_extended: true
+    sld_enabled: true
+    advertised_crs:
+      - "EPSG:25832"
+      - "EPSG:3857"
+      - "EPSG:4326"
+    authorities:
+      - name: "primary"
+        href: "https://example.org/auth/primary"
+      - name: "secondary"
+        href: "https://example.org/auth/secondary"
+    identifiers:
+      - authority: "primary"
+        value: "urn:demo:svc"
+    formats:
+      get_map:
+        - "image/png"
+        - "image/jpeg"
+        - "image/webp"
+      get_feature_info:
+        - "text/html"
+      get_legend_graphic:
+        - "image/png"
 
 source:
   type: postgis

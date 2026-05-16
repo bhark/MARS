@@ -36,7 +36,7 @@ async fn gfi_returns_empty_when_layer_lacks_get_feature_info_permission() {
     let state = fix.runtime.current_state().expect("state");
     let mut new_cfg: mars_config::Config = state.config.as_ref().unwrap().as_ref().clone();
     if let Some(layer) = new_cfg.layers.iter_mut().find(|l| l.name == fix.layer_id) {
-        layer.enable_get_feature_info = false;
+        layer.wms.enable_get_feature_info = false;
     }
     let new_state = mars_runtime::RuntimeState::from_config_and_manifest(
         &new_cfg,

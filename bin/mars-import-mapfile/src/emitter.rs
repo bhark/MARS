@@ -425,38 +425,11 @@ fn quote_colour(c: Colour) -> String {
 }
 
 /// Emit the optional `service.*` fields harvested from MAP-level METADATA.
-/// Each field is written only when set. Empty list fields are skipped.
+/// Identity-shaped fields (`contact:` / `contact_email:`) sit at the top of
+/// `service:`; OWS-shared metadata nests under `service.ows:`; WMS-only
+/// metadata nests under `service.wms:`. Each block is emitted only when at
+/// least one of its fields is set.
 fn write_service_meta(out: &mut String, svc: &ServiceMetaSkeleton) {
-    if !svc.keywords.is_empty() {
-        let _ = writeln!(out, "  keywords:");
-        for kw in &svc.keywords {
-            let _ = writeln!(out, "    - {}", yaml_quote(kw));
-        }
-    }
-    if let Some(v) = &svc.online_resource {
-        let _ = writeln!(out, "  online_resource: {}", yaml_quote(v));
-    }
-    if let Some(v) = &svc.fees {
-        let _ = writeln!(out, "  fees: {}", yaml_quote(v));
-    }
-    if let Some(v) = &svc.access_constraints {
-        let _ = writeln!(out, "  access_constraints: {}", yaml_quote(v));
-    }
-    if let Some(v) = &svc.encoding {
-        let _ = writeln!(out, "  encoding: {}", yaml_quote(v));
-    }
-    if let Some(b) = svc.bbox_extended {
-        let _ = writeln!(out, "  bbox_extended: {b}");
-    }
-    if let Some(b) = svc.sld_enabled {
-        let _ = writeln!(out, "  sld_enabled: {b}");
-    }
-    if !svc.advertised_crs.is_empty() {
-        let _ = writeln!(out, "  advertised_crs:");
-        for crs in &svc.advertised_crs {
-            let _ = writeln!(out, "    - {}", yaml_quote(crs));
-        }
-    }
     if svc.has_structured_contact() || svc.contact_email.is_some() {
         let _ = writeln!(out, "  contact:");
         if let Some(v) = &svc.contact_person {
@@ -505,154 +478,208 @@ fn write_service_meta(out: &mut String, svc: &ServiceMetaSkeleton) {
             }
         }
     }
-    if !svc.authorities.is_empty() {
-        let _ = writeln!(out, "  authorities:");
-        for (n, h) in &svc.authorities {
-            let _ = writeln!(out, "    - name: {}", yaml_quote(n));
-            let _ = writeln!(out, "      href: {}", yaml_quote(h));
+    let any_ows = !svc.keywords.is_empty()
+        || svc.online_resource.is_some()
+        || svc.fees.is_some()
+        || svc.access_constraints.is_some()
+        || svc.encoding.is_some();
+    if any_ows {
+        let _ = writeln!(out, "  ows:");
+        if !svc.keywords.is_empty() {
+            let _ = writeln!(out, "    keywords:");
+            for kw in &svc.keywords {
+                let _ = writeln!(out, "      - {}", yaml_quote(kw));
+            }
         }
-    }
-    if !svc.identifiers.is_empty() {
-        let _ = writeln!(out, "  identifiers:");
-        for (a, v) in &svc.identifiers {
-            let _ = writeln!(out, "    - authority: {}", yaml_quote(a));
-            let _ = writeln!(out, "      value: {}", yaml_quote(v));
+        if let Some(v) = &svc.online_resource {
+            let _ = writeln!(out, "    online_resource: {}", yaml_quote(v));
+        }
+        if let Some(v) = &svc.fees {
+            let _ = writeln!(out, "    fees: {}", yaml_quote(v));
+        }
+        if let Some(v) = &svc.access_constraints {
+            let _ = writeln!(out, "    access_constraints: {}", yaml_quote(v));
+        }
+        if let Some(v) = &svc.encoding {
+            let _ = writeln!(out, "    encoding: {}", yaml_quote(v));
         }
     }
     let any_fmt =
         !svc.getmap_formats.is_empty() || !svc.getfeatureinfo_formats.is_empty() || !svc.getlegend_formats.is_empty();
-    if any_fmt {
-        let _ = writeln!(out, "  formats:");
-        if !svc.getmap_formats.is_empty() {
-            let _ = writeln!(out, "    get_map:");
-            for v in &svc.getmap_formats {
-                let _ = writeln!(out, "      - {}", yaml_quote(v));
+    let any_wms = svc.bbox_extended.is_some()
+        || svc.sld_enabled.is_some()
+        || !svc.advertised_crs.is_empty()
+        || !svc.authorities.is_empty()
+        || !svc.identifiers.is_empty()
+        || any_fmt;
+    if any_wms {
+        let _ = writeln!(out, "  wms:");
+        if let Some(b) = svc.bbox_extended {
+            let _ = writeln!(out, "    bbox_extended: {b}");
+        }
+        if let Some(b) = svc.sld_enabled {
+            let _ = writeln!(out, "    sld_enabled: {b}");
+        }
+        if !svc.advertised_crs.is_empty() {
+            let _ = writeln!(out, "    advertised_crs:");
+            for crs in &svc.advertised_crs {
+                let _ = writeln!(out, "      - {}", yaml_quote(crs));
             }
         }
-        if !svc.getfeatureinfo_formats.is_empty() {
-            let _ = writeln!(out, "    get_feature_info:");
-            for v in &svc.getfeatureinfo_formats {
-                let _ = writeln!(out, "      - {}", yaml_quote(v));
+        if !svc.authorities.is_empty() {
+            let _ = writeln!(out, "    authorities:");
+            for (n, h) in &svc.authorities {
+                let _ = writeln!(out, "      - name: {}", yaml_quote(n));
+                let _ = writeln!(out, "        href: {}", yaml_quote(h));
             }
         }
-        if !svc.getlegend_formats.is_empty() {
-            let _ = writeln!(out, "    get_legend_graphic:");
-            for v in &svc.getlegend_formats {
-                let _ = writeln!(out, "      - {}", yaml_quote(v));
+        if !svc.identifiers.is_empty() {
+            let _ = writeln!(out, "    identifiers:");
+            for (a, v) in &svc.identifiers {
+                let _ = writeln!(out, "      - authority: {}", yaml_quote(a));
+                let _ = writeln!(out, "        value: {}", yaml_quote(v));
+            }
+        }
+        if any_fmt {
+            let _ = writeln!(out, "    formats:");
+            if !svc.getmap_formats.is_empty() {
+                let _ = writeln!(out, "      get_map:");
+                for v in &svc.getmap_formats {
+                    let _ = writeln!(out, "        - {}", yaml_quote(v));
+                }
+            }
+            if !svc.getfeatureinfo_formats.is_empty() {
+                let _ = writeln!(out, "      get_feature_info:");
+                for v in &svc.getfeatureinfo_formats {
+                    let _ = writeln!(out, "        - {}", yaml_quote(v));
+                }
+            }
+            if !svc.getlegend_formats.is_empty() {
+                let _ = writeln!(out, "      get_legend_graphic:");
+                for v in &svc.getlegend_formats {
+                    let _ = writeln!(out, "        - {}", yaml_quote(v));
+                }
             }
         }
     }
 }
 
-/// Emit per-layer WMS metadata fields under the layer body. Indent assumes a
-/// `layers:` list item ("  - ...") - each top-level metadata field starts at
-/// column 4 to align with siblings like `title:` and `group:`.
+/// Emit per-layer WMS metadata under a `wms:` block. Indent assumes a
+/// `layers:` list item ("  - ...") - the `wms:` key starts at column 4 to
+/// align with siblings like `title:` and `group:`. Fields nest at column 6.
+/// `enable_get_feature_info: true` is emitted whenever the request gating
+/// explicitly permits GFI, preserving the legacy back-compat shape.
 fn write_layer_wms_metadata(out: &mut String, wms: &LayerWmsSkeleton) {
-    if wms.is_empty() {
+    let gfi_enabled = matches!(wms.request_gating.get_feature_info, Some(true));
+    if wms.is_empty() && !gfi_enabled {
         return;
     }
+    let _ = writeln!(out, "    wms:");
+    if gfi_enabled {
+        let _ = writeln!(out, "      enable_get_feature_info: true");
+    }
     if !wms.keywords.is_empty() {
-        let _ = writeln!(out, "    keywords:");
+        let _ = writeln!(out, "      keywords:");
         for kw in &wms.keywords {
-            let _ = writeln!(out, "      - {}", yaml_quote(kw));
+            let _ = writeln!(out, "        - {}", yaml_quote(kw));
         }
     }
     if !wms.metadata_urls.is_empty() {
-        let _ = writeln!(out, "    metadata_urls:");
+        let _ = writeln!(out, "      metadata_urls:");
         for (t, f, h) in &wms.metadata_urls {
-            let _ = writeln!(out, "      - type: {}", yaml_quote(t));
-            let _ = writeln!(out, "        format: {}", yaml_quote(f));
-            let _ = writeln!(out, "        href: {}", yaml_quote(h));
+            let _ = writeln!(out, "        - type: {}", yaml_quote(t));
+            let _ = writeln!(out, "          format: {}", yaml_quote(f));
+            let _ = writeln!(out, "          href: {}", yaml_quote(h));
         }
     }
     if !wms.authorities.is_empty() {
-        let _ = writeln!(out, "    authorities:");
+        let _ = writeln!(out, "      authorities:");
         for (n, h) in &wms.authorities {
-            let _ = writeln!(out, "      - name: {}", yaml_quote(n));
-            let _ = writeln!(out, "        href: {}", yaml_quote(h));
+            let _ = writeln!(out, "        - name: {}", yaml_quote(n));
+            let _ = writeln!(out, "          href: {}", yaml_quote(h));
         }
     }
     if !wms.identifiers.is_empty() {
-        let _ = writeln!(out, "    identifiers:");
+        let _ = writeln!(out, "      identifiers:");
         for (a, v) in &wms.identifiers {
-            let _ = writeln!(out, "      - authority: {}", yaml_quote(a));
-            let _ = writeln!(out, "        value: {}", yaml_quote(v));
+            let _ = writeln!(out, "        - authority: {}", yaml_quote(a));
+            let _ = writeln!(out, "          value: {}", yaml_quote(v));
         }
     }
     if let Some(o) = wms.opaque {
-        let _ = writeln!(out, "    opaque: {o}");
+        let _ = writeln!(out, "      opaque: {o}");
     }
     if !wms.advertised_crs.is_empty() {
-        let _ = writeln!(out, "    advertised_crs:");
+        let _ = writeln!(out, "      advertised_crs:");
         for crs in &wms.advertised_crs {
-            let _ = writeln!(out, "      - {}", yaml_quote(crs));
+            let _ = writeln!(out, "        - {}", yaml_quote(crs));
         }
     }
     if let Some(a) = &wms.attribution {
-        let _ = writeln!(out, "    attribution:");
+        let _ = writeln!(out, "      attribution:");
         if let Some(t) = &a.title {
-            let _ = writeln!(out, "      title: {}", yaml_quote(t));
+            let _ = writeln!(out, "        title: {}", yaml_quote(t));
         }
         if let Some(or) = &a.online_resource {
-            let _ = writeln!(out, "      online_resource: {}", yaml_quote(or));
+            let _ = writeln!(out, "        online_resource: {}", yaml_quote(or));
         }
         if a.logo_format.is_some() || a.logo_href.is_some() || a.logo_width.is_some() || a.logo_height.is_some() {
-            let _ = writeln!(out, "      logo:");
+            let _ = writeln!(out, "        logo:");
             if let Some(f) = &a.logo_format {
-                let _ = writeln!(out, "        format: {}", yaml_quote(f));
+                let _ = writeln!(out, "          format: {}", yaml_quote(f));
             }
             if let Some(h) = &a.logo_href {
-                let _ = writeln!(out, "        href: {}", yaml_quote(h));
+                let _ = writeln!(out, "          href: {}", yaml_quote(h));
             }
             if let Some(w) = a.logo_width {
-                let _ = writeln!(out, "        width: {w}");
+                let _ = writeln!(out, "          width: {w}");
             }
             if let Some(h) = a.logo_height {
-                let _ = writeln!(out, "        height: {h}");
+                let _ = writeln!(out, "          height: {h}");
             }
         }
     }
     if let Some(items) = &wms.include_items {
         match items {
             IncludeItemsSkeleton::All => {
-                let _ = writeln!(out, "    include_items: {{ mode: all }}");
+                let _ = writeln!(out, "      include_items: {{ mode: all }}");
             }
             IncludeItemsSkeleton::None => {
-                let _ = writeln!(out, "    include_items: {{ mode: none }}");
+                let _ = writeln!(out, "      include_items: {{ mode: none }}");
             }
             IncludeItemsSkeleton::Explicit(names) => {
-                let _ = writeln!(out, "    include_items:");
-                let _ = writeln!(out, "      mode: explicit");
-                let _ = writeln!(out, "      names:");
+                let _ = writeln!(out, "      include_items:");
+                let _ = writeln!(out, "        mode: explicit");
+                let _ = writeln!(out, "        names:");
                 for n in names {
-                    let _ = writeln!(out, "        - {}", yaml_quote(n));
+                    let _ = writeln!(out, "          - {}", yaml_quote(n));
                 }
             }
         }
     }
     if !wms.request_gating.is_empty() {
-        let _ = writeln!(out, "    request_gating:");
+        let _ = writeln!(out, "      request_gating:");
         let rg = &wms.request_gating;
         if let Some(b) = rg.get_capabilities {
-            let _ = writeln!(out, "      get_capabilities: {b}");
+            let _ = writeln!(out, "        get_capabilities: {b}");
         }
         if let Some(b) = rg.get_map {
-            let _ = writeln!(out, "      get_map: {b}");
+            let _ = writeln!(out, "        get_map: {b}");
         }
         // get_feature_info=true already surfaces via the legacy enable flag
         // emitted above; here we record only the explicit deny case to avoid
         // double-emission of the same fact.
         if let Some(false) = rg.get_feature_info {
-            let _ = writeln!(out, "      get_feature_info: false");
+            let _ = writeln!(out, "        get_feature_info: false");
         }
         if let Some(b) = rg.get_legend_graphic {
-            let _ = writeln!(out, "      get_legend_graphic: {b}");
+            let _ = writeln!(out, "        get_legend_graphic: {b}");
         }
         if let Some(b) = rg.get_styles {
-            let _ = writeln!(out, "      get_styles: {b}");
+            let _ = writeln!(out, "        get_styles: {b}");
         }
         if let Some(b) = rg.describe_layer {
-            let _ = writeln!(out, "      describe_layer: {b}");
+            let _ = writeln!(out, "        describe_layer: {b}");
         }
     }
 }
@@ -1138,12 +1165,6 @@ pub(crate) fn render(skel: &Skeleton, bands: &[(String, u64)]) -> String {
             }
             if let Some(g) = &layer.group {
                 let _ = writeln!(out, "    group: {}", yaml_quote(g));
-            }
-            // explicit GFI opt-in derived from request_gating; the layer block
-            // emits `enable_get_feature_info: true` whenever the request_gating
-            // explicitly permits the op (back-compat with the binary flag).
-            if let Some(true) = layer.wms.request_gating.get_feature_info {
-                let _ = writeln!(out, "    enable_get_feature_info: true");
             }
             write_layer_wms_metadata(&mut out, &layer.wms);
 

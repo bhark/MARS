@@ -262,7 +262,7 @@ impl WmsVersion {
 pub fn queryable_layer_ids(cfg: &Config) -> Vec<LayerId> {
     cfg.layers
         .iter()
-        .filter(|l| l.enable_get_feature_info)
+        .filter(|l| l.wms.enable_get_feature_info)
         .map(|l| l.name.clone())
         .collect()
 }
@@ -294,13 +294,15 @@ layers:
     type: polygon
     sources:
       - { from: t, geometry_column: g }
-    request_gating: { get_map: false }
+    wms:
+      request_gating: { get_map: false }
   - name: b
     title: "B layer"
     type: polygon
-    enable_get_feature_info: true
     sources:
       - { from: t, geometry_column: g }
+    wms:
+      enable_get_feature_info: true
 "#;
         serde_yaml_ng::from_str(yaml).unwrap()
     }
