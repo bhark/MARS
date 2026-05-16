@@ -203,8 +203,14 @@ mod tests {
         assert_eq!(parse("u#format=fgb").unwrap().format, VectorFileFormat::FlatGeobuf);
         assert_eq!(parse("u#format=geo_json").unwrap().format, VectorFileFormat::GeoJson);
         // shapefile spellings only pass when the URI is a recognised archive.
-        assert_eq!(parse("u.shp.zip#format=shp").unwrap().format, VectorFileFormat::Shapefile);
-        assert_eq!(parse("u.shz#format=shapefile").unwrap().format, VectorFileFormat::Shapefile);
+        assert_eq!(
+            parse("u.shp.zip#format=shp").unwrap().format,
+            VectorFileFormat::Shapefile
+        );
+        assert_eq!(
+            parse("u.shz#format=shapefile").unwrap().format,
+            VectorFileFormat::Shapefile
+        );
     }
 
     #[test]
