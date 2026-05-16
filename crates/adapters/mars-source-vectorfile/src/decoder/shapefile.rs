@@ -13,6 +13,12 @@
 //! single source of truth for reprojection. When a `.prj` is present and
 //! disagrees with the configured CRS this decoder logs a warning but does
 //! not fail the decode - many real-world `.prj` files are imprecise.
+//!
+//! Raw `.shp` URIs (or `#format=shapefile` over a non-archive URI) are
+//! rejected at fragment-resolution time with `FragmentError::Unsupported-
+//! RawShapefile`, not at decode time: the `&Bytes` contract has no room
+//! for sidecar fetching, and the upstream `shapefile::ShapeReader::with_shx`
+//! + `dbase::Reader` together require all three files.
 
 use std::collections::HashMap;
 use std::io::{Cursor, Read};
