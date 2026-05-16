@@ -89,7 +89,7 @@ impl VectorFileSource {
             Err(_) => return Err(VectorFileError::InvalidConfig { what: "cache_max_size" }),
         };
         let cache = Arc::new(cache::DiskCache::open(cfg.cache_dir.clone(), cache_max).await?);
-        let fetcher = Arc::new(fetch::Fetcher::new());
+        let fetcher = Arc::new(fetch::Fetcher::new(cfg.allow_http));
         let decoders = Arc::new(decoder::Registry::with_builtin());
         Ok(Self {
             id,

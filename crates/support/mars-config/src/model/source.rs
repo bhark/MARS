@@ -88,6 +88,13 @@ pub struct VectorFileBackend {
     /// uncapped (cache grows until full disk).
     #[serde(default)]
     pub cache_max_size: Option<String>,
+    /// Allow plain `http://` URIs through the HTTP backend. Defaults to
+    /// false: object_store's HttpBuilder rejects http URIs unless this is
+    /// explicitly opted into, mirroring the secure-by-default posture
+    /// operators expect. Set to true for internal-network file servers
+    /// that do not terminate TLS.
+    #[serde(default)]
+    pub allow_http: bool,
 }
 
 impl VectorFileBackend {

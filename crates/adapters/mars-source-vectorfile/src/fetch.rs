@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use object_store::aws::AmazonS3Builder;
+use object_store::client::ClientOptions;
 use object_store::gcp::GoogleCloudStorageBuilder;
 use object_store::http::HttpBuilder;
 use object_store::local::LocalFileSystem;
@@ -23,11 +24,14 @@ use crate::error::VectorFileError;
 /// on first use of a host and reuses it for subsequent fetches.
 pub struct Fetcher {
     stores: RwLock<HashMap<StoreKey, Arc<dyn ObjectStore>>>,
+    allow_http: bool,
 }
 
 impl std::fmt::Debug for Fetcher {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Fetcher").finish_non_exhaustive()
+        f.debug_struct("Fetcher")
+            .field("allow_http", &self.allow_http)
+            .finish_non_exhaustive()
     }
 }
 
@@ -39,16 +43,19 @@ struct StoreKey {
 
 impl Default for Fetcher {
     fn default() -> Self {
-        Self::new()
+        Self::new(false)
     }
 }
 
 impl Fetcher {
-    /// Construct an empty fetcher.
+    /// Construct an empty fetcher. `allow_http` controls whether plain
+    /// `http://` URIs are routed through the HTTP backend; default-false is
+    /// the secure-by-default posture (object_store rejects http otherwise).
     #[must_use]
-    pub fn new() -> Self {
+    pub fn new(allow_http: bool) -> Self {
         Self {
             stores: RwLock::new(HashMap::new()),
+            allow_http,
         }
     }
 
@@ -104,7 +111,7 @@ impl Fetcher {
         if let Some(s) = self.stores.read().await.get(&key) {
             return Ok(s.clone());
         }
-        let store = build_store(parsed)?;
+        let store = build_store(parsed, self.allow_http)?;
         let mut w = self.stores.write().await;
         // re-check under write lock in case a peer raced us.
         if let Some(existing) = w.get(&key) {
@@ -179,7 +186,7 @@ impl ParsedUri {
     }
 }
 
-fn build_store(parsed: &ParsedUri) -> Result<Arc<dyn ObjectStore>, VectorFileError> {
+fn build_store(parsed: &ParsedUri, allow_http: bool) -> Result<Arc<dyn ObjectStore>, VectorFileError> {
     match parsed.scheme.as_str() {
         "s3" => {
             let mut b = AmazonS3Builder::from_env().with_bucket_name(&parsed.authority);
@@ -208,8 +215,11 @@ fn build_store(parsed: &ParsedUri) -> Result<Arc<dyn ObjectStore>, VectorFileErr
         }
         "http" | "https" => {
             let url = format!("{}://{}", parsed.scheme, parsed.authority);
+            // plain http must be explicitly opted into by the operator;
+            // object_store rejects it otherwise. https never needs the flag.
             let store = HttpBuilder::new()
                 .with_url(url)
+                .with_client_options(ClientOptions::new().with_allow_http(allow_http))
                 .build()
                 .map_err(|e| VectorFileError::ObjectStore {
                     what: "build_http",
@@ -266,7 +276,7 @@ mod tests {
     fn scheme_dispatch_for_file() {
         // file:// resolves to LocalFileSystem without touching disk during build.
         let parsed = ParsedUri::parse("file:///tmp/anywhere.fgb").unwrap();
-        let store = build_store(&parsed).unwrap();
+        let store = build_store(&parsed, false).unwrap();
         let dbg = format!("{:?}", store);
         assert!(dbg.contains("LocalFileSystem"), "got {dbg}");
     }
@@ -279,7 +289,7 @@ mod tests {
 
         let cache_dir = tempfile::tempdir().unwrap();
         let cache = DiskCache::open(cache_dir.path(), None).await.unwrap();
-        let fetcher = Fetcher::new();
+        let fetcher = Fetcher::new(false);
         let uri = format!("file://{}", path.display());
         let got = fetcher.fetch_cached(&uri, &cache).await.unwrap();
         assert_eq!(&got[..], b"hello-vectorfile");
