@@ -41,3 +41,5 @@ zip           = { workspace = true }
 [dev-dependencies]
 tokio    = { workspace = true, features = ["test-util", "rt-multi-thread", "macros"] }
 tempfile = { workspace = true }
+wiremock = { workspace = true }
+futures-util = { workspace = true }
