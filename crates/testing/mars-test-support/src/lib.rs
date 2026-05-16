@@ -8,6 +8,9 @@
 #[cfg(feature = "docker")]
 pub mod postgis;
 
+#[cfg(feature = "docker")]
+pub mod seaweedfs;
+
 use std::fmt;
 
 #[derive(Debug, Clone)]
