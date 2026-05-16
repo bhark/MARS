@@ -65,7 +65,12 @@ pub(crate) enum LayerDirective<'a> {
     Group(&'a Token),
     Status(&'a Token),
     Metadata(&'a Token),
+    /// `CONNECTION "<uri>"` - layer-scoped source connection string. For OGR
+    /// it's the `/vsi*` or filesystem path; for POSTGIS it's the DSN lifted
+    /// to MAP-scope `source.dsn` when every PostGIS layer agrees.
     Connection(&'a Token),
+    /// `CONNECTIONTYPE <kind>` - source-driver discriminator (POSTGIS, OGR,
+    /// ...). Drives downstream branching in the resolver.
     ConnectionType(&'a Token),
     Projection(&'a Token),
     Unsupported(&'a Token),

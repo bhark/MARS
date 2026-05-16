@@ -117,6 +117,11 @@ fn layer_metadata_fixture_matches() {
 }
 
 #[test]
+fn postgis_connection_lifts_to_source_dsn() {
+    assert_fixture_matches("postgis_connection");
+}
+
+#[test]
 fn ogr_s3_fixture_matches() {
     assert_fixture_matches("ogr_s3");
 }

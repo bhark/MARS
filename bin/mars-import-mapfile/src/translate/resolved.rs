@@ -42,6 +42,11 @@ pub(crate) struct ResolvedLayer {
     /// (flat) and `wms_layer_group` (hierarchical); the hierarchical form
     /// wins when both are set.
     pub group_path: Option<String>,
+    /// Lifted PostGIS DSN from `CONNECTIONTYPE POSTGIS` + `CONNECTION "<dsn>"`.
+    /// `Some` only for layers that declare both; non-PostGIS layers and
+    /// layers without an explicit CONNECTION leave this `None` so the
+    /// MAP-scope lift can distinguish agreement, mixed input, and absence.
+    pub postgis_dsn: Option<String>,
     pub wms: LayerWmsSkeleton,
     pub ows: LayerOwsSkeleton,
     pub unimplemented: Vec<&'static str>,
@@ -141,6 +146,8 @@ pub(crate) fn resolve_layer(
             return None;
         }
     }
+
+    let postgis_dsn = lift_postgis_dsn(p.connection_type.as_ref(), p.connection.as_deref(), &name, layer_line);
 
     let geom_kind_str = p.layer_type.as_deref().and_then(mapfile_type_to_geom);
     let geom_for_classes = geom_kind_str.unwrap_or("polygon");
@@ -264,10 +271,33 @@ pub(crate) fn resolve_layer(
         label,
         attributes: all_attrs.into_iter().collect(),
         group_path,
+        postgis_dsn,
         wms,
         ows,
         unimplemented,
     })
+}
+
+/// Lift a layer's CONNECTIONTYPE + CONNECTION pair into a PostGIS DSN.
+/// Returns `Some` only for POSTGIS layers carrying an explicit CONNECTION.
+/// non-POSTGIS types log a warn so the operator notices the dropped DSN; OGR
+/// is unaffected because its CONNECTION is consumed by `resolve_ogr_source`.
+fn lift_postgis_dsn(kind: Option<&ConnectionTypeToken>, dsn: Option<&str>, layer: &str, line: usize) -> Option<String> {
+    let dsn = dsn?;
+    match kind {
+        Some(ConnectionTypeToken::Postgis) => Some(dsn.to_string()),
+        Some(ConnectionTypeToken::Ogr) => None,
+        Some(ConnectionTypeToken::Other(raw)) => {
+            warn!(line, layer, connection_type = %raw, "non-postgis CONNECTIONTYPE; CONNECTION dropped");
+            None
+        }
+        // mapfile permits a bare CONNECTION without CONNECTIONTYPE in older
+        // dialects; the type is ambiguous - skip rather than guess.
+        None => {
+            warn!(line, layer, "CONNECTION without CONNECTIONTYPE; dropped");
+            None
+        }
+    }
 }
 
 /// WMS-only extras (opaque + advertised CRS list).

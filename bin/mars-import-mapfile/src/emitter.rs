@@ -30,6 +30,34 @@ pub(crate) struct Skeleton {
     pub(crate) symbols: HashMap<String, SymbolDef>,
 }
 
+/// outcome of folding per-layer PostGIS CONNECTION lifts into a single
+/// MAP-scope `source.dsn`. config currently has no per-layer dsn override,
+/// so mixed input falls back to the placeholder.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum LiftedSourceDsn<'a> {
+    Placeholder,
+    Lifted(&'a str),
+    Mixed,
+}
+
+pub(crate) fn fold_postgis_dsns<'a, I>(dsns: I) -> LiftedSourceDsn<'a>
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    let mut chosen: Option<&str> = None;
+    for d in dsns {
+        match chosen {
+            None => chosen = Some(d),
+            Some(c) if c == d => {}
+            Some(_) => return LiftedSourceDsn::Mixed,
+        }
+    }
+    match chosen {
+        Some(d) => LiftedSourceDsn::Lifted(d),
+        None => LiftedSourceDsn::Placeholder,
+    }
+}
+
 /// MAP-level service metadata harvested from the mapfile METADATA block.
 /// Each field carries either a parsed value or the absent state; the emitter
 /// is responsible for falling back to placeholders when nothing is set.
@@ -277,6 +305,10 @@ pub(crate) struct LayerSkeleton {
     pub(crate) wms: LayerWmsSkeleton,
     /// Per-layer OWS metadata + cross-protocol gating.
     pub(crate) ows: LayerOwsSkeleton,
+    /// PostGIS DSN lifted from this layer's `CONNECTION`. folded at render
+    /// time into a single MAP-scope `source.dsn` when every PostGIS layer
+    /// agrees; see [`fold_postgis_dsns`].
+    pub(crate) postgis_dsn: Option<String>,
 }
 
 /// Per-layer WMS-only extras (opaque, advertised CRS list). The cross-
@@ -1172,6 +1204,15 @@ pub(crate) fn render(skel: &Skeleton, bands: &[(String, u64)]) -> String {
         .iter()
         .flat_map(|l| &l.sources)
         .any(|s| matches!(s.source, BindingSource::VectorFile(_)));
+    let dsn_lift = fold_postgis_dsns(skel.layers.iter().filter_map(|l| l.postgis_dsn.as_deref()));
+    let dsn_line = match &dsn_lift {
+        LiftedSourceDsn::Lifted(d) => yaml_quote(d),
+        LiftedSourceDsn::Mixed => {
+            warn!("layers declared mismatched PostGIS CONNECTION strings; emitting ${{PG_DSN}} placeholder");
+            "\"${PG_DSN}\"".to_string()
+        }
+        LiftedSourceDsn::Placeholder => "\"${PG_DSN}\"".to_string(),
+    };
     if has_vectorfile {
         // plural form: postgis + vectorfile coexist. per-binding `source:`
         // fields disambiguate; mars-config folds the wire shape into the
@@ -1179,7 +1220,7 @@ pub(crate) fn render(skel: &Skeleton, bands: &[(String, u64)]) -> String {
         let _ = writeln!(out, "sources:");
         let _ = writeln!(out, "  - id: pg");
         let _ = writeln!(out, "    type: postgis");
-        let _ = writeln!(out, "    dsn: \"${{PG_DSN}}\"");
+        let _ = writeln!(out, "    dsn: {dsn_line}");
         let _ = writeln!(out, "    native_crs: ${{MARS_NATIVE_CRS:-EPSG:25832}}");
         let _ = writeln!(out, "  - id: ogr");
         let _ = writeln!(out, "    type: vectorfile");
@@ -1188,7 +1229,7 @@ pub(crate) fn render(skel: &Skeleton, bands: &[(String, u64)]) -> String {
     } else {
         let _ = writeln!(out, "source:");
         let _ = writeln!(out, "  type: postgis");
-        let _ = writeln!(out, "  dsn: \"${{PG_DSN}}\"");
+        let _ = writeln!(out, "  dsn: {dsn_line}");
         let _ = writeln!(out, "  native_crs: ${{MARS_NATIVE_CRS:-EPSG:25832}}");
     }
     let _ = writeln!(out);
@@ -1385,6 +1426,27 @@ pub(crate) fn render(skel: &Skeleton, bands: &[(String, u64)]) -> String {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fold_postgis_dsns_empty_is_placeholder() {
+        let out: LiftedSourceDsn<'_> = fold_postgis_dsns(std::iter::empty::<&str>());
+        assert_eq!(out, LiftedSourceDsn::Placeholder);
+    }
+
+    #[test]
+    fn fold_postgis_dsns_agreement_lifts() {
+        let dsns = ["host=a dbname=x", "host=a dbname=x"];
+        assert_eq!(
+            fold_postgis_dsns(dsns.iter().copied()),
+            LiftedSourceDsn::Lifted("host=a dbname=x")
+        );
+    }
+
+    #[test]
+    fn fold_postgis_dsns_disagreement_is_mixed() {
+        let dsns = ["host=a dbname=x", "host=b dbname=y"];
+        assert_eq!(fold_postgis_dsns(dsns.iter().copied()), LiftedSourceDsn::Mixed);
+    }
 
     fn src(max: Option<u64>, from: &str) -> SourceSkeleton {
         SourceSkeleton {

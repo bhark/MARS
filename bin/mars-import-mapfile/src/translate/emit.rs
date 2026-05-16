@@ -52,6 +52,7 @@ pub(crate) fn emit_layer(r: ResolvedLayer, skel: &mut Skeleton) {
         group: r.group_path,
         wms: r.wms,
         ows: r.ows,
+        postgis_dsn: r.postgis_dsn,
     });
 }
 

@@ -1,0 +1,37 @@
+# exercises CONNECTIONTYPE POSTGIS + CONNECTION lift to source.dsn.
+# both layers agree on the DSN, so the emitter folds it to MAP scope.
+MAP
+  NAME "pg"
+  TITLE "Postgis Connection"
+  EXTENT 0 0 1 1
+  UNITS METERS
+
+  LAYER
+    NAME "roads"
+    TYPE LINE
+    STATUS ON
+    CONNECTIONTYPE POSTGIS
+    CONNECTION "host=db.example.org port=5432 dbname=gis user=mars password=secret"
+    DATA "geom FROM roads"
+    CLASS
+      STYLE
+        COLOR 0 0 0
+        WIDTH 1
+      END
+    END
+  END
+
+  LAYER
+    NAME "buildings"
+    TYPE POLYGON
+    STATUS ON
+    CONNECTIONTYPE POSTGIS
+    CONNECTION "host=db.example.org port=5432 dbname=gis user=mars password=secret"
+    DATA "geom FROM buildings"
+    CLASS
+      STYLE
+        COLOR 128 128 128
+      END
+    END
+  END
+END
