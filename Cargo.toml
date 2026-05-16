@@ -109,9 +109,13 @@ fallible-streaming-iterator = "0.1.9"
 flatgeobuf          = { version = "6.0.1", default-features = false, features = ["bytes"] }
 flate2              = "1.1.9"
 fontdb              = { version = "0.23.0", default-features = false }
+# geo-types is the bridge type the shapefile crate hands geometries through
+# on its way to geozero's WKB writer. version is pinned to the range
+# shapefile 0.8 accepts and what geozero 0.15 ships against transitively.
+geo-types           = { version = "0.7.19", default-features = false }
 futures-core        = "0.3.32"
 futures-util        = "0.3.32"
-geozero             = { version = "0.15.1", default-features = false, features = ["with-wkb", "with-geojson"] }
+geozero             = { version = "0.15.1", default-features = false, features = ["with-wkb", "with-geojson", "with-geo"] }
 hashbrown           = "0.17.1"
 hashlink            = "0.11.0"
 humantime           = "2.3.0"
@@ -147,6 +151,9 @@ schemars            = "1.2.1"
 serde               = { version = "1.0.228", features = ["derive", "rc"] }
 serde_json          = "1.0.149"
 serde_yaml_ng       = "0.10.0"
+# shapefile decoder for mars-source-vectorfile; geo-types feature enables
+# the Shape -> geo_types::Geometry conversion path that geozero lowers to WKB.
+shapefile           = { version = "0.8.0", default-features = false, features = ["geo-types"] }
 sha2                = "0.11.0"
 temp-env            = "0.3.6"
 tempfile            = "3.27.0"
@@ -162,6 +169,10 @@ tower-http          = { version = "0.6.10", features = ["trace", "timeout", "lim
 tracing             = "0.1.44"
 tracing-subscriber  = { version = "0.3.23", features = ["env-filter", "json", "fmt"] }
 wiremock            = "0.6.5"
+# zip carrier for the shapefile decoder: one binding fetches a single archive
+# bundling .shp + .shx + .dbf (+ optional .prj). default features pull bzip2
+# / zstd / xz; deflate is the only compressor real shapefile bundles use.
+zip                 = { version = "8.6.0", default-features = false, features = ["deflate"] }
 zune-jpeg           = "0.5.15"
 rayon               = "1.12.0"
 

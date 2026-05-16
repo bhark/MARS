@@ -10,7 +10,8 @@
 //!
 //! The fragment is optional. When omitted, [`parse`] infers the format
 //! from the URI's file extension (`.fgb` -> FlatGeobuf, `.geojson|.json`
-//! -> GeoJson) and leaves `source_crs` unset; the caller falls back to
+//! -> GeoJson, `.shp.zip|.shz` -> Shapefile) and leaves `source_crs`
+//! unset; the caller falls back to
 //! [`mars_source::SourceBinding::crs`].
 //!
 //! The composition layer that builds port bindings from the typed
@@ -100,6 +101,7 @@ fn parse_format(s: &str) -> Result<VectorFileFormat, FragmentError> {
     match s {
         "flat_geobuf" | "flatgeobuf" | "fgb" => Ok(VectorFileFormat::FlatGeobuf),
         "geo_json" | "geojson" | "json" => Ok(VectorFileFormat::GeoJson),
+        "shapefile" | "shp" | "shz" => Ok(VectorFileFormat::Shapefile),
         other => Err(FragmentError::UnknownFormat(other.to_string())),
     }
 }
@@ -110,9 +112,14 @@ fn infer_from_extension(uri: &str) -> Option<VectorFileFormat> {
         Some((_, t)) => t,
         None => uri,
     };
-    let ext = tail.rsplit_once('.').map(|(_, e)| e)?;
-    let lower = ext.to_ascii_lowercase();
-    match lower.as_str() {
+    let lower_tail = tail.to_ascii_lowercase();
+    // shapefile lives in a compound extension; check it before the
+    // single-extension cases so plain `.zip` doesn't masquerade.
+    if lower_tail.ends_with(".shp.zip") || lower_tail.ends_with(".shz") {
+        return Some(VectorFileFormat::Shapefile);
+    }
+    let ext = lower_tail.rsplit_once('.').map(|(_, e)| e)?;
+    match ext {
         "fgb" => Some(VectorFileFormat::FlatGeobuf),
         "geojson" | "json" => Some(VectorFileFormat::GeoJson),
         _ => None,
@@ -165,5 +172,15 @@ mod tests {
     fn accepts_alternate_spellings() {
         assert_eq!(parse("u#format=fgb").unwrap().format, VectorFileFormat::FlatGeobuf);
         assert_eq!(parse("u#format=geo_json").unwrap().format, VectorFileFormat::GeoJson);
+        assert_eq!(parse("u#format=shp").unwrap().format, VectorFileFormat::Shapefile);
+        assert_eq!(parse("u#format=shapefile").unwrap().format, VectorFileFormat::Shapefile);
+    }
+
+    #[test]
+    fn infers_shapefile_compound_extension() {
+        let p = parse("s3://b/data/roads.shp.zip").unwrap();
+        assert_eq!(p.format, VectorFileFormat::Shapefile);
+        let p = parse("file:///x.shz").unwrap();
+        assert_eq!(p.format, VectorFileFormat::Shapefile);
     }
 }

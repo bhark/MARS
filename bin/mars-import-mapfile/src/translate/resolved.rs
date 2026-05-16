@@ -478,6 +478,10 @@ fn infer_vectorfile_format(uri: &str) -> Option<String> {
         Some("flat_geobuf".to_string())
     } else if lower.ends_with(".geojson") || lower.ends_with(".json") {
         Some("geo_json".to_string())
+    } else if lower.ends_with(".shp.zip") || lower.ends_with(".shz") {
+        // shapefile triple is shipped as a single archive; .shz is the
+        // less-common compact spelling.
+        Some("shapefile".to_string())
     } else {
         None
     }

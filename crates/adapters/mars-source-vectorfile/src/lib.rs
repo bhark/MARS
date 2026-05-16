@@ -1,12 +1,18 @@
 //! Object-store-backed adapter for `mars-source`.
 //!
-//! Pulls vector-file payloads (FlatGeobuf, GeoJSON) from any object_store
-//! scheme (`s3://`, `gs://`, `file://`, `https://`), caches them on disk
-//! keyed by `(uri, etag)`, decodes them through a pluggable [`decoder`]
-//! registry, and reprojects every row's geometry from the per-binding
-//! `source_crs` to the configured `Source.native_crs`. A polled etag
-//! change feed emits `ChangeEvent::Rebind` when the upstream object
-//! identity moves.
+//! Pulls vector-file payloads (FlatGeobuf, GeoJSON, zipped Shapefile)
+//! from any object_store scheme (`s3://`, `gs://`, `file://`, `https://`),
+//! caches them on disk keyed by `(uri, etag)`, decodes them through a
+//! pluggable [`decoder`] registry, and reprojects every row's geometry
+//! from the per-binding `source_crs` to the configured `Source.native_crs`.
+//! A polled etag change feed emits `ChangeEvent::Rebind` when the
+//! upstream object identity moves.
+//!
+//! Shapefile note: the binding URI points at a single ZIP archive
+//! bundling the `.shp` + `.shx` + `.dbf` triple at a shared basename;
+//! a `.prj` is honoured when present. One archive keeps the adapter's
+//! single-URI fetch contract intact and matches the way public shapefile
+//! distributions ship in practice.
 //!
 //! Bindings reach this adapter through the port-level [`SourceBinding`].
 //! Because the port's `from: String` is an opaque locator, this adapter

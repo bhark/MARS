@@ -501,6 +501,7 @@ fn resolve_binding_source(binding: &mars_config::SourceBinding) -> Result<(Strin
         let fmt_tok = match fmt {
             mars_config::VectorFileFormat::FlatGeobuf => "flat_geobuf",
             mars_config::VectorFileFormat::GeoJson => "geo_json",
+            mars_config::VectorFileFormat::Shapefile => "shapefile",
         };
         let locator = format!("{uri}#format={fmt_tok}&source_crs={}", source_crs.as_str());
         // BindingId must be path-safe; hash the locator so URIs with colons /

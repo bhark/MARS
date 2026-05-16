@@ -1,9 +1,9 @@
 //! Pluggable decoder registry.
 //!
 //! `Decoder` is the seam that lets new vector-file formats slot in
-//! without touching the `Source` impl. v1 ships two pure-Rust decoders
-//! (FlatGeobuf, GeoJSON); a GDAL FFI variant could implement the same
-//! trait later without disturbing callers.
+//! without touching the `Source` impl. v1 ships three pure-Rust decoders
+//! (FlatGeobuf, GeoJSON, Shapefile); a GDAL FFI variant could implement
+//! the same trait later without disturbing callers.
 //!
 //! Decoding runs on a `spawn_blocking` worker because the parsers and
 //! `mars_proj::Transformer` are both synchronous and the transformer is
@@ -21,6 +21,7 @@ use mars_types::CrsCode;
 
 pub mod flatgeobuf;
 pub mod geojson;
+pub mod shapefile;
 
 use crate::BindingPlan;
 use crate::error::DecoderError;
@@ -80,6 +81,7 @@ impl Registry {
         let mut r = Self::new();
         r.decoders.push(Box::new(flatgeobuf::FlatGeobufDecoder));
         r.decoders.push(Box::new(geojson::GeoJsonDecoder));
+        r.decoders.push(Box::new(shapefile::ShapefileDecoder));
         r
     }
 

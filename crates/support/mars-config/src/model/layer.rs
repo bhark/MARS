@@ -146,6 +146,11 @@ pub enum VectorFileFormat {
     FlatGeobuf,
     /// GeoJSON (`.geojson` / `.json`). RFC 7946.
     GeoJson,
+    /// ESRI Shapefile bundled as a single ZIP archive (`.shp.zip` / `.zip`).
+    /// The archive must carry the mandatory `.shp` + `.shx` + `.dbf` triple
+    /// at a shared basename; an optional `.prj` is honoured when present.
+    /// One-file packaging keeps the adapter's single-URI fetch contract.
+    Shapefile,
 }
 
 /// Source binding for a layer. Always points at one of the configured

@@ -7,7 +7,7 @@ repository.workspace   = true
 authors.workspace      = true
 publish.workspace      = true
 rust-version.workspace = true
-description = "Object-store-backed vector-file adapter for mars-source. Pure-Rust decoders for FlatGeobuf and GeoJSON, with on-disk cache, etag change feed, and per-binding CRS reprojection."
+description = "Object-store-backed vector-file adapter for mars-source. Pure-Rust decoders for FlatGeobuf, GeoJSON, and zipped Shapefile, with on-disk cache, etag change feed, and per-binding CRS reprojection."
 
 [lints]
 workspace = true
@@ -24,16 +24,19 @@ bytes         = { workspace = true }
 fallible-streaming-iterator = { workspace = true }
 flatgeobuf    = { workspace = true }
 futures-core  = { workspace = true }
+geo-types     = { workspace = true }
 futures-util  = { workspace = true }
 geozero       = { workspace = true }
 object_store  = { workspace = true }
 serde         = { workspace = true }
 serde_json    = { workspace = true }
+shapefile     = { workspace = true }
 sha2          = { workspace = true }
 tempfile      = { workspace = true }
 thiserror     = { workspace = true }
 tokio         = { workspace = true }
 tracing       = { workspace = true }
+zip           = { workspace = true }
 
 [dev-dependencies]
 tokio    = { workspace = true, features = ["test-util", "rt-multi-thread", "macros"] }
