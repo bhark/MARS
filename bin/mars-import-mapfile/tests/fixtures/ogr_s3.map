@@ -1,0 +1,16 @@
+# OGR + s3 vsi connection - exercises CONNECTIONTYPE OGR -> vectorfile binding.
+MAP
+  NAME "ogr_s3"
+  TITLE "OGR via /vsis3 connection"
+
+  LAYER
+    NAME "airports"
+    TYPE POINT
+    STATUS ON
+    CONNECTIONTYPE OGR
+    CONNECTION "/vsis3/bucket/airports.fgb"
+    PROJECTION
+      "init=epsg:4326"
+    END
+  END
+END

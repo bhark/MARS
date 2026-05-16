@@ -198,6 +198,7 @@ impl LeaderLock for NopLock {
 fn binding_plan(id: &str, page_size: u64) -> BindingPlan {
     BindingPlan {
         binding_id: BindingId::try_new(id).unwrap(),
+        source_id: mars_config::SourceId::new("default"),
         source_table: id.to_string(),
         filter: None,
         geometry_field: "geom".into(),
@@ -221,8 +222,10 @@ fn binding_plan(id: &str, page_size: u64) -> BindingPlan {
 fn make_deps(source: Arc<ConfigurableFakeSource>) -> (Deps, Arc<InMemoryStore>) {
     let store = Arc::new(InMemoryStore::new());
     let manifest_store = Arc::new(InMemoryPublisher::new());
+    let mut registry = mars_compiler::SourceRegistry::new();
+    registry.insert(mars_config::SourceId::new("default"), source);
     let deps = Deps {
-        source,
+        sources: Arc::new(registry),
         change_feed: Arc::new(NopFeed),
         leader_lock: Arc::new(NopLock),
         store: store.clone(),

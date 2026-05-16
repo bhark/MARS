@@ -41,8 +41,8 @@ pub fn validate(config: &mut Config, config_dir: &Path) -> Result<(), ConfigErro
 
     service::validate_service(config)?;
     compiler::validate_compiler_and_render(config)?;
+    source::validate_sources(config)?;
     crs::validate_native_crs(config)?;
-    source::validate_bootstrap(config)?;
     style::validate_styles(&config.styles)?;
 
     let bands = band::validate_bands(config)?;
@@ -86,7 +86,7 @@ mod tests {
     #[test]
     fn rejects_empty_native_crs() {
         let mut cfg = minimal_config();
-        cfg.source.native_crs = CrsCode::new("");
+        cfg.sources[0].native_crs = CrsCode::new("");
         assert!(matches!(
             validate(&mut cfg, Path::new(".")),
             Err(ConfigError::Invalid(ref s)) if s.contains("native_crs")
@@ -540,19 +540,30 @@ raster:
     }
 
     fn cfg_with_bootstrap(role: &str, schemas: &[&str]) -> crate::model::Config {
-        use crate::model::{Bootstrap, ChangeFeed};
+        use crate::model::{Bootstrap, ChangeFeed, SourceBackend};
         let mut cfg = minimal_config();
-        cfg.source.change_feed = Some(ChangeFeed {
+        let pg = match &mut cfg.sources[0].backend {
+            SourceBackend::Postgis(pg) => pg,
+            _ => unreachable!("minimal_config seeds a postgis backend"),
+        };
+        pg.change_feed = Some(ChangeFeed {
             kind: "pgoutput".into(),
             publication: Some("mars_pub".into()),
             slot: Some("mars_slot".into()),
             poll_interval: None,
         });
-        cfg.source.bootstrap = Some(Bootstrap {
+        pg.bootstrap = Some(Bootstrap {
             role: role.into(),
             schemas: schemas.iter().map(|s| (*s).into()).collect(),
         });
         cfg
+    }
+
+    fn postgis_backend_mut(cfg: &mut crate::model::Config) -> &mut crate::model::PostgisBackend {
+        match &mut cfg.sources[0].backend {
+            crate::model::SourceBackend::Postgis(pg) => pg,
+            _ => unreachable!("minimal_config seeds a postgis backend"),
+        }
     }
 
     #[test]
@@ -564,7 +575,7 @@ raster:
     #[test]
     fn rejects_bootstrap_without_change_feed() {
         let mut cfg = cfg_with_bootstrap("mars_replicator", &["public"]);
-        cfg.source.change_feed = None;
+        postgis_backend_mut(&mut cfg).change_feed = None;
         let err = validate(&mut cfg, Path::new(".")).unwrap_err();
         assert!(err.to_string().contains("change_feed"));
     }
@@ -573,7 +584,7 @@ raster:
     fn rejects_bootstrap_with_polling_change_feed() {
         use crate::model::ChangeFeed;
         let mut cfg = cfg_with_bootstrap("mars_replicator", &["public"]);
-        cfg.source.change_feed = Some(ChangeFeed {
+        postgis_backend_mut(&mut cfg).change_feed = Some(ChangeFeed {
             kind: "polling".into(),
             publication: None,
             slot: None,

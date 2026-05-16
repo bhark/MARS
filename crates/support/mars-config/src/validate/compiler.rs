@@ -24,12 +24,21 @@ pub(super) fn validate_compiler_and_render(config: &Config) -> Result<(), Config
             "compiler.compile_binding_parallelism must be > 0".into(),
         ));
     }
-    if let Some(pool_max) = config.source.pool.max_size
+    // compare against the tightest pool ceiling across postgis sources -
+    // parallelism is service-wide, so the smallest configured ceiling caps
+    // it. vectorfile sources have no pool concept and are skipped.
+    let pool_ceiling = config
+        .sources
+        .iter()
+        .filter_map(|s| s.postgis())
+        .filter_map(|pg| pg.pool.max_size)
+        .min();
+    if let Some(pool_max) = pool_ceiling
         && parallelism > pool_max
     {
         return Err(ConfigError::Invalid(format!(
-            "compiler.compile_binding_parallelism ({parallelism}) exceeds source.pool.max_size ({pool_max}); \
-             raise the pool size or lower the parallelism"
+            "compiler.compile_binding_parallelism ({parallelism}) exceeds the smallest postgis source pool max_size \
+             ({pool_max}); raise the pool size or lower the parallelism"
         )));
     }
 

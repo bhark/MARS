@@ -70,7 +70,8 @@ pub async fn reconcile_binding(
 
     // 1. count source rows per user_id (bag, not set - a non-unique source id
     //    contributes one count per row).
-    let mut stream = deps.source.stream_feature_ids(&port_binding).await?;
+    let source = deps.source_for(binding_plan)?;
+    let mut stream = source.stream_feature_ids(&port_binding).await?;
     let mut source_counts: BTreeMap<u64, u32> = BTreeMap::new();
     while let Some(item) = stream.next().await {
         let id = item?;
@@ -138,7 +139,7 @@ pub async fn reconcile_binding(
             .iter()
             .map(|id| i64::try_from(*id).unwrap_or(i64::MAX))
             .collect();
-        let mut geom_stream = deps.source.stream_rows_by_id(&port_binding, &ids_signed).await?;
+        let mut geom_stream = source.stream_rows_by_id(&port_binding, &ids_signed).await?;
         while let Some(item) = geom_stream.next().await {
             let row = item?;
             let envelope = envelope_from_wkb(&row.geometry, row.feature_id)?;
@@ -261,6 +262,7 @@ mod tests {
     fn binding_plan() -> BindingPlan {
         BindingPlan {
             binding_id: BindingId::try_new("points").unwrap(),
+            source_id: mars_config::SourceId::new("default"),
             source_table: "points".into(),
             filter: None,
             geometry_field: "geom".into(),
@@ -282,8 +284,10 @@ mod tests {
     }
 
     fn make_deps(source: ReconcileSource) -> Deps {
+        let mut registry = crate::SourceRegistry::new();
+        registry.insert(mars_config::SourceId::new("default"), Arc::new(source));
         Deps {
-            source: Arc::new(source),
+            sources: Arc::new(registry),
             change_feed: Arc::new(NopFeed),
             leader_lock: Arc::new(NopLock),
             store: Arc::new(NotImplementedStore),

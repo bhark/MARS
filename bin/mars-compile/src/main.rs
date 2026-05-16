@@ -4,9 +4,11 @@
 
 use std::path::PathBuf;
 
+use std::sync::Arc;
+
 use anyhow::{Context, Result, anyhow};
 use clap::Parser;
-use mars_bin_shared::{build_pg_source, build_store_and_publisher};
+use mars_bin_shared::{build_pg_source, build_sources, build_store_and_publisher};
 use mars_compiler::{Compiler, Deps};
 use mars_config::{Config, config_dir};
 use tokio_util::sync::CancellationToken;
@@ -42,15 +44,16 @@ fn main() -> Result<()> {
 
 async fn run_snapshot(cfg: Config) -> Result<()> {
     // snapshot compile: no replication topology, no leader contention.
-    let source = build_pg_source(&cfg, None).await?;
+    let pg_source = build_pg_source(&cfg, None).await?;
+    let registry = build_sources(&cfg, Some(pg_source.clone())).await?;
     let (store, manifest) = build_store_and_publisher(&cfg)?;
     let metrics = mars_observability::Metrics::new().context("init metrics")?;
 
     let compiler = Compiler::new(
         Deps {
-            source: source.clone(),
-            change_feed: source.clone(),
-            leader_lock: source,
+            sources: Arc::new(registry),
+            change_feed: pg_source.clone(),
+            leader_lock: pg_source,
             store,
             manifest,
             metrics,

@@ -36,10 +36,11 @@ fn rejects_non_positive_scale_dpi() {
     let dir = tempfile::tempdir().unwrap();
     let yaml = r#"
 service: { name: t, scale_dpi: 0 }
-source:
-  type: postgis
-  dsn: postgres://example/x
-  native_crs: EPSG:25832
+sources:
+  - id: pg
+    type: postgis
+    dsn: postgres://example/x
+    native_crs: EPSG:25832
 artifacts:
   store: { type: fs, path: /tmp/s }
   cache: { path: /tmp/c, max_size: 1MiB }
@@ -77,7 +78,7 @@ fn non_metric_canonical_crs_is_rejected() {
     let path = fixtures_dir().join("demo_minimal.yaml");
     let mut cfg = load(&path).unwrap();
     // EPSG:4326 is geographic (lat/lon, degrees) - must be refused at load time.
-    cfg.source.native_crs = mars_types::CrsCode::new("EPSG:4326");
+    cfg.sources[0].native_crs = mars_types::CrsCode::new("EPSG:4326");
     let err = validate(&mut cfg, &fixtures_dir()).unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("metric"), "error should mention metric: {msg}");
@@ -113,7 +114,7 @@ interfaces: {}
         let p = dir.path().join("c.yaml");
         fs::write(&p, yaml).unwrap();
         let cfg = load(&p).unwrap();
-        assert_eq!(cfg.source.dsn, "postgres://default/x");
+        assert_eq!(cfg.sources[0].postgis().unwrap().dsn, "postgres://default/x");
     });
 }
 
@@ -162,7 +163,7 @@ interfaces: {}
         let p = dir.path().join("c.yaml");
         fs::write(&p, yaml).unwrap();
         let cfg = load(&p).unwrap();
-        assert_eq!(cfg.source.dsn, "postgres://example/x");
+        assert_eq!(cfg.sources[0].postgis().unwrap().dsn, "postgres://example/x");
     });
 }
 
@@ -266,10 +267,11 @@ fn loads_tiered_sources_fixture() {
     let dir = tempfile::tempdir().unwrap();
     let yaml = r#"
 service: { name: t }
-source:
-  type: postgis
-  dsn: postgres://example/x
-  native_crs: EPSG:25832
+sources:
+  - id: pg
+    type: postgis
+    dsn: postgres://example/x
+    native_crs: EPSG:25832
 artifacts:
   store: { type: fs, path: /tmp/s }
   cache: { path: /tmp/c, max_size: 1MiB }
@@ -283,15 +285,18 @@ layers:
   - name: bygning
     type: polygon
     sources:
-      - band: hi
+      - source: pg
+        band: hi
         max_denom_exclusive: 8000
         from: geodanmark_latest.bygning
         geometry_column: geometri
-      - band: hi
+      - source: pg
+        band: hi
         max_denom_exclusive: 10000
         from: simplified.bygning_1meter
         geometry_column: geometri
-      - band: hi
+      - source: pg
+        band: hi
         max_denom_exclusive: 25000
         from: simplified.bygning_2meter
         geometry_column: geometri

@@ -274,12 +274,16 @@ mod tests {
 
     fn cfg_source(from: &str, scale: Option<ScaleWindow>) -> SourceBinding {
         SourceBinding {
+            source: mars_config::SourceId::new("default"),
             scale,
             band: None,
             max_denom: None,
             filter: None,
             from: Some(from.into()),
             sql: None,
+            uri: None,
+            format: None,
+            source_crs: None,
             geometry_column: "geom".into(),
             id_column: None,
             attributes: vec![],

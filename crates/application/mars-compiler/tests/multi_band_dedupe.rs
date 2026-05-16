@@ -20,8 +20,8 @@ use mars_compiler::plan::build_bootstrap_plan;
 use mars_compiler::testing::FullScanCompileSession;
 use mars_compiler::{Deps, run_snapshot_from_plan};
 use mars_config::{
-    Artifacts, Band, Cells, Class, ClassStyle, Compiler, Config, Interfaces, Layer, Observability, Render, Scales,
-    ServiceMeta, Source, SourceBinding,
+    Artifacts, Band, Cells, Class, ClassStyle, Compiler, Config, Interfaces, Layer, Observability, PostgisBackend,
+    Render, Scales, ServiceMeta, Source, SourceBackend, SourceBinding, SourceId,
 };
 use mars_observability::Metrics;
 use mars_source::{
@@ -126,12 +126,16 @@ fn build_two_band_config() -> Config {
     size_per_band.insert("hi".into(), "1024m".into());
     size_per_band.insert("mid".into(), "4096m".into());
     let make_source = |band: &str| SourceBinding {
+        source: SourceId::new("default"),
         scale: None,
         band: Some(band.into()),
         max_denom: None,
         filter: None,
         from: Some("vejmidte".into()),
         sql: None,
+        uri: None,
+        format: None,
+        source_crs: None,
         geometry_column: "geom".into(),
         id_column: Some("id".into()),
         attributes: vec!["vejkategori".into()],
@@ -147,14 +151,16 @@ fn build_two_band_config() -> Config {
             name: "test".into(),
             ..Default::default()
         },
-        source: Source {
-            kind: "memory".into(),
-            dsn: "memory://".into(),
+        sources: vec![Source {
+            id: SourceId::new("default"),
             native_crs: CrsCode::new("EPSG:25832"),
-            change_feed: None,
-            pool: Default::default(),
-            bootstrap: None,
-        },
+            backend: SourceBackend::Postgis(PostgisBackend {
+                dsn: "memory://".into(),
+                change_feed: None,
+                pool: Default::default(),
+                bootstrap: None,
+            }),
+        }],
         artifacts: Artifacts {
             store: mars_config::ArtifactStore {
                 kind: "fs".into(),
@@ -244,8 +250,10 @@ async fn multi_band_same_binding_emits_one_class_sidecar_per_page() {
     let source = Arc::new(FakeSource::with_rows(rows));
     let store = Arc::new(InMemoryStore::new());
     let manifest = Arc::new(InMemoryPublisher::new());
+    let mut registry = mars_compiler::SourceRegistry::new();
+    registry.insert(SourceId::new("default"), source);
     let deps = Deps {
-        source,
+        sources: Arc::new(registry),
         change_feed: Arc::new(NopFeed),
         leader_lock: Arc::new(NopLock),
         store,

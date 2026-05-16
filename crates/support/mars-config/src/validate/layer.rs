@@ -13,6 +13,7 @@ pub(super) fn validate_layers(config: &Config, bands: &BandIndex) -> Result<(), 
         }
         validate_layer(layer, config, bands)?;
     }
+    binding::validate_binding_source_refs(config)?;
     Ok(())
 }
 
@@ -148,7 +149,6 @@ fn validate_sources(layer: &Layer, bands: &BandIndex) -> Result<(), ConfigError>
                 layer.name
             )));
         }
-        binding::validate_binding_source(&layer.name, i, src)?;
         binding::validate_binding_levels(&layer.name, i, src)?;
     }
     Ok(())

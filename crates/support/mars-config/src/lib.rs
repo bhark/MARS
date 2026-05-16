@@ -40,6 +40,13 @@ mars_types::impl_string_newtype!(
     pub ScaleBand
 );
 
+mars_types::impl_string_newtype!(
+    /// Stable identifier for a configured source. Each entry in `Config.sources`
+    /// carries a unique `id`; per-layer bindings reference it to route to the
+    /// right backend.
+    pub SourceId
+);
+
 /// Errors emitted by the configuration loader and validator.
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
@@ -85,12 +92,33 @@ pub enum ConfigError {
 pub fn load(path: impl AsRef<Path>) -> Result<Config, ConfigError> {
     let path = path.as_ref();
     let root = config_dir(path);
-    let value = include::load_with_includes(path, &root)?;
+    let mut value = include::load_with_includes(path, &root)?;
+    fold_legacy_source(&mut value);
     let config: Config = serde_yaml_ng::from_value(value).map_err(|e| ConfigError::Parse {
         path: path.display().to_string(),
         source: e,
     })?;
     Ok(config)
+}
+
+// wire-level back-compat: legacy YAMLs carried a singular `source: { ... }`
+// block at the top level. rewrite it to plural `sources: [{ ... }]` so it
+// parses against the multi-source `Config`. the folded entry's `id` field
+// auto-defaults via serde, matching the per-binding default so layers don't
+// need to name their source.
+fn fold_legacy_source(value: &mut serde_yaml_ng::Value) {
+    use serde_yaml_ng::Value;
+    let Value::Mapping(m) = value else {
+        return;
+    };
+    let has_singular = m.contains_key("source");
+    let has_plural = m.contains_key("sources");
+    if has_singular
+        && !has_plural
+        && let Some(singular) = m.remove("source")
+    {
+        m.insert(Value::String("sources".into()), Value::Sequence(vec![singular]));
+    }
 }
 
 mod validate;

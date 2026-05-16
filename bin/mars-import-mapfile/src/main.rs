@@ -126,7 +126,7 @@ fn main() -> Result<()> {
     } else {
         Some(cli.include_layers.into_iter().map(|s| s.to_lowercase()).collect())
     };
-    let skeleton = translate_tokens(&tokens, include_layers.as_ref());
+    let skeleton = translate_tokens(&tokens, include_layers.as_ref(), cli.strict);
     let bands = cli.bands.unwrap_or_else(emitter::default_bands);
     let yaml = emitter::render(&skeleton, &bands);
 

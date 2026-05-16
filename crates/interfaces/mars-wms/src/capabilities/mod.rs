@@ -48,6 +48,46 @@ pub(super) fn derive_layer_bboxes(cfg: &Config, _manifest: &Manifest) -> HashMap
     out
 }
 
+/// Resolve a layer's native CRS for capabilities emission. Vector layers
+/// take the CRS of the source that feeds their first binding; raster layers
+/// take their `raster.source.source_crs`. The fallback when no binding /
+/// raster source is set is the first configured `cfg.sources[0]`, which
+/// matches the legacy single-source emit shape.
+pub(super) fn layer_native_crs<'a>(cfg: &'a Config, layer: &'a mars_config::Layer) -> &'a str {
+    if let Some(raster) = layer.raster.as_ref() {
+        return raster.source.source_crs.as_str();
+    }
+    if let Some(first) = layer.sources.first()
+        && let Some(src) = cfg.sources.iter().find(|s| s.id == first.source)
+    {
+        return src.native_crs.as_str();
+    }
+    cfg.sources.first().map(|s| s.native_crs.as_str()).unwrap_or("")
+}
+
+/// Service-wide native CRS used to label the root layer's bbox. Picks the
+/// first configured source's CRS so single-source configs keep their prior
+/// shape; multi-source configs surface the additional CRSes via
+/// [`distinct_native_crses`] in the layer SRS/CRS lists.
+pub(super) fn service_root_native_crs(cfg: &Config) -> &str {
+    cfg.sources.first().map(|s| s.native_crs.as_str()).unwrap_or("")
+}
+
+/// Distinct native CRSes across all configured sources, in `cfg.sources`
+/// order. Used to advertise the union of canonical CRSes the service can
+/// emit bbox values in without reprojection.
+pub(super) fn distinct_native_crses(cfg: &Config) -> Vec<&str> {
+    let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    let mut out: Vec<&str> = Vec::new();
+    for s in &cfg.sources {
+        let c = s.native_crs.as_str();
+        if seen.insert(c) {
+            out.push(c);
+        }
+    }
+    out
+}
+
 pub(super) fn union_bbox(a: Bbox, b: Bbox) -> Bbox {
     Bbox::new(
         a.min_x.min(b.min_x),

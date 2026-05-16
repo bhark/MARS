@@ -14,16 +14,27 @@ pub(super) fn is_metric_crs(code: &str) -> Result<bool, ConfigError> {
     })
 }
 
+/// Each source's `native_crs` must be a recognised metric CRS, since the
+/// runtime materialises artifacts in that CRS and reprojects to request CRSes
+/// from there. Geographic CRSes (degrees) break the units-per-metre = 1
+/// invariant the renderer relies on.
 pub(super) fn validate_native_crs(config: &Config) -> Result<(), ConfigError> {
-    let crs = config.source.native_crs.as_str().trim();
-    if crs.is_empty() {
-        return Err(ConfigError::Invalid("source.native_crs must not be empty".into()));
-    }
-    if !is_metric_crs(crs)? {
-        return Err(ConfigError::Invalid(format!(
-            "source.native_crs {crs:?} is not a recognised metric CRS; mars-runtime requires a metric canonical CRS \
-             (units-per-metre = 1). Use a projected, metre-based EPSG code (e.g. EPSG:25832, EPSG:3857)."
-        )));
+    for src in &config.sources {
+        let crs = src.native_crs.as_str().trim();
+        if crs.is_empty() {
+            return Err(ConfigError::Invalid(format!(
+                "sources[{:?}].native_crs must not be empty",
+                src.id.as_str()
+            )));
+        }
+        if !is_metric_crs(crs)? {
+            return Err(ConfigError::Invalid(format!(
+                "sources[{:?}].native_crs {crs:?} is not a recognised metric CRS; mars-runtime requires a metric \
+                 canonical CRS (units-per-metre = 1). Use a projected, metre-based EPSG code (e.g. EPSG:25832, \
+                 EPSG:3857).",
+                src.id.as_str()
+            )));
+        }
     }
     Ok(())
 }

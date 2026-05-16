@@ -378,14 +378,16 @@ pub fn build_minimal_config(layer_id: &LayerId, binding_id: &BindingId, label_su
             name: "test".into(),
             ..Default::default()
         },
-        source: Source {
-            kind: "memory".into(),
-            dsn: "memory://".into(),
+        sources: vec![Source {
+            id: mars_config::SourceId::new("default"),
             native_crs: CrsCode::new(REQUEST_CRS),
-            change_feed: None,
-            pool: Default::default(),
-            bootstrap: None,
-        },
+            backend: mars_config::SourceBackend::Postgis(mars_config::PostgisBackend {
+                dsn: "memory://".into(),
+                change_feed: None,
+                pool: Default::default(),
+                bootstrap: None,
+            }),
+        }],
         artifacts: Artifacts {
             store: ArtifactStore {
                 kind: "fs".into(),
@@ -429,12 +431,16 @@ pub fn build_minimal_config(layer_id: &LayerId, binding_id: &BindingId, label_su
             enable_get_feature_info: true,
             bbox: None,
             sources: vec![SourceBinding {
+                source: mars_config::SourceId::new("default"),
                 scale: None,
                 band: None,
                 max_denom: None,
                 filter: None,
                 from: Some(binding_id.as_str().into()),
                 sql: None,
+                uri: None,
+                format: None,
+                source_crs: None,
                 geometry_column: "geom".into(),
                 id_column: None,
                 attributes: vec!["name".into()],
@@ -782,12 +788,16 @@ pub fn build_multi_layer_config(layer_ids: &[LayerId], binding_ids: &[BindingId]
             enable_get_feature_info: true,
             bbox: None,
             sources: vec![SourceBinding {
+                source: mars_config::SourceId::new("default"),
                 scale: None,
                 band: None,
                 max_denom: None,
                 filter: None,
                 from: Some(bid.as_str().into()),
                 sql: None,
+                uri: None,
+                format: None,
+                source_crs: None,
                 geometry_column: "geom".into(),
                 id_column: None,
                 attributes: vec!["name".into()],
@@ -825,14 +835,16 @@ pub fn build_multi_layer_config(layer_ids: &[LayerId], binding_ids: &[BindingId]
             name: "test-multi".into(),
             ..Default::default()
         },
-        source: Source {
-            kind: "memory".into(),
-            dsn: "memory://".into(),
+        sources: vec![Source {
+            id: mars_config::SourceId::new("default"),
             native_crs: CrsCode::new(REQUEST_CRS),
-            change_feed: None,
-            pool: Default::default(),
-            bootstrap: None,
-        },
+            backend: mars_config::SourceBackend::Postgis(mars_config::PostgisBackend {
+                dsn: "memory://".into(),
+                change_feed: None,
+                pool: Default::default(),
+                bootstrap: None,
+            }),
+        }],
         artifacts: Artifacts {
             store: ArtifactStore {
                 kind: "fs".into(),

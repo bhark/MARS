@@ -11,7 +11,7 @@
 //! decides what set of (binding, level) slices the snapshot has to emit.
 
 use mars_config::{
-    Config, DecimationLevelConfig, LabelStyleAttach, Layer as CfgLayer, MissingPagePolicy, SimplifierKind,
+    Config, DecimationLevelConfig, LabelStyleAttach, Layer as CfgLayer, MissingPagePolicy, SimplifierKind, SourceId,
 };
 use mars_expr::{Expr, Template, parse, parse_template};
 use mars_style::{LabelStyle, LabelSurvival, Placement, default_placement};
@@ -93,11 +93,16 @@ pub struct LevelPlan {
 #[derive(Debug, Clone, PartialEq)]
 pub struct BindingPlan {
     pub binding_id: BindingId,
+    /// Id of the configured source that feeds this binding. The compiler
+    /// looks this up in the [`crate::SourceRegistry`] to obtain the adapter
+    /// that handles `stream_rows` / `stream_rows_by_id` / `open_compile_session`.
+    pub source_id: SourceId,
     /// Opaque backend-side locator passed verbatim to the source adapter via
-    /// `port::SourceBinding.from`. For `from:` bindings this is the table
-    /// reference (`"schema.table"` or just `"table"`); for `sql:` bindings it
-    /// is the parenthesised inline SELECT (`"(SELECT … FROM …)"`). The
-    /// postgres adapter dispatches on the leading `(`.
+    /// `port::SourceBinding.from`. For postgis `from:` bindings this is the
+    /// table reference (`"schema.table"` or just `"table"`); for postgis
+    /// `sql:` bindings it is the parenthesised inline SELECT (`"(SELECT …)"`);
+    /// for vectorfile bindings it is the URI with an embedded `#format=...&source_crs=...`
+    /// fragment the adapter consumes.
     pub source_table: String,
     pub geometry_field: String,
     pub id_field: Option<String>,
@@ -196,7 +201,9 @@ impl BootstrapPlan {
 /// declared defaults to a single level-0 (raw) entry, since the snapshot
 /// always materialises at least the canonical level.
 pub fn build_bootstrap_plan(cfg: &Config) -> Result<BootstrapPlan, PlanError> {
-    let native_crs = cfg.source.native_crs.clone();
+    // index sources by id so per-binding native_crs lookup is O(log n).
+    let sources_by_id: std::collections::BTreeMap<&SourceId, &mars_config::Source> =
+        cfg.sources.iter().map(|s| (&s.id, s)).collect();
     let mut bindings: Vec<BindingPlan> = Vec::new();
     let mut layers: Vec<LayerPlan> = Vec::new();
     let raster_layers = build_raster_layer_entries(cfg);
@@ -213,6 +220,16 @@ pub fn build_bootstrap_plan(cfg: &Config) -> Result<BootstrapPlan, PlanError> {
         }
         for binding in &layer.sources {
             let (source_locator, id) = resolve_binding_source(binding)?;
+            let source = sources_by_id
+                .get(&binding.source)
+                .copied()
+                .ok_or_else(|| PlanError::InvalidBindingId {
+                    from: binding.source_descriptor(),
+                    source: BindingIdError::Malformed {
+                        id: format!("unknown source id {}", binding.source.as_str()),
+                    },
+                })?;
+            let native_crs = source.native_crs.clone();
             let sidecar_warn =
                 binding
                     .resolved_sidecar_size_warn_bytes()
@@ -229,12 +246,13 @@ pub fn build_bootstrap_plan(cfg: &Config) -> Result<BootstrapPlan, PlanError> {
             };
             let plan = BindingPlan {
                 binding_id: id.clone(),
+                source_id: binding.source.clone(),
                 source_table: source_locator,
                 geometry_field: binding.geometry_column.clone(),
                 id_field: binding.id_column.clone(),
                 attributes: binding.attributes.clone(),
                 filter: filter_parsed,
-                native_crs: native_crs.clone(),
+                native_crs,
                 levels: level_plans(binding.levels.as_deref()),
                 page_size_target_bytes: binding.resolved_page_size_target(),
                 sidecar_size_warn_bytes: sidecar_warn,
@@ -442,10 +460,14 @@ fn binding_id_for(from: &str) -> Result<BindingId, PlanError> {
     })
 }
 
-/// Resolve a config binding to its (locator, id) pair. Table form passes the
-/// `from:` string through unchanged; sql form wraps the inline SELECT in parens
-/// (so the postgres adapter can splice it into `FROM (...) AS s`) and derives a
-/// stable, hash-prefixed `BindingId` so equal SELECTs across layers dedupe.
+/// Resolve a config binding to its (locator, id) pair. Postgis table form
+/// passes the `from:` string through unchanged; sql form wraps the inline
+/// SELECT in parens (so the postgres adapter can splice it into `FROM (...)
+/// AS s`) and derives a stable, hash-prefixed `BindingId` so equal SELECTs
+/// across layers dedupe. Vectorfile form (`uri:` + `format:` + `source_crs:`)
+/// embeds the format / source_crs as a `#format=...&source_crs=...` fragment
+/// on the URI so the adapter sees one opaque locator and ids dedupe per
+/// (uri, format, source_crs) triple.
 fn resolve_binding_source(binding: &mars_config::SourceBinding) -> Result<(String, BindingId), PlanError> {
     if let Some(from) = binding.from.as_deref() {
         let id = binding_id_for(from)?;
@@ -456,6 +478,31 @@ fn resolve_binding_source(binding: &mars_config::SourceBinding) -> Result<(Strin
         let id_str = format!("sql_{}", &hash.as_str()[..16]);
         let id = binding_id_for(&id_str)?;
         return Ok((format!("({sql})"), id));
+    }
+    if let Some(uri) = binding.uri.as_deref() {
+        let fmt = binding.format.ok_or_else(|| PlanError::InvalidBindingId {
+            from: binding.source_descriptor(),
+            source: BindingIdError::Malformed {
+                id: "vectorfile binding missing format".into(),
+            },
+        })?;
+        let source_crs = binding.source_crs.as_ref().ok_or_else(|| PlanError::InvalidBindingId {
+            from: binding.source_descriptor(),
+            source: BindingIdError::Malformed {
+                id: "vectorfile binding missing source_crs".into(),
+            },
+        })?;
+        let fmt_tok = match fmt {
+            mars_config::VectorFileFormat::FlatGeobuf => "flat_geobuf",
+            mars_config::VectorFileFormat::GeoJson => "geo_json",
+        };
+        let locator = format!("{uri}#format={fmt_tok}&source_crs={}", source_crs.as_str());
+        // BindingId must be path-safe; hash the locator so URIs with colons /
+        // slashes still produce a valid id. dedup key matches (uri, format, source_crs).
+        let hash = blake3::hash(locator.as_bytes()).to_hex();
+        let id_str = format!("vf_{}", &hash.as_str()[..16]);
+        let id = binding_id_for(&id_str)?;
+        return Ok((locator, id));
     }
     // config validation rejects bindings with neither from: nor sql:; surface
     // a typed error in case a config bypasses validate.
@@ -468,6 +515,12 @@ fn resolve_binding_source(binding: &mars_config::SourceBinding) -> Result<(Strin
 }
 
 fn ensure_consistent(existing: &BindingPlan, candidate: &BindingPlan) -> Result<(), PlanError> {
+    if existing.source_id != candidate.source_id {
+        return Err(PlanError::ConflictingBinding {
+            id: existing.binding_id.clone(),
+            detail: "source_id",
+        });
+    }
     if existing.geometry_field != candidate.geometry_field {
         return Err(PlanError::ConflictingBinding {
             id: existing.binding_id.clone(),
@@ -576,14 +629,16 @@ mod tests {
                 name: "test".into(),
                 ..Default::default()
             },
-            source: Source {
-                kind: "memory".into(),
-                dsn: "memory://".into(),
+            sources: vec![Source {
+                id: mars_config::SourceId::new("default"),
                 native_crs: CrsCode::new("EPSG:25832"),
-                change_feed: None,
-                pool: Default::default(),
-                bootstrap: None,
-            },
+                backend: mars_config::SourceBackend::Postgis(mars_config::PostgisBackend {
+                    dsn: "memory://".into(),
+                    change_feed: None,
+                    pool: Default::default(),
+                    bootstrap: None,
+                }),
+            }],
             artifacts: Artifacts {
                 store: mars_config::ArtifactStore {
                     kind: "fs".into(),
@@ -626,12 +681,16 @@ mod tests {
 
     fn binding(from: &str) -> SourceBinding {
         SourceBinding {
+            source: mars_config::SourceId::new("default"),
             scale: None,
             band: None,
             max_denom: None,
             filter: None,
             from: Some(from.into()),
             sql: None,
+            uri: None,
+            format: None,
+            source_crs: None,
             geometry_column: "geom".into(),
             id_column: Some("id".into()),
             attributes: vec!["name".into()],

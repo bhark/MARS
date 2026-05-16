@@ -1,24 +1,125 @@
 use mars_types::LayerId;
 
 use crate::ConfigError;
-use crate::model::{SimplifierKind, SourceBinding};
+use crate::model::{Config, SimplifierKind, SourceBackend, SourceBinding};
 
-/// Validate the source of a binding: exactly one of `from:` (table reference)
-/// or `sql:` (inline SELECT) must be set. `from` restrictions: single
-/// change-feed-mappable table or single-table view, schema-qualified at most;
-/// joins/subselects/DDL fragments rejected so the snapshot path doesn't fail
-/// opaquely later. `sql` bindings are snapshot-only.
-pub(super) fn validate_binding_source(layer: &LayerId, idx: usize, binding: &SourceBinding) -> Result<(), ConfigError> {
-    match (binding.from.as_deref(), binding.sql.as_deref()) {
-        (None, None) => Err(ConfigError::Invalid(format!(
-            "layer {layer} source[{idx}] must set exactly one of `from:` or `sql:`"
-        ))),
-        (Some(_), Some(_)) => Err(ConfigError::Invalid(format!(
-            "layer {layer} source[{idx}] sets both `from:` and `sql:`; they are mutually exclusive"
-        ))),
-        (Some(from), None) => validate_table_from(layer, idx, from),
-        (None, Some(sql)) => validate_sql_binding(layer, idx, sql),
+/// Resolve the `source:` field on `binding` against the service-level
+/// sources list. Returns the resolved kind so the binding-shape check can
+/// cross-verify (postgis source ↔ from/sql binding, vectorfile source ↔ uri
+/// binding).
+fn resolve_binding_source<'cfg>(
+    layer: &LayerId,
+    idx: usize,
+    binding: &SourceBinding,
+    config: &'cfg Config,
+) -> Result<&'cfg SourceBackend, ConfigError> {
+    let source_id = &binding.source;
+    config
+        .sources
+        .iter()
+        .find(|s| &s.id == source_id)
+        .map(|s| &s.backend)
+        .ok_or_else(|| {
+            ConfigError::Invalid(format!(
+                "layer {layer} source[{idx}] references unknown source {:?}; declare it under top-level `sources:`",
+                source_id.as_str()
+            ))
+        })
+}
+
+/// Validate the source-shape coherence of a binding: exactly one of `from:`
+/// (table reference), `sql:` (inline SELECT) or `uri:` (vector file) must be
+/// set, and the variant must match the kind of the referenced source.
+pub(super) fn validate_binding_source(
+    layer: &LayerId,
+    idx: usize,
+    binding: &SourceBinding,
+    config: &Config,
+) -> Result<(), ConfigError> {
+    let backend = resolve_binding_source(layer, idx, binding, config)?;
+    let from = binding.from.as_deref();
+    let sql = binding.sql.as_deref();
+    let uri = binding.uri.as_deref();
+
+    let variants_set = [from.is_some(), sql.is_some(), uri.is_some()]
+        .iter()
+        .filter(|b| **b)
+        .count();
+    if variants_set == 0 {
+        return Err(ConfigError::Invalid(format!(
+            "layer {layer} source[{idx}] must set exactly one of `from:`, `sql:` or `uri:`"
+        )));
     }
+    if variants_set > 1 {
+        return Err(ConfigError::Invalid(format!(
+            "layer {layer} source[{idx}] sets more than one of `from:`, `sql:`, `uri:`; they are mutually exclusive"
+        )));
+    }
+
+    match (backend, from, sql, uri) {
+        (SourceBackend::Postgis(_), Some(t), None, None) => validate_table_from(layer, idx, t),
+        (SourceBackend::Postgis(_), None, Some(s), None) => validate_sql_binding(layer, idx, s),
+        (SourceBackend::Postgis(_), None, None, Some(_)) => Err(ConfigError::Invalid(format!(
+            "layer {layer} source[{idx}] sets `uri:` but references a postgis source {:?}; use `from:` or `sql:`",
+            binding.source.as_str()
+        ))),
+        (SourceBackend::VectorFile(_), None, None, Some(_)) => validate_vectorfile_binding(layer, idx, binding),
+        (SourceBackend::VectorFile(_), _, _, _) => Err(ConfigError::Invalid(format!(
+            "layer {layer} source[{idx}] references vectorfile source {:?} but uses a postgis binding shape; use `uri:` \
+             + `format:` + `source_crs:`",
+            binding.source.as_str()
+        ))),
+        _ => unreachable!("variants_set check above"),
+    }
+}
+
+/// Validate that every per-layer binding's `source:` resolves and the source
+/// kind matches the binding shape. Wraps [`validate_binding_source`] across
+/// the layer set.
+pub(super) fn validate_binding_source_refs(config: &Config) -> Result<(), ConfigError> {
+    for layer in &config.layers {
+        for (idx, binding) in layer.sources.iter().enumerate() {
+            validate_binding_source(&layer.name, idx, binding, config)?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg_attr(test, allow(dead_code))]
+fn validate_vectorfile_binding(layer: &LayerId, idx: usize, binding: &SourceBinding) -> Result<(), ConfigError> {
+    let uri = binding.uri.as_deref().unwrap_or_default().trim();
+    if uri.is_empty() {
+        return Err(ConfigError::Invalid(format!(
+            "layer {layer} source[{idx}] uri must not be empty"
+        )));
+    }
+    if !uri_scheme_supported(uri) {
+        return Err(ConfigError::Invalid(format!(
+            "layer {layer} source[{idx}] uri {uri:?} must start with one of s3://, gs://, file://, http://, https://"
+        )));
+    }
+    if binding.format.is_none() {
+        return Err(ConfigError::Invalid(format!(
+            "layer {layer} source[{idx}] vectorfile binding requires `format:`"
+        )));
+    }
+    let Some(src_crs) = binding.source_crs.as_ref() else {
+        return Err(ConfigError::Invalid(format!(
+            "layer {layer} source[{idx}] vectorfile binding requires `source_crs:`"
+        )));
+    };
+    if src_crs.as_str().trim().is_empty() {
+        return Err(ConfigError::Invalid(format!(
+            "layer {layer} source[{idx}] source_crs must not be empty"
+        )));
+    }
+    Ok(())
+}
+
+fn uri_scheme_supported(uri: &str) -> bool {
+    ["s3://", "gs://", "file://", "http://", "https://"]
+        .iter()
+        .any(|s| uri.starts_with(s))
 }
 
 fn validate_table_from(layer: &LayerId, idx: usize, from: &str) -> Result<(), ConfigError> {

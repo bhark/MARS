@@ -10,6 +10,7 @@ members = [
     "crates/ports/mars-store",
     "crates/ports/mars-render-port",
     "crates/adapters/mars-source-postgres",
+    "crates/adapters/mars-source-vectorfile",
     "crates/adapters/mars-source-xyz",
     "crates/adapters/mars-store-s3",
     "crates/adapters/mars-store-fs",
@@ -68,6 +69,7 @@ mars-store          = { path = "crates/ports/mars-store" }
 mars-render-port    = { path = "crates/ports/mars-render-port" }
 # adapters
 mars-source-postgres = { path = "crates/adapters/mars-source-postgres" }
+mars-source-vectorfile = { path = "crates/adapters/mars-source-vectorfile" }
 mars-source-xyz      = { path = "crates/adapters/mars-source-xyz" }
 mars-store-s3        = { path = "crates/adapters/mars-store-s3" }
 mars-store-fs        = { path = "crates/adapters/mars-store-fs" }
@@ -99,10 +101,15 @@ bytes               = "1.11.1"
 clap                = { version = "4.6.1", features = ["derive", "env"] }
 criterion           = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
 deadpool-postgres   = "0.14.1"
+fallible-streaming-iterator = "0.1.9"
+# default features pull in reqwest/http for direct fetching; we use object_store
+# for transport, so only the bytes integration is needed.
+flatgeobuf          = { version = "6.0.1", default-features = false, features = ["bytes"] }
 flate2              = "1.1.9"
 fontdb              = { version = "0.23.0", default-features = false }
 futures-core        = "0.3.32"
 futures-util        = "0.3.32"
+geozero             = { version = "0.15.1", default-features = false, features = ["with-wkb", "with-geojson"] }
 hashbrown           = "0.17.1"
 hashlink            = "0.11.0"
 humantime           = "2.3.0"
@@ -114,7 +121,7 @@ kube                = { version = "3.1.0", default-features = false, features = 
 kube-lease-manager  = "0.11.1"
 libfuzzer-sys       = "0.4.12"
 memmap2             = "0.9.10"
-object_store        = { version = "0.13.2", default-features = false, features = ["aws"] }
+object_store        = { version = "0.13.2", default-features = false, features = ["aws", "gcp", "http", "fs"] }
 parking_lot         = "0.12.5"
 percent-encoding    = "2.3.2"
 pgwire-replication  = "0.3.2"
@@ -138,6 +145,7 @@ schemars            = "1.2.1"
 serde               = { version = "1.0.228", features = ["derive", "rc"] }
 serde_json          = "1.0.149"
 serde_yaml_ng       = "0.10.0"
+sha2                = "0.11.0"
 temp-env            = "0.3.6"
 tempfile            = "3.27.0"
 testcontainers      = "0.27.3"

@@ -93,7 +93,7 @@ mod tests {
     use super::*;
     use std::collections::{BTreeMap, BTreeSet};
 
-    use mars_config::SimplifierKind;
+    use mars_config::{SimplifierKind, SourceId};
     use mars_types::{CrsCode, DecimationLevel, HilbertKey, PageId};
 
     use crate::incremental::{BindingDirty, DirtyPages};
@@ -102,6 +102,7 @@ mod tests {
     fn binding_plan(id: &str, policy: MissingPagePolicy) -> BindingPlan {
         BindingPlan {
             binding_id: BindingId::try_new(id).unwrap(),
+            source_id: SourceId::new("default"),
             source_table: id.into(),
             filter: None,
             geometry_field: "geom".into(),

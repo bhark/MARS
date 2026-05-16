@@ -125,6 +125,7 @@ impl LeaderLock for NopLock {
 fn binding_plan(id: &str, page_size: u64) -> BindingPlan {
     BindingPlan {
         binding_id: BindingId::try_new(id).unwrap(),
+        source_id: mars_config::SourceId::new("default"),
         source_table: id.to_string(),
         filter: None,
         geometry_field: "geom".into(),
@@ -160,8 +161,10 @@ async fn build_fixture(n_features: usize, page_size: u64) -> Fixture {
     let source = Arc::new(FakeSource::with_rows(initial));
     let store = Arc::new(InMemoryStore::new());
     let manifest_store: Arc<dyn ManifestStore> = Arc::new(InMemoryPublisher::new());
+    let mut registry = mars_compiler::SourceRegistry::new();
+    registry.insert(mars_config::SourceId::new("default"), source.clone());
     let deps = Deps {
-        source: source.clone(),
+        sources: Arc::new(registry),
         change_feed: Arc::new(NopFeed),
         leader_lock: Arc::new(NopLock),
         store: store.clone(),
@@ -408,8 +411,10 @@ fn bench_full_bootstrap(c: &mut Criterion) {
                     let source = Arc::new(FakeSource::with_rows(initial.clone()));
                     let store = Arc::new(InMemoryStore::new());
                     let manifest_store: Arc<dyn ManifestStore> = Arc::new(InMemoryPublisher::new());
+                    let mut registry = mars_compiler::SourceRegistry::new();
+                    registry.insert(mars_config::SourceId::new("default"), source);
                     Deps {
-                        source,
+                        sources: Arc::new(registry),
                         change_feed: Arc::new(NopFeed),
                         leader_lock: Arc::new(NopLock),
                         store,

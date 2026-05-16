@@ -281,11 +281,14 @@ fn secret_env(name: &str, sref: &SecretKeyRef) -> EnvVar {
     }
 }
 
-/// Pull `source.bootstrap` + the publication/slot names out of an opaque
-/// `spec.config` JSON value. Returns `None` when the config does not declare
-/// a bootstrap block (the operator treats this as "feature off").
+/// Pull a postgis source's `bootstrap` + the publication/slot names out of an
+/// opaque `spec.config` JSON value. Accepts both legacy singular `source: {..}`
+/// and new plural `sources: [{..}]` shapes; in the plural case, picks the
+/// first entry whose `bootstrap` block is set. Returns `None` when no
+/// bootstrap-bearing source is declared (the operator treats this as
+/// "feature off").
 pub(crate) fn extract_source_bootstrap(config: &serde_json::Value) -> Option<SourceBootstrap> {
-    let source = config.get("source")?;
+    let source = resolve_bootstrap_source(config)?;
     let bs = source.get("bootstrap")?;
     let cf = source.get("change_feed")?;
 
@@ -307,6 +310,22 @@ pub(crate) fn extract_source_bootstrap(config: &serde_json::Value) -> Option<Sou
         slot,
         schemas,
     })
+}
+
+// pick the bootstrap-bearing source from either wire shape. singular `source:`
+// takes precedence (back-compat); falls back to the first `sources[]` entry
+// that carries a bootstrap block.
+fn resolve_bootstrap_source(config: &serde_json::Value) -> Option<&serde_json::Value> {
+    if let Some(s) = config.get("source")
+        && s.get("bootstrap").is_some()
+    {
+        return Some(s);
+    }
+    config
+        .get("sources")?
+        .as_array()?
+        .iter()
+        .find(|s| s.get("bootstrap").is_some())
 }
 
 fn cr_name(cr: &MarsService) -> Result<String> {

@@ -17,6 +17,10 @@ pub(crate) struct Skeleton {
     /// block. Empty defaults preserve the placeholder-only output for inputs
     /// without metadata.
     pub(crate) service_meta: ServiceMetaSkeleton,
+    /// MAP-level `PROJECTION { ... }` capture (e.g. `EPSG:25832`). Falls
+    /// back as source_crs for OGR layers that have no layer-scope PROJECTION
+    /// block of their own. `None` when the mapfile has no MAP PROJECTION.
+    pub(crate) map_projection: Option<String>,
     pub(crate) layers: Vec<LayerSkeleton>,
     pub(crate) styles: Vec<StyleDef>,
     /// mapfile-level SYMBOL definitions keyed by name. consumed by STYLE
@@ -334,6 +338,19 @@ pub(crate) enum BindingSource {
     /// `sql: <SELECT ...>` form for inline subqueries the mapfile DATA block
     /// could not be lifted to a plain table reference. Snapshot-only.
     Sql(String),
+    /// vectorfile binding lifted from a `CONNECTIONTYPE OGR` + `CONNECTION`
+    /// pair. emits `uri: / format: / source_crs:` on the per-binding line.
+    VectorFile(VectorFileBinding),
+}
+
+/// vectorfile binding fields. format is the snake_case wire spelling
+/// (`flat_geobuf` | `geo_json`); source_crs is the layer's PROJECTION (with
+/// MAP-level fallback) in `EPSG:NNNN` form.
+#[derive(Debug, Clone)]
+pub(crate) struct VectorFileBinding {
+    pub uri: String,
+    pub format: String,
+    pub source_crs: String,
 }
 
 impl SourceSkeleton {
@@ -345,6 +362,7 @@ impl SourceSkeleton {
         match &self.source {
             BindingSource::Table(t) => t.as_str(),
             BindingSource::Sql(_) => "<sql>",
+            BindingSource::VectorFile(_) => "<vectorfile>",
         }
     }
 }
@@ -934,10 +952,30 @@ pub(crate) fn render(skel: &Skeleton, bands: &[(String, u64)]) -> String {
     write_service_meta(&mut out, svc);
     let _ = writeln!(out);
 
-    let _ = writeln!(out, "source:");
-    let _ = writeln!(out, "  type: postgis");
-    let _ = writeln!(out, "  dsn: \"${{PG_DSN}}\"");
-    let _ = writeln!(out, "  native_crs: ${{MARS_NATIVE_CRS:-EPSG:25832}}");
+    let has_vectorfile = skel
+        .layers
+        .iter()
+        .flat_map(|l| &l.sources)
+        .any(|s| matches!(s.source, BindingSource::VectorFile(_)));
+    if has_vectorfile {
+        // plural form: postgis + vectorfile coexist. per-binding `source:`
+        // fields disambiguate; mars-config folds the wire shape into the
+        // typed `sources:` model.
+        let _ = writeln!(out, "sources:");
+        let _ = writeln!(out, "  - id: pg");
+        let _ = writeln!(out, "    type: postgis");
+        let _ = writeln!(out, "    dsn: \"${{PG_DSN}}\"");
+        let _ = writeln!(out, "    native_crs: ${{MARS_NATIVE_CRS:-EPSG:25832}}");
+        let _ = writeln!(out, "  - id: ogr");
+        let _ = writeln!(out, "    type: vectorfile");
+        let _ = writeln!(out, "    native_crs: ${{MARS_NATIVE_CRS:-EPSG:25832}}");
+        let _ = writeln!(out, "    cache_dir: /var/cache/mars/vectorfile");
+    } else {
+        let _ = writeln!(out, "source:");
+        let _ = writeln!(out, "  type: postgis");
+        let _ = writeln!(out, "  dsn: \"${{PG_DSN}}\"");
+        let _ = writeln!(out, "  native_crs: ${{MARS_NATIVE_CRS:-EPSG:25832}}");
+    }
     let _ = writeln!(out);
 
     let _ = writeln!(out, "artifacts:");
@@ -1115,15 +1153,32 @@ pub(crate) fn render(skel: &Skeleton, bands: &[(String, u64)]) -> String {
                 for (band_name, tiers) in &band_tiers {
                     for tier in tiers {
                         let src = tier.src;
-                        let source_part = match &src.source {
-                            BindingSource::Table(t) => format!("from: {}", yaml_quote(t)),
-                            BindingSource::Sql(s) => format!("sql: {}", yaml_quote(s)),
-                        };
-                        let mut parts = vec![
-                            format!("band: {band_name}"),
-                            source_part,
-                            format!("geometry_column: {}", yaml_quote(&src.geometry_column)),
-                        ];
+                        let mut parts: Vec<String> = Vec::new();
+                        // emit `source: pg|ogr` only in plural mode so the
+                        // 17 back-compat fixtures stay byte-stable.
+                        if has_vectorfile {
+                            let id = match &src.source {
+                                BindingSource::VectorFile(_) => "ogr",
+                                _ => "pg",
+                            };
+                            parts.push(format!("source: {id}"));
+                        }
+                        parts.push(format!("band: {band_name}"));
+                        match &src.source {
+                            BindingSource::Table(t) => {
+                                parts.push(format!("from: {}", yaml_quote(t)));
+                                parts.push(format!("geometry_column: {}", yaml_quote(&src.geometry_column)));
+                            }
+                            BindingSource::Sql(s) => {
+                                parts.push(format!("sql: {}", yaml_quote(s)));
+                                parts.push(format!("geometry_column: {}", yaml_quote(&src.geometry_column)));
+                            }
+                            BindingSource::VectorFile(vf) => {
+                                parts.push(format!("uri: {}", yaml_quote(&vf.uri)));
+                                parts.push(format!("format: {}", vf.format));
+                                parts.push(format!("source_crs: {}", yaml_quote(&vf.source_crs)));
+                            }
+                        }
                         if let Some(ref id) = src.id_column {
                             parts.push(format!("id_column: {}", yaml_quote(id)));
                         }

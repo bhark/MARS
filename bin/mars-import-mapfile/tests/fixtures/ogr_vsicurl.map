@@ -1,0 +1,16 @@
+# OGR + /vsicurl/ prefix - the URL after the prefix is the locator.
+MAP
+  NAME "ogr_vsicurl"
+  TITLE "OGR via /vsicurl"
+
+  LAYER
+    NAME "remote_points"
+    TYPE POINT
+    STATUS ON
+    CONNECTIONTYPE OGR
+    CONNECTION "/vsicurl/https://example.com/data.fgb"
+    PROJECTION
+      "init=epsg:4326"
+    END
+  END
+END

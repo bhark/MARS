@@ -303,7 +303,7 @@ mod tests {
     use async_trait::async_trait;
     use futures_core::stream::BoxStream;
     use futures_util::stream;
-    use mars_config::{MissingPagePolicy, SimplifierKind};
+    use mars_config::{MissingPagePolicy, SimplifierKind, SourceId};
     use mars_source::{RowBytes, SourceError};
     use mars_types::{BindingId, CrsCode};
 
@@ -338,6 +338,7 @@ mod tests {
     fn binding_plan(page_target: u64, levels: Vec<LevelPlan>) -> BindingPlan {
         BindingPlan {
             binding_id: BindingId::try_new("planned").unwrap(),
+            source_id: SourceId::new("default"),
             source_table: "planned".into(),
             filter: None,
             geometry_field: "geom".into(),

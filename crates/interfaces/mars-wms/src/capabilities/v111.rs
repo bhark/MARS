@@ -106,17 +106,21 @@ pub(super) fn capabilities_xml(cfg: &Config, manifest: &Manifest) -> Result<Stri
 
     // canonical-only srs advertisement: bbox values are emitted without a
     // per-srs transform, so listing every allowlist entry would lie about
-    // what's available.
-    text_element(&mut w, "SRS", cfg.source.native_crs.as_str())?;
+    // what's available. multi-source configs expand the root-layer SRS set
+    // to every distinct native crs declared across cfg.sources.
+    for srs in super::distinct_native_crses(cfg) {
+        text_element(&mut w, "SRS", srs)?;
+    }
+    let root_crs = super::service_root_native_crs(cfg);
     for srs in &cfg.service.advertised_crs {
-        if srs == cfg.source.native_crs.as_str() {
+        if super::distinct_native_crses(cfg).contains(&srs.as_str()) {
             continue;
         }
         text_element(&mut w, "SRS", srs)?;
     }
 
     if let Some(bb) = root_bbox {
-        write_bbox(&mut w, cfg.source.native_crs.as_str(), bb)?;
+        write_bbox(&mut w, root_crs, bb)?;
     }
 
     // 1.1.1 has no inheritable root-layer AuthorityURL or Identifier - those
@@ -227,7 +231,7 @@ fn emit_leaf<W: std::io::Write>(
     }
     let bbox = layer_bboxes.get(&layer.name).copied().or(layer.bbox);
     if let Some(bb) = bbox {
-        write_bbox(w, cfg.source.native_crs.as_str(), bb)?;
+        write_bbox(w, super::layer_native_crs(cfg, layer), bb)?;
     }
     // 1.1.1 layer-block ordering: MetadataURL before Attribution / AuthorityURL
     // / Identifier (opposite of 1.3.0).
@@ -372,7 +376,8 @@ mod tests {
     fn minimal_cfg() -> Config {
         let yaml = r#"
 service: { name: t, title: "T", abstract: "A", contact_email: ops@x }
-source: { type: postgis, dsn: "postgres://x", native_crs: EPSG:25832 }
+sources:
+  - { id: default, type: postgis, dsn: "postgres://x", native_crs: EPSG:25832 }
 artifacts:
   store: { type: fs, path: /tmp }
   cache: { path: /tmp/c, max_size: 1GiB }
@@ -642,7 +647,8 @@ layers:
     fn advertises_configured_formats_111() {
         let yaml = r#"
 service: { name: t, title: T, abstract: A, contact_email: "" }
-source: { type: postgis, dsn: "postgres://x", native_crs: EPSG:25832 }
+sources:
+  - { id: default, type: postgis, dsn: "postgres://x", native_crs: EPSG:25832 }
 artifacts:
   store: { type: fs, path: /tmp }
   cache: { path: /tmp/c, max_size: 1GiB }

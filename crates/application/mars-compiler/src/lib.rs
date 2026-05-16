@@ -28,16 +28,68 @@ pub(crate) mod spill;
 mod stages;
 pub mod testing;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
 
-use mars_config::Config;
+use mars_config::{Config, SourceId};
 use mars_observability::{Metrics, rebalance_outcome};
 use mars_source::{ChangeBatch, ChangeFeed, ChangeSubscription, LeaderLock, LeaderLockGuard, Source};
 use mars_store::{ManifestStore, ObjectStore, StoreError};
 use mars_types::{BindingId, Manifest};
 use tokio_util::sync::CancellationToken;
+
+/// Lookup table mapping a configured source id to its constructed adapter.
+/// Bins build one of these via composition and the compiler routes each
+/// binding through its declared source.
+#[derive(Clone, Default)]
+pub struct SourceRegistry {
+    by_id: BTreeMap<SourceId, Arc<dyn Source>>,
+}
+
+impl SourceRegistry {
+    /// Empty registry. Use [`Self::insert`] to populate.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Insert a source. Replaces any prior entry for the same id.
+    pub fn insert(&mut self, id: SourceId, source: Arc<dyn Source>) {
+        self.by_id.insert(id, source);
+    }
+
+    /// Borrow the source registered under `id`, if any.
+    #[must_use]
+    pub fn get(&self, id: &SourceId) -> Option<Arc<dyn Source>> {
+        self.by_id.get(id).cloned()
+    }
+
+    /// True when no sources are registered.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.by_id.is_empty()
+    }
+
+    /// Number of registered sources.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.by_id.len()
+    }
+
+    /// Iterate over `(id, source)` pairs in id-ascending order.
+    pub fn iter(&self) -> impl Iterator<Item = (&SourceId, &Arc<dyn Source>)> {
+        self.by_id.iter()
+    }
+}
+
+impl std::fmt::Debug for SourceRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SourceRegistry")
+            .field("ids", &self.by_id.keys().collect::<Vec<_>>())
+            .finish()
+    }
+}
 
 /// Capped exponential backoff schedule for retrying a transient publish.
 const PUBLISH_RETRY_DELAYS: &[Duration] = &[
@@ -136,6 +188,16 @@ pub enum CompilerError {
     InvalidBindingId {
         /// Offending binding identifier.
         binding: String,
+    },
+    /// A binding referenced a source id absent from the registry. Config
+    /// validation should catch this before compile; surfaces here only when
+    /// the registry was built without the declared source.
+    #[error("binding {binding} references unknown source id {source_id}")]
+    UnknownSource {
+        /// Affected binding id.
+        binding: String,
+        /// The missing source id.
+        source_id: String,
     },
     /// An incremental change event's hilbert key fell outside every page
     /// range and the binding's `MissingPagePolicy::Fail` policy elected to
@@ -269,8 +331,9 @@ pub enum CompilerError {
 
 /// All ports the compiler depends on, bundled for easy composition by the bin.
 pub struct Deps {
-    /// Read-side source (geometry / attributes).
-    pub source: Arc<dyn Source>,
+    /// Registry of read-side sources keyed by their configured id. Each
+    /// binding plan carries the id of the source that feeds it.
+    pub sources: Arc<SourceRegistry>,
     /// Subscription source for incremental updates.
     pub change_feed: Arc<dyn ChangeFeed>,
     /// Coordination lock so at most one compiler runs at a time.
@@ -281,6 +344,20 @@ pub struct Deps {
     pub manifest: Arc<dyn ManifestStore>,
     /// Service metrics handle.
     pub metrics: Metrics,
+}
+
+impl Deps {
+    /// Route a binding plan to its source via the registry. Returns
+    /// [`CompilerError::UnknownSource`] when the binding's declared source id
+    /// is not registered (a configuration / wiring bug).
+    pub fn source_for(&self, binding: &plan::BindingPlan) -> Result<Arc<dyn Source>, CompilerError> {
+        self.sources
+            .get(&binding.source_id)
+            .ok_or_else(|| CompilerError::UnknownSource {
+                binding: binding.binding_id.as_str().to_string(),
+                source_id: binding.source_id.as_str().to_string(),
+            })
+    }
 }
 
 /// The compiler service.
@@ -508,7 +585,8 @@ pub async fn run_snapshot_from_plan(
             binding = %binding_plan.binding_id,
             "compile.binding.start",
         );
-        let mut session = deps.source.open_compile_session(&port_binding).await?;
+        let source = deps.source_for(binding_plan)?;
+        let mut session = source.open_compile_session(&port_binding).await?;
         let work = async {
             let page_plan =
                 page_plan::compute_page_plan(session.as_mut(), binding_plan, plan_budget_bytes, spill_dir).await?;

@@ -45,7 +45,6 @@ mod map_metadata;
 const UNSUPPORTED: &[&str] = &[
     "FONTSET",
     "LEGEND",
-    "PROJECTION",
     "OUTPUTFORMAT",
     "FEATURE",
     "JOIN",
@@ -67,10 +66,10 @@ pub(crate) fn is_unsupported(kw: &str) -> bool {
 #[cfg(test)]
 fn translate(src: &str) -> Skeleton {
     let tokens = scan(src);
-    translate_tokens(&tokens, None)
+    translate_tokens(&tokens, None, false)
 }
 
-pub(crate) fn translate_tokens(tokens: &[Token], include_layers: Option<&HashSet<String>>) -> Skeleton {
+pub(crate) fn translate_tokens(tokens: &[Token], include_layers: Option<&HashSet<String>>, strict: bool) -> Skeleton {
     let mut skel = Skeleton::default();
 
     let map_slice: &[Token] = match tokens
@@ -82,11 +81,11 @@ pub(crate) fn translate_tokens(tokens: &[Token], include_layers: Option<&HashSet
         None => tokens,
     };
 
-    walk(map_slice, &mut skel, include_layers);
+    walk(map_slice, &mut skel, include_layers, strict);
     skel
 }
 
-fn walk(tokens: &[Token], skel: &mut Skeleton, include_layers: Option<&HashSet<String>>) {
+fn walk(tokens: &[Token], skel: &mut Skeleton, include_layers: Option<&HashSet<String>>, strict: bool) {
     let mut i = 0;
     while i < tokens.len() {
         let t = &tokens[i];
@@ -108,7 +107,7 @@ fn walk(tokens: &[Token], skel: &mut Skeleton, include_layers: Option<&HashSet<S
                 } else {
                     &[]
                 };
-                handle_layer(body, open.line, skel, include_layers);
+                handle_layer(body, open.line, skel, include_layers, strict);
                 i = range.end;
                 continue;
             }
@@ -136,6 +135,21 @@ fn walk(tokens: &[Token], skel: &mut Skeleton, include_layers: Option<&HashSet<S
                 i = range.end;
                 continue;
             }
+            MapDirective::Projection(_t) => {
+                let range = block_range(tokens, i).unwrap_or(i..i + 1);
+                let body: &[Token] = if range.end > range.start + 1 {
+                    &tokens[range.start + 1..range.end - 1]
+                } else {
+                    &[]
+                };
+                if skel.map_projection.is_none()
+                    && let Some(crs) = parse_projection_block(body)
+                {
+                    skel.map_projection = Some(crs);
+                }
+                i = range.end;
+                continue;
+            }
             MapDirective::Unsupported(t) => {
                 warn!(line = t.line, keyword = %t.keyword, "unsupported mapfile construct");
                 if is_block_opener(&t.keyword)
@@ -151,6 +165,36 @@ fn walk(tokens: &[Token], skel: &mut Skeleton, include_layers: Option<&HashSet<S
         }
         i += 1;
     }
+}
+
+/// Parse a `PROJECTION { ... }` block body into an `EPSG:NNNN` CRS code.
+/// Only the `init=epsg:NNNN` form is recognised (case-insensitive); raw
+/// `+proj=...` parameter lists return `None`. Each line of the block scans
+/// as one token whose keyword is the first arg and whose later args (if any)
+/// are siblings; we look across both keyword and args for the init=epsg
+/// fragment.
+pub(crate) fn parse_projection_block(body: &[Token]) -> Option<String> {
+    for t in body {
+        if let Some(code) = init_epsg_from(&t.keyword) {
+            return Some(code);
+        }
+        for arg in &t.args {
+            if let Some(code) = init_epsg_from(arg) {
+                return Some(code);
+            }
+        }
+    }
+    None
+}
+
+fn init_epsg_from(s: &str) -> Option<String> {
+    let lower = s.to_ascii_lowercase();
+    let rest = lower.strip_prefix("init=epsg:")?;
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        return None;
+    }
+    Some(format!("EPSG:{digits}"))
 }
 
 /// canonicalize MapServer's `MINSCALEDENOM = N+1` half-open convention.

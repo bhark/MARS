@@ -16,7 +16,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand, ValueEnum};
 use futures_util::StreamExt;
-use mars_bin_shared::{build_pg_source, build_store_and_publisher, build_stylesheet, load_fonts};
+use mars_bin_shared::{build_pg_source, build_sources, build_store_and_publisher, build_stylesheet, load_fonts};
 use mars_compiler::{Compiler, Deps as CompilerDeps};
 use mars_config::{Config, PngCompression as ConfigPngCompression, config_dir};
 use mars_render::{PngCompression as RenderPngCompression, TinySkiaEncoder, TinySkiaRenderer};
@@ -439,16 +439,17 @@ async fn rebuild_capabilities_loop(
 async fn run_compiler(cfg: Arc<Config>, shutdown: CancellationToken) -> Result<()> {
     composition::validate_change_feed_config(&cfg)?;
     let topology = composition::build_replication_topology(&cfg)?;
-    let source = build_pg_source(&cfg, Some(topology)).await?;
+    let pg_source = build_pg_source(&cfg, Some(topology)).await?;
+    let registry = build_sources(&cfg, Some(pg_source.clone())).await?;
     let (store, publisher) = build_store_and_publisher(&cfg)?;
     let metrics = mars_observability::Metrics::new().context("init metrics")?;
 
     // Compiler::new takes Config by value; clone out of the Arc once at handoff.
     let compiler = Compiler::new(
         CompilerDeps {
-            source: source.clone(),
-            change_feed: source.clone(),
-            leader_lock: source,
+            sources: Arc::new(registry),
+            change_feed: pg_source.clone(),
+            leader_lock: pg_source,
             store,
             manifest: publisher,
             metrics,
@@ -618,16 +619,15 @@ async fn tool_teardown(
     dry_run: bool,
 ) -> Result<()> {
     let cfg = load_and_validate(config)?;
-    let bs = cfg
-        .source
+    let pg = unique_bootstrap_postgis(&cfg)?;
+    let bs = pg
         .bootstrap
         .as_ref()
-        .ok_or_else(|| anyhow!("source.bootstrap is not configured"))?;
-    let cf = cfg
-        .source
+        .ok_or_else(|| anyhow!("sources[].bootstrap is not configured"))?;
+    let cf = pg
         .change_feed
         .as_ref()
-        .ok_or_else(|| anyhow!("source.change_feed is not configured"))?;
+        .ok_or_else(|| anyhow!("sources[].change_feed is not configured"))?;
     let plan = mars_source_postgres::bootstrap::TeardownPlan {
         role: bs.role.clone(),
         publication: cf.publication.clone().unwrap_or_default(),
@@ -661,24 +661,23 @@ fn build_bootstrap_plan(
     cfg: &Config,
     runtime_password: String,
 ) -> Result<mars_source_postgres::bootstrap::BootstrapPlan> {
-    let bs = cfg
-        .source
+    let pg = unique_bootstrap_postgis(cfg)?;
+    let bs = pg
         .bootstrap
         .as_ref()
-        .ok_or_else(|| anyhow!("source.bootstrap is not configured"))?;
-    let cf = cfg
-        .source
+        .ok_or_else(|| anyhow!("sources[].bootstrap is not configured"))?;
+    let cf = pg
         .change_feed
         .as_ref()
-        .ok_or_else(|| anyhow!("source.change_feed is not configured"))?;
+        .ok_or_else(|| anyhow!("sources[].change_feed is not configured"))?;
     let publication = cf
         .publication
         .clone()
-        .ok_or_else(|| anyhow!("source.change_feed.publication is required for bootstrap"))?;
+        .ok_or_else(|| anyhow!("sources[].change_feed.publication is required for bootstrap"))?;
     let slot = cf
         .slot
         .clone()
-        .ok_or_else(|| anyhow!("source.change_feed.slot is required for bootstrap"))?;
+        .ok_or_else(|| anyhow!("sources[].change_feed.slot is required for bootstrap"))?;
     Ok(mars_source_postgres::bootstrap::BootstrapPlan {
         role: bs.role.clone(),
         runtime_password,
@@ -686,6 +685,28 @@ fn build_bootstrap_plan(
         slot,
         schemas: bs.schemas.clone(),
     })
+}
+
+/// Pick the unique postgis source carrying a `bootstrap:` block. `mars setup`
+/// and `mars teardown` operate on a single source; if more than one is
+/// configured with bootstrap, fail fast so the operator names the target
+/// explicitly in a future revision.
+fn unique_bootstrap_postgis(cfg: &Config) -> Result<&mars_config::PostgisBackend> {
+    let mut pg_bootstraps = cfg
+        .sources
+        .iter()
+        .filter_map(|s| s.postgis())
+        .filter(|pg| pg.bootstrap.is_some());
+    let first = pg_bootstraps
+        .next()
+        .ok_or_else(|| anyhow!("no postgis source with sources[].bootstrap configured"))?;
+    if pg_bootstraps.next().is_some() {
+        return Err(anyhow!(
+            "more than one postgis source declares sources[].bootstrap; \
+             mars setup / teardown currently target a single source"
+        ));
+    }
+    Ok(first)
 }
 
 // ---------- composition helpers ----------

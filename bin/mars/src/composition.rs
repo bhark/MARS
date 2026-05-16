@@ -79,28 +79,33 @@ pub(crate) fn build_replication_topology(cfg: &Config) -> Result<ReplicationTopo
     Ok(ReplicationTopology { collections })
 }
 
-/// Validate the change-feed configuration block for compiler mode. Runtime
-/// mode never reads it, so this is only called from the compiler boot path.
+/// Validate the change-feed configuration block on the unique postgis source
+/// for compiler mode. Runtime mode never reads it, so this is only called
+/// from the compiler boot path.
 pub(crate) fn validate_change_feed_config(cfg: &Config) -> Result<()> {
-    let feed = cfg
-        .source
+    let pg = mars_bin_shared::unique_postgis_source(cfg)?
+        .postgis()
+        .ok_or_else(|| anyhow!("internal: unique_postgis_source returned non-postgis source"))?;
+    let feed = pg
         .change_feed
         .as_ref()
-        .ok_or_else(|| anyhow!("source.change_feed is required for compiler / all-in-one mode"))?;
+        .ok_or_else(|| anyhow!("sources[].change_feed is required for compiler / all-in-one mode"))?;
     match feed.kind.as_str() {
         "pgoutput" => {
             let publication = feed.publication.as_deref().unwrap_or("");
             let slot = feed.slot.as_deref().unwrap_or("");
             if publication.is_empty() {
-                return Err(anyhow!("source.change_feed.publication is required for type=pgoutput"));
+                return Err(anyhow!(
+                    "sources[].change_feed.publication is required for type=pgoutput"
+                ));
             }
             if slot.is_empty() {
-                return Err(anyhow!("source.change_feed.slot is required for type=pgoutput"));
+                return Err(anyhow!("sources[].change_feed.slot is required for type=pgoutput"));
             }
             Ok(())
         }
         other => Err(anyhow!(
-            "source.change_feed.type='{other}' unsupported; only 'pgoutput' is wired"
+            "sources[].change_feed.type='{other}' unsupported; only 'pgoutput' is wired"
         )),
     }
 }
@@ -156,7 +161,8 @@ mod tests {
     use super::*;
     use mars_config::{
         ArtifactCache, ArtifactStore, Artifacts, Cells, ChangeFeed as CfgChangeFeed, Class, ClassStyle, Compiler,
-        Config, Interfaces, Layer, Scales, ServiceMeta, Source as CfgSource, SourceBinding as CfgBinding, model::Band,
+        Config, Interfaces, Layer, PostgisBackend, Scales, ServiceMeta, Source as CfgSource,
+        SourceBackend as CfgBackend, SourceBinding as CfgBinding, SourceId, model::Band,
     };
     use mars_types::{Bbox, CrsCode, LayerId};
     use std::collections::BTreeMap;
@@ -171,19 +177,21 @@ mod tests {
                 name: "svc".into(),
                 ..Default::default()
             },
-            source: CfgSource {
-                kind: "postgis".into(),
-                dsn: "postgres://x".into(),
+            sources: vec![CfgSource {
+                id: SourceId::new("default"),
                 native_crs: CrsCode::new("EPSG:25832"),
-                change_feed: Some(CfgChangeFeed {
-                    kind: "pgoutput".into(),
-                    publication: Some("pub".into()),
-                    slot: Some("slot".into()),
-                    poll_interval: None,
+                backend: CfgBackend::Postgis(PostgisBackend {
+                    dsn: "postgres://x".into(),
+                    change_feed: Some(CfgChangeFeed {
+                        kind: "pgoutput".into(),
+                        publication: Some("pub".into()),
+                        slot: Some("slot".into()),
+                        poll_interval: None,
+                    }),
+                    pool: Default::default(),
+                    bootstrap: None,
                 }),
-                pool: Default::default(),
-                bootstrap: None,
-            },
+            }],
             artifacts: Artifacts {
                 store: ArtifactStore {
                     kind: "fs".into(),
@@ -243,12 +251,16 @@ mod tests {
             sources: bindings
                 .into_iter()
                 .map(|(from, geom)| CfgBinding {
+                    source: SourceId::new("default"),
                     scale: None,
                     band: None,
                     max_denom: None,
                     filter: None,
                     from: Some(from.into()),
                     sql: None,
+                    uri: None,
+                    format: None,
+                    source_crs: None,
                     geometry_column: geom.into(),
                     id_column: None,
                     attributes: vec![],
@@ -364,12 +376,16 @@ mod tests {
             bbox: None,
             sources: vec![
                 CfgBinding {
+                    source: mars_config::SourceId::new("default"),
                     scale: None,
                     band: Some("hi".into()),
                     max_denom: Some(8_000),
                     filter: None,
                     from: Some("public.bygning".into()),
                     sql: None,
+                    uri: None,
+                    format: None,
+                    source_crs: None,
                     geometry_column: "geom".into(),
                     id_column: None,
                     attributes: vec![],
@@ -381,12 +397,16 @@ mod tests {
                     on_missing_page: None,
                 },
                 CfgBinding {
+                    source: mars_config::SourceId::new("default"),
                     scale: None,
                     band: Some("hi".into()),
                     max_denom: Some(10_000),
                     filter: None,
                     from: Some("public.bygning_1m".into()),
                     sql: None,
+                    uri: None,
+                    format: None,
+                    source_crs: None,
                     geometry_column: "geom".into(),
                     id_column: None,
                     attributes: vec![],
@@ -398,12 +418,16 @@ mod tests {
                     on_missing_page: None,
                 },
                 CfgBinding {
+                    source: mars_config::SourceId::new("default"),
                     scale: None,
                     band: Some("hi".into()),
                     max_denom: Some(25_000),
                     filter: None,
                     from: Some("public.bygning_2m".into()),
                     sql: None,
+                    uri: None,
+                    format: None,
+                    source_crs: None,
                     geometry_column: "geom".into(),
                     id_column: None,
                     attributes: vec![],
@@ -449,17 +473,26 @@ mod tests {
         validate_change_feed_config(&cfg).unwrap();
     }
 
+    /// Mutable accessor for the test fixture's postgis backend. tests reach
+    /// in to flip change_feed knobs; the assertion documents the seeded shape.
+    fn pg_mut(cfg: &mut Config) -> &mut PostgisBackend {
+        match &mut cfg.sources[0].backend {
+            CfgBackend::Postgis(pg) => pg,
+            _ => panic!("test fixture must have postgis as first source"),
+        }
+    }
+
     #[test]
     fn validate_change_feed_config_rejects_missing_block() {
         let mut cfg = cfg_with_layers(vec![]);
-        cfg.source.change_feed = None;
+        pg_mut(&mut cfg).change_feed = None;
         assert!(validate_change_feed_config(&cfg).is_err());
     }
 
     #[test]
     fn validate_change_feed_config_rejects_unknown_type() {
         let mut cfg = cfg_with_layers(vec![]);
-        cfg.source.change_feed.as_mut().unwrap().kind = "polling".into();
+        pg_mut(&mut cfg).change_feed.as_mut().unwrap().kind = "polling".into();
         let err = validate_change_feed_config(&cfg).unwrap_err().to_string();
         assert!(err.contains("only 'pgoutput'"), "{err}");
     }
@@ -467,14 +500,14 @@ mod tests {
     #[test]
     fn validate_change_feed_config_rejects_missing_publication() {
         let mut cfg = cfg_with_layers(vec![]);
-        cfg.source.change_feed.as_mut().unwrap().publication = None;
+        pg_mut(&mut cfg).change_feed.as_mut().unwrap().publication = None;
         assert!(validate_change_feed_config(&cfg).is_err());
     }
 
     #[test]
     fn validate_change_feed_config_rejects_missing_slot() {
         let mut cfg = cfg_with_layers(vec![]);
-        cfg.source.change_feed.as_mut().unwrap().slot = Some(String::new());
+        pg_mut(&mut cfg).change_feed.as_mut().unwrap().slot = Some(String::new());
         assert!(validate_change_feed_config(&cfg).is_err());
     }
 

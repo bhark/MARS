@@ -96,17 +96,22 @@ pub(super) fn capabilities_xml(cfg: &Config, manifest: &Manifest) -> Result<Stri
     // canonical-only crs advertisement: bbox values are emitted without a
     // per-crs transform, so listing every allowlist entry would lie about
     // what's available. once BBOX round-trips through the reprojection
-    // allowlist the full set can be advertised again.
-    text_element(&mut w, "CRS", cfg.source.native_crs.as_str())?;
+    // allowlist the full set can be advertised again. multi-source configs
+    // expand the root-layer CRS set to every distinct native crs declared
+    // across cfg.sources.
+    for crs in super::distinct_native_crses(cfg) {
+        text_element(&mut w, "CRS", crs)?;
+    }
+    let root_crs = super::service_root_native_crs(cfg);
     for crs in &cfg.service.advertised_crs {
-        if crs == cfg.source.native_crs.as_str() {
+        if super::distinct_native_crses(cfg).contains(&crs.as_str()) {
             continue;
         }
         text_element(&mut w, "CRS", crs)?;
     }
 
     if let Some(bb) = root_bbox {
-        write_bbox(&mut w, cfg.source.native_crs.as_str(), bb)?;
+        write_bbox(&mut w, root_crs, bb)?;
     }
 
     // root-layer authority + identifier references. 1.3.0-only - 1.1.1
@@ -249,7 +254,7 @@ fn emit_leaf<W: std::io::Write>(
     }
     let bbox = layer_bboxes.get(&layer.name).copied().or(layer.bbox);
     if let Some(bb) = bbox {
-        write_bbox(w, cfg.source.native_crs.as_str(), bb)?;
+        write_bbox(w, super::layer_native_crs(cfg, layer), bb)?;
     }
     if let Some(attr) = layer.attribution.as_ref() {
         write_attribution(w, attr)?;
@@ -375,7 +380,8 @@ mod tests {
     fn minimal_cfg() -> Config {
         let yaml = r#"
 service: { name: t, title: "T", abstract: "A", contact_email: ops@x }
-source: { type: postgis, dsn: "postgres://x", native_crs: EPSG:25832 }
+sources:
+  - { id: default, type: postgis, dsn: "postgres://x", native_crs: EPSG:25832 }
 artifacts:
   store: { type: fs, path: /tmp }
   cache: { path: /tmp/c, max_size: 1GiB }
@@ -547,7 +553,8 @@ layers:
     fn cfg_with_groups() -> Config {
         let yaml = r#"
 service: { name: t, title: "Root", abstract: "A", contact_email: "" }
-source: { type: postgis, dsn: "postgres://x", native_crs: EPSG:25832 }
+sources:
+  - { id: default, type: postgis, dsn: "postgres://x", native_crs: EPSG:25832 }
 artifacts:
   store: { type: fs, path: /tmp }
   cache: { path: /tmp/c, max_size: 1GiB }
@@ -875,7 +882,8 @@ layers:
     fn advertises_configured_formats() {
         let yaml = r#"
 service: { name: t, title: T, abstract: A, contact_email: "" }
-source: { type: postgis, dsn: "postgres://x", native_crs: EPSG:25832 }
+sources:
+  - { id: default, type: postgis, dsn: "postgres://x", native_crs: EPSG:25832 }
 artifacts:
   store: { type: fs, path: /tmp }
   cache: { path: /tmp/c, max_size: 1GiB }

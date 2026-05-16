@@ -294,6 +294,7 @@ mod tests {
     fn binding(id: &str) -> BindingPlan {
         BindingPlan {
             binding_id: BindingId::try_new(id).unwrap(),
+            source_id: mars_config::SourceId::new("default"),
             source_table: id.to_string(),
             filter: None,
             geometry_field: "geom".into(),

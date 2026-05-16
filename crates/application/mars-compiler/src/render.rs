@@ -440,7 +440,8 @@ async fn rebuild_binding_truncate(
         binding_plan.native_crs.clone(),
     )?
     .with_filter(binding_plan.filter.clone());
-    let mut session = deps.source.open_compile_session(&port_binding).await?;
+    let source = deps.source_for(binding_plan)?;
+    let mut session = source.open_compile_session(&port_binding).await?;
     let work = async {
         let page_plan = compute_page_plan(session.as_mut(), binding_plan, plan_budget_bytes, spill_dir).await?;
         rebuild_binding_from_plan(
@@ -564,7 +565,8 @@ async fn rebuild_binding_incremental(
         .iter()
         .map(|f| i64::try_from(*f).unwrap_or(i64::MAX))
         .collect();
-    let stream = deps.source.stream_rows_by_id(&port_binding, &ids).await?;
+    let source = deps.source_for(binding_plan)?;
+    let stream = source.stream_rows_by_id(&port_binding, &ids).await?;
     let rows = hydrate_keyed_rows(stream, combined_bbox).await?;
     let mut returned_counts: BTreeMap<u64, u32> = BTreeMap::new();
     for r in &rows {

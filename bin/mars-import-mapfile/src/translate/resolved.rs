@@ -11,7 +11,8 @@ use std::collections::{BTreeSet, HashMap};
 use mars_style::Colour;
 use tracing::warn;
 
-use crate::emitter::{EmitLinePlacement, MarkerKind, SymbolDef, slugify};
+use crate::directive::ConnectionTypeToken;
+use crate::emitter::{BindingSource, EmitLinePlacement, MarkerKind, SymbolDef, VectorFileBinding, slugify};
 use crate::expression::parse_mapfile_expression;
 
 use super::class::{ParsedClass, ParsedExpression};
@@ -96,6 +97,8 @@ pub(crate) fn resolve_layer(
     p: ParsedLayer,
     layer_line: usize,
     symbols: &HashMap<String, SymbolDef>,
+    map_projection: Option<&str>,
+    strict: bool,
 ) -> Option<ResolvedLayer> {
     let name = p.name.clone().unwrap_or_else(|| format!("unnamed_layer_l{layer_line}"));
 
@@ -164,13 +167,44 @@ pub(crate) fn resolve_layer(
         .label
         .map(|pl| resolve_label(pl, &layer_label_style_name(&name), label_item));
 
-    let sources = resolve_sources(
-        p.data.as_deref(),
-        &p.scale_token_values,
-        p.max_scale_denom,
-        p.processing_items.as_deref(),
-        p.filter.as_ref(),
-    );
+    let sources = match p.connection_type.as_ref() {
+        Some(ConnectionTypeToken::Ogr) => resolve_ogr_source(
+            &name,
+            layer_line,
+            p.connection.as_deref(),
+            p.projection.as_deref(),
+            map_projection,
+            p.max_scale_denom,
+            p.processing_items.as_deref(),
+        ),
+        Some(ConnectionTypeToken::Other(raw)) => {
+            warn!(
+                line = layer_line,
+                layer = %name,
+                connection_type = %raw,
+                "unsupported CONNECTIONTYPE; skipping layer sources"
+            );
+            Vec::new()
+        }
+        Some(ConnectionTypeToken::Postgis) | None => {
+            if strict && p.connection_type.is_none() && p.data.is_some() {
+                // postgis is implied; surface a warn only under --strict so
+                // back-compat (untyped) mapfiles don't flood stderr.
+                warn!(
+                    line = layer_line,
+                    layer = %name,
+                    "CONNECTIONTYPE missing on postgis-style DATA layer; defaulting to postgis"
+                );
+            }
+            resolve_sources(
+                p.data.as_deref(),
+                &p.scale_token_values,
+                p.max_scale_denom,
+                p.processing_items.as_deref(),
+                p.filter.as_ref(),
+            )
+        }
+    };
 
     // attribute idents from class predicates, per-tier filters and label-text
     // templates - config validation requires every ident referenced by these
@@ -300,6 +334,125 @@ fn normalize_group_path(wms: Option<&str>, group: Option<&str>) -> Option<String
         out.push_str(s);
     }
     Some(out)
+}
+
+/// Lift a `CONNECTIONTYPE OGR` layer's CONNECTION + PROJECTION into a single
+/// vectorfile binding. Failure cases (missing connection / unknown
+/// /vsi-prefix / unknown extension / no source CRS) warn and return an
+/// empty source list.
+fn resolve_ogr_source(
+    layer_name: &str,
+    layer_line: usize,
+    connection: Option<&str>,
+    layer_projection: Option<&str>,
+    map_projection: Option<&str>,
+    max_scale_denom: Option<u64>,
+    processing_items: Option<&str>,
+) -> Vec<ResolvedSource> {
+    let Some(raw) = connection else {
+        warn!(
+            line = layer_line,
+            layer = %layer_name,
+            "OGR layer has no CONNECTION; skipping"
+        );
+        return Vec::new();
+    };
+    let Some(uri) = ogr_connection_to_uri(raw, layer_name, layer_line) else {
+        return Vec::new();
+    };
+    let Some(format) = infer_vectorfile_format(&uri) else {
+        warn!(
+            line = layer_line,
+            layer = %layer_name,
+            uri = %uri,
+            "OGR connection has unknown extension; cannot infer format - skipping"
+        );
+        return Vec::new();
+    };
+    let source_crs = match layer_projection.or(map_projection) {
+        Some(s) => s.to_string(),
+        None => {
+            warn!(
+                line = layer_line,
+                layer = %layer_name,
+                "OGR layer has no PROJECTION (and no MAP PROJECTION fallback); skipping"
+            );
+            return Vec::new();
+        }
+    };
+    let id_col = processing_items.and_then(guess_id_column);
+    vec![ResolvedSource {
+        source: BindingSource::VectorFile(VectorFileBinding {
+            uri,
+            format,
+            source_crs,
+        }),
+        filter: None,
+        // vectorfile bindings ignore geometry_column at decode time, but the
+        // emitter still writes it for shape parity. Keep it empty to make
+        // intent explicit in the YAML.
+        geometry_column: String::new(),
+        id_column: id_col,
+        max_denom_exclusive: max_scale_denom,
+    }]
+}
+
+/// Translate a MapServer-OGR CONNECTION string into an object-store URI.
+/// Returns `None` (after warning) for unrecognised `/vsi*` prefixes; bare
+/// paths route to `file://` (canonicalised when relative).
+fn ogr_connection_to_uri(raw: &str, layer_name: &str, layer_line: usize) -> Option<String> {
+    let trimmed = raw.trim().trim_matches('"');
+    if let Some(rest) = trimmed.strip_prefix("/vsis3/") {
+        return Some(format!("s3://{rest}"));
+    }
+    if let Some(rest) = trimmed.strip_prefix("/vsigs/") {
+        return Some(format!("gs://{rest}"));
+    }
+    if let Some(rest) = trimmed.strip_prefix("/vsicurl/") {
+        return Some(rest.to_string());
+    }
+    if trimmed.starts_with("/vsi") {
+        warn!(
+            line = layer_line,
+            layer = %layer_name,
+            connection = %trimmed,
+            "unsupported /vsi* prefix in OGR CONNECTION; skipping layer"
+        );
+        return None;
+    }
+    if trimmed.starts_with("s3://")
+        || trimmed.starts_with("gs://")
+        || trimmed.starts_with("file://")
+        || trimmed.starts_with("http://")
+        || trimmed.starts_with("https://")
+    {
+        return Some(trimmed.to_string());
+    }
+    // bare path: absolute -> file:///abs; relative -> canonicalise against cwd.
+    let pathbuf = std::path::Path::new(trimmed);
+    let abs = if pathbuf.is_absolute() {
+        pathbuf.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .ok()
+            .map(|cwd| cwd.join(pathbuf))
+            .unwrap_or_else(|| pathbuf.to_path_buf())
+    };
+    Some(format!("file://{}", abs.display()))
+}
+
+/// Map a file extension on the URI's path to a `VectorFileFormat` wire spelling.
+fn infer_vectorfile_format(uri: &str) -> Option<String> {
+    // strip query/fragment before extension match
+    let path = uri.split(['?', '#']).next().unwrap_or(uri);
+    let lower = path.to_ascii_lowercase();
+    if lower.ends_with(".fgb") {
+        Some("flat_geobuf".to_string())
+    } else if lower.ends_with(".geojson") || lower.ends_with(".json") {
+        Some("geo_json".to_string())
+    } else {
+        None
+    }
 }
 
 fn resolve_sources(

@@ -19,6 +19,10 @@ pub(crate) enum MapDirective<'a> {
     /// drive WMS / WMTS capabilities metadata (online resource, contact,
     /// keywords, fees, authority refs, etc.).
     Metadata,
+    /// `PROJECTION { "init=epsg:NNNN" }` at MAP scope. Captured so OGR
+    /// layers without a layer-scope PROJECTION can fall back to it as
+    /// their source CRS.
+    Projection(&'a Token),
     /// Keyword present in the `UNSUPPORTED` list - the parser warns at use
     /// site and skips a matching block range when applicable.
     Unsupported(&'a Token),
@@ -33,6 +37,7 @@ impl<'a> MapDirective<'a> {
             "LAYER" => Self::Layer(t),
             "SYMBOL" => Self::Symbol,
             "METADATA" => Self::Metadata,
+            "PROJECTION" => Self::Projection(t),
             other if is_unsupported(other) => Self::Unsupported(t),
             _ => Self::Unknown,
         }
@@ -60,6 +65,9 @@ pub(crate) enum LayerDirective<'a> {
     Group(&'a Token),
     Status(&'a Token),
     Metadata(&'a Token),
+    Connection(&'a Token),
+    ConnectionType(&'a Token),
+    Projection(&'a Token),
     Unsupported(&'a Token),
     Unknown,
 }
@@ -83,8 +91,30 @@ impl<'a> LayerDirective<'a> {
             "GROUP" => Self::Group(t),
             "STATUS" => Self::Status(t),
             "METADATA" => Self::Metadata(t),
+            "CONNECTION" => Self::Connection(t),
+            "CONNECTIONTYPE" => Self::ConnectionType(t),
+            "PROJECTION" => Self::Projection(t),
             other if is_unsupported(other) => Self::Unsupported(t),
             _ => Self::Unknown,
+        }
+    }
+}
+
+/// Token recognised after `CONNECTIONTYPE`. Comparison is case-insensitive
+/// (MapServer accepts `POSTGIS`, `postgis`, `PostGIS` interchangeably).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ConnectionTypeToken {
+    Postgis,
+    Ogr,
+    Other(String),
+}
+
+impl ConnectionTypeToken {
+    pub(crate) fn parse(raw: &str) -> Self {
+        match raw.to_ascii_uppercase().as_str() {
+            "POSTGIS" => Self::Postgis,
+            "OGR" => Self::Ogr,
+            _ => Self::Other(raw.to_string()),
         }
     }
 }

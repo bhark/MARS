@@ -190,8 +190,10 @@ impl ChangeFeed for ScriptedFeed {
 }
 
 fn deps_with(feed: Arc<dyn ChangeFeed>, leader: Arc<dyn LeaderLock>, manifest: Arc<InMemoryPublisher>) -> Deps {
+    let mut registry = mars_compiler::SourceRegistry::new();
+    registry.insert(mars_config::SourceId::new("default"), Arc::new(UnusedSource));
     Deps {
-        source: Arc::new(UnusedSource),
+        sources: Arc::new(registry),
         change_feed: feed,
         leader_lock: leader,
         store: Arc::new(InMemoryStore::new()) as Arc<dyn ObjectStore>,

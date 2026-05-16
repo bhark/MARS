@@ -249,7 +249,7 @@ fn write_layer<W: std::io::Write>(
         text_element(w, "ows:Abstract", &layer.abstract_)?;
     }
     if let Some(bb) = bbox.or(layer.bbox) {
-        write_bbox(w, cfg.source.native_crs.as_str(), bb)?;
+        write_bbox(w, layer_native_crs(cfg, layer), bb)?;
     }
     text_element(w, "ows:Identifier", layer.name.as_str())?;
 
@@ -358,6 +358,21 @@ fn xml_err(e: std::io::Error) -> WmtsError {
         name: "capabilities",
         reason: e.to_string(),
     }
+}
+
+/// Resolve a layer's native CRS for bbox labelling. Raster layers take
+/// `raster.source.source_crs`; vector layers take the CRS of the source
+/// feeding their first binding. Falls back to the first configured source.
+fn layer_native_crs<'a>(cfg: &'a Config, layer: &'a mars_config::Layer) -> &'a str {
+    if let Some(raster) = layer.raster.as_ref() {
+        return raster.source.source_crs.as_str();
+    }
+    if let Some(first) = layer.sources.first()
+        && let Some(src) = cfg.sources.iter().find(|s| s.id == first.source)
+    {
+        return src.native_crs.as_str();
+    }
+    cfg.sources.first().map(|s| s.native_crs.as_str()).unwrap_or("")
 }
 
 /// Resolve the tile-matrix-sets to advertise. Honours the

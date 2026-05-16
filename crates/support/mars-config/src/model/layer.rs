@@ -4,7 +4,17 @@ use serde::{Deserialize, Serialize};
 
 use super::service::{AuthorityRef, IdentifierRef};
 use crate::ConfigError;
+use crate::SourceId;
+use crate::model::source::DEFAULT_SOURCE_ID;
 use crate::units;
+
+/// Default binding source-id used when the YAML omits `source:`. Matches
+/// [`crate::model::source::DEFAULT_SOURCE_ID`] so single-source configs
+/// (legacy singular `source:` block, no per-binding `source:` ref) resolve
+/// cleanly through the multi-source pipeline.
+pub fn default_binding_source_id() -> SourceId {
+    SourceId::new(DEFAULT_SOURCE_ID)
+}
 
 /// Layer definition.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -336,9 +346,38 @@ pub struct ScaleWindow {
     pub max: Option<u64>,
 }
 
-/// Source binding for a layer.
+/// Format hint for a vectorfile binding. Inferable from the URI extension
+/// at translation time; explicit on the wire so binding-time errors point
+/// at config, not at adapter probes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VectorFileFormat {
+    /// FlatGeobuf (`.fgb`). Cloud-native, spatially indexed.
+    FlatGeobuf,
+    /// GeoJSON (`.geojson` / `.json`). RFC 7946.
+    GeoJson,
+}
+
+/// Source binding for a layer. Always points at one of the configured
+/// [`super::source::Source`] entries via [`Self::source`]; the
+/// remaining fields are mutually-exclusive variants describing how to
+/// pull rows from that source:
+///
+/// - `from:` / `sql:` — PostGIS binding (a table reference or an inline
+///   SELECT).
+/// - `uri:` + `format:` + `source_crs:` — vector-file binding (an object-store
+///   URI plus decoder hint and the file's native CRS).
+///
+/// Exactly one variant must be set; the cross-check is enforced at validate
+/// time.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourceBinding {
+    /// Identifier of the configured source that feeds this binding. Must
+    /// resolve against the service-level `sources:` list. Defaults to
+    /// [`DEFAULT_SOURCE_ID`] so legacy single-source configs don't need to
+    /// name their one source.
+    #[serde(default = "default_binding_source_id")]
+    pub source: SourceId,
     /// Scale window this binding is active in.
     #[serde(default)]
     pub scale: Option<ScaleWindow>,
@@ -369,6 +408,19 @@ pub struct SourceBinding {
     /// wraps this as `FROM (<sql>) AS src`. Mutually exclusive with `from`.
     #[serde(default)]
     pub sql: Option<String>,
+    /// Vector-file URI. One of `s3://...`, `gs://...`, `file://...`,
+    /// `https://...`. The object-store backend is inferred from the scheme.
+    /// Mutually exclusive with `from:` / `sql:`.
+    #[serde(default)]
+    pub uri: Option<String>,
+    /// Decoder hint for a vectorfile binding. Required when `uri:` is set.
+    #[serde(default)]
+    pub format: Option<VectorFileFormat>,
+    /// Source CRS of the vector file. Required when `uri:` is set; the
+    /// adapter reprojects to the configured source's `native_crs` before
+    /// emitting WKB.
+    #[serde(default)]
+    pub source_crs: Option<CrsCode>,
     /// Optional binding-level filter expression (mars-expr DSL). When set,
     /// the compiler ANDs this into the source SELECT so artifacts only
     /// materialise rows the filter accepts. Mirrors MapServer DATA inline
@@ -376,7 +428,10 @@ pub struct SourceBinding {
     /// declared in `attributes` (or be `id_column`).
     #[serde(default)]
     pub filter: Option<String>,
-    /// Geometry column.
+    /// Geometry column. Required for postgis bindings; ignored (empty
+    /// permitted) for vectorfile bindings whose decoder owns geometry
+    /// extraction.
+    #[serde(default)]
     pub geometry_column: String,
     /// Identifier column.
     #[serde(default)]
@@ -494,9 +549,22 @@ impl SourceBinding {
         self.sql.is_some()
     }
 
-    /// Diagnostic descriptor for the binding source: the table reference or
-    /// a truncated SQL snippet. Used in validation error messages so the
-    /// operator can find the offending binding regardless of source kind.
+    /// True when this binding pulls from a vector file via `uri:`.
+    #[must_use]
+    pub fn is_vectorfile_binding(&self) -> bool {
+        self.uri.is_some()
+    }
+
+    /// True when this binding is a postgis (table or sql) binding.
+    #[must_use]
+    pub fn is_postgis_binding(&self) -> bool {
+        self.from.is_some() || self.sql.is_some()
+    }
+
+    /// Diagnostic descriptor for the binding source: the table reference, a
+    /// truncated SQL snippet, or the vector-file URI. Used in validation
+    /// error messages so the operator can find the offending binding
+    /// regardless of source kind.
     #[must_use]
     pub fn source_descriptor(&self) -> String {
         if let Some(t) = &self.from {
@@ -504,14 +572,16 @@ impl SourceBinding {
         }
         if let Some(s) = &self.sql {
             let trimmed = s.split_whitespace().collect::<Vec<_>>().join(" ");
-            if trimmed.len() > 80 {
+            return if trimmed.len() > 80 {
                 format!("sql:{}…", &trimmed[..80])
             } else {
                 format!("sql:{trimmed}")
-            }
-        } else {
-            "<unset>".to_string()
+            };
         }
+        if let Some(u) = &self.uri {
+            return format!("uri:{u}");
+        }
+        "<unset>".to_string()
     }
 
     /// Resolve `page_size_target_bytes` against the substrate default.

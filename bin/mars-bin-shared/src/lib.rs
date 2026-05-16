@@ -19,30 +19,53 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
-use mars_config::Config;
+use mars_compiler::SourceRegistry;
+use mars_config::{Config, Source as CfgSource, SourceBackend};
+use mars_source::Source;
 use mars_source_postgres::{PgConfig, PgSource, ReplicationTopology};
+use mars_source_vectorfile::VectorFileSource;
 use mars_store::{ManifestStore, ObjectStore};
 use mars_store_fs::{FsPublisher, FsStore};
 use mars_store_s3::{S3Config, S3Publisher, S3Store};
 
-/// Build a `PgSource` from the connection / pool block in `cfg`.
-///
-/// `topology` is only relevant for compiler / all-in-one mode; pass `None`
-/// for snapshot compiles.
-pub async fn build_pg_source(cfg: &Config, topology: Option<ReplicationTopology>) -> Result<Arc<PgSource>> {
-    if cfg.source.kind != "postgis" {
+/// Locate the unique postgis source. Compiler / all-in-one mode requires
+/// exactly one; runtime mode allows any number. Returns the source entry
+/// so callers can name the id and read the `PostgisBackend` config.
+pub fn unique_postgis_source(cfg: &Config) -> Result<&CfgSource> {
+    let mut pg_sources = cfg.sources.iter().filter(|s| s.postgis().is_some());
+    let first = pg_sources
+        .next()
+        .ok_or_else(|| anyhow!("at least one postgis source is required"))?;
+    if pg_sources.next().is_some() {
         return Err(anyhow!(
-            "source.type='{}' is not supported; only 'postgis' is implemented",
-            cfg.source.kind
+            "exactly one postgis source is supported in this mode; multi-postgis compile is not implemented"
         ));
     }
-    let pool = &cfg.source.pool;
+    Ok(first)
+}
+
+/// Build a `PgSource` from the unique postgis backend in `cfg`.
+///
+/// `topology` is only relevant for compiler / all-in-one mode; pass `None`
+/// for snapshot compiles. Errors if `cfg` does not have exactly one postgis
+/// source.
+pub async fn build_pg_source(cfg: &Config, topology: Option<ReplicationTopology>) -> Result<Arc<PgSource>> {
+    let src_cfg = unique_postgis_source(cfg)?;
+    let pg = src_cfg
+        .postgis()
+        .ok_or_else(|| anyhow!("source {} is not a postgis backend", src_cfg.id.as_str()))?;
+    let src = connect_pg(pg, topology).await?;
+    Ok(Arc::new(src))
+}
+
+async fn connect_pg(pg: &mars_config::PostgisBackend, topology: Option<ReplicationTopology>) -> Result<PgSource> {
+    let pool = &pg.pool;
     // change_feed config is meaningless without replication topology - skip it
     // entirely in snapshot mode so we don't ship empty publication/slot strings
     // that look like a configuration request.
-    let feed = topology.is_some().then_some(cfg.source.change_feed.as_ref()).flatten();
+    let feed = topology.is_some().then_some(pg.change_feed.as_ref()).flatten();
     let pg_cfg = PgConfig {
-        dsn: cfg.source.dsn.clone(),
+        dsn: pg.dsn.clone(),
         publication: feed.and_then(|f| f.publication.clone()).unwrap_or_default(),
         slot: feed.and_then(|f| f.slot.clone()).unwrap_or_default(),
         max_pool_size: pool.max_size,
@@ -53,9 +76,43 @@ pub async fn build_pg_source(cfg: &Config, topology: Option<ReplicationTopology>
     };
     let src = PgSource::connect(pg_cfg).await.context("connect postgres")?;
     Ok(match topology {
-        Some(t) => Arc::new(src.with_topology(t)),
-        None => Arc::new(src),
+        Some(t) => src.with_topology(t),
+        None => src,
     })
+}
+
+/// Build the [`SourceRegistry`] the compiler uses to route bindings.
+///
+/// Iterates `cfg.sources`: each postgis entry connects a fresh `PgSource`
+/// (`pg_main` reuses the caller-supplied instance, so the topology /
+/// change-feed / leader-lock wiring stays consistent with the rest of the
+/// compose root); each vectorfile entry constructs a `VectorFileSource`.
+///
+/// `pg_main` is the postgis source already constructed by `build_pg_source`
+/// in compiler / all-in-one mode (so the topology applied there carries
+/// through). Pass `None` in pure runtime or snapshot mode; the function
+/// will connect any postgis sources fresh without topology.
+pub async fn build_sources(cfg: &Config, pg_main: Option<Arc<PgSource>>) -> Result<SourceRegistry> {
+    if cfg.sources.is_empty() {
+        return Err(anyhow!("no sources configured; at least one entry is required"));
+    }
+    let mut registry = SourceRegistry::new();
+    let mut pg_main = pg_main;
+    for src_cfg in &cfg.sources {
+        let source: Arc<dyn Source> = match &src_cfg.backend {
+            SourceBackend::Postgis(pg) => match pg_main.take() {
+                Some(existing) => existing,
+                None => Arc::new(connect_pg(pg, None).await?),
+            },
+            SourceBackend::VectorFile(vf) => Arc::new(
+                VectorFileSource::new(src_cfg.id.clone(), src_cfg.native_crs.clone(), vf.clone())
+                    .await
+                    .with_context(|| format!("init vectorfile source '{}'", src_cfg.id.as_str()))?,
+            ),
+        };
+        registry.insert(src_cfg.id.clone(), source);
+    }
+    Ok(registry)
 }
 
 /// Build the artifact object store and the manifest publisher from the

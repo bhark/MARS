@@ -71,26 +71,28 @@ pub(crate) async fn run(
 
     // publication-membership probe: backstop for the "binding silently
     // dropped from the publication" case the in-band Relation messages
-    // cannot deliver. one query covers every due binding; sources with
-    // no publication concept return Healthy via the default impl.
-    let due_ids: Vec<_> = due
-        .iter()
-        .map(|b| mars_source::SourceCollectionId::new(b.binding_id.as_str()))
-        .collect();
-    let unpublished: HashSet<BindingId> = if due_ids.is_empty() {
-        HashSet::new()
-    } else {
-        c.deps
-            .source
-            .probe_binding_health(&due_ids)
-            .await?
-            .into_iter()
-            .filter_map(|h| match h {
-                BindingHealth::Healthy(_) => None,
-                BindingHealth::Unpublished(id) => BindingId::try_new(id.as_str()).ok(),
-            })
-            .collect()
-    };
+    // cannot deliver. one query per source covers all due bindings on it;
+    // sources with no publication concept return Healthy via the default impl.
+    let mut due_by_source: HashMap<mars_config::SourceId, Vec<mars_source::SourceCollectionId>> = HashMap::new();
+    for b in &due {
+        due_by_source
+            .entry(b.source_id.clone())
+            .or_default()
+            .push(mars_source::SourceCollectionId::new(b.binding_id.as_str()));
+    }
+    let mut unpublished: HashSet<BindingId> = HashSet::new();
+    for (source_id, ids) in &due_by_source {
+        let Some(src) = c.deps.sources.get(source_id) else {
+            continue;
+        };
+        for h in src.probe_binding_health(ids).await? {
+            if let BindingHealth::Unpublished(id) = h
+                && let Ok(b) = BindingId::try_new(id.as_str())
+            {
+                unpublished.insert(b);
+            }
+        }
+    }
 
     let mut events: Vec<ChangeEvent> = Vec::new();
     let mut reconciled: HashSet<BindingId> = HashSet::new();

@@ -16,8 +16,11 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
+mars-compiler       = { workspace = true }
 mars-config         = { workspace = true }
+mars-source         = { workspace = true }
 mars-source-postgres = { workspace = true }
+mars-source-vectorfile = { workspace = true }
 mars-store          = { workspace = true }
 mars-store-fs       = { workspace = true }
 mars-store-s3       = { workspace = true }

@@ -117,6 +117,21 @@ fn layer_metadata_fixture_matches() {
 }
 
 #[test]
+fn ogr_s3_fixture_matches() {
+    assert_fixture_matches("ogr_s3");
+}
+
+#[test]
+fn ogr_local_fixture_matches() {
+    assert_fixture_matches("ogr_local");
+}
+
+#[test]
+fn ogr_vsicurl_fixture_matches() {
+    assert_fixture_matches("ogr_vsicurl");
+}
+
+#[test]
 fn strict_exits_two_on_unsupported() {
     let out = Command::new(bin_path())
         .arg("--strict")

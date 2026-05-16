@@ -1,7 +1,12 @@
 #[cfg(test)]
+use crate::SourceId;
+#[cfg(test)]
 use crate::model::*;
 #[cfg(test)]
 use mars_types::{Bbox, CrsCode};
+
+#[cfg(test)]
+pub(crate) const TEST_SOURCE_ID: &str = "pg";
 
 #[cfg(test)]
 pub(crate) fn minimal_config() -> Config {
@@ -13,14 +18,16 @@ pub(crate) fn minimal_config() -> Config {
             name: "test".into(),
             ..Default::default()
         },
-        source: Source {
-            kind: "memory".into(),
-            dsn: "memory://".into(),
+        sources: vec![Source {
+            id: SourceId::new(TEST_SOURCE_ID),
             native_crs: CrsCode::new("EPSG:25832"),
-            change_feed: None,
-            pool: Default::default(),
-            bootstrap: None,
-        },
+            backend: SourceBackend::Postgis(PostgisBackend {
+                dsn: "memory://".into(),
+                change_feed: None,
+                pool: Default::default(),
+                bootstrap: None,
+            }),
+        }],
         artifacts: Artifacts {
             store: ArtifactStore {
                 kind: "fs".into(),
@@ -64,12 +71,16 @@ pub(crate) fn minimal_config() -> Config {
 #[cfg(test)]
 pub(crate) fn binding(from: &str) -> SourceBinding {
     SourceBinding {
+        source: SourceId::new(TEST_SOURCE_ID),
         scale: None,
         band: None,
         max_denom: None,
         filter: None,
         from: Some(from.into()),
         sql: None,
+        uri: None,
+        format: None,
+        source_crs: None,
         geometry_column: "geom".into(),
         id_column: Some("id".into()),
         attributes: vec![],

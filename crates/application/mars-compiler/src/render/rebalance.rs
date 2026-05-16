@@ -136,7 +136,8 @@ async fn execute_rebalance_one_binding(
         .iter()
         .map(|f| i64::try_from(*f).unwrap_or(i64::MAX))
         .collect();
-    let stream = deps.source.stream_rows_by_id(&port_binding, &ids).await?;
+    let source = deps.source_for(binding_plan)?;
+    let stream = source.stream_rows_by_id(&port_binding, &ids).await?;
     let mut rows = hydrate_keyed_rows(stream, combined_bbox).await?;
     rows.sort_by(|a, b| {
         a.key

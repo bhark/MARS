@@ -15,8 +15,13 @@ use crate::model::Cells;
 pub struct Config {
     /// Service identity and capabilities metadata.
     pub service: ServiceMeta,
-    /// Source database / change-feed configuration.
-    pub source: Source,
+    /// Configured data sources. Each carries a unique id; per-layer bindings
+    /// reference it to pick the backend that feeds them. Multiple sources of
+    /// different (or the same) kind may coexist - e.g. a postgis source for
+    /// CDC-friendly tables alongside a vectorfile source pulling FlatGeobuf
+    /// from an object store.
+    #[serde(default)]
+    pub sources: Vec<Source>,
     /// Artifact store and on-disk cache settings.
     pub artifacts: Artifacts,
     /// Scale-band definitions used by the compiler.

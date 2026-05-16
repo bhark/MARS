@@ -1,0 +1,16 @@
+# OGR + local filesystem path - bare absolute path translates to file:///.
+MAP
+  NAME "ogr_local"
+  TITLE "OGR via local file path"
+
+  LAYER
+    NAME "roads"
+    TYPE LINE
+    STATUS ON
+    CONNECTIONTYPE OGR
+    CONNECTION "/data/roads.geojson"
+    PROJECTION
+      "init=epsg:25832"
+    END
+  END
+END

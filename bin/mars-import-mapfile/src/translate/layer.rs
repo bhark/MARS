@@ -12,11 +12,11 @@ use std::collections::HashSet;
 
 use tracing::warn;
 
-use crate::directive::LayerDirective;
+use crate::directive::{ConnectionTypeToken, LayerDirective};
 use crate::emitter::{BindingSource, Skeleton};
 use crate::parsing;
 use crate::scanner::{Token, block_range, is_block_opener};
-use crate::translate::{is_unsupported, normalize_n_plus_one};
+use crate::translate::{is_unsupported, normalize_n_plus_one, parse_projection_block};
 
 use super::class::{ParsedClass, parse_class};
 use super::emit::emit_layer;
@@ -56,6 +56,16 @@ pub(crate) struct ParsedLayer {
     /// Per-layer WMS metadata harvested from a `METADATA { ... }` block.
     /// Drives the expanded service-side per-layer fields the YAML emits.
     pub wms_metadata: LayerMetadata,
+    /// `CONNECTION "<uri>"`. Meaning depends on `connection_type`: for OGR
+    /// it's the `/vsi*` or filesystem path; for postgis it's the DSN we
+    /// don't currently re-emit. Raw text preserved for diagnostics.
+    pub connection: Option<String>,
+    /// `CONNECTIONTYPE` token (POSTGIS / OGR / other). Absent means
+    /// postgis-implied (MapServer's default for `DATA "geom FROM table"`).
+    pub connection_type: Option<ConnectionTypeToken>,
+    /// LAYER-scope `PROJECTION { "init=epsg:NNNN" }` collapsed to a CRS code
+    /// (e.g. `EPSG:4326`). Used as source_crs for OGR vectorfile bindings.
+    pub projection: Option<String>,
 }
 
 pub(crate) fn handle_layer(
@@ -63,6 +73,7 @@ pub(crate) fn handle_layer(
     layer_line: usize,
     skel: &mut Skeleton,
     include_layers: Option<&HashSet<String>>,
+    strict: bool,
 ) {
     // peek name first for filtering - skip the whole parse if the layer is
     // excluded by the operator's --layers list.
@@ -81,7 +92,13 @@ pub(crate) fn handle_layer(
     }
 
     let parsed = parse_layer(body);
-    if let Some(resolved) = resolve_layer(parsed, layer_line, &skel.symbols) {
+    if let Some(resolved) = resolve_layer(
+        parsed,
+        layer_line,
+        &skel.symbols,
+        skel.map_projection.as_deref(),
+        strict,
+    ) {
         emit_layer(resolved, skel);
     }
 }
@@ -172,6 +189,24 @@ pub(crate) fn parse_layer(body: &[Token]) -> ParsedLayer {
                     continue;
                 }
             }
+            LayerDirective::Connection(t) if p.connection.is_none() => {
+                p.connection = t.args.first().cloned();
+            }
+            LayerDirective::ConnectionType(t) if p.connection_type.is_none() => {
+                if let Some(arg) = t.args.first() {
+                    p.connection_type = Some(ConnectionTypeToken::parse(arg));
+                }
+            }
+            LayerDirective::Projection(_t) => {
+                if let Some(r) = block_range(body, i) {
+                    let inner = &body[r.start + 1..r.end - 1];
+                    if let Some(crs) = parse_projection_block(inner) {
+                        p.projection = Some(crs);
+                    }
+                    i = r.end;
+                    continue;
+                }
+            }
             LayerDirective::Unsupported(t) => {
                 warn!(line = t.line, keyword = %t.keyword, "unsupported mapfile construct");
                 if is_block_opener(&t.keyword)
@@ -182,8 +217,9 @@ pub(crate) fn parse_layer(body: &[Token]) -> ParsedLayer {
                 }
             }
             // re-occurrence of a wins-once scalar (NAME / TITLE / TYPE / DATA
-            // / FILTER / CLASSITEM / LABELITEM / GROUP) after the first is
-            // ignored; same for anything outside the known directive set.
+            // / FILTER / CLASSITEM / LABELITEM / GROUP / CONNECTION /
+            // CONNECTIONTYPE) after the first is ignored; same for anything
+            // outside the known directive set.
             LayerDirective::Name(_)
             | LayerDirective::Title(_)
             | LayerDirective::Type(_)
@@ -192,6 +228,8 @@ pub(crate) fn parse_layer(body: &[Token]) -> ParsedLayer {
             | LayerDirective::ClassItem(_)
             | LayerDirective::LabelItem(_)
             | LayerDirective::Group(_)
+            | LayerDirective::Connection(_)
+            | LayerDirective::ConnectionType(_)
             | LayerDirective::Unknown => {}
         }
         i += 1;

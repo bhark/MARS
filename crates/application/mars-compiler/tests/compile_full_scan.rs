@@ -98,8 +98,10 @@ impl LeaderLock for NopLock {
 }
 
 fn make_deps() -> Deps {
+    let mut registry = mars_compiler::SourceRegistry::new();
+    registry.insert(mars_config::SourceId::new("default"), Arc::new(UnusedSource));
     Deps {
-        source: Arc::new(UnusedSource),
+        sources: Arc::new(registry),
         change_feed: Arc::new(NopFeed),
         leader_lock: Arc::new(NopLock),
         store: Arc::new(InMemoryStore::new()),
@@ -111,6 +113,7 @@ fn make_deps() -> Deps {
 fn binding_plan() -> BindingPlan {
     BindingPlan {
         binding_id: BindingId::try_new("points").unwrap(),
+        source_id: mars_config::SourceId::new("default"),
         source_table: "public.points".into(),
         filter: None,
         geometry_field: "geom".into(),
