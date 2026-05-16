@@ -164,9 +164,9 @@ async fn insert_update_delete_round_trip_under_default_identity() {
     }
 
     // UPDATE moves the geometry. under DEFAULT identity pgoutput sends
-    // no old tuple; the translator surfaces feature_id from `new` and
-    // emits old_envelope: None. old-side dirty pages are recovered
-    // downstream from the page-membership sidecar.
+    // no old tuple; the translator surfaces feature_id from `new`.
+    // old-side dirty pages are recovered downstream from the
+    // page-membership sidecar.
     client
         .batch_execute("UPDATE roads SET geom = ST_SetSRID(ST_MakePoint(2000, 2000), 25832) WHERE gid = 1;")
         .await
@@ -176,31 +176,20 @@ async fn insert_update_delete_round_trip_under_default_identity() {
         ChangeEvent::Update {
             feature_id,
             new_envelope,
-            old_envelope,
             ..
         } => {
             assert_eq!(*feature_id, 1);
-            assert!(
-                old_envelope.is_none(),
-                "old_envelope must be None under default identity"
-            );
             assert_eq!(new_envelope.centroid, [2000.0, 2000.0]);
         }
         other => panic!("expected Update, got {other:?}"),
     }
 
-    // DELETE: K tuple carries `gid` only. feature_id still recovered,
-    // old_envelope is None.
+    // DELETE: K tuple carries `gid` only. feature_id still recovered.
     client.batch_execute("DELETE FROM roads WHERE gid = 1;").await.unwrap();
     let batch = next_batch_or_timeout(&mut sub).await.unwrap();
     match &batch.events[0] {
-        ChangeEvent::Delete {
-            feature_id,
-            old_envelope,
-            ..
-        } => {
+        ChangeEvent::Delete { feature_id, .. } => {
             assert_eq!(*feature_id, 1);
-            assert!(old_envelope.is_none());
         }
         other => panic!("expected Delete, got {other:?}"),
     }

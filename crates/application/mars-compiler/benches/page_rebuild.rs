@@ -258,7 +258,6 @@ fn bench_page_rebuild(c: &mut Criterion) {
                             collection: SourceCollectionId::new("points"),
                             feature_id: 0,
                             new_envelope: envelope.clone(),
-                            old_envelope: Some(envelope.clone()),
                         })
                         .unwrap();
                     let dirty = cycle.finish();
@@ -355,7 +354,6 @@ fn bench_multi_page_rebuild(c: &mut Criterion) {
                                 collection: SourceCollectionId::new("points"),
                                 feature_id: *fid,
                                 new_envelope: env.clone(),
-                                old_envelope: Some(env.clone()),
                             })
                             .unwrap();
                     }

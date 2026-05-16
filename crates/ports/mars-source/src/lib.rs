@@ -109,13 +109,9 @@ pub struct GeometryEnvelope {
 }
 
 /// One change-feed event, lowered from an upstream change-feed message or a
-/// polling diff.
-///
-/// `old_envelope` is currently unused: the pgoutput adapter always sets it
-/// to `None`, and the compiler resolves old-side dirty pages through the
-/// page-membership sidecar (keyed by `feature_id`). retained as
-/// `Option<GeometryEnvelope>` for forward compatibility with future
-/// adapters that can cheaply supply prior bounds; candidate for removal.
+/// polling diff. Update / Delete carry only the new-side envelope (or none,
+/// for Delete) - old-side dirty pages are resolved downstream through the
+/// page-membership sidecar keyed by `feature_id`.
 #[derive(Debug, Clone)]
 pub enum ChangeEvent {
     /// A row was inserted.
@@ -135,9 +131,6 @@ pub enum ChangeEvent {
         feature_id: u64,
         /// new-row envelope.
         new_envelope: GeometryEnvelope,
-        /// deprecated: always `None` from the pgoutput adapter; see the
-        /// enum-level docstring.
-        old_envelope: Option<GeometryEnvelope>,
     },
     /// A row was deleted.
     Delete {
@@ -145,9 +138,6 @@ pub enum ChangeEvent {
         collection: SourceCollectionId,
         /// stable feature id.
         feature_id: u64,
-        /// deprecated: always `None` from the pgoutput adapter; see the
-        /// enum-level docstring.
-        old_envelope: Option<GeometryEnvelope>,
     },
     /// The whole collection was truncated; the binding goes through a
     /// bootstrap-equivalent rebuild.

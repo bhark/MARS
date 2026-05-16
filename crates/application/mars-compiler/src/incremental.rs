@@ -111,18 +111,13 @@ impl<'a> IncrementalCycle<'a> {
                 collection,
                 feature_id,
                 new_envelope,
-                old_envelope: _,
             } => {
                 let binding_id = self.binding_id_for(&collection)?;
                 self.observe(&binding_id, feature_id);
                 self.mark_envelope(&binding_id, &new_envelope)?;
                 self.mark_old_side(&binding_id, feature_id)?;
             }
-            ChangeEvent::Delete {
-                collection,
-                feature_id,
-                old_envelope: _,
-            } => {
+            ChangeEvent::Delete { collection, feature_id } => {
                 let binding_id = self.binding_id_for(&collection)?;
                 self.observe(&binding_id, feature_id);
                 self.mark_old_side(&binding_id, feature_id)?;
@@ -406,7 +401,6 @@ mod tests {
                 collection: "roads".into(),
                 feature_id: 2,
                 new_envelope: envelope(20.0, 20.0),
-                old_envelope: None,
             })
             .unwrap();
         cycle
@@ -414,7 +408,6 @@ mod tests {
                 collection: "roads".into(),
                 feature_id: 77,
                 new_envelope: envelope(50.0, 50.0),
-                old_envelope: None,
             })
             .unwrap();
         cycle
@@ -422,21 +415,18 @@ mod tests {
                 collection: "buildings".into(),
                 feature_id: 999,
                 new_envelope: envelope(10.0, 10.0),
-                old_envelope: None,
             })
             .unwrap();
         cycle
             .ingest(ChangeEvent::Delete {
                 collection: "roads".into(),
                 feature_id: 3,
-                old_envelope: None,
             })
             .unwrap();
         cycle
             .ingest(ChangeEvent::Delete {
                 collection: "roads".into(),
                 feature_id: 77,
-                old_envelope: None,
             })
             .unwrap();
         cycle

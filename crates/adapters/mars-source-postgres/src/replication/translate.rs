@@ -189,7 +189,6 @@ fn update_event(
         collection: entry.topology.collection.clone(),
         feature_id,
         new_envelope,
-        old_envelope: None,
     }]))
 }
 
@@ -236,7 +235,6 @@ fn delete_event(
     Ok(Translated(vec![ChangeEvent::Delete {
         collection: entry.topology.collection.clone(),
         feature_id,
-        old_envelope: None,
     }]))
 }
 
@@ -616,7 +614,7 @@ mod tests {
     }
 
     #[test]
-    fn update_emits_new_envelope_and_no_old_envelope() {
+    fn update_emits_new_envelope() {
         let mut cache = RelationCache::default();
         let t = topo();
         let _ = translate(Message::Relation(relation_msg()), &mut cache, &t).unwrap();
@@ -647,11 +645,9 @@ mod tests {
             ChangeEvent::Update {
                 feature_id,
                 new_envelope,
-                old_envelope,
                 ..
             } => {
                 assert_eq!(feature_id, 42);
-                assert!(old_envelope.is_none(), "old_envelope should always be None now");
                 assert_eq!(new_envelope.centroid, [2000.0, 2000.0]);
             }
             other => panic!("expected Update event, got {other:?}"),
@@ -662,7 +658,7 @@ mod tests {
     fn update_without_full_old_succeeds_under_default_identity() {
         // standard postgres path: DEFAULT identity → no full_old tuple,
         // just key_old (or nothing when the PK is unchanged). translator
-        // recovers feature_id from `new` and emits old_envelope: None.
+        // recovers feature_id from `new`.
         let mut cache = RelationCache::default();
         let t = topo();
         let _ = translate(Message::Relation(relation_msg()), &mut cache, &t).unwrap();
@@ -684,13 +680,8 @@ mod tests {
         )
         .unwrap();
         match one_event(res) {
-            ChangeEvent::Update {
-                feature_id,
-                old_envelope,
-                ..
-            } => {
+            ChangeEvent::Update { feature_id, .. } => {
                 assert_eq!(feature_id, 42);
-                assert!(old_envelope.is_none());
             }
             other => panic!("expected Update event, got {other:?}"),
         }
@@ -764,20 +755,15 @@ mod tests {
         )
         .unwrap();
         match one_event(res) {
-            ChangeEvent::Delete {
-                feature_id,
-                old_envelope,
-                ..
-            } => {
+            ChangeEvent::Delete { feature_id, .. } => {
                 assert_eq!(feature_id, 42);
-                assert!(old_envelope.is_none());
             }
             other => panic!("expected Delete event, got {other:?}"),
         }
 
         // default identity path: K tuple carries key columns only. the
         // geometry slot is unused (typically NULL); feature_id still
-        // comes through, old_envelope is None.
+        // comes through.
         let res = translate(
             Message::Delete {
                 relation_oid: 100,
@@ -790,13 +776,8 @@ mod tests {
         )
         .unwrap();
         match one_event(res) {
-            ChangeEvent::Delete {
-                feature_id,
-                old_envelope,
-                ..
-            } => {
+            ChangeEvent::Delete { feature_id, .. } => {
                 assert_eq!(feature_id, 99);
-                assert!(old_envelope.is_none());
             }
             other => panic!("expected Delete event, got {other:?}"),
         }

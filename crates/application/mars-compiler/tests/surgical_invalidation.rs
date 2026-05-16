@@ -340,18 +340,15 @@ async fn surgical_invalidation_rebuilds_only_dirty_pages() {
             collection: collection.clone(),
             feature_id: id_in_b_in_page,
             new_envelope: envelope(target_xy_in_b.0, target_xy_in_b.1),
-            old_envelope: None, // resolved via sidecar lookup
         },
         ChangeEvent::Update {
             collection: collection.clone(),
             feature_id: id_to_move_b_to_c,
             new_envelope: envelope(target_xy_in_c.0, target_xy_in_c.1),
-            old_envelope: None,
         },
         ChangeEvent::Delete {
             collection: collection.clone(),
             feature_id: id_in_a_to_delete,
-            old_envelope: None,
         },
     ];
 

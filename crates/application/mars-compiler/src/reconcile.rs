@@ -120,7 +120,6 @@ pub async fn reconcile_binding(
                     events.push(ChangeEvent::Delete {
                         collection: collection.clone(),
                         feature_id: id,
-                        old_envelope: None,
                     });
                 }
             }
