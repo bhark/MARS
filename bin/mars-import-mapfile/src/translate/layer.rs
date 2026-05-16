@@ -66,6 +66,11 @@ pub(crate) struct ParsedLayer {
     /// LAYER-scope `PROJECTION { "init=epsg:NNNN" }` collapsed to a CRS code
     /// (e.g. `EPSG:4326`). Used as source_crs for OGR vectorfile bindings.
     pub projection: Option<String>,
+    /// Layer-wide opacity in `[0.0, 1.0]` lifted from `COMPOSITE { OPACITY n }`
+    /// (mapserver percent 0..100). Composes multiplicatively with any
+    /// per-style STYLE.OPACITY at resolve time. COMPOP / FILTER /
+    /// COMPFILTER inside COMPOSITE are renderer work and ignored.
+    pub composite_opacity: Option<f32>,
 }
 
 pub(crate) fn handle_layer(
@@ -202,6 +207,18 @@ pub(crate) fn parse_layer(body: &[Token]) -> ParsedLayer {
                     let inner = &body[r.start + 1..r.end - 1];
                     if let Some(crs) = parse_projection_block(inner) {
                         p.projection = Some(crs);
+                    }
+                    i = r.end;
+                    continue;
+                }
+            }
+            LayerDirective::Composite(_t) => {
+                if let Some(r) = block_range(body, i) {
+                    let inner = &body[r.start + 1..r.end - 1];
+                    if let Some(o) = parse_composite_opacity(inner) {
+                        // last COMPOSITE wins; multiple blocks are unusual but
+                        // mapserver allows them for COMPOP stacking.
+                        p.composite_opacity = Some(o);
                     }
                     i = r.end;
                     continue;
@@ -408,6 +425,20 @@ pub(crate) fn parse_scale_token(body: &[Token]) -> Vec<(u64, String)> {
         }
     }
     out
+}
+
+/// extract `OPACITY <n>` from a COMPOSITE block body, mapping mapserver's
+/// 0..100 percent into a `[0.0, 1.0]` multiplier. Other COMPOSITE-scoped
+/// directives (COMPOP, COMPFILTER, FILTER) are renderer work and silently
+/// ignored here.
+fn parse_composite_opacity(body: &[Token]) -> Option<f32> {
+    body.iter().rev().find_map(|t| {
+        if !t.keyword.eq_ignore_ascii_case("OPACITY") {
+            return None;
+        }
+        let v: f32 = parsing::first_parsed(t)?;
+        Some((v / 100.0).clamp(0.0, 1.0))
+    })
 }
 
 /// parse a MIN/MAXSCALEDENOM argument, applying the N+1 canonicalisation.

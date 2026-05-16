@@ -152,6 +152,11 @@ fn attribute_driven_fixture_matches() {
 }
 
 #[test]
+fn composite_opacity_fixture_matches() {
+    assert_fixture_matches("composite_opacity");
+}
+
+#[test]
 fn multi_pass_does_not_emit_collapse_warning() {
     // the legacy importer collapsed multi-STYLE classes into one fill+stroke
     // and warned per occurrence. multi-pass attachments now preserve order
@@ -178,7 +183,7 @@ fn strict_exits_two_on_unsupported() {
     assert_eq!(
         out.status.code(),
         Some(2),
-        "expected exit 2 in strict mode (fixture has COMPOSITE); got {:?} stderr={}",
+        "expected exit 2 in strict mode (fixture has CLUSTER); got {:?} stderr={}",
         out.status.code(),
         String::from_utf8_lossy(&out.stderr),
     );

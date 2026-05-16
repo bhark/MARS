@@ -1,0 +1,25 @@
+# exercises layer-wide COMPOSITE { OPACITY n } -> Style.opacity lowering.
+# the percentage 50 becomes 0.5 on every class style emitted under this layer.
+MAP
+  NAME "composite_test"
+  TITLE "Composite Opacity"
+
+  LAYER
+    NAME "roads"
+    TYPE LINE
+    STATUS ON
+    DATA "geom FROM roads_table"
+
+    COMPOSITE
+      OPACITY 50
+    END
+
+    CLASS
+      NAME "default"
+      STYLE
+        COLOR 200 50 50
+        WIDTH 1.0
+      END
+    END
+  END
+END

@@ -48,7 +48,6 @@ const UNSUPPORTED: &[&str] = &[
     "OUTPUTFORMAT",
     "FEATURE",
     "JOIN",
-    "COMPOSITE",
     "CLUSTER",
     "GRID",
     "VALIDATION",
@@ -1017,6 +1016,74 @@ END
             yaml.contains("max_image_dimension: 8192"),
             "rendered yaml missing max_image_dimension field; got:\n{yaml}"
         );
+    }
+
+    #[test]
+    fn composite_opacity_lowers_to_style_opacity_multiplier() {
+        let src = r#"
+MAP
+  NAME "demo"
+  LAYER
+    NAME "roads"
+    TYPE LINE
+    DATA "geom FROM r"
+    COMPOSITE
+      OPACITY 50
+    END
+    CLASS
+      NAME "default"
+      STYLE
+        COLOR 0 0 0
+        WIDTH 1.0
+      END
+    END
+  END
+END
+"#;
+        let skel = translate(src);
+        let style = skel
+            .styles
+            .iter()
+            .find(|s| s.name.starts_with("line_roads_"))
+            .expect("line style emitted");
+        let op = style.opacity.expect("opacity set from COMPOSITE OPACITY");
+        assert!((op - 0.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn composite_opacity_composes_with_style_opacity() {
+        // mapfile permits both COMPOSITE.OPACITY (layer-wide) and STYLE.OPACITY
+        // (per-pass) - mars-style composes multiplicatively at draw time, so
+        // we pre-compose at translate time too.
+        let src = r#"
+MAP
+  NAME "demo"
+  LAYER
+    NAME "x"
+    TYPE LINE
+    DATA "geom FROM t"
+    COMPOSITE
+      OPACITY 50
+    END
+    CLASS
+      NAME "default"
+      STYLE
+        COLOR 0 0 0
+        OPACITY 40
+      END
+    END
+  END
+END
+"#;
+        let skel = translate(src);
+        let style = skel
+            .styles
+            .iter()
+            .find(|s| s.name.starts_with("line_x_"))
+            .expect("line style emitted");
+        let op = style.opacity.expect("opacity set");
+        // 0.5 * 0.4 = 0.2
+        assert!((op - 0.2).abs() < 1e-5);
     }
 
     #[test]

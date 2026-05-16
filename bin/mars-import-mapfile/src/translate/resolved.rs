@@ -171,10 +171,21 @@ pub(crate) fn resolve_layer(
     let class_item = p.class_item.as_deref();
     let label_item = p.label_item.as_deref();
 
+    let composite_opacity = p.composite_opacity;
     let classes: Vec<ResolvedClass> = p
         .classes
         .into_iter()
-        .map(|pc| resolve_class(pc, &name, geom_for_classes, class_item, label_item, symbols))
+        .map(|pc| {
+            resolve_class(
+                pc,
+                &name,
+                geom_for_classes,
+                class_item,
+                label_item,
+                symbols,
+                composite_opacity,
+            )
+        })
         .collect();
 
     let label = p
@@ -576,13 +587,27 @@ fn resolve_class(
     class_item: Option<&str>,
     label_item: Option<&str>,
     symbols: &HashMap<String, SymbolDef>,
+    composite_opacity: Option<f32>,
 ) -> ResolvedClass {
     let title = p.name.clone();
     let class_name = slugify(&p.name.unwrap_or_else(|| format!("class_l{}", p.class_line)));
     let style_prefix = if geom_kind == "polygon" { "poly" } else { geom_kind };
     let style_name = format!("{}_{}_{}", style_prefix, slugify(layer_name), class_name);
 
-    let passes: Vec<SinglePass> = p.styles.iter().map(|sb| style_block_to_pass(sb, symbols)).collect();
+    // layer-wide COMPOSITE OPACITY composes multiplicatively with any
+    // per-pass STYLE.OPACITY; absent pass opacity defaults to 1.0.
+    let passes: Vec<SinglePass> = p
+        .styles
+        .iter()
+        .map(|sb| {
+            let mut pass = style_block_to_pass(sb, symbols);
+            if let Some(layer_op) = composite_opacity {
+                let pass_op = pass.opacity.unwrap_or(1.0);
+                pass.opacity = Some((layer_op * pass_op).clamp(0.0, 1.0));
+            }
+            pass
+        })
+        .collect();
 
     let when = resolve_when(p.expression, class_item, title.as_deref(), layer_name, p.class_line);
 

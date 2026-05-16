@@ -7,8 +7,8 @@ MAP
     NAME "roads"
     TYPE LINE
     STATUS ON
-    COMPOSITE
-      COMPOP "multiply"
+    CLUSTER
+      MAXDISTANCE 50
     END
   END
 END

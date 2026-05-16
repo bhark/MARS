@@ -80,6 +80,10 @@ pub(crate) enum LayerDirective<'a> {
     /// ...). Drives downstream branching in the resolver.
     ConnectionType(&'a Token),
     Projection(&'a Token),
+    /// `COMPOSITE { ... }` block at LAYER scope. Carries the OPACITY scalar
+    /// only; COMPOP (multiply/screen/etc.) is renderer work and stays out of
+    /// scope.
+    Composite(&'a Token),
     Unsupported(&'a Token),
     Unknown,
 }
@@ -106,6 +110,7 @@ impl<'a> LayerDirective<'a> {
             "CONNECTION" => Self::Connection(t),
             "CONNECTIONTYPE" => Self::ConnectionType(t),
             "PROJECTION" => Self::Projection(t),
+            "COMPOSITE" => Self::Composite(t),
             other if is_unsupported(other) => Self::Unsupported(t),
             _ => Self::Unknown,
         }

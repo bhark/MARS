@@ -43,7 +43,8 @@ cargo run -p mars-import-mapfile --locked -- \
 | `CLASS NAME / TITLE / EXPRESSION / STYLE` | mapped to MARS class with `when:` and `style: ref` |
 | `STYLE COLOR / OUTLINECOLOR / WIDTH / OUTLINEWIDTH / PATTERN` | mapped to MARS Style; multi-pass STYLE collapses with a warning |
 | `LABEL` | mapped to MARS label (font/colour/size subset) |
-| `METADATA / LEGEND / OUTPUTFORMAT / PROJECTION / FONTSET / SYMBOL / FEATURE / JOIN / COMPOSITE / CLUSTER / GRID / VALIDATION` | warned, skipped |
+| `LAYER COMPOSITE { OPACITY n }` | layer-wide opacity multiplier; composes with per-style `STYLE.OPACITY`. `COMPOP` and other inner directives are ignored (renderer work). |
+| `METADATA / LEGEND / OUTPUTFORMAT / PROJECTION / FONTSET / SYMBOL / FEATURE / JOIN / CLUSTER / GRID / VALIDATION` | warned, skipped |
 
 ### Expression operators
 
