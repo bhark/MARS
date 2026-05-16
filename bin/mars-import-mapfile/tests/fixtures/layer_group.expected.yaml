@@ -52,6 +52,22 @@ interfaces:
     formats: ["image/png", "image/jpeg"]
 
 layers:
+  - name: "Basis_kort_root"
+    title: "Basis kort"
+    abstract: "Foundation cartography group"
+    type: polygon
+    group: "/Basis"
+    ows:
+      keywords:
+        - "basis"
+        - "foundation"
+      metadata_urls:
+        - type: "ISO19115:2003"
+          format: "text/xml"
+          href: "https://example.org/md/basis.xml"
+      request_gating:
+        wms_get_capabilities: true
+        wms_get_map: false
   - name: "basemap"
     type: polygon
     group: "/Basis"

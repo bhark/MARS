@@ -115,19 +115,35 @@ pub(crate) fn resolve_layer(
     let name = p.name.clone().unwrap_or_else(|| format!("unnamed_layer_l{layer_line}"));
 
     // abstract parent layer: STATUS OFF + wms_enable_request denying GetMap.
-    // the path-based capabilities builder reconstructs the parent <Layer>
-    // element from real children's group paths, so we drop this record
-    // entirely. operators relying on Title/Abstract on the parent entry
-    // should add wms_group_title / wms_group_abstract follow-up support
-    // (out of scope here).
+    // surface as a metadata-only record (no sources/classes/label) so the
+    // emitted YAML keeps title/abstract/keywords/metadata_urls on the parent
+    // entry. the request_gating.get_map=false carries through to the runtime
+    // and capabilities builder, which together make it non-renderable.
     let getmap_denied = matches!(p.wms_metadata.request_gating.get_map, Some(false));
     if p.status_off && getmap_denied {
         tracing::info!(
             line = layer_line,
             layer = %name,
-            "absorbed abstract parent layer into group synthesis"
+            "translating advertise-only layer (STATUS OFF + GetMap denied)"
         );
-        return None;
+        return Some(ResolvedLayer {
+            name,
+            title: p.wms_metadata.title_override.clone().or(p.title.clone()),
+            abstract_: p.wms_metadata.abstract_override.clone(),
+            // config requires a kind; surface polygon for the advertise-only
+            // record. the layer never renders (GetMap denied), but the field
+            // must parse cleanly downstream.
+            geom_kind: Some("polygon".into()),
+            sources: Vec::new(),
+            classes: Vec::new(),
+            label: None,
+            attributes: Vec::new(),
+            group_path: normalize_group_path(p.wms_layer_group.as_deref(), p.group.as_deref()),
+            postgis_dsn: None,
+            wms: layer_wms_skeleton(&p.wms_metadata),
+            ows: layer_ows_skeleton(&p.wms_metadata),
+            unimplemented: Vec::new(),
+        });
     }
 
     if let Some(ref t) = p.layer_type {
@@ -1000,5 +1016,46 @@ mod tests {
         let s = w.unwrap();
         assert_eq!(s, "(rtt >= 0 AND rtt <= 2.5)");
         mars_expr::parse(&s).unwrap();
+    }
+
+    #[test]
+    fn advertise_only_layer_preserves_metadata_and_denies_get_map() {
+        use super::super::layer::ParsedLayer;
+        use super::super::layer_metadata::{LayerMetadata, MetadataUrlTriple, ParsedGating};
+
+        let mut p = ParsedLayer {
+            name: Some("Basis_root".into()),
+            status_off: true,
+            wms_layer_group: Some("/Basis".into()),
+            ..ParsedLayer::default()
+        };
+        p.wms_metadata = LayerMetadata {
+            title_override: Some("Basis kort".into()),
+            abstract_override: Some("Foundation group".into()),
+            keywords: vec!["basis".into()],
+            metadata_urls: vec![MetadataUrlTriple {
+                type_: "ISO19115:2003".into(),
+                format: "text/xml".into(),
+                href: "https://example.org/md.xml".into(),
+            }],
+            request_gating: ParsedGating {
+                get_capabilities: Some(true),
+                get_map: Some(false),
+                ..ParsedGating::default()
+            },
+            ..LayerMetadata::default()
+        };
+
+        let r = resolve_layer(p, 1, &HashMap::new(), None, false).expect("advertise-only layer retained");
+        assert_eq!(r.name, "Basis_root");
+        assert_eq!(r.title.as_deref(), Some("Basis kort"));
+        assert_eq!(r.abstract_.as_deref(), Some("Foundation group"));
+        assert_eq!(r.group_path.as_deref(), Some("/Basis"));
+        assert_eq!(r.ows.keywords, vec!["basis"]);
+        assert_eq!(r.ows.metadata_urls.len(), 1);
+        assert_eq!(r.ows.request_gating.get_map, Some(false));
+        assert!(r.sources.is_empty(), "advertise-only must carry no sources");
+        assert!(r.classes.is_empty(), "advertise-only must carry no classes");
+        assert!(r.label.is_none(), "advertise-only must carry no label");
     }
 }

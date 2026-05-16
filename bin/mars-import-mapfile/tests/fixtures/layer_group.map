@@ -1,9 +1,9 @@
 # LAYER GROUP / wms_layer_group / abstract-parent fixture. Exercises:
 #   - flat `GROUP "Basis"` -> `/Basis`
 #   - hierarchical `wms_layer_group "/Adresse/Bygning"` (wins over GROUP)
-#   - abstract-parent absorbed: STATUS OFF + wms_enable_request "!GetMap"
-#     drops the layer entirely; capabilities synthesises the parent from
-#     the children's paths.
+#   - advertise-only parent: STATUS OFF + wms_enable_request "!GetMap" emits
+#     a metadata-only Layer (title/abstract/keywords/metadata_url) with
+#     get_map denied so the WMS surface still carries the parent block.
 MAP
   NAME "groups"
   TITLE "WMS Layer Grouping Coverage"
@@ -13,8 +13,14 @@ MAP
     STATUS OFF
     TYPE POLYGON
     METADATA
-      "wms_layer_group" "/Basis"
-      "wms_enable_request" "GetCapabilities !GetMap"
+      "wms_layer_group"        "/Basis"
+      "wms_enable_request"     "GetCapabilities !GetMap"
+      "wms_title"              "Basis kort"
+      "wms_abstract"           "Foundation cartography group"
+      "wms_keywordlist"        "basis, foundation"
+      "wms_metadataurl_type"   "ISO19115:2003"
+      "wms_metadataurl_format" "text/xml"
+      "wms_metadataurl_href"   "https://example.org/md/basis.xml"
     END
   END
 
