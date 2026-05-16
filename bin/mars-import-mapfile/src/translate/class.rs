@@ -6,7 +6,7 @@ use mars_expr::{Expr, Literal};
 use tracing::warn;
 
 use crate::directive::ClassDirective;
-use crate::expression::{parse_mapfile_expression, parse_set_literal};
+use crate::expression::{number_or_string, parse_mapfile_expression, parse_set_literal};
 use crate::scanner::{Token, block_range, is_block_opener};
 
 use super::is_unsupported;
@@ -36,6 +36,14 @@ pub(crate) enum ParsedExpression {
     BareLiteral(Literal),
     // `{v1,v2,...}` set form needing CLASSITEM IN wrapping
     Set(Vec<Literal>),
+    // `/pat/` regex form needing CLASSITEM regex-match wrapping. mars_expr has
+    // no regex AST so the resolver emits a CLASSITEM-aware TODO; operator
+    // hand-finishes before validation.
+    Regex(String),
+    // `lo-hi` / `lo-` numeric range shorthand over a numeric CLASSITEM. lifts
+    // through the resolver as `(ci >= lo AND ci <= hi)` (or `ci >= lo` when
+    // the upper bound is open).
+    Range { lo: Literal, hi: Option<Literal> },
     // unparsable; raw text preserved for the TODO comment
     Todo(String),
 }
@@ -109,10 +117,13 @@ fn parse_class_scale_denom(t: &Token) -> Option<u64> {
     }
 }
 
-/// classify a CLASS EXPRESSION token into one of the four parsed shapes.
+/// classify a CLASS EXPRESSION token into one of the parsed shapes.
 /// the scanner strips surrounding double quotes, so `EXPRESSION "lit"` and
 /// `EXPRESSION lit` arrive identically as a single arg - both lower to
-/// `BareLiteral` here and pick up their column at resolve time.
+/// `BareLiteral` here and pick up their column at resolve time. regex
+/// (`/.../`) and range (`lo-hi` / `lo-`) shorthand are detected before the
+/// general expression parser since the parser would otherwise reject the
+/// leading `/` or fuse the hyphen into a number token.
 fn parse_class_expression(t: &Token) -> ParsedExpression {
     let joined = t.args.join(" ");
     let trimmed = joined.trim();
@@ -127,6 +138,15 @@ fn parse_class_expression(t: &Token) -> ParsedExpression {
         };
     }
 
+    if t.args.len() == 1 {
+        if let Some(pat) = parse_regex_shorthand(&t.args[0]) {
+            return ParsedExpression::Regex(pat);
+        }
+        if let Some((lo, hi)) = parse_range_shorthand(&t.args[0]) {
+            return ParsedExpression::Range { lo, hi };
+        }
+    }
+
     match parse_mapfile_expression(trimmed, t.line) {
         Ok(Expr::Literal(lit)) => ParsedExpression::BareLiteral(lit),
         Ok(expr) => ParsedExpression::Predicate(format!("{expr}")),
@@ -134,14 +154,156 @@ fn parse_class_expression(t: &Token) -> ParsedExpression {
             // single-arg fallback: the scanner strips quotes, so a quoted
             // string and an unquoted bareword both arrive as one arg with
             // no expression-y characters. treat as a literal value (the
-            // resolver decides whether to wrap with CLASSITEM). regex form
-            // `/.../` is held back so it still surfaces as a TODO.
+            // resolver decides whether to wrap with CLASSITEM). malformed
+            // `/...` shapes still surface as TODO via the regex guard above
+            // returning None.
             if t.args.len() == 1 && !t.args[0].starts_with('/') {
                 ParsedExpression::BareLiteral(Literal::String(t.args[0].clone()))
             } else {
                 warn!(line = t.line, error = %e, "could not parse EXPRESSION");
                 ParsedExpression::Todo(joined)
             }
+        }
+    }
+}
+
+// recognise `/pat/` only when there is exactly one outer pair of slashes and
+// the pattern body is non-empty. inner `/` chars defeat detection so we never
+// silently truncate something like `/a/b/`.
+fn parse_regex_shorthand(arg: &str) -> Option<String> {
+    let s = arg.strip_prefix('/')?.strip_suffix('/')?;
+    if s.is_empty() || s.contains('/') {
+        return None;
+    }
+    Some(s.to_string())
+}
+
+// recognise `lo-hi` and `lo-` where lo/hi are unsigned decimal numbers. no
+// leading sign, no scientific notation - intentionally tight so we don't
+// steal meaning from negative-literal class predicates like `-12`.
+fn parse_range_shorthand(arg: &str) -> Option<(Literal, Option<Literal>)> {
+    if !arg.starts_with(|c: char| c.is_ascii_digit()) {
+        return None;
+    }
+    let dash = arg.find('-')?;
+    let (lo_str, rest) = arg.split_at(dash);
+    let hi_str = &rest[1..];
+    if !is_unsigned_decimal(lo_str) {
+        return None;
+    }
+    let hi = if hi_str.is_empty() {
+        None
+    } else if is_unsigned_decimal(hi_str) {
+        Some(number_or_string(hi_str))
+    } else {
+        return None;
+    };
+    Some((number_or_string(lo_str), hi))
+}
+
+fn is_unsigned_decimal(s: &str) -> bool {
+    if s.is_empty() {
+        return false;
+    }
+    let mut seen_dot = false;
+    for c in s.chars() {
+        if c == '.' {
+            if seen_dot {
+                return false;
+            }
+            seen_dot = true;
+        } else if !c.is_ascii_digit() {
+            return false;
+        }
+    }
+    // reject lone `.`
+    s.chars().any(|c| c.is_ascii_digit())
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use super::*;
+
+    fn tok(arg: &str) -> Token {
+        Token {
+            line: 1,
+            keyword: "EXPRESSION".to_string(),
+            args: vec![arg.to_string()],
+        }
+    }
+
+    #[test]
+    fn regex_shorthand_lifts_pattern() {
+        match parse_class_expression(&tok("/Hovedrute/")) {
+            ParsedExpression::Regex(p) => assert_eq!(p, "Hovedrute"),
+            other => panic!("expected Regex, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn regex_empty_body_falls_to_todo() {
+        assert!(matches!(parse_class_expression(&tok("//")), ParsedExpression::Todo(_)));
+    }
+
+    #[test]
+    fn regex_inner_slash_falls_to_todo() {
+        // never silently truncate /a/b/ to "a/b"; surface as TODO instead.
+        assert!(matches!(
+            parse_class_expression(&tok("/foo/bar/")),
+            ParsedExpression::Todo(_)
+        ));
+    }
+
+    #[test]
+    fn range_closed_int_pair() {
+        match parse_class_expression(&tok("2-12")) {
+            ParsedExpression::Range { lo, hi } => {
+                assert_eq!(lo, Literal::Int(2));
+                assert_eq!(hi, Some(Literal::Int(12)));
+            }
+            other => panic!("expected Range, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn range_open_upper_bound() {
+        match parse_class_expression(&tok("12-")) {
+            ParsedExpression::Range { lo, hi } => {
+                assert_eq!(lo, Literal::Int(12));
+                assert_eq!(hi, None);
+            }
+            other => panic!("expected Range, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn range_mixed_int_float() {
+        match parse_class_expression(&tok("0-2.5")) {
+            ParsedExpression::Range { lo, hi } => {
+                assert_eq!(lo, Literal::Int(0));
+                assert_eq!(hi, Some(Literal::Float(2.5)));
+            }
+            other => panic!("expected Range, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn negative_literal_is_not_a_range() {
+        // `-12` is a literal -12, never an upper-bound half-open range.
+        match parse_class_expression(&tok("-12")) {
+            ParsedExpression::BareLiteral(Literal::Int(-12)) => {}
+            other => panic!("expected BareLiteral(Int(-12)), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn string_with_hyphen_is_not_a_range() {
+        // leading non-digit disqualifies the range shorthand; falls back to
+        // the single-arg bareword path.
+        match parse_class_expression(&tok("foo-bar")) {
+            ParsedExpression::BareLiteral(Literal::String(s)) => assert_eq!(s, "foo-bar"),
+            other => panic!("expected BareLiteral(String), got {other:?}"),
         }
     }
 }

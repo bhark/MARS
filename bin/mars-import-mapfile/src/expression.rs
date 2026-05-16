@@ -350,7 +350,7 @@ impl<'a> Lexer<'a> {
 
 // mapfile values like `12-` / `2.5-12` / `0-2.5` are bareword string literals,
 // not numbers. fall back to a string when the token doesn't parse cleanly.
-fn number_or_string(s: &str) -> Literal {
+pub(crate) fn number_or_string(s: &str) -> Literal {
     if let Ok(n) = s.parse::<i64>() {
         Literal::Int(n)
     } else if let Ok(f) = s.parse::<f64>()

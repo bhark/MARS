@@ -572,10 +572,11 @@ fn resolve_class(
 
 /// reconcile a class's EXPRESSION shape with the layer's CLASSITEM.
 ///
-/// `BareLiteral` and `Set` are CLASSITEM-relative by construction - they pick
-/// up the column at this point. `Predicate` is self-contained and passes
-/// through. `None` falls back to the CLASS NAME / CLASSITEM expansion that
-/// has always existed for un-EXPRESSION'd classes.
+/// `BareLiteral`, `Set`, and `Range` are CLASSITEM-relative by construction -
+/// they pick up the column at this point. `Regex` is also CLASSITEM-relative
+/// but emits a TODO (mars_expr has no regex AST). `Predicate` is
+/// self-contained and passes through. `None` falls back to the CLASS NAME /
+/// CLASSITEM expansion that has always existed for un-EXPRESSION'd classes.
 fn resolve_when(
     expression: Option<ParsedExpression>,
     class_item: Option<&str>,
@@ -611,6 +612,32 @@ fn resolve_when(
                 Some("# TODO: EXPRESSION set requires CLASSITEM".to_string())
             }
         },
+        Some(ParsedExpression::Regex(pat)) => {
+            let escaped = pat.replace('\'', "''");
+            match class_item {
+                Some(ci) => Some(format!("# TODO: regex match: {ci} ~ '{escaped}'")),
+                None => {
+                    warn!(
+                        layer = %layer_name,
+                        line = class_line,
+                        "CLASS EXPRESSION regex without CLASSITEM - emitting TODO"
+                    );
+                    Some(format!("# TODO: regex match without CLASSITEM: /{pat}/"))
+                }
+            }
+        }
+        Some(ParsedExpression::Range { lo, hi }) => match class_item {
+            Some(ci) => Some(format_range(ci, &lo, hi.as_ref())),
+            None => {
+                warn!(
+                    layer = %layer_name,
+                    line = class_line,
+                    "CLASS EXPRESSION range without CLASSITEM - emitting TODO"
+                );
+                let suffix = hi.as_ref().map(|h| format!("{h}")).unwrap_or_default();
+                Some(format!("# TODO: range without CLASSITEM: {lo}-{suffix}"))
+            }
+        },
         Some(ParsedExpression::Todo(raw)) => Some(format!("# TODO: hand-translate: {raw}")),
         None => match (class_item, title) {
             (Some(item), Some(value)) => Some(format!("{item} = '{}'", value.replace('\'', "''"))),
@@ -631,6 +658,13 @@ fn format_in(column: &str, lits: &[mars_expr::Literal]) -> String {
     }
     s.push(')');
     s
+}
+
+fn format_range(column: &str, lo: &mars_expr::Literal, hi: Option<&mars_expr::Literal>) -> String {
+    match hi {
+        Some(hi) => format!("({column} >= {lo} AND {column} <= {hi})"),
+        None => format!("{column} >= {lo}"),
+    }
 }
 
 fn layer_label_style_name(layer: &str) -> String {
@@ -832,5 +866,104 @@ mod tests {
         assert_eq!(normalize_group_path(Some("///A// /B/"), None).as_deref(), Some("/A/B"));
         assert!(normalize_group_path(Some(""), None).is_none());
         assert!(normalize_group_path(Some("///"), None).is_none());
+    }
+
+    use mars_expr::Literal;
+
+    #[test]
+    fn regex_with_classitem_emits_classitem_aware_todo() {
+        let w = resolve_when(
+            Some(ParsedExpression::Regex("^A".into())),
+            Some("rtt"),
+            None,
+            "layer",
+            1,
+        );
+        assert_eq!(w.as_deref(), Some("# TODO: regex match: rtt ~ '^A'"));
+    }
+
+    #[test]
+    fn regex_without_classitem_emits_raw_todo() {
+        let w = resolve_when(Some(ParsedExpression::Regex("foo".into())), None, None, "layer", 1);
+        assert_eq!(w.as_deref(), Some("# TODO: regex match without CLASSITEM: /foo/"));
+    }
+
+    #[test]
+    fn regex_pattern_with_quote_is_doubled() {
+        let w = resolve_when(
+            Some(ParsedExpression::Regex("o'brien".into())),
+            Some("name"),
+            None,
+            "layer",
+            1,
+        );
+        assert_eq!(w.as_deref(), Some("# TODO: regex match: name ~ 'o''brien'"));
+    }
+
+    #[test]
+    fn closed_range_with_classitem_emits_bounded_predicate() {
+        let w = resolve_when(
+            Some(ParsedExpression::Range {
+                lo: Literal::Int(2),
+                hi: Some(Literal::Int(12)),
+            }),
+            Some("rtt"),
+            None,
+            "layer",
+            1,
+        );
+        let s = w.unwrap();
+        assert_eq!(s, "(rtt >= 2 AND rtt <= 12)");
+        // round-trips through mars_expr
+        mars_expr::parse(&s).unwrap();
+    }
+
+    #[test]
+    fn open_upper_range_with_classitem_emits_lower_bound_only() {
+        let w = resolve_when(
+            Some(ParsedExpression::Range {
+                lo: Literal::Int(100),
+                hi: None,
+            }),
+            Some("rtt"),
+            None,
+            "layer",
+            1,
+        );
+        let s = w.unwrap();
+        assert_eq!(s, "rtt >= 100");
+        mars_expr::parse(&s).unwrap();
+    }
+
+    #[test]
+    fn range_without_classitem_emits_todo() {
+        let w = resolve_when(
+            Some(ParsedExpression::Range {
+                lo: Literal::Int(2),
+                hi: Some(Literal::Int(12)),
+            }),
+            None,
+            None,
+            "layer",
+            1,
+        );
+        assert_eq!(w.as_deref(), Some("# TODO: range without CLASSITEM: 2-12"));
+    }
+
+    #[test]
+    fn mixed_range_round_trips() {
+        let w = resolve_when(
+            Some(ParsedExpression::Range {
+                lo: Literal::Int(0),
+                hi: Some(Literal::Float(2.5)),
+            }),
+            Some("rtt"),
+            None,
+            "layer",
+            1,
+        );
+        let s = w.unwrap();
+        assert_eq!(s, "(rtt >= 0 AND rtt <= 2.5)");
+        mars_expr::parse(&s).unwrap();
     }
 }

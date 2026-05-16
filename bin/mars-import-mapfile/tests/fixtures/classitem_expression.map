@@ -1,6 +1,8 @@
 # CLASSITEM combined with EXPRESSION (gaps #5 and #6).
 # - EXPRESSION "lit" / bareword: wraps with CLASSITEM equality
 # - EXPRESSION {set}: wraps with CLASSITEM IN(...)
+# - EXPRESSION /pat/: regex shorthand, lifts to CLASSITEM-aware TODO
+# - EXPRESSION lo-hi / lo-: numeric range, lifts to bounded predicate
 # - EXPRESSION (...) self-contained predicate: passes through unchanged
 # - CLASS NAME without EXPRESSION: existing CLASSITEM-from-NAME expansion
 MAP
@@ -39,6 +41,33 @@ MAP
       EXPRESSION {skovPlantage,agerMark,eng}
       STYLE
         COLOR 80 160 80
+      END
+    END
+
+    # regex shorthand: /pat/ surfaces a CLASSITEM-aware TODO
+    CLASS
+      NAME "matches_a"
+      EXPRESSION /^A/
+      STYLE
+        COLOR 120 60 200
+      END
+    END
+
+    # closed numeric range
+    CLASS
+      NAME "mid_band"
+      EXPRESSION 10-20
+      STYLE
+        COLOR 60 120 60
+      END
+    END
+
+    # open-upper range
+    CLASS
+      NAME "tail"
+      EXPRESSION 100-
+      STYLE
+        COLOR 60 60 120
       END
     END
 
