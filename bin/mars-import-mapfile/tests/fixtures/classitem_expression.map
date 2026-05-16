@@ -80,6 +80,24 @@ MAP
       END
     END
 
+    # gap #8: CLASSITEM regex predicate (/pat/ lifted to `rtt ~ 'pat'`)
+    CLASS
+      NAME "service_road"
+      EXPRESSION /^Service.*Road$/
+      STYLE
+        COLOR 150 100 50
+      END
+    END
+
+    # gap #8: CLASSITEM regex predicate, case-insensitive flag (/pat/i)
+    CLASS
+      NAME "highway_ci"
+      EXPRESSION /highway/i
+      STYLE
+        COLOR 50 100 150
+      END
+    END
+
     # regression: bare CLASS NAME (no EXPRESSION) still picks up CLASSITEM
     CLASS
       NAME "default"

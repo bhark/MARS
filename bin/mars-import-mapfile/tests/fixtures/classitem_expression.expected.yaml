@@ -73,6 +73,12 @@ styles:
   poly_ranks_explicit_other:
     type: polygon
     fill: "#646464"
+  poly_ranks_service_road:
+    type: polygon
+    fill: "#966432"
+  poly_ranks_highway_ci:
+    type: polygon
+    fill: "#326496"
   poly_ranks_default:
     type: polygon
     fill: "#dcdcdc"
@@ -90,10 +96,12 @@ layers:
       - { name: "hovedrute", title: "hovedrute", when: "rtt = 'Hovedrute'", style: { type: ref, name: "poly_ranks_hovedrute" } }
       - { name: "majors", title: "majors", when: "rtt IN (14, 15, 984)", style: { type: ref, name: "poly_ranks_majors" } }
       - { name: "naturkind", title: "naturkind", when: "rtt IN ('skovPlantage', 'agerMark', 'eng')", style: { type: ref, name: "poly_ranks_naturkind" } }
-      - { name: "matches_a", title: "matches_a", when: "# TODO: regex match: rtt ~ '^A'", style: { type: ref, name: "poly_ranks_matches_a" } }
+      - { name: "matches_a", title: "matches_a", when: "rtt ~ '^A'", style: { type: ref, name: "poly_ranks_matches_a" } }
       - { name: "mid_band", title: "mid_band", when: "(rtt >= 10 AND rtt <= 20)", style: { type: ref, name: "poly_ranks_mid_band" } }
       - { name: "tail", title: "tail", when: "rtt >= 100", style: { type: ref, name: "poly_ranks_tail" } }
       - { name: "explicit_other", title: "explicit_other", when: "other = 'x'", style: { type: ref, name: "poly_ranks_explicit_other" } }
+      - { name: "service_road", title: "service_road", when: "rtt ~ '^Service.*Road$'", style: { type: ref, name: "poly_ranks_service_road" } }
+      - { name: "highway_ci", title: "highway_ci", when: "rtt ~* 'highway'", style: { type: ref, name: "poly_ranks_highway_ci" } }
       - { name: "default", title: "default", when: "rtt = 'default'", style: { type: ref, name: "poly_ranks_default" } }
 
 observability:

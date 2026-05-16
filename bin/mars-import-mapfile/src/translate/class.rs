@@ -36,10 +36,9 @@ pub(crate) enum ParsedExpression {
     BareLiteral(Literal),
     // `{v1,v2,...}` set form needing CLASSITEM IN wrapping
     Set(Vec<Literal>),
-    // `/pat/` regex form needing CLASSITEM regex-match wrapping. mars_expr has
-    // no regex AST so the resolver emits a CLASSITEM-aware TODO; operator
-    // hand-finishes before validation.
-    Regex(String),
+    // `/pat/` or `/pat/i` regex form needing CLASSITEM regex-match wrapping.
+    // case_insensitive carries the optional trailing `i` flag.
+    Regex { pattern: String, case_insensitive: bool },
     // `lo-hi` / `lo-` numeric range shorthand over a numeric CLASSITEM. lifts
     // through the resolver as `(ci >= lo AND ci <= hi)` (or `ci >= lo` when
     // the upper bound is open).
@@ -138,13 +137,19 @@ fn parse_class_expression(t: &Token) -> ParsedExpression {
         };
     }
 
-    if t.args.len() == 1 {
-        if let Some(pat) = parse_regex_shorthand(&t.args[0]) {
-            return ParsedExpression::Regex(pat);
-        }
-        if let Some((lo, hi)) = parse_range_shorthand(&t.args[0]) {
-            return ParsedExpression::Range { lo, hi };
-        }
+    // mapfile `/pat/` or `/pat/i` -> CLASSITEM-relative regex match (forwarded
+    // to the resolver, which emits `ci ~ 'pat'` or `ci ~* 'pat'`).
+    if let Some(rx) = strip_regex_form(t.args.as_slice()) {
+        return ParsedExpression::Regex {
+            pattern: rx.pattern,
+            case_insensitive: rx.case_insensitive,
+        };
+    }
+
+    if t.args.len() == 1
+        && let Some((lo, hi)) = parse_range_shorthand(&t.args[0])
+    {
+        return ParsedExpression::Range { lo, hi };
     }
 
     match parse_mapfile_expression(trimmed, t.line) {
@@ -167,15 +172,37 @@ fn parse_class_expression(t: &Token) -> ParsedExpression {
     }
 }
 
-// recognise `/pat/` only when there is exactly one outer pair of slashes and
-// the pattern body is non-empty. inner `/` chars defeat detection so we never
-// silently truncate something like `/a/b/`.
-fn parse_regex_shorthand(arg: &str) -> Option<String> {
-    let s = arg.strip_prefix('/')?.strip_suffix('/')?;
-    if s.is_empty() || s.contains('/') {
+struct StrippedRegex {
+    pattern: String,
+    case_insensitive: bool,
+}
+
+/// recognise the mapfile `/pat/` or `/pat/i` regex form. expects the scanner
+/// to have left the slashes intact on a single arg; multi-arg or anything not
+/// wrapped in slashes returns None and falls through to the regular parse.
+fn strip_regex_form(args: &[String]) -> Option<StrippedRegex> {
+    if args.len() != 1 {
         return None;
     }
-    Some(s.to_string())
+    let raw = &args[0];
+    if !raw.starts_with('/') {
+        return None;
+    }
+    let body = &raw[1..];
+    let (pattern, case_insensitive) = if let Some(p) = body.strip_suffix("/i") {
+        (p, true)
+    } else if let Some(p) = body.strip_suffix('/') {
+        (p, false)
+    } else {
+        return None;
+    };
+    if pattern.is_empty() || pattern.contains('/') {
+        return None;
+    }
+    Some(StrippedRegex {
+        pattern: pattern.to_string(),
+        case_insensitive,
+    })
 }
 
 // recognise `lo-hi` and `lo-` where lo/hi are unsigned decimal numbers. no
@@ -233,10 +260,17 @@ mod tests {
         }
     }
 
+    fn one_arg(s: &str) -> Vec<String> {
+        vec![s.to_string()]
+    }
+
     #[test]
     fn regex_shorthand_lifts_pattern() {
         match parse_class_expression(&tok("/Hovedrute/")) {
-            ParsedExpression::Regex(p) => assert_eq!(p, "Hovedrute"),
+            ParsedExpression::Regex { pattern, case_insensitive } => {
+                assert_eq!(pattern, "Hovedrute");
+                assert!(!case_insensitive);
+            }
             other => panic!("expected Regex, got {other:?}"),
         }
     }
@@ -253,6 +287,29 @@ mod tests {
             parse_class_expression(&tok("/foo/bar/")),
             ParsedExpression::Todo(_)
         ));
+    }
+
+    #[test]
+    fn strip_regex_basic() {
+        let r = strip_regex_form(&one_arg("/foo.*/")).unwrap();
+        assert_eq!(r.pattern, "foo.*");
+        assert!(!r.case_insensitive);
+    }
+
+    #[test]
+    fn strip_regex_case_insensitive_flag() {
+        let r = strip_regex_form(&one_arg("/foo.*/i")).unwrap();
+        assert_eq!(r.pattern, "foo.*");
+        assert!(r.case_insensitive);
+    }
+
+    #[test]
+    fn strip_regex_rejects_non_slash_forms() {
+        assert!(strip_regex_form(&one_arg("foo")).is_none());
+        assert!(strip_regex_form(&one_arg("/incomplete")).is_none());
+        assert!(strip_regex_form(&one_arg("//")).is_none());
+        assert!(strip_regex_form(&[]).is_none());
+        assert!(strip_regex_form(&[String::from("/a/"), String::from("extra")]).is_none());
     }
 
     #[test]

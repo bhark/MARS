@@ -687,20 +687,23 @@ fn resolve_when(
                 Some("# TODO: EXPRESSION set requires CLASSITEM".to_string())
             }
         },
-        Some(ParsedExpression::Regex(pat)) => {
-            let escaped = pat.replace('\'', "''");
-            match class_item {
-                Some(ci) => Some(format!("# TODO: regex match: {ci} ~ '{escaped}'")),
-                None => {
-                    warn!(
-                        layer = %layer_name,
-                        line = class_line,
-                        "CLASS EXPRESSION regex without CLASSITEM - emitting TODO"
-                    );
-                    Some(format!("# TODO: regex match without CLASSITEM: /{pat}/"))
-                }
+        Some(ParsedExpression::Regex {
+            pattern,
+            case_insensitive,
+        }) => match class_item {
+            Some(ci) => {
+                let op = if case_insensitive { "~*" } else { "~" };
+                Some(format!("{ci} {op} '{}'", pattern.replace('\'', "''")))
             }
-        }
+            None => {
+                warn!(
+                    layer = %layer_name,
+                    line = class_line,
+                    "CLASS EXPRESSION regex without CLASSITEM - emitting TODO"
+                );
+                Some(format!("# TODO: regex EXPRESSION requires CLASSITEM: /{pattern}/"))
+            }
+        },
         Some(ParsedExpression::Range { lo, hi }) => match class_item {
             Some(ci) => Some(format_range(ci, &lo, hi.as_ref())),
             None => {
@@ -947,33 +950,66 @@ mod tests {
     use mars_expr::Literal;
 
     #[test]
-    fn regex_with_classitem_emits_classitem_aware_todo() {
+    fn regex_with_classitem_emits_classitem_aware_predicate() {
         let w = resolve_when(
-            Some(ParsedExpression::Regex("^A".into())),
+            Some(ParsedExpression::Regex {
+                pattern: "^A".into(),
+                case_insensitive: false,
+            }),
             Some("rtt"),
             None,
             "layer",
             1,
         );
-        assert_eq!(w.as_deref(), Some("# TODO: regex match: rtt ~ '^A'"));
+        assert_eq!(w.as_deref(), Some("rtt ~ '^A'"));
     }
 
     #[test]
-    fn regex_without_classitem_emits_raw_todo() {
-        let w = resolve_when(Some(ParsedExpression::Regex("foo".into())), None, None, "layer", 1);
-        assert_eq!(w.as_deref(), Some("# TODO: regex match without CLASSITEM: /foo/"));
+    fn regex_without_classitem_emits_todo() {
+        let w = resolve_when(
+            Some(ParsedExpression::Regex {
+                pattern: "foo".into(),
+                case_insensitive: false,
+            }),
+            None,
+            None,
+            "layer",
+            1,
+        );
+        assert_eq!(
+            w.as_deref(),
+            Some("# TODO: regex EXPRESSION requires CLASSITEM: /foo/"),
+        );
     }
 
     #[test]
     fn regex_pattern_with_quote_is_doubled() {
         let w = resolve_when(
-            Some(ParsedExpression::Regex("o'brien".into())),
+            Some(ParsedExpression::Regex {
+                pattern: "o'brien".into(),
+                case_insensitive: false,
+            }),
             Some("name"),
             None,
             "layer",
             1,
         );
-        assert_eq!(w.as_deref(), Some("# TODO: regex match: name ~ 'o''brien'"));
+        assert_eq!(w.as_deref(), Some("name ~ 'o''brien'"));
+    }
+
+    #[test]
+    fn regex_case_insensitive_lifts_to_tilde_star() {
+        let w = resolve_when(
+            Some(ParsedExpression::Regex {
+                pattern: "highway".into(),
+                case_insensitive: true,
+            }),
+            Some("kind"),
+            None,
+            "layer",
+            1,
+        );
+        assert_eq!(w.as_deref(), Some("kind ~* 'highway'"));
     }
 
     #[test]
