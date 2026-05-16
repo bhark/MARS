@@ -9,7 +9,7 @@
 pub mod postgis;
 
 #[cfg(feature = "docker")]
-pub mod seaweedfs;
+pub mod garage;
 
 use std::fmt;
 
