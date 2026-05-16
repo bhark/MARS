@@ -49,8 +49,8 @@ impl Decoder for GeoPackageDecoder {
         tmp.write_all(bytes).map_err(io_err)?;
         tmp.flush().map_err(io_err)?;
 
-        let conn = Connection::open_with_flags(tmp.path(), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .map_err(parse_err)?;
+        let conn =
+            Connection::open_with_flags(tmp.path(), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(parse_err)?;
 
         let table = first_feature_table(&conn)?;
         let geom_col = geometry_column_for(&conn, &table)?;
@@ -126,7 +126,9 @@ fn first_feature_table(conn: &Connection) -> Result<String, DecoderError> {
         .map_err(|e| schema_err(&format!("gpkg_contents missing or unreadable: {e}")))?;
     let mut rows = stmt.query([]).map_err(parse_err)?;
     let Some(row) = rows.next().map_err(parse_err)? else {
-        return Err(schema_err("gpkg has no feature table (gpkg_contents.data_type = 'features')"));
+        return Err(schema_err(
+            "gpkg has no feature table (gpkg_contents.data_type = 'features')",
+        ));
     };
     let name: String = row.get(0).map_err(parse_err)?;
     validate_identifier(&name)?;
