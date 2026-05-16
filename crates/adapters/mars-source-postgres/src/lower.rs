@@ -92,6 +92,20 @@ fn lower(e: &Expr, ctx: &mut LowerCtx<'_>) -> Result<String, SourceError> {
             let p = ctx.push_param(SqlParam::Text(pattern.clone()));
             Ok(format!("{l} LIKE {p}"))
         }
+        Expr::Regex {
+            lhs,
+            pattern,
+            case_insensitive,
+        } => {
+            // postgres' `~` is posix-flavoured; rust's `regex` crate is rust-flavoured.
+            // overlap is sufficient for the patterns we emit from the mapfile importer
+            // (`/pat/` -> Regex). callers writing exotic patterns in `when:` should
+            // expect the same caveat as anywhere the dialect borrows postgres syntax.
+            let l = lower(lhs, ctx)?;
+            let p = ctx.push_param(SqlParam::Text(pattern.clone()));
+            let op = if *case_insensitive { "~*" } else { "~" };
+            Ok(format!("{l} {op} {p}"))
+        }
         Expr::IsNull(inner) => {
             let s = lower(inner, ctx)?;
             Ok(format!("{s} IS NULL"))
@@ -188,6 +202,33 @@ mod tests {
         let (sql, params) = lower_to_sql(&e, &b, 1).unwrap();
         assert_eq!(sql, "\"name\" LIKE $1");
         assert!(matches!(&params[0], SqlParam::Text(s) if s == "foo%"));
+    }
+
+    #[test]
+    fn lowers_regex_case_sensitive() {
+        let e = parse("name ~ '^foo'").unwrap();
+        let b = binding(&["name"], "gid");
+        let (sql, params) = lower_to_sql(&e, &b, 1).unwrap();
+        assert_eq!(sql, "\"name\" ~ $1");
+        assert!(matches!(&params[0], SqlParam::Text(s) if s == "^foo"));
+    }
+
+    #[test]
+    fn lowers_regex_case_insensitive() {
+        let e = parse("name ~* 'bar'").unwrap();
+        let b = binding(&["name"], "gid");
+        let (sql, params) = lower_to_sql(&e, &b, 1).unwrap();
+        assert_eq!(sql, "\"name\" ~* $1");
+        assert!(matches!(&params[0], SqlParam::Text(s) if s == "bar"));
+    }
+
+    #[test]
+    fn lowers_regex_offsets_placeholder() {
+        // confirm pattern uses caller-provided $N start, like LIKE / cmp do.
+        let e = parse("name ~ 'x'").unwrap();
+        let b = binding(&["name"], "gid");
+        let (sql, _params) = lower_to_sql(&e, &b, 5).unwrap();
+        assert_eq!(sql, "\"name\" ~ $5");
     }
 
     #[test]
