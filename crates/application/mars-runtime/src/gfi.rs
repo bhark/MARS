@@ -15,7 +15,7 @@
 use bytes::Bytes;
 use futures_util::StreamExt;
 use mars_artifact::{ArtifactReader, AttrValue, GeometryPayload, SectionKind, SpatialIndex, decode_row};
-use mars_config::Layer;
+use mars_config::{Layer, ServiceOp};
 use mars_types::{Bbox, BindingMetadata, LayerId, PageEntry};
 
 use crate::state::RuntimeState;
@@ -56,7 +56,7 @@ pub(crate) async fn get_feature_info(
     let mut hits: Vec<LayerFeatureInfo> = Vec::new();
     for layer_id in &plan.layers {
         let layer_cfg = lookup_layer(config, layer_id)?;
-        if !layer_cfg.wms.enable_get_feature_info {
+        if !layer_cfg.permits_op(ServiceOp::WmsGetFeatureInfo) {
             continue;
         }
         let denom = crate::denom_from_plan(plan.bbox.width(), plan.width, plan.scale_pixel_size_m);
