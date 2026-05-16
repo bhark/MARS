@@ -155,6 +155,11 @@ fn walk(tokens: &[Token], skel: &mut Skeleton, include_layers: Option<&HashSet<S
                     skel.wms_max_image_dimension = Some(n);
                 }
             }
+            MapDirective::Resolution(t) => {
+                if let Some(v) = parse_map_positive_f64(t) {
+                    skel.scale_dpi = Some(v);
+                }
+            }
             MapDirective::Unsupported(t) => {
                 warn!(line = t.line, keyword = %t.keyword, "unsupported mapfile construct");
                 if is_block_opener(&t.keyword)
@@ -210,6 +215,19 @@ fn parse_map_u32(t: &Token) -> Option<u32> {
         Ok(n) => Some(n),
         Err(_) => {
             warn!(line = t.line, keyword = %t.keyword, value = %arg, "could not parse as u32");
+            None
+        }
+    }
+}
+
+/// parse a MAP-scope scalar that should be a finite, strictly-positive f64
+/// (e.g. RESOLUTION). warns at the token's line on bad input and returns None.
+fn parse_map_positive_f64(t: &Token) -> Option<f64> {
+    let arg = t.args.first()?;
+    match arg.parse::<f64>() {
+        Ok(v) if v.is_finite() && v > 0.0 => Some(v),
+        _ => {
+            warn!(line = t.line, keyword = %t.keyword, value = %arg, "could not parse as positive f64");
             None
         }
     }
@@ -957,6 +975,27 @@ END
             crate::emitter::BindingSource::Sql(_) => {}
             other => panic!("expected sql binding, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn map_resolution_lifts_to_service_scale_dpi() {
+        let src = r#"
+MAP
+  NAME "demo"
+  RESOLUTION 96
+  LAYER
+    NAME "x"
+    TYPE LINE
+  END
+END
+"#;
+        let skel = translate(src);
+        assert_eq!(skel.scale_dpi, Some(96.0));
+        let yaml = crate::emitter::render(&skel, &crate::emitter::default_bands());
+        assert!(
+            yaml.contains("scale_dpi: 96"),
+            "rendered yaml missing scale_dpi field; got:\n{yaml}"
+        );
     }
 
     #[test]

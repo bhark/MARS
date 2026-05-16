@@ -26,6 +26,8 @@ pub(crate) enum MapDirective<'a> {
     /// `MAP MAXSIZE n`: per-axis upper bound on GetMap image dimensions.
     /// Lifts to `interfaces.wms.max_image_dimension`.
     MaxSize(&'a Token),
+    /// `MAP RESOLUTION n`: rendering DPI. Lifts to `service.scale_dpi`.
+    Resolution(&'a Token),
     /// Keyword present in the `UNSUPPORTED` list - the parser warns at use
     /// site and skips a matching block range when applicable.
     Unsupported(&'a Token),
@@ -42,6 +44,7 @@ impl<'a> MapDirective<'a> {
             "METADATA" => Self::Metadata,
             "PROJECTION" => Self::Projection(t),
             "MAXSIZE" => Self::MaxSize(t),
+            "RESOLUTION" => Self::Resolution(t),
             other if is_unsupported(other) => Self::Unsupported(t),
             _ => Self::Unknown,
         }

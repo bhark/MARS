@@ -31,6 +31,9 @@ pub(crate) struct Skeleton {
     /// `MAP MAXSIZE n` lifted to `interfaces.wms.max_image_dimension`. None
     /// keeps the runtime adapter default.
     pub(crate) wms_max_image_dimension: Option<u32>,
+    /// `MAP RESOLUTION n` lifted to `service.scale_dpi`. None falls back to
+    /// the config default (96).
+    pub(crate) scale_dpi: Option<f64>,
 }
 
 /// outcome of folding per-layer PostGIS CONNECTION lifts into a single
@@ -1198,6 +1201,9 @@ pub(crate) fn render(skel: &Skeleton, bands: &[(String, u64)]) -> String {
             // legacy placeholder unquoted to match existing fixture goldens
             let _ = writeln!(out, "  contact_email: ops@example.org");
         }
+    }
+    if let Some(dpi) = skel.scale_dpi {
+        let _ = writeln!(out, "  scale_dpi: {dpi}");
     }
     write_service_meta(&mut out, svc);
     let _ = writeln!(out);
