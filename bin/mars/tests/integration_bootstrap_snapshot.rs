@@ -310,10 +310,11 @@ fn fixture_yaml(dsn_kv: &str, store_path: &str, cache_path: &str) -> String {
   abstract: "snapshot bootstrap fixture"
   contact_email: ops@example.org
 
-source:
-  type: postgis
-  dsn: "{dsn_kv}"
-  native_crs: EPSG:25832
+sources:
+  - id: default
+    type: postgis
+    dsn: "{dsn_kv}"
+    native_crs: EPSG:25832
 
 artifacts:
   store:

@@ -342,7 +342,8 @@ mod tests {
     fn polygon_layer_cfg() -> Config {
         let yaml = r##"
 service: { name: t, title: T, abstract: A, contact_email: "" }
-source: { type: postgis, dsn: "postgres://x", native_crs: EPSG:25832 }
+sources:
+  - { id: default, type: postgis, dsn: "postgres://x", native_crs: EPSG:25832 }
 artifacts:
   store: { type: fs, path: /tmp }
   cache: { path: /tmp/c, max_size: 1GiB }

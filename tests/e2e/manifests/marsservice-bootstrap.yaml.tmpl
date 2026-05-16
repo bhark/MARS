@@ -75,22 +75,23 @@ spec:
       name: mars-bs
       title: "MARS bootstrap e2e"
       contact_email: ops@example.org
-    source:
-      type: postgis
-      dsn: "${PG_DSN}"
-      native_crs: EPSG:25832
-      change_feed:
-        type: pgoutput
-        publication: mars_bs_pub
-        slot: mars_bs_slot
-      bootstrap:
-        role: mars_replicator
-        schemas:
-          - e2e_source
-      pool:
-        max_size: 4
-        statement_timeout_ms: 300000
-        batch_send_timeout_secs: 30
+    sources:
+      - id: default
+        type: postgis
+        dsn: "${PG_DSN}"
+        native_crs: EPSG:25832
+        change_feed:
+          type: pgoutput
+          publication: mars_bs_pub
+          slot: mars_bs_slot
+        bootstrap:
+          role: mars_replicator
+          schemas:
+            - e2e_source
+        pool:
+          max_size: 4
+          statement_timeout_ms: 300000
+          batch_send_timeout_secs: 30
     artifacts:
       store:
         type: s3

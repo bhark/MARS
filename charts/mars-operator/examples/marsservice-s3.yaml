@@ -46,18 +46,19 @@ spec:
       name: example
       title: Example MARS service
       contact_email: ops@example.org
-    source:
-      type: postgis
-      dsn: "${PG_DSN}"
-      native_crs: "EPSG:25832"
-      change_feed:
-        type: pgoutput
-        publication: mars_pub
-        slot: mars_slot
-      pool:
-        max_size: 8
-        statement_timeout_ms: 300000
-        batch_send_timeout_secs: 30
+    sources:
+      - id: default
+        type: postgis
+        dsn: "${PG_DSN}"
+        native_crs: "EPSG:25832"
+        change_feed:
+          type: pgoutput
+          publication: mars_pub
+          slot: mars_slot
+        pool:
+          max_size: 8
+          statement_timeout_ms: 300000
+          batch_send_timeout_secs: 30
     artifacts:
       store:
         type: s3

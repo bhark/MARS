@@ -478,10 +478,11 @@ mod tests {
 service:
   name: demo
   title: demo
-source:
-  type: postgis
-  dsn: "postgres://localhost/x"
-  native_crs: EPSG:25832
+sources:
+  - id: default
+    type: postgis
+    dsn: "postgres://localhost/x"
+    native_crs: EPSG:25832
 artifacts:
   store: { type: fs, path: /tmp }
   cache: { path: /tmp, max_size: 1GiB, eviction: lru }

@@ -12,10 +12,11 @@ service:
   abstract: "Image-diff harness fixture sourced from a Liechtenstein OSM extract."
   contact_email: ops@example.org
 
-source:
-  type: postgis
-  dsn: "{{DSN}}"
-  native_crs: EPSG:3857
+sources:
+  - id: default
+    type: postgis
+    dsn: "{{DSN}}"
+    native_crs: EPSG:3857
 
 artifacts:
   store:

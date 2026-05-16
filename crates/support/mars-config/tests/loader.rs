@@ -100,10 +100,11 @@ fn env_default_used_when_unset() {
         let dir = tempfile::tempdir().unwrap();
         let yaml = r#"
 service: { name: t }
-source:
-  type: postgis
-  dsn: ${MARS_TEST_DSN:-postgres://default/x}
-  native_crs: EPSG:25832
+sources:
+  - id: default
+    type: postgis
+    dsn: ${MARS_TEST_DSN:-postgres://default/x}
+    native_crs: EPSG:25832
 artifacts:
   store: { type: fs, path: /tmp/s }
   cache: { path: /tmp/c, max_size: 1MiB }
@@ -124,10 +125,11 @@ fn env_unset_no_default_errors() {
         let dir = tempfile::tempdir().unwrap();
         let yaml = r#"
 service: { name: t }
-source:
-  type: postgis
-  dsn: ${MARS_TEST_REQUIRED_VAR}
-  native_crs: EPSG:25832
+sources:
+  - id: default
+    type: postgis
+    dsn: ${MARS_TEST_REQUIRED_VAR}
+    native_crs: EPSG:25832
 artifacts:
   store: { type: fs, path: /tmp/s }
   cache: { path: /tmp/c, max_size: 1MiB }
@@ -148,11 +150,12 @@ fn env_in_yaml_comment_is_ignored() {
         let dir = tempfile::tempdir().unwrap();
         let yaml = r#"
 service: { name: t }
-source:
-  type: postgis
-  # historical: dsn: ${MARS_TEST_COMMENTED_OUT}
-  dsn: postgres://example/x
-  native_crs: EPSG:25832
+sources:
+  - id: default
+    type: postgis
+    # historical: dsn: ${MARS_TEST_COMMENTED_OUT}
+    dsn: postgres://example/x
+    native_crs: EPSG:25832
 artifacts:
   store: { type: fs, path: /tmp/s }
   cache: { path: /tmp/c, max_size: 1MiB }
@@ -172,10 +175,11 @@ fn include_resolves_relative() {
     let dir = tempfile::tempdir().unwrap();
     let main = r#"
 service: { name: t }
-source:
-  type: postgis
-  dsn: x
-  native_crs: EPSG:25832
+sources:
+  - id: default
+    type: postgis
+    dsn: x
+    native_crs: EPSG:25832
 artifacts:
   store: { type: fs, path: /tmp/s }
   cache: { path: /tmp/c, max_size: 1MiB }
@@ -205,7 +209,8 @@ fn include_escapes_config_dir_is_rejected() {
     let dir = tempfile::tempdir().unwrap();
     let main = r#"
 service: { name: t }
-source: { type: postgis, dsn: x, native_crs: EPSG:25832 }
+sources:
+  - { id: default, type: postgis, dsn: x, native_crs: EPSG:25832 }
 artifacts:
   store: { type: fs, path: /tmp/s }
   cache: { path: /tmp/c, max_size: 1MiB }
@@ -228,7 +233,8 @@ fn include_cycle_is_rejected() {
         dir.path().join("a.yaml"),
         r#"
 service: { name: t }
-source: { type: postgis, dsn: x, native_crs: EPSG:25832 }
+sources:
+  - { id: default, type: postgis, dsn: x, native_crs: EPSG:25832 }
 artifacts:
   store: { type: fs, path: /tmp/s }
   cache: { path: /tmp/c, max_size: 1MiB }

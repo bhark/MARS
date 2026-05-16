@@ -39,10 +39,11 @@ service:
   abstract: a
   contact_email: ops@example.org
 
-source:
-  type: postgis
-  dsn: "postgres://localhost/x"
-  native_crs: EPSG:25832
+sources:
+  - id: default
+    type: postgis
+    dsn: "postgres://localhost/x"
+    native_crs: EPSG:25832
 
 artifacts:
   store:

@@ -418,7 +418,8 @@ mod tests {
     fn minimal_cfg() -> Config {
         let yaml = r#"
 service: { name: t, title: "T", abstract: "A", contact_email: ops@x }
-source: { type: postgis, dsn: "postgres://x", native_crs: EPSG:25832 }
+sources:
+  - { id: default, type: postgis, dsn: "postgres://x", native_crs: EPSG:25832 }
 artifacts:
   store: { type: fs, path: /tmp }
   cache: { path: /tmp/c, max_size: 1GiB }
