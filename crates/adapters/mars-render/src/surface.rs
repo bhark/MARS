@@ -85,7 +85,7 @@ impl Surface for TinySkiaSurface {
         opacity: f32,
         blend_mode: Option<mars_style::BlendMode>,
     ) -> Result<(), RenderError> {
-        crate::raster::draw(&mut self.pm, &Arc::new(tile.clone()), dst, opacity, blend_mode)
+        crate::raster::draw(&mut self.pm, tile, dst, opacity, blend_mode)
     }
 
     fn finish(self: Box<Self>) -> Pixmap {

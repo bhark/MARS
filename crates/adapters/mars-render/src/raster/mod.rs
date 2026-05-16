@@ -4,8 +4,6 @@
 //! difference is that raster tiles paint a rectangle (`draw_pixmap`) rather
 //! than fill a path with a tiled shader.
 
-use std::sync::Arc;
-
 use mars_render_port::{DecodedImage, PixelRect, RenderError};
 use tiny_skia::{BlendMode, FilterQuality, Pixmap, PixmapPaint, Transform};
 
@@ -14,7 +12,7 @@ use crate::decoded_image::build_premultiplied;
 
 pub(crate) fn draw(
     pm: &mut Pixmap,
-    tile: &Arc<DecodedImage>,
+    tile: &DecodedImage,
     dst: PixelRect,
     opacity: f32,
     blend_mode: Option<mars_style::BlendMode>,
@@ -52,6 +50,8 @@ pub(crate) fn draw(
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
 
     fn solid_tile(w: u32, h: u32, r: u8, g: u8, b: u8, a: u8) -> Arc<DecodedImage> {
