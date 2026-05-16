@@ -61,4 +61,5 @@ testcontainers = { workspace = true }
 tokio-postgres = { workspace = true }
 futures-util   = { workspace = true }
 mars-test-support = { workspace = true, features = ["docker"] }
+mars-store-s3  = { workspace = true }
 png            = { workspace = true }

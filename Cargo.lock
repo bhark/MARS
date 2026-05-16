@@ -2596,6 +2596,7 @@ dependencies = [
  "mars-source-xyz",
  "mars-store",
  "mars-store-fs",
+ "mars-store-s3",
  "mars-test-support",
  "mars-types",
  "mars-wms",
