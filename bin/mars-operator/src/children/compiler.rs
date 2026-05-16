@@ -294,6 +294,24 @@ pub(crate) fn optional_affinity(value: Option<&serde_json::Value>) -> Result<Opt
     }
 }
 
+/// Deserialise an opaque `extraVolumes` array into typed `corev1.Volume`s.
+/// Same rationale as `optional_affinity`: validate at reconcile so a typo
+/// surfaces in the CR status rather than at first pod admission.
+pub(crate) fn extra_volumes(values: &[serde_json::Value]) -> Result<Vec<Volume>> {
+    values
+        .iter()
+        .map(|v| serde_json::from_value(v.clone()).map_err(Into::into))
+        .collect()
+}
+
+/// Sibling of `extra_volumes` for `extraVolumeMounts`.
+pub(crate) fn extra_volume_mounts(values: &[serde_json::Value]) -> Result<Vec<VolumeMount>> {
+    values
+        .iter()
+        .map(|v| serde_json::from_value(v.clone()).map_err(Into::into))
+        .collect()
+}
+
 /// Append the operator-projected `MARS_RUNTIME_PASSWORD` env to the
 /// user-supplied env list. The projection is the resolved runtime password
 /// Secret (BYO or operator-managed). Users template it into their DSN via

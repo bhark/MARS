@@ -14,8 +14,8 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta, 
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
 
 use crate::children::compiler::{
-    container_security_context, env_from, env_vars_with_runtime_password, optional_affinity, optional_btree_map,
-    optional_tolerations, pod_security_context, resource_requirements,
+    container_security_context, env_from, env_vars_with_runtime_password, extra_volume_mounts, extra_volumes,
+    optional_affinity, optional_btree_map, optional_tolerations, pod_security_context, resource_requirements,
 };
 use crate::children::labels::{
     self, COMPONENT_RUNTIME, CONFIG_CHECKSUM_ANNOTATION, artifact_store_pvc_name, config_map_name,
@@ -111,6 +111,11 @@ pub(crate) fn build(
             ..Default::default()
         });
     }
+
+    // user-supplied entries appended after the managed ones so reserved
+    // names (`config`, `cache`, `artifact-store`) stay deterministic.
+    volumes.extend(extra_volumes(&cr.spec.runtime.extra_volumes)?);
+    mounts.extend(extra_volume_mounts(&cr.spec.runtime.extra_volume_mounts)?);
 
     let probe_readiness = Probe {
         http_get: Some(HTTPGetAction {
@@ -279,6 +284,45 @@ mod tests {
             annotations.get(CONFIG_CHECKSUM_ANNOTATION).map(String::as_str),
             Some("deadbeef")
         );
+    }
+
+    #[test]
+    fn build_appends_extra_volumes_and_mounts_after_managed_entries() {
+        let mut cr = test_support::cr("demo", "svc-ns");
+        cr.spec.runtime.extra_volumes.push(serde_json::json!({
+            "name": "fonts",
+            "configMap": { "name": "custom-fonts" }
+        }));
+        cr.spec.runtime.extra_volume_mounts.push(serde_json::json!({
+            "name": "fonts",
+            "mountPath": "/var/lib/mars/fonts",
+            "readOnly": true
+        }));
+        let dep = build(
+            &cr,
+            "deadbeef",
+            None,
+            None,
+            test_support::TEST_IMAGE,
+            test_support::owner_ref(),
+        )
+        .unwrap();
+        let pod = dep.spec.unwrap().template.spec.unwrap();
+        let volumes = pod.volumes.unwrap();
+        // user volume appears after the two managed entries (`config`, `cache`).
+        assert_eq!(volumes.len(), 3);
+        assert_eq!(volumes[0].name, "config");
+        assert_eq!(volumes[1].name, "cache");
+        assert_eq!(volumes[2].name, "fonts");
+        assert_eq!(volumes[2].config_map.as_ref().unwrap().name, "custom-fonts");
+
+        let mounts = pod.containers[0].volume_mounts.clone().unwrap();
+        assert_eq!(mounts.len(), 3);
+        assert_eq!(mounts[0].name, "config");
+        assert_eq!(mounts[1].name, "cache");
+        assert_eq!(mounts[2].name, "fonts");
+        assert_eq!(mounts[2].mount_path, "/var/lib/mars/fonts");
+        assert_eq!(mounts[2].read_only, Some(true));
     }
 
     #[test]

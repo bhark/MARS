@@ -268,6 +268,23 @@ pub(crate) struct RuntimeSpec {
     #[schemars(schema_with = "preserve_unknown_fields_optional")]
     pub(crate) affinity: Option<serde_json::Value>,
 
+    /// Extra `corev1.Volume` entries appended to the runtime pod spec after
+    /// the operator-managed volumes (config, cache, optional artifact-store).
+    /// Opaque in the CRD schema and validated at reconcile time; the names
+    /// must not collide with the reserved internals (`config`, `cache`,
+    /// `artifact-store`). Primary use: mounting Secrets/ConfigMaps/PVCs of
+    /// custom font files so `service.fonts.paths` can pick them up.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(schema_with = "preserve_unknown_fields_array")]
+    pub(crate) extra_volumes: Vec<serde_json::Value>,
+
+    /// Extra `corev1.VolumeMount` entries appended to the runtime container.
+    /// Each entry must reference a volume name defined in `extraVolumes` (or
+    /// a reserved internal one). Validated at reconcile time.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(schema_with = "preserve_unknown_fields_array")]
+    pub(crate) extra_volume_mounts: Vec<serde_json::Value>,
+
     /// Reconcile a sibling PodDisruptionBudget targeting the runtime
     /// Deployment's pods. Absent = no PDB; presence = the operator
     /// creates/updates one, and clearing the field deletes the prior PDB.
@@ -534,6 +551,23 @@ fn preserve_unknown_fields_optional(_: &mut schemars::SchemaGenerator) -> schema
         "x-kubernetes-preserve-unknown-fields".into(),
         serde_json::Value::Bool(true),
     );
+    schemars::Schema::from(map)
+}
+
+/// Schema for `Vec<serde_json::Value>` where each element is an opaque object
+/// (validated at reconcile time, not at admission). Used for the
+/// `extraVolumes` / `extraVolumeMounts` passthroughs whose typed schemas are
+/// too large to mirror.
+fn preserve_unknown_fields_array(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    let mut item = serde_json::Map::new();
+    item.insert("type".into(), serde_json::Value::String("object".into()));
+    item.insert(
+        "x-kubernetes-preserve-unknown-fields".into(),
+        serde_json::Value::Bool(true),
+    );
+    let mut map = serde_json::Map::new();
+    map.insert("type".into(), serde_json::Value::String("array".into()));
+    map.insert("items".into(), serde_json::Value::Object(item));
     schemars::Schema::from(map)
 }
 

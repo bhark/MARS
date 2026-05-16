@@ -445,6 +445,27 @@ spec:
                           type: object
                       type: object
                     type: array
+                  extraVolumeMounts:
+                    description: |-
+                      Extra `corev1.VolumeMount` entries appended to the runtime container.
+                      Each entry must reference a volume name defined in `extraVolumes` (or
+                      a reserved internal one). Validated at reconcile time.
+                    items:
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                    type: array
+                  extraVolumes:
+                    description: |-
+                      Extra `corev1.Volume` entries appended to the runtime pod spec after
+                      the operator-managed volumes (config, cache, optional artifact-store).
+                      Opaque in the CRD schema and validated at reconcile time; the names
+                      must not collide with the reserved internals (`config`, `cache`,
+                      `artifact-store`). Primary use: mounting Secrets/ConfigMaps/PVCs of
+                      custom font files so `service.fonts.paths` can pick them up.
+                    items:
+                      type: object
+                      x-kubernetes-preserve-unknown-fields: true
+                    type: array
                   nodeSelector:
                     additionalProperties:
                       type: string
