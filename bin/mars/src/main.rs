@@ -351,6 +351,7 @@ async fn run_runtime(cfg: Arc<Config>, shutdown: CancellationToken) -> Result<()
             wms: wms_cfg,
             wmts: wmts_cfg,
             cors: cfg.interfaces.cors.clone(),
+            gfi_templates: mars_wms::GfiTemplates::from_config(&cfg),
         },
         metrics,
         shutdown.clone(),

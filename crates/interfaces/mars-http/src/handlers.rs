@@ -56,7 +56,7 @@ pub async fn handle_wms(State(state): State<AppState>, headers: HeaderMap, raw_q
                     Ok(hits) => {
                         let count = gfi.feature_count as usize;
                         let trimmed: Vec<_> = hits.into_iter().take(count).collect();
-                        let body = mars_wms::format_feature_info(&trimmed, gfi.info_format);
+                        let body = mars_wms::format_feature_info(&trimmed, gfi.info_format, &state.gfi_templates);
                         let mut h = HeaderMap::new();
                         // mime strings carry charset where applicable; the
                         // gfi formatter contract pre-sets it for text/*.

@@ -25,7 +25,7 @@ use axum::routing::get;
 use mars_config::CorsConfig;
 use mars_observability::Metrics;
 use mars_runtime::Runtime;
-use mars_wms::{WmsConfig, WmsVersion};
+use mars_wms::{GfiTemplates, WmsConfig, WmsVersion};
 use mars_wmts::WmtsConfig;
 use tokio_util::sync::CancellationToken;
 use tower_http::cors::{AllowOrigin, CorsLayer};
@@ -62,6 +62,8 @@ pub struct InterfacesConfig {
     pub wms: WmsConfig,
     pub wmts: WmtsConfig,
     pub cors: Option<CorsConfig>,
+    /// Pre-parsed per-layer GFI templates. Empty when no layer carries one.
+    pub gfi_templates: GfiTemplates,
 }
 
 /// Capabilities document with a precomputed strong ETag. `body` is held as
@@ -130,6 +132,7 @@ pub struct AppState {
     wmts_capabilities: CapabilitiesHandle,
     wms_cfg: Arc<WmsConfig>,
     wmts_cfg: Arc<WmtsConfig>,
+    gfi_templates: Arc<GfiTemplates>,
     metrics: Metrics,
     request_counter: Arc<AtomicU64>,
 }
@@ -148,6 +151,7 @@ pub fn router(
         wms: wms_cfg,
         wmts: wmts_cfg,
         cors,
+        gfi_templates,
     } = interfaces;
     let state = AppState {
         runtime,
@@ -155,6 +159,7 @@ pub fn router(
         wmts_capabilities: capabilities.wmts,
         wms_cfg: Arc::new(wms_cfg),
         wmts_cfg: Arc::new(wmts_cfg),
+        gfi_templates: Arc::new(gfi_templates),
         metrics,
         request_counter: Arc::new(AtomicU64::new(0)),
     };
@@ -327,6 +332,7 @@ mod tests {
                 wms: test_wms_cfg(),
                 wmts: test_wmts_cfg(),
                 cors,
+                gfi_templates: GfiTemplates::default(),
             },
             metrics,
         )
@@ -624,6 +630,7 @@ mod tests {
                 wms: test_wms_cfg(),
                 wmts: test_wmts_cfg(),
                 cors: None,
+                gfi_templates: GfiTemplates::default(),
             },
             metrics,
         );
@@ -698,6 +705,7 @@ mod tests {
                 wms: test_wms_cfg(),
                 wmts: test_wmts_cfg(),
                 cors: None,
+                gfi_templates: GfiTemplates::default(),
             },
             metrics,
         );
@@ -1138,6 +1146,7 @@ mod tests {
                 wms: test_wms_cfg(),
                 wmts: test_wmts_cfg(),
                 cors: None,
+                gfi_templates: GfiTemplates::default(),
             },
             metrics,
         );

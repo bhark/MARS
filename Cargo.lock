@@ -3048,6 +3048,7 @@ name = "mars-wms"
 version = "0.0.0-dev"
 dependencies = [
  "mars-config",
+ "mars-expr",
  "mars-ows-common",
  "mars-proj",
  "mars-runtime",

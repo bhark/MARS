@@ -18,7 +18,7 @@ use mars_types::{CrsCode, ImageFormat, LayerId};
 
 pub use capabilities::capabilities_xml;
 pub use exception::service_exception_report;
-pub use feature_info::format_feature_info;
+pub use feature_info::{GfiTemplates, format_feature_info};
 pub use parse::{
     parse_get_feature_info, parse_get_legend_graphic, parse_get_map, parse_request, version_for_error_response,
 };

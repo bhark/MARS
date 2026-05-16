@@ -15,6 +15,7 @@ workspace = true
 [dependencies]
 mars-runtime    = { workspace = true }
 mars-config     = { workspace = true }
+mars-expr       = { workspace = true }
 mars-types      = { workspace = true }
 mars-proj       = { workspace = true }
 mars-ows-common = { workspace = true }
