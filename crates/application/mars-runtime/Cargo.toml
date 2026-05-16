@@ -16,7 +16,7 @@ workspace = true
 # exposes `mars_runtime::test_fixtures` (in-memory runtime + manifest +
 # pages) for tests and benches. activated for all dev/test/bench targets
 # via the self-dev-dep below; not enabled in production builds.
-test-fixtures = ["mars-store/test-utils"]
+test-fixtures = ["mars-store/test-utils", "dep:mars-test-support"]
 # exposes `mars_runtime::bench_internals` re-exporting collision internals
 # so the label-collision bench can drive them. opt-in per bench target via
 # `required-features`; never enabled in production builds.
@@ -35,6 +35,7 @@ mars-config        = { workspace = true }
 mars-observability = { workspace = true }
 mars-proj          = { workspace = true }
 mars-text          = { workspace = true }
+mars-test-support  = { workspace = true, optional = true }
 rstar              = { workspace = true }
 tokio              = { workspace = true }
 tokio-util         = { workspace = true }
@@ -58,7 +59,6 @@ zune-jpeg          = { workspace = true }
 # silently skips targets when the feature is not active).
 mars-runtime       = { path = ".", features = ["test-fixtures"] }
 mars-store         = { workspace = true, features = ["test-utils"] }
-mars-test-support  = { workspace = true }
 tokio              = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tracing-subscriber = { workspace = true }
 criterion          = { workspace = true }

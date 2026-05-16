@@ -64,20 +64,23 @@ check_dep_direction() {
         is_domain "$dep"  && return 0
         is_port "$dep"    && return 0
         is_support "$dep" && return 0
-        warn "adapter crate '$consumer' has workspace dep on '$dep' (adapters may only depend on domain, ports, support)"
+        is_testing "$dep" && return 0
+        warn "adapter crate '$consumer' has workspace dep on '$dep' (adapters may only depend on domain, ports, support, testing)"
     elif is_app "$consumer"; then
         is_domain "$dep"  && return 0
         is_port "$dep"    && return 0
         is_support "$dep" && return 0
         is_app "$dep"     && return 0
-        warn "application crate '$consumer' has workspace dep on '$dep' (application may only depend on domain, ports, support, application)"
+        is_testing "$dep" && return 0
+        warn "application crate '$consumer' has workspace dep on '$dep' (application may only depend on domain, ports, support, application, testing)"
     elif is_interface "$consumer"; then
         is_domain "$dep"  && return 0
         is_port "$dep"    && return 0
         is_app "$dep"     && return 0
         is_support "$dep" && return 0
         is_interface "$dep" && return 0
-        warn "interface crate '$consumer' has workspace dep on '$dep' (interfaces may only depend on domain, ports, application, support, interfaces)"
+        is_testing "$dep" && return 0
+        warn "interface crate '$consumer' has workspace dep on '$dep' (interfaces may only depend on domain, ports, application, support, interfaces, testing)"
     elif is_support "$consumer"; then
         is_domain "$dep"  && return 0
         is_support "$dep" && return 0

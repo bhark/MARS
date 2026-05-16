@@ -32,10 +32,11 @@ use mars_config::model::{
     ArtifactCache, ArtifactStore, Artifacts, Band, Cells, Class, ClassStyle, Compiler, Config, Interfaces, Layer,
     Observability, Render, Scales, ServiceMeta, Source, SourceBinding,
 };
-use mars_render_port::{Canvas, DrawOp, EncodeError, Encoder, ImageFormat, Pixmap, RenderError, Renderer, TextMetrics};
+use mars_render_port::{DrawOp, Encoder, Renderer};
 use mars_store::mem::{InMemoryCache, InMemoryStore};
 use mars_store::{LocalCache, ObjectStore};
-use mars_style::{Colour, FillPaint, LabelStyle, LabelSurvival, ResolvedLabelStyle, Style, Stylesheet};
+use mars_style::{Colour, FillPaint, LabelStyle, LabelSurvival, Style, Stylesheet};
+pub use mars_test_support::port_fakes::{CapturingRenderer, StubEncoder};
 use mars_types::{
     Bbox, BindingId, BindingMetadata, CrsCode, DecimationLevel, HilbertKey, ImageFormat as TImageFormat, LayerId,
     LayerSidecarEntry, LayerSidecarKind, MANIFEST_FORMAT_VERSION, Manifest, PageEntry, PageId, PageKey,
@@ -44,50 +45,6 @@ use mars_types::{
 use crate::{Deps, Fonts, RenderPlan, Runtime, RuntimeState};
 
 pub const REQUEST_CRS: &str = "EPSG:25832";
-
-/// captures every DrawOp the runtime emits, then returns a 4×N×4 pixmap so
-/// the encoder has something to encode. tests inspect the captured ops list
-/// rather than pixel signatures.
-#[derive(Default, Clone)]
-pub struct CapturingRenderer {
-    pub log: Arc<Mutex<Vec<DrawOp>>>,
-}
-
-impl Renderer for CapturingRenderer {
-    fn render(&self, canvas: Canvas, ops: &[DrawOp]) -> Result<Pixmap, RenderError> {
-        let mut log = self.log.lock().unwrap();
-        log.extend(ops.iter().cloned());
-        let n = canvas.width as usize * canvas.height as usize * 4;
-        Ok(Pixmap {
-            width: canvas.width,
-            height: canvas.height,
-            premultiplied_rgba: vec![0u8; n],
-        })
-    }
-
-    fn measure_text(&self, text: &str, style: &ResolvedLabelStyle) -> Result<TextMetrics, RenderError> {
-        // coarse stub matches the pre-Phase-F approximation so existing
-        // layout assertions are stable.
-        let chars = text.chars().count().max(1) as f32;
-        let fs = style.font_size.max(1.0);
-        Ok(TextMetrics {
-            advance_x: chars * 0.55 * fs,
-            ascent: fs * 0.8,
-            descent: fs * 0.2,
-        })
-    }
-}
-
-/// returns a sentinel byte vec sized off the pixmap's dimensions; tests
-/// don't inspect the encoded bytes.
-#[derive(Default)]
-pub struct StubEncoder;
-
-impl Encoder for StubEncoder {
-    fn encode(&self, pixmap: &Pixmap, _format: ImageFormat) -> Result<Vec<u8>, EncodeError> {
-        Ok(vec![0u8; (pixmap.width * pixmap.height) as usize])
-    }
-}
 
 /// the in-memory bits a test or bench needs handles to.
 pub struct Fixture {
