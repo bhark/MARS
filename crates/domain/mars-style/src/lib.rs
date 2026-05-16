@@ -10,6 +10,12 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+mod numeric;
+mod scaled;
+
+pub use numeric::NumericField;
+pub use scaled::ScaledSize;
+
 #[derive(Debug, thiserror::Error)]
 pub enum StyleError {
     #[error("invalid colour: {0}")]

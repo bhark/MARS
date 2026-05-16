@@ -13,6 +13,7 @@ description = "MARS style model. Compile-to-internal-form for use by the rendere
 workspace = true
 
 [dependencies]
+mars-expr  = { workspace = true }
 serde      = { workspace = true }
 thiserror  = { workspace = true }
 

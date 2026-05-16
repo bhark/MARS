@@ -2973,6 +2973,7 @@ dependencies = [
 name = "mars-style"
 version = "0.0.0-dev"
 dependencies = [
+ "mars-expr",
  "serde",
  "serde_json",
  "serde_yaml_ng",
