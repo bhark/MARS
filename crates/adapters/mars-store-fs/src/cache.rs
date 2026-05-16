@@ -321,8 +321,18 @@ impl LocalCache for FsCache {
                         state.insert(key.clone(), bytes.len() as u64)
                     }
                 };
-                if self.trust_path_hash && !already_verified {
-                    self.verified.lock().insert(key.clone());
+                if self.trust_path_hash {
+                    // invariant: `verified` only holds keys currently in
+                    // state.lru. record this key, drop entries that just got
+                    // evicted (their files are about to disappear and a
+                    // re-fetch will need to re-verify).
+                    let mut verified = self.verified.lock();
+                    if !already_verified {
+                        verified.insert(key.clone());
+                    }
+                    for v in &evicted {
+                        verified.remove(v);
+                    }
                 }
                 if !evicted.is_empty() {
                     self.evict_files(evicted).await?;
