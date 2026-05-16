@@ -49,3 +49,4 @@ testcontainers = { workspace = true, optional = true }
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros", "rt-multi-thread"] }
 rand = { workspace = true }
+mars-test-support = { workspace = true, features = ["docker"] }

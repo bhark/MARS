@@ -2909,6 +2909,7 @@ dependencies = [
  "mars-expr",
  "mars-grid",
  "mars-source",
+ "mars-test-support",
  "mars-types",
  "pgwire-replication",
  "rand 0.10.1",
