@@ -15,17 +15,19 @@ mod polyline;
 mod prepare;
 mod raster;
 mod stroke;
+mod surface;
 mod symbol;
 
 use std::sync::Arc;
 
 use mars_render_port::{
     Canvas, DrawOp, EmptyImageRegistry, EncodeError, Encoder, ImageFormat, ImageRegistry, Pixmap, RenderError,
-    Renderer, TextMetrics,
+    Renderer, Surface, TextMetrics, dispatch_ops,
 };
 use mars_style::ResolvedLabelStyle;
 use mars_text::{FontError, Fonts};
-use tiny_skia::Pixmap as SkPixmap;
+
+use crate::surface::TinySkiaSurface;
 
 /// CPU rasteriser. Stamps geometry via tiny-skia and shapes / rasterises
 /// label runs via [`mars_text`]. The font registry is shared with the
@@ -64,25 +66,20 @@ impl Renderer for TinySkiaRenderer {
             return Err(RenderError::Backend("canvas has zero dimension".into()));
         }
 
-        let mut pm = SkPixmap::new(canvas.width, canvas.height)
-            .ok_or_else(|| RenderError::Backend(format!("pixmap alloc {}x{}", canvas.width, canvas.height)))?;
+        let mut surface: Box<dyn Surface> = Box::new(TinySkiaSurface::new(
+            canvas.width,
+            canvas.height,
+            self.fonts.clone(),
+            self.images.clone(),
+        )?);
 
         if let Some(bg) = canvas.background {
-            crate::canvas::fill_background(&mut pm, bg);
+            surface.fill_background(bg);
         }
 
-        for op in ops {
-            ops::dispatch(&mut pm, op, &self.fonts, self.images.as_ref())?;
-        }
+        dispatch_ops(surface.as_mut(), ops)?;
 
-        let width = pm.width();
-        let height = pm.height();
-
-        Ok(Pixmap {
-            width,
-            height,
-            premultiplied_rgba: pm.take(),
-        })
+        Ok(surface.finish())
     }
 
     fn measure_text(&self, text: &str, style: &ResolvedLabelStyle) -> Result<TextMetrics, RenderError> {

@@ -1,51 +1,12 @@
-//! `DrawOp` dispatch hub. exhaustive match on the port-level enum so that
-//! adding a variant in `mars-render-port` breaks the build here, forcing the
-//! implementation rather than silently falling through.
+//! Per-`DrawOp`-variant tiny-skia draw helpers. The port-level
+//! [`mars_render_port::dispatch_ops`] walks `DrawOp`s and routes each
+//! through the [`mars_render_port::Surface`] impl in `crate::surface`,
+//! which in turn calls into these helpers. Adding a new `DrawOp` variant
+//! breaks the build at the Surface impl, which is the canonical seam.
 
-mod label;
+pub(crate) mod label;
 pub(crate) mod path;
-mod pattern;
-
-use mars_render_port::{DrawOp, ImageRegistry, RenderError};
-use mars_text::Fonts;
-use tiny_skia::Pixmap;
-
-use crate::{raster, symbol};
-
-pub(crate) fn dispatch(
-    pm: &mut Pixmap,
-    op: &DrawOp,
-    fonts: &Fonts,
-    images: &dyn ImageRegistry,
-) -> Result<(), RenderError> {
-    match op {
-        DrawOp::Path { path, style } => path::draw(pm, path, style, fonts),
-        DrawOp::Label {
-            anchor,
-            text,
-            style,
-            angle_rad,
-        } => label::draw(pm, *anchor, text, style, *angle_rad, fonts),
-        DrawOp::FollowLabel {
-            polyline_px,
-            start_arc_px,
-            text,
-            style,
-        } => label::draw_follow(pm, polyline_px, *start_arc_px, text, style, fonts),
-        DrawOp::Symbol {
-            anchor,
-            rotation_rad,
-            style,
-        } => symbol::dispatch(pm, *anchor, *rotation_rad, style, fonts),
-        DrawOp::Pattern { path, style } => pattern::draw(pm, path, style, images),
-        DrawOp::Raster {
-            tile,
-            dst,
-            opacity,
-            blend_mode,
-        } => raster::draw(pm, tile, *dst, *opacity, *blend_mode),
-    }
-}
+pub(crate) mod pattern;
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -55,7 +16,6 @@ mod tests {
     use mars_render_port::{Canvas, DrawOp, Path as PortPath, RenderError, Renderer, Subpath};
     use mars_style::{MarkerShape, MarkerSymbol, Style};
 
-    use super::dispatch;
     use crate::TinySkiaRenderer;
 
     fn renderer() -> TinySkiaRenderer {
@@ -181,10 +141,6 @@ mod tests {
 
     #[test]
     fn symbol_with_glyph_marker_dispatches_through_glyph_path() {
-        use tiny_skia::Pixmap as SkPixmap;
-
-        let mut pm = SkPixmap::new(32, 32).unwrap();
-        let fonts = mars_text::Fonts::with_default();
         let op = DrawOp::Symbol {
             anchor: (16.0, 16.0),
             rotation_rad: 0.0,
@@ -204,11 +160,16 @@ mod tests {
                 .resolve(0),
             ),
         };
-        dispatch(&mut pm, &op, &fonts, &mars_render_port::EmptyImageRegistry).expect("dispatch ok");
+        let canvas = Canvas {
+            width: 32,
+            height: 32,
+            background: None,
+        };
+        let pm = renderer().render(canvas, &[op]).expect("render ok");
         // verify pixels actually moved - at least one painted alpha byte.
         assert!(
-            pm.data().chunks_exact(4).any(|p| p[3] > 0),
-            "glyph dispatch must paint at least one pixel"
+            pm.premultiplied_rgba.chunks_exact(4).any(|p| p[3] > 0),
+            "glyph marker render must paint at least one pixel"
         );
     }
 }
