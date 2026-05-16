@@ -96,6 +96,9 @@ layers:
         wms_get_legend_graphic: true
         wms_get_styles: false
         wms_describe_layer: false
+        wmts_get_capabilities: true
+        wmts_get_tile: true
+        wmts_get_feature_info: false
     sources:
       - { band: detail, from: "roads", geometry_column: "geom" }
       - { band: hi, from: "roads", geometry_column: "geom" }

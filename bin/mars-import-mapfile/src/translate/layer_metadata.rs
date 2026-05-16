@@ -51,6 +51,9 @@ pub(crate) enum IncludeItemsParsed {
 
 /// Parsed per-op gating decisions. `None` means "no explicit setting" - the
 /// emitter omits that field so the config consumer falls through to defaults.
+/// WMS and WMTS share the struct but track distinct fields per `ServiceOp`
+/// variant (e.g. WMS and WMTS each have their own GetCapabilities /
+/// GetFeatureInfo).
 #[derive(Debug, Default, Clone)]
 pub(crate) struct ParsedGating {
     pub get_capabilities: Option<bool>,
@@ -59,6 +62,9 @@ pub(crate) struct ParsedGating {
     pub get_legend_graphic: Option<bool>,
     pub get_styles: Option<bool>,
     pub describe_layer: Option<bool>,
+    pub wmts_get_capabilities: Option<bool>,
+    pub wmts_get_tile: Option<bool>,
+    pub wmts_get_feature_info: Option<bool>,
 }
 
 /// Top-level entry: parse a LAYER-body METADATA block.
@@ -98,7 +104,8 @@ pub(crate) fn parse_layer_metadata_block(body: &[Token]) -> LayerMetadata {
             "wms_keywordlist" | "ows_keywordlist" => m.keywords.extend(split_keywords(&value)),
             "wms_opaque" => m.opaque = parse_bool(&value),
             "wms_srs" => m.advertised_crs.extend(split_whitespace(&value)),
-            "wms_enable_request" => m.request_gating = parse_enable_request(&value),
+            "wms_enable_request" => apply_enable_request_wms(&value, &mut m.request_gating),
+            "wmts_enable_request" => apply_enable_request_wmts(&value, &mut m.request_gating),
             "ows_include_items" => m.include_items = Some(parse_include_items(&value)),
 
             "wms_attribution_title" => {
@@ -218,13 +225,17 @@ fn parse_include_items(s: &str) -> IncludeItemsParsed {
     }
 }
 
-/// Parse `wms_enable_request` token-by-token. Tokens are space-separated:
-/// `*` allows every op (sets every unset op to true), `!*` denies every op,
-/// `Op` allows that op, `!Op` denies it. Later tokens override earlier ones,
-/// so `* !GetStyles` denies only GetStyles. Unrecognised operation names are
+/// Parse `wms_enable_request` token-by-token into the WMS-side fields of an
+/// existing [`ParsedGating`]. Tokens are space-separated: `*` allows every
+/// WMS op (sets every unset op to true), `!*` denies every WMS op, `Op`
+/// allows that op, `!Op` denies it. Later tokens override earlier ones, so
+/// `* !GetStyles` denies only GetStyles. Unrecognised operation names are
 /// silently dropped (e.g., `wms_*` prefixes some setups use).
-fn parse_enable_request(s: &str) -> ParsedGating {
-    let mut g = ParsedGating::default();
+///
+/// Mutating an existing struct (rather than returning a fresh one) lets
+/// `wmts_enable_request` compose into the same gating when both directives
+/// appear on the same layer.
+fn apply_enable_request_wms(s: &str, g: &mut ParsedGating) {
     for tok in s.split_whitespace() {
         let (positive, name) = if let Some(rest) = tok.strip_prefix('!') {
             (false, rest)
@@ -250,7 +261,31 @@ fn parse_enable_request(s: &str) -> ParsedGating {
             _ => {} // unknown op - silently ignored
         }
     }
-    g
+}
+
+/// Parse `wmts_enable_request` into the WMTS-side fields of an existing
+/// [`ParsedGating`]. Recognised ops mirror MapServer's WMTS surface:
+/// GetCapabilities, GetTile, GetFeatureInfo. `*` / `!*` apply to those three.
+fn apply_enable_request_wmts(s: &str, g: &mut ParsedGating) {
+    for tok in s.split_whitespace() {
+        let (positive, name) = if let Some(rest) = tok.strip_prefix('!') {
+            (false, rest)
+        } else {
+            (true, tok)
+        };
+        if name == "*" {
+            g.wmts_get_capabilities = Some(positive);
+            g.wmts_get_tile = Some(positive);
+            g.wmts_get_feature_info = Some(positive);
+            continue;
+        }
+        match name.to_ascii_lowercase().as_str() {
+            "getcapabilities" => g.wmts_get_capabilities = Some(positive),
+            "gettile" => g.wmts_get_tile = Some(positive),
+            "getfeatureinfo" => g.wmts_get_feature_info = Some(positive),
+            _ => {} // unknown op - silently ignored
+        }
+    }
 }
 
 #[cfg(test)]
@@ -283,9 +318,21 @@ mod tests {
         assert_eq!(m.keywords, vec!["a", "b", "c"]);
     }
 
+    fn wms_gating(s: &str) -> ParsedGating {
+        let mut g = ParsedGating::default();
+        apply_enable_request_wms(s, &mut g);
+        g
+    }
+
+    fn wmts_gating(s: &str) -> ParsedGating {
+        let mut g = ParsedGating::default();
+        apply_enable_request_wmts(s, &mut g);
+        g
+    }
+
     #[test]
     fn enable_request_star_then_deny_two() {
-        let g = parse_enable_request("* !GetStyles !DescribeLayer");
+        let g = wms_gating("* !GetStyles !DescribeLayer");
         assert_eq!(g.get_capabilities, Some(true));
         assert_eq!(g.get_map, Some(true));
         assert_eq!(g.get_feature_info, Some(true));
@@ -296,13 +343,13 @@ mod tests {
 
     #[test]
     fn enable_request_getcaps_only() {
-        let g = parse_enable_request("GetCapabilities !*");
+        let g = wms_gating("GetCapabilities !*");
         // `!*` after `GetCapabilities` overrides everything to false including capabilities
         assert_eq!(g.get_capabilities, Some(false));
         assert_eq!(g.get_map, Some(false));
         // tokens applied left-to-right; later wins.
         // Re-do with reversed order:
-        let g2 = parse_enable_request("!* GetCapabilities");
+        let g2 = wms_gating("!* GetCapabilities");
         assert_eq!(g2.get_capabilities, Some(true));
         assert_eq!(g2.get_map, Some(false));
         assert_eq!(g2.get_feature_info, Some(false));
@@ -310,12 +357,55 @@ mod tests {
 
     #[test]
     fn enable_request_bare_deny() {
-        let g = parse_enable_request("!GetCapabilities !GetFeatureInfo");
+        let g = wms_gating("!GetCapabilities !GetFeatureInfo");
         assert_eq!(g.get_capabilities, Some(false));
         assert_eq!(g.get_feature_info, Some(false));
         // others unset
         assert_eq!(g.get_map, None);
         assert_eq!(g.get_legend_graphic, None);
+    }
+
+    #[test]
+    fn wmts_enable_request_star_then_deny_one() {
+        let g = wmts_gating("* !GetFeatureInfo");
+        assert_eq!(g.wmts_get_capabilities, Some(true));
+        assert_eq!(g.wmts_get_tile, Some(true));
+        assert_eq!(g.wmts_get_feature_info, Some(false));
+        // wms-side untouched by wmts directive
+        assert_eq!(g.get_map, None);
+        assert_eq!(g.get_capabilities, None);
+    }
+
+    #[test]
+    fn wmts_enable_request_bare_op() {
+        let g = wmts_gating("GetTile");
+        assert_eq!(g.wmts_get_tile, Some(true));
+        assert_eq!(g.wmts_get_capabilities, None);
+    }
+
+    #[test]
+    fn wmts_unknown_op_dropped_silently() {
+        let g = wmts_gating("GetMap GetLegendGraphic GetTile");
+        // GetMap / GetLegendGraphic are WMS-only and must not leak into WMTS fields
+        assert_eq!(g.wmts_get_tile, Some(true));
+        assert_eq!(g.wmts_get_capabilities, None);
+        assert_eq!(g.wmts_get_feature_info, None);
+        assert_eq!(g.get_map, None);
+    }
+
+    #[test]
+    fn wms_and_wmts_directives_compose() {
+        // Both directives appearing on the same layer should populate their
+        // own sides without clobbering each other.
+        let body = vec![
+            t("wms_enable_request", &["GetMap GetCapabilities"]),
+            t("wmts_enable_request", &["GetTile GetCapabilities"]),
+        ];
+        let m = parse_layer_metadata_block(&body);
+        assert_eq!(m.request_gating.get_map, Some(true));
+        assert_eq!(m.request_gating.get_capabilities, Some(true));
+        assert_eq!(m.request_gating.wmts_get_tile, Some(true));
+        assert_eq!(m.request_gating.wmts_get_capabilities, Some(true));
     }
 
     #[test]

@@ -368,6 +368,9 @@ pub(crate) struct LayerGatingSkeleton {
     pub(crate) get_legend_graphic: Option<bool>,
     pub(crate) get_styles: Option<bool>,
     pub(crate) describe_layer: Option<bool>,
+    pub(crate) wmts_get_capabilities: Option<bool>,
+    pub(crate) wmts_get_tile: Option<bool>,
+    pub(crate) wmts_get_feature_info: Option<bool>,
 }
 
 impl LayerGatingSkeleton {
@@ -378,6 +381,9 @@ impl LayerGatingSkeleton {
             && self.get_legend_graphic.is_none()
             && self.get_styles.is_none()
             && self.describe_layer.is_none()
+            && self.wmts_get_capabilities.is_none()
+            && self.wmts_get_tile.is_none()
+            && self.wmts_get_feature_info.is_none()
     }
 }
 
@@ -776,6 +782,15 @@ fn write_layer_ows_metadata(out: &mut String, ows: &LayerOwsSkeleton) {
         }
         if let Some(b) = rg.describe_layer {
             let _ = writeln!(out, "        wms_describe_layer: {b}");
+        }
+        if let Some(b) = rg.wmts_get_capabilities {
+            let _ = writeln!(out, "        wmts_get_capabilities: {b}");
+        }
+        if let Some(b) = rg.wmts_get_tile {
+            let _ = writeln!(out, "        wmts_get_tile: {b}");
+        }
+        if let Some(b) = rg.wmts_get_feature_info {
+            let _ = writeln!(out, "        wmts_get_feature_info: {b}");
         }
     }
 }

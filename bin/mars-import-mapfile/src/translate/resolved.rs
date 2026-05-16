@@ -375,6 +375,9 @@ fn layer_ows_skeleton(m: &LayerMetadata) -> LayerOwsSkeleton {
             get_legend_graphic: m.request_gating.get_legend_graphic,
             get_styles: m.request_gating.get_styles,
             describe_layer: m.request_gating.describe_layer,
+            wmts_get_capabilities: m.request_gating.wmts_get_capabilities,
+            wmts_get_tile: m.request_gating.wmts_get_tile,
+            wmts_get_feature_info: m.request_gating.wmts_get_feature_info,
         },
     }
 }
