@@ -16,7 +16,7 @@ mod decode;
 // `pub(crate)` so the `bench-internals` feature can re-export the collision
 // API. without the feature this is effectively private (parent `render`
 // module is itself `mod`, not `pub mod`).
-pub(crate) mod labels;
+pub(crate) mod label;
 mod marker;
 mod project;
 mod raster;
@@ -34,7 +34,7 @@ use crate::{Deps, RenderPlan, RuntimeError};
 use crate::{fetch::fetch_page, fetch::fetch_sidecar, plan as planning};
 
 use decode::{DecodedPage, decode_page_to_ops};
-use labels::{PreparedLabel, collide_and_emit_labels, prepare_labels};
+use label::{PreparedLabel, collide_and_emit_labels, prepare_labels};
 
 /// drive one render plan end-to-end. produces encoded image bytes ready to
 /// hand back to the WMS / WMTS interface.
