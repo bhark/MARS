@@ -1,5 +1,7 @@
-# exercises layer-wide COMPOSITE { OPACITY n } -> Style.opacity lowering.
-# the percentage 50 becomes 0.5 on every class style emitted under this layer.
+# exercises layer-wide COMPOSITE { OPACITY n, COMPOP "..." } -> Style.opacity
+# and Style.blend_mode lowering. OPACITY 50 becomes 0.5; COMPOP multiply maps
+# to BlendMode::Multiply; both apply to every class style emitted under the
+# layer.
 MAP
   NAME "composite_test"
   TITLE "Composite Opacity"
@@ -12,6 +14,7 @@ MAP
 
     COMPOSITE
       OPACITY 50
+      COMPOP "multiply"
     END
 
     CLASS

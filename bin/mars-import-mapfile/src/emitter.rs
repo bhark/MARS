@@ -208,6 +208,9 @@ pub(crate) struct StyleDef {
     /// `MINFEATURESIZE` threshold in pixels. Per-pass gate dropped at render
     /// time when the feature's pixel-bbox extent falls below the value.
     pub(crate) min_feature_size_px: Option<f32>,
+    /// Per-pass blend mode lifted from layer-scope `COMPOSITE { COMPOP }`.
+    /// `None` falls back to the renderer default (source-over).
+    pub(crate) blend_mode: Option<mars_style::BlendMode>,
     pub(crate) font_family: Option<String>,
     pub(crate) font_size: Option<f32>,
     pub(crate) halo_color: Option<Colour>,
@@ -948,8 +951,24 @@ fn write_geometry_style_body(out: &mut String, st: &StyleDef, indent: &str) {
     if let Some(t) = st.min_feature_size_px {
         let _ = writeln!(out, "{indent}min_feature_size_px: {t}");
     }
+    if let Some(bm) = st.blend_mode {
+        let _ = writeln!(out, "{indent}blend_mode: {}", blend_mode_yaml(bm));
+    }
     if let Some(m) = st.marker.as_ref() {
         write_marker_at(out, m, indent);
+    }
+}
+
+/// YAML wire spelling for `mars_style::BlendMode` (kebab-case enum).
+fn blend_mode_yaml(b: mars_style::BlendMode) -> &'static str {
+    use mars_style::BlendMode;
+    match b {
+        BlendMode::SourceOver => "source-over",
+        BlendMode::Multiply => "multiply",
+        BlendMode::Screen => "screen",
+        BlendMode::Overlay => "overlay",
+        BlendMode::Darken => "darken",
+        BlendMode::Lighten => "lighten",
     }
 }
 

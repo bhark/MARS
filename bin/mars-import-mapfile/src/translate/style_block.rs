@@ -202,6 +202,7 @@ pub(crate) struct SinglePass {
     pub(crate) stroke_linejoin: Option<&'static str>,
     pub(crate) geom_transform: Option<&'static str>,
     pub(crate) min_feature_size_px: Option<f32>,
+    pub(crate) blend_mode: Option<mars_style::BlendMode>,
     pub(crate) unimplemented: Vec<&'static str>,
 }
 
@@ -329,6 +330,7 @@ pub(crate) fn style_block_to_pass(s: &StyleBlock, symbols: &HashMap<String, Symb
         stroke_linejoin,
         geom_transform,
         min_feature_size_px,
+        blend_mode: None,
         unimplemented,
     }
 }

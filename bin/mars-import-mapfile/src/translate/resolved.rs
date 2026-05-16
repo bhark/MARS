@@ -66,6 +66,14 @@ pub(crate) struct ResolvedSource {
     pub max_denom_exclusive: Option<u64>,
 }
 
+/// Layer-wide composite fields lifted from `COMPOSITE { ... }` and applied
+/// to every pass at class-resolve time.
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct LayerComposite {
+    pub opacity: Option<f32>,
+    pub blend_mode: Option<mars_style::BlendMode>,
+}
+
 #[derive(Debug)]
 pub(crate) struct ResolvedClass {
     pub class_name: String,
@@ -177,21 +185,14 @@ pub(crate) fn resolve_layer(
     let class_item = p.class_item.as_deref();
     let label_item = p.label_item.as_deref();
 
-    let composite_opacity = p.composite_opacity;
+    let composite = LayerComposite {
+        opacity: p.composite_opacity,
+        blend_mode: p.composite_blend_mode,
+    };
     let classes: Vec<ResolvedClass> = p
         .classes
         .into_iter()
-        .map(|pc| {
-            resolve_class(
-                pc,
-                &name,
-                geom_for_classes,
-                class_item,
-                label_item,
-                symbols,
-                composite_opacity,
-            )
-        })
+        .map(|pc| resolve_class(pc, &name, geom_for_classes, class_item, label_item, symbols, composite))
         .collect();
 
     let label = p
@@ -597,7 +598,7 @@ fn resolve_class(
     class_item: Option<&str>,
     label_item: Option<&str>,
     symbols: &HashMap<String, SymbolDef>,
-    composite_opacity: Option<f32>,
+    composite: LayerComposite,
 ) -> ResolvedClass {
     let title = p.name.clone();
     let class_name = slugify(&p.name.unwrap_or_else(|| format!("class_l{}", p.class_line)));
@@ -605,15 +606,20 @@ fn resolve_class(
     let style_name = format!("{}_{}_{}", style_prefix, slugify(layer_name), class_name);
 
     // layer-wide COMPOSITE OPACITY composes multiplicatively with any
-    // per-pass STYLE.OPACITY; absent pass opacity defaults to 1.0.
+    // per-pass STYLE.OPACITY; absent pass opacity defaults to 1.0. COMPOSITE
+    // COMPOP sets the per-pass blend_mode (no per-STYLE COMPOP in mapfile, so
+    // no composition rule is needed).
     let passes: Vec<SinglePass> = p
         .styles
         .iter()
         .map(|sb| {
             let mut pass = style_block_to_pass(sb, symbols);
-            if let Some(layer_op) = composite_opacity {
+            if let Some(layer_op) = composite.opacity {
                 let pass_op = pass.opacity.unwrap_or(1.0);
                 pass.opacity = Some((layer_op * pass_op).clamp(0.0, 1.0));
+            }
+            if let Some(bm) = composite.blend_mode {
+                pass.blend_mode = Some(bm);
             }
             pass
         })

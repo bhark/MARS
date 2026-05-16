@@ -68,9 +68,13 @@ pub(crate) struct ParsedLayer {
     pub projection: Option<String>,
     /// Layer-wide opacity in `[0.0, 1.0]` lifted from `COMPOSITE { OPACITY n }`
     /// (mapserver percent 0..100). Composes multiplicatively with any
-    /// per-style STYLE.OPACITY at resolve time. COMPOP / FILTER /
-    /// COMPFILTER inside COMPOSITE are renderer work and ignored.
+    /// per-style STYLE.OPACITY at resolve time.
     pub composite_opacity: Option<f32>,
+    /// Layer-wide blend mode lifted from `COMPOSITE { COMPOP "name" }`.
+    /// Applied to every pass at resolve time. COMPFILTER stays out of scope
+    /// (mapserver expression syntax); FILTER inside COMPOSITE emits a warn
+    /// at parse time and is otherwise dropped.
+    pub composite_blend_mode: Option<mars_style::BlendMode>,
     /// Raw mapfile `TEMPLATE "path.html"` arg. Threaded into `Layer.template`
     /// in the emitted YAML.
     pub template: Option<String>,
@@ -218,10 +222,14 @@ pub(crate) fn parse_layer(body: &[Token]) -> ParsedLayer {
             LayerDirective::Composite(_t) => {
                 if let Some(r) = block_range(body, i) {
                     let inner = &body[r.start + 1..r.end - 1];
-                    if let Some(o) = parse_composite_opacity(inner) {
-                        // last COMPOSITE wins; multiple blocks are unusual but
-                        // mapserver allows them for COMPOP stacking.
+                    let parsed = parse_composite(inner);
+                    // last COMPOSITE wins; multiple blocks are unusual but
+                    // mapserver allows them for stacking.
+                    if let Some(o) = parsed.opacity {
                         p.composite_opacity = Some(o);
+                    }
+                    if let Some(bm) = parsed.blend_mode {
+                        p.composite_blend_mode = Some(bm);
                     }
                     i = r.end;
                     continue;
@@ -434,18 +442,69 @@ pub(crate) fn parse_scale_token(body: &[Token]) -> Vec<(u64, String)> {
     out
 }
 
-/// extract `OPACITY <n>` from a COMPOSITE block body, mapping mapserver's
-/// 0..100 percent into a `[0.0, 1.0]` multiplier. Other COMPOSITE-scoped
-/// directives (COMPOP, COMPFILTER, FILTER) are renderer work and silently
-/// ignored here.
-fn parse_composite_opacity(body: &[Token]) -> Option<f32> {
-    body.iter().rev().find_map(|t| {
-        if !t.keyword.eq_ignore_ascii_case("OPACITY") {
-            return None;
+/// parsed contents of a `COMPOSITE { ... }` block.
+#[derive(Debug, Default)]
+struct ParsedComposite {
+    opacity: Option<f32>,
+    blend_mode: Option<mars_style::BlendMode>,
+}
+
+/// Parse a COMPOSITE block body. Recognises:
+///   - `OPACITY <n>`: mapserver 0..100 percent into a `[0.0, 1.0]` multiplier.
+///   - `COMPOP "<name>"`: maps to a [`mars_style::BlendMode`]. Unrecognised
+///     names warn and fall through to source-over.
+///   - `FILTER`: mapserver raster filter; not supported, emits a warn so the
+///     operator notices the directive was dropped.
+///   - `COMPFILTER`: mapserver expression syntax; explicitly out of scope and
+///     silently ignored.
+///
+/// Later tokens win for the scalar fields.
+fn parse_composite(body: &[Token]) -> ParsedComposite {
+    let mut out = ParsedComposite::default();
+    for t in body {
+        let key = t.keyword.to_ascii_uppercase();
+        match key.as_str() {
+            "OPACITY" => {
+                if let Some(v) = parsing::first_parsed::<f32>(t) {
+                    out.opacity = Some((v / 100.0).clamp(0.0, 1.0));
+                }
+            }
+            "COMPOP" => {
+                let raw = parsing::first_unquoted(t).unwrap_or_default();
+                match map_compop(&raw) {
+                    Some(bm) => out.blend_mode = Some(bm),
+                    None => {
+                        warn!(
+                            line = t.line,
+                            value = %raw,
+                            "unsupported COMPOP value; defaulting to source-over",
+                        );
+                    }
+                }
+            }
+            "FILTER" => {
+                warn!(line = t.line, "COMPOSITE FILTER is not supported; ignoring",);
+            }
+            "COMPFILTER" => {} // mapserver expression syntax; out of scope
+            _ => {}            // unknown directive - silently ignored
         }
-        let v: f32 = parsing::first_parsed(t)?;
-        Some((v / 100.0).clamp(0.0, 1.0))
-    })
+    }
+    out
+}
+
+/// Map a mapserver COMPOP scalar to [`mars_style::BlendMode`]. Recognises the
+/// SVG/Porter-Duff names the renderer supports natively; anything outside the
+/// set returns `None` so the caller can warn.
+fn map_compop(raw: &str) -> Option<mars_style::BlendMode> {
+    match raw.to_ascii_lowercase().as_str() {
+        "src-over" | "src_over" | "source-over" | "source_over" | "normal" => Some(mars_style::BlendMode::SourceOver),
+        "multiply" => Some(mars_style::BlendMode::Multiply),
+        "screen" => Some(mars_style::BlendMode::Screen),
+        "overlay" => Some(mars_style::BlendMode::Overlay),
+        "darken" => Some(mars_style::BlendMode::Darken),
+        "lighten" => Some(mars_style::BlendMode::Lighten),
+        _ => None,
+    }
 }
 
 /// parse a MIN/MAXSCALEDENOM argument, applying the N+1 canonicalisation.
@@ -459,5 +518,63 @@ fn parse_scale_denom_arg(t: &Token) -> Option<u64> {
             warn!(line = t.line, keyword = %t.keyword, value = %arg, "could not parse scale denom");
             None
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    fn t(kw: &str, args: &[&str]) -> Token {
+        Token {
+            line: 1,
+            keyword: kw.to_string(),
+            args: args.iter().map(|s| (*s).to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn composite_opacity_and_compop_lower_together() {
+        let body = vec![t("OPACITY", &["50"]), t("COMPOP", &["multiply"])];
+        let p = parse_composite(&body);
+        assert!((p.opacity.unwrap() - 0.5).abs() < f32::EPSILON);
+        assert_eq!(p.blend_mode, Some(mars_style::BlendMode::Multiply));
+    }
+
+    #[test]
+    fn composite_compop_unknown_falls_through_to_none() {
+        // unrecognised COMPOP triggers a warn but does not set blend_mode,
+        // so the renderer falls back to source-over.
+        let body = vec![t("COMPOP", &["color-burn"])];
+        let p = parse_composite(&body);
+        assert_eq!(p.blend_mode, None);
+    }
+
+    #[test]
+    fn composite_compop_normal_maps_to_source_over() {
+        let body = vec![t("COMPOP", &["normal"])];
+        let p = parse_composite(&body);
+        assert_eq!(p.blend_mode, Some(mars_style::BlendMode::SourceOver));
+    }
+
+    #[test]
+    fn composite_filter_emits_no_blend_mode_and_no_opacity() {
+        // FILTER is recognised but not supported; it triggers a warn and is
+        // otherwise dropped. The block leaves the other fields untouched.
+        let body = vec![t("FILTER", &["(some expr)"])];
+        let p = parse_composite(&body);
+        assert_eq!(p.opacity, None);
+        assert_eq!(p.blend_mode, None);
+    }
+
+    #[test]
+    fn composite_compfilter_silently_ignored() {
+        // COMPFILTER is mapserver expression syntax and explicitly out of
+        // scope. No warn, no field set.
+        let body = vec![t("COMPFILTER", &["[type] = 'major'"])];
+        let p = parse_composite(&body);
+        assert_eq!(p.opacity, None);
+        assert_eq!(p.blend_mode, None);
     }
 }
