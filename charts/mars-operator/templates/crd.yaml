@@ -85,9 +85,14 @@ spec:
                     type: boolean
                   runtimePasswordSecretRef:
                     description: |-
-                      Secret reference for the runtime role password. Required when
-                      `enabled` is true. Mounted only into the bootstrap Job pod; the
-                      always-on compiler/runtime never sees the admin secret.
+                      Secret reference for the runtime role password. Optional when
+                      `enabled` is true: when omitted, the operator generates a random
+                      password on first reconcile and persists it in a Secret named
+                      `<msvc>-runtime-credentials` (key `password`) owned by the
+                      MarsService so deletion of the CR garbage-collects it. The resolved
+                      Secret is consumed by the bootstrap Job and projected as
+                      `MARS_RUNTIME_PASSWORD` into the compiler/runtime pods so user DSN
+                      templates can reference it directly.
                     nullable: true
                     properties:
                       key:
@@ -421,6 +426,14 @@ spec:
                 nullable: true
                 type: integer
               phase:
+                nullable: true
+                type: string
+              runtimeCredentialsSecret:
+                description: |-
+                  Name of the Secret holding the runtime role password. Set whether
+                  the user supplied `bootstrap.runtimePasswordSecretRef` (BYO) or the
+                  operator generated and persisted one. Absent when no `spec.bootstrap`
+                  is declared or bootstrap is disabled.
                 nullable: true
                 type: string
             type: object

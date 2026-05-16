@@ -16,10 +16,10 @@ use serde_json::json;
 use tracing::{error, info, warn};
 
 use crate::bootstrap::{self, BOOTSTRAP_FINALIZER, PlanInputs};
-use crate::children::labels::artifact_store_pvc_name;
+use crate::children::labels::{self, artifact_store_pvc_name};
 use crate::children::pvc::{self, PvcSpec};
 use crate::children::{compiler, configmap, runtime, service};
-use crate::crd::{ArtifactStoreSpec, MarsService};
+use crate::crd::{ArtifactStoreSpec, BootstrapSpec, MarsService, SecretKeyRef};
 use crate::error::{OperatorError, Result};
 use crate::metrics::Metrics;
 use crate::status::{self, BootstrapReason, BootstrapStatus, StatusInputs};
@@ -102,6 +102,7 @@ async fn reconcile_inner(cr: Arc<MarsService>, ctx: Arc<Ctx>) -> Result<Action> 
             runtime_ready: false,
             degraded: None,
             bootstrap: None,
+            runtime_credentials_secret: None,
         });
         patch_status(&ctx, &svc_name, &ns, status_body).await?;
         return Ok(Action::requeue(Duration::from_secs(30)));
@@ -121,6 +122,7 @@ async fn reconcile_inner(cr: Arc<MarsService>, ctx: Arc<Ctx>) -> Result<Action> 
             runtime_ready: false,
             degraded: Some(&reason),
             bootstrap: None,
+            runtime_credentials_secret: None,
         });
         patch_status(&ctx, &svc_name, &ns, status_body).await?;
         return Ok(Action::requeue(Duration::from_secs(30)));
@@ -132,6 +134,7 @@ async fn reconcile_inner(cr: Arc<MarsService>, ctx: Arc<Ctx>) -> Result<Action> 
     apply_configmap(&ctx, &ns, &cm).await?;
 
     let bootstrap_outcome = reconcile_bootstrap(&ctx, &cr, &svc_name, &ns, owner_ref.clone()).await?;
+    let runtime_credentials_secret = bootstrap_outcome.runtime_password_ref.as_ref().map(|r| r.name.as_str());
     if !bootstrap_outcome.proceed {
         let status_body = status::compute(StatusInputs {
             observed_generation: generation,
@@ -143,6 +146,7 @@ async fn reconcile_inner(cr: Arc<MarsService>, ctx: Arc<Ctx>) -> Result<Action> 
             runtime_ready: false,
             degraded: None,
             bootstrap: Some(bootstrap_outcome.status),
+            runtime_credentials_secret,
         });
         patch_status(&ctx, &svc_name, &ns, status_body).await?;
         return Ok(Action::requeue(bootstrap_outcome.requeue));
@@ -163,12 +167,27 @@ async fn reconcile_inner(cr: Arc<MarsService>, ctx: Arc<Ctx>) -> Result<Action> 
         apply_pvc(&ctx, &ns, &art_pvc).await?;
     }
 
-    let compiler_children = compiler::build(&cr, &checksum, fs_store.as_ref(), &ctx.runtime_image, owner_ref.clone())?;
+    let runtime_password_ref = bootstrap_outcome.runtime_password_ref.as_ref();
+    let compiler_children = compiler::build(
+        &cr,
+        &checksum,
+        fs_store.as_ref(),
+        runtime_password_ref,
+        &ctx.runtime_image,
+        owner_ref.clone(),
+    )?;
     apply_pvc(&ctx, &ns, &compiler_children.cache_pvc).await?;
     apply_pvc(&ctx, &ns, &compiler_children.work_pvc).await?;
     apply_deployment(&ctx, &ns, &compiler_children.deployment).await?;
 
-    let runtime_deployment = runtime::build(&cr, &checksum, fs_store.as_ref(), &ctx.runtime_image, owner_ref.clone())?;
+    let runtime_deployment = runtime::build(
+        &cr,
+        &checksum,
+        fs_store.as_ref(),
+        runtime_password_ref,
+        &ctx.runtime_image,
+        owner_ref.clone(),
+    )?;
     apply_deployment(&ctx, &ns, &runtime_deployment).await?;
 
     let runtime_service = service::build(&cr, owner_ref)?;
@@ -196,6 +215,7 @@ async fn reconcile_inner(cr: Arc<MarsService>, ctx: Arc<Ctx>) -> Result<Action> 
         runtime_ready,
         degraded: None,
         bootstrap: Some(bootstrap_outcome.status),
+        runtime_credentials_secret,
     });
     patch_status(&ctx, &svc_name, &ns, status_body).await?;
 
@@ -209,6 +229,11 @@ struct BootstrapOutcome {
     proceed: bool,
     status: BootstrapStatus<'static>,
     requeue: Duration,
+    /// Resolved Secret holding the runtime role password. Always Some when
+    /// `spec.bootstrap` is declared (BYO or operator-managed); None means
+    /// the legacy "no bootstrap" path and no MARS_RUNTIME_PASSWORD env is
+    /// projected into compiler/runtime pods.
+    runtime_password_ref: Option<SecretKeyRef>,
 }
 
 async fn reconcile_bootstrap(
@@ -231,6 +256,7 @@ async fn reconcile_bootstrap(
                     message: "no spec.bootstrap declared",
                 },
                 requeue: Duration::from_secs(30),
+                runtime_password_ref: None,
             });
         }
     };
@@ -245,6 +271,7 @@ async fn reconcile_bootstrap(
                     message: "spec.bootstrap is set but spec.config.source.bootstrap is missing",
                 },
                 requeue: Duration::from_secs(30),
+                runtime_password_ref: None,
             });
         }
     };
@@ -260,6 +287,7 @@ async fn reconcile_bootstrap(
                 message: "bootstrap.enabled=false; assuming manual setup is in place",
             },
             requeue: Duration::from_secs(60),
+            runtime_password_ref: bs_spec.runtime_password_secret_ref.clone(),
         });
     }
 
@@ -269,10 +297,7 @@ async fn reconcile_bootstrap(
         .admin_secret_ref
         .as_ref()
         .ok_or_else(|| OperatorError::ConfigInvalid("bootstrap.adminSecretRef is required".into()))?;
-    let runtime_ref = bs_spec
-        .runtime_password_secret_ref
-        .as_ref()
-        .ok_or_else(|| OperatorError::ConfigInvalid("bootstrap.runtimePasswordSecretRef is required".into()))?;
+    let runtime_password_ref = ensure_runtime_password_secret(ctx, svc_name, ns, bs_spec, owner.clone()).await?;
     let secret_api: Api<Secret> = Api::namespaced(ctx.client.clone(), ns);
     let admin_rv = secret_api
         .get_opt(&admin_ref.name)
@@ -280,7 +305,7 @@ async fn reconcile_bootstrap(
         .and_then(|s| s.metadata.resource_version.clone())
         .unwrap_or_default();
     let runtime_rv = secret_api
-        .get_opt(&runtime_ref.name)
+        .get_opt(&runtime_password_ref.name)
         .await?
         .and_then(|s| s.metadata.resource_version.clone())
         .unwrap_or_default();
@@ -288,6 +313,7 @@ async fn reconcile_bootstrap(
     let inputs = PlanInputs {
         bootstrap: bs_spec,
         source_bootstrap: source_bs,
+        runtime_password_ref: runtime_password_ref.clone(),
         admin_secret_resource_version: admin_rv,
         runtime_secret_resource_version: runtime_rv,
     };
@@ -319,6 +345,7 @@ async fn reconcile_bootstrap(
                 message: "bootstrap Job created; waiting for completion",
             },
             requeue: Duration::from_secs(10),
+            runtime_password_ref: Some(runtime_password_ref),
         });
     };
     let st = existing.status.as_ref();
@@ -336,6 +363,7 @@ async fn reconcile_bootstrap(
                 message: "bootstrap Job succeeded",
             },
             requeue: Duration::from_secs(60),
+            runtime_password_ref: Some(runtime_password_ref),
         })
     } else if failed >= 3 {
         Ok(BootstrapOutcome {
@@ -346,6 +374,7 @@ async fn reconcile_bootstrap(
                 message: "bootstrap Job failed; inspect Job pods for logs",
             },
             requeue: Duration::from_secs(60),
+            runtime_password_ref: Some(runtime_password_ref),
         })
     } else {
         Ok(BootstrapOutcome {
@@ -356,7 +385,76 @@ async fn reconcile_bootstrap(
                 message: "bootstrap Job in progress",
             },
             requeue: Duration::from_secs(10),
+            runtime_password_ref: Some(runtime_password_ref),
         })
+    }
+}
+
+/// Resolve the runtime password Secret reference. With a BYO
+/// `runtimePasswordSecretRef` the user owns rotation entirely. Without one,
+/// the operator generates a cryptographically random password on first
+/// reconcile and persists it as `<svc>-runtime-credentials` (key `password`)
+/// with an owner reference back to the MarsService. Subsequent reconciles
+/// reuse the existing Secret; we never rotate in-place.
+async fn ensure_runtime_password_secret(
+    ctx: &Ctx,
+    svc_name: &str,
+    ns: &str,
+    bs_spec: &BootstrapSpec,
+    owner: OwnerReference,
+) -> Result<SecretKeyRef> {
+    if let Some(byo) = &bs_spec.runtime_password_secret_ref {
+        return Ok(byo.clone());
+    }
+    let name = labels::runtime_credentials_secret_name(svc_name);
+    let key = labels::RUNTIME_PASSWORD_KEY.to_string();
+    let api: Api<Secret> = Api::namespaced(ctx.client.clone(), ns);
+
+    if api.get_opt(&name).await?.is_some() {
+        return Ok(SecretKeyRef { name, key });
+    }
+
+    let password = generate_runtime_password();
+    let secret = build_runtime_credentials_secret(&name, ns, svc_name, &password, owner);
+    api.patch(&name, &PatchParams::apply(&ctx.field_manager).force(), &Patch::Apply(&secret))
+        .await?;
+    info!(svc = %svc_name, secret = %name, "generated operator-managed runtime password");
+    Ok(SecretKeyRef { name, key })
+}
+
+/// 32 chars of [A-Za-z0-9], ~190 bits of entropy. Alphanumeric to keep the
+/// password embeddable in a libpq URI DSN without URL-encoding.
+fn generate_runtime_password() -> String {
+    use rand::RngExt;
+    use rand::distr::Alphanumeric;
+    rand::rng()
+        .sample_iter(&Alphanumeric)
+        .take(32)
+        .map(char::from)
+        .collect()
+}
+
+fn build_runtime_credentials_secret(
+    name: &str,
+    ns: &str,
+    svc: &str,
+    password: &str,
+    owner: OwnerReference,
+) -> Secret {
+    use k8s_openapi::ByteString;
+    let mut data = std::collections::BTreeMap::new();
+    data.insert(labels::RUNTIME_PASSWORD_KEY.into(), ByteString(password.as_bytes().to_vec()));
+    Secret {
+        metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
+            name: Some(name.into()),
+            namespace: Some(ns.into()),
+            labels: Some(labels::labels(svc, "runtime-credentials")),
+            owner_references: Some(vec![owner]),
+            ..Default::default()
+        },
+        data: Some(data),
+        type_: Some("Opaque".into()),
+        ..Default::default()
     }
 }
 

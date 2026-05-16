@@ -64,9 +64,14 @@ pub(crate) struct BootstrapSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) admin_secret_ref: Option<SecretKeyRef>,
 
-    /// Secret reference for the runtime role password. Required when
-    /// `enabled` is true. Mounted only into the bootstrap Job pod; the
-    /// always-on compiler/runtime never sees the admin secret.
+    /// Secret reference for the runtime role password. Optional when
+    /// `enabled` is true: when omitted, the operator generates a random
+    /// password on first reconcile and persists it in a Secret named
+    /// `<msvc>-runtime-credentials` (key `password`) owned by the
+    /// MarsService so deletion of the CR garbage-collects it. The resolved
+    /// Secret is consumed by the bootstrap Job and projected as
+    /// `MARS_RUNTIME_PASSWORD` into the compiler/runtime pods so user DSN
+    /// templates can reference it directly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) runtime_password_secret_ref: Option<SecretKeyRef>,
 
@@ -346,6 +351,12 @@ pub(crate) struct MarsServiceStatus {
     pub(crate) observed_generation: Option<i64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) conditions: Vec<Condition>,
+    /// Name of the Secret holding the runtime role password. Set whether
+    /// the user supplied `bootstrap.runtimePasswordSecretRef` (BYO) or the
+    /// operator generated and persisted one. Absent when no `spec.bootstrap`
+    /// is declared or bootstrap is disabled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) runtime_credentials_secret: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]

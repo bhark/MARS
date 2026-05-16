@@ -13,11 +13,11 @@ use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta, OwnerReference};
 
 use crate::children::labels::{
-    self, COMPONENT_COMPILER, CONFIG_CHECKSUM_ANNOTATION, compiler_cache_pvc_name, compiler_deployment_name,
-    compiler_work_pvc_name, config_map_name,
+    self, COMPONENT_COMPILER, CONFIG_CHECKSUM_ANNOTATION, RUNTIME_PASSWORD_ENV, compiler_cache_pvc_name,
+    compiler_deployment_name, compiler_work_pvc_name, config_map_name,
 };
 use crate::children::pvc::{self, PvcSpec};
-use crate::crd::{ArtifactStoreSpec, EnvFromSourceSpec, EnvVarSpec, MarsService, ResourceRequirementsSpec};
+use crate::crd::{ArtifactStoreSpec, EnvFromSourceSpec, EnvVarSpec, MarsService, ResourceRequirementsSpec, SecretKeyRef};
 use crate::error::Result;
 
 pub(crate) struct CompilerChildren {
@@ -30,6 +30,7 @@ pub(crate) fn build(
     cr: &MarsService,
     config_checksum: &str,
     fs_store: Option<&ArtifactStoreSpec>,
+    runtime_password_ref: Option<&SecretKeyRef>,
     image: &str,
     owner_ref: OwnerReference,
 ) -> Result<CompilerChildren> {
@@ -155,7 +156,7 @@ pub(crate) fn build(
             "--config".into(),
             "/etc/mars/mars.yaml".into(),
         ]),
-        env: Some(env_vars(&cr.spec.compiler.env)),
+        env: Some(env_vars_with_runtime_password(&cr.spec.compiler.env, runtime_password_ref)),
         env_from: Some(env_from(&cr.spec.compiler.env_from)),
         resources: cr.spec.compiler.resources.as_ref().map(resource_requirements),
         security_context: Some(container_security_context()),
@@ -252,6 +253,35 @@ pub(crate) fn resource_requirements(spec: &ResourceRequirementsSpec) -> Resource
     }
 }
 
+/// Append the operator-projected `MARS_RUNTIME_PASSWORD` env to the
+/// user-supplied env list. The projection is the resolved runtime password
+/// Secret (BYO or operator-managed). Users template it into their DSN via
+/// `${MARS_RUNTIME_PASSWORD}` so the always-on pods can authenticate as the
+/// runtime role without the user staging a password Secret themselves.
+pub(crate) fn env_vars_with_runtime_password(
+    specs: &[EnvVarSpec],
+    runtime_password_ref: Option<&SecretKeyRef>,
+) -> Vec<EnvVar> {
+    let mut out = env_vars(specs);
+    if let Some(r) = runtime_password_ref
+        && !out.iter().any(|e| e.name == RUNTIME_PASSWORD_ENV)
+    {
+        out.push(EnvVar {
+            name: RUNTIME_PASSWORD_ENV.into(),
+            value_from: Some(EnvVarSource {
+                secret_key_ref: Some(SecretKeySelector {
+                    name: r.name.clone(),
+                    key: r.key.clone(),
+                    optional: Some(false),
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+    }
+    out
+}
+
 pub(crate) fn env_vars(specs: &[EnvVarSpec]) -> Vec<EnvVar> {
     specs
         .iter()
@@ -309,6 +339,7 @@ mod tests {
             &cr,
             "deadbeef",
             None,
+            None,
             test_support::TEST_IMAGE,
             test_support::owner_ref(),
         )
@@ -329,7 +360,7 @@ mod tests {
     #[test]
     fn build_propagates_config_checksum_to_pod_template_annotation() {
         let cr = test_support::cr("demo", "svc-ns");
-        let kids = build(&cr, "abc123", None, test_support::TEST_IMAGE, test_support::owner_ref()).unwrap();
+        let kids = build(&cr, "abc123", None, None, test_support::TEST_IMAGE, test_support::owner_ref()).unwrap();
         let template = kids.deployment.spec.unwrap().template;
         let annotations = template.metadata.unwrap().annotations.unwrap();
         assert_eq!(
@@ -343,11 +374,48 @@ mod tests {
         let mut cr = test_support::cr("demo", "svc-ns");
         cr.metadata.name = None;
         // CompilerChildren is intentionally not Debug; use match to extract the err.
-        match build(&cr, "abc123", None, test_support::TEST_IMAGE, test_support::owner_ref()) {
+        match build(&cr, "abc123", None, None, test_support::TEST_IMAGE, test_support::owner_ref()) {
             Err(crate::error::OperatorError::MissingField(f)) => assert_eq!(f, "metadata.name"),
             Err(other) => panic!("expected MissingField, got {other:?}"),
             Ok(_) => panic!("expected error, got Ok"),
         }
+    }
+
+    #[test]
+    fn build_projects_runtime_password_env_when_resolved_ref_is_set() {
+        let cr = test_support::cr("demo", "svc-ns");
+        let runtime_ref = SecretKeyRef {
+            name: "demo-runtime-credentials".into(),
+            key: "password".into(),
+        };
+        let kids = build(
+            &cr,
+            "deadbeef",
+            None,
+            Some(&runtime_ref),
+            test_support::TEST_IMAGE,
+            test_support::owner_ref(),
+        )
+        .unwrap();
+        let envs = kids.deployment.spec.unwrap().template.spec.unwrap().containers[0]
+            .env
+            .clone()
+            .unwrap();
+        let injected = envs.iter().find(|e| e.name == RUNTIME_PASSWORD_ENV).unwrap();
+        let sref = injected.value_from.as_ref().unwrap().secret_key_ref.as_ref().unwrap();
+        assert_eq!(sref.name, "demo-runtime-credentials");
+        assert_eq!(sref.key, "password");
+    }
+
+    #[test]
+    fn build_omits_runtime_password_env_when_resolved_ref_is_absent() {
+        let cr = test_support::cr("demo", "svc-ns");
+        let kids = build(&cr, "deadbeef", None, None, test_support::TEST_IMAGE, test_support::owner_ref()).unwrap();
+        let envs = kids.deployment.spec.unwrap().template.spec.unwrap().containers[0]
+            .env
+            .clone()
+            .unwrap();
+        assert!(envs.iter().all(|e| e.name != RUNTIME_PASSWORD_ENV));
     }
 
     #[test]
@@ -356,6 +424,7 @@ mod tests {
         let kids = build(
             &cr,
             "deadbeef",
+            None,
             None,
             test_support::TEST_IMAGE,
             test_support::owner_ref(),
@@ -374,6 +443,7 @@ mod tests {
         let kids = build(
             &cr,
             "deadbeef",
+            None,
             None,
             test_support::TEST_IMAGE,
             test_support::owner_ref(),

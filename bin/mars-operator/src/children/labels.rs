@@ -12,6 +12,14 @@ pub(crate) const COMPONENT_TEARDOWN: &str = "teardown";
 
 pub(crate) const CONFIG_CHECKSUM_ANNOTATION: &str = "mars.forn.dk/config-checksum";
 
+/// Fixed key the operator-managed runtime-credentials Secret stores the
+/// password under. Documented in the CRD doc and `docs/postgres-setup.md`.
+pub(crate) const RUNTIME_PASSWORD_KEY: &str = "password";
+
+/// Env var the operator projects into compiler/runtime pods so users can
+/// template the password into `spec.config.source.dsn` via `${MARS_RUNTIME_PASSWORD}`.
+pub(crate) const RUNTIME_PASSWORD_ENV: &str = "MARS_RUNTIME_PASSWORD";
+
 pub(crate) fn bootstrap_service_account_name(svc: &str) -> String {
     format!("{svc}-bootstrap")
 }
@@ -50,6 +58,12 @@ pub(crate) fn runtime_service_name(svc: &str) -> String {
 
 pub(crate) fn artifact_store_pvc_name(svc: &str) -> String {
     format!("{svc}-artifact-store")
+}
+
+/// Name of the operator-managed Secret carrying the generated runtime role
+/// password when `bootstrap.runtimePasswordSecretRef` is not set.
+pub(crate) fn runtime_credentials_secret_name(svc: &str) -> String {
+    format!("{svc}-runtime-credentials")
 }
 
 /// Standard labels applied to every child object. `component` is per-child.

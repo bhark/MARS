@@ -119,6 +119,10 @@ pub(crate) struct StatusInputs<'a> {
     /// emitted at all so cluster operators see exactly the conditions that
     /// apply to their setup.
     pub(crate) bootstrap: Option<BootstrapStatus<'a>>,
+    /// Name of the resolved runtime-password Secret (BYO or operator-managed).
+    /// Surfaced on status so consumers can locate it without recomputing the
+    /// naming convention.
+    pub(crate) runtime_credentials_secret: Option<&'a str>,
 }
 
 #[derive(Clone, Copy)]
@@ -228,5 +232,6 @@ pub(crate) fn compute(inputs: StatusInputs<'_>) -> MarsServiceStatus {
         phase: Some(phase.into()),
         observed_generation: Some(inputs.observed_generation),
         conditions,
+        runtime_credentials_secret: inputs.runtime_credentials_secret.map(str::to_string),
     }
 }

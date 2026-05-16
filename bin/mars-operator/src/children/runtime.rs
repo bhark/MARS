@@ -14,19 +14,20 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta, 
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
 
 use crate::children::compiler::{
-    container_security_context, env_from, env_vars, pod_security_context, resource_requirements,
+    container_security_context, env_from, env_vars_with_runtime_password, pod_security_context, resource_requirements,
 };
 use crate::children::labels::{
     self, COMPONENT_RUNTIME, CONFIG_CHECKSUM_ANNOTATION, artifact_store_pvc_name, config_map_name,
     runtime_deployment_name,
 };
-use crate::crd::{ArtifactStoreSpec, MarsService};
+use crate::crd::{ArtifactStoreSpec, MarsService, SecretKeyRef};
 use crate::error::Result;
 
 pub(crate) fn build(
     cr: &MarsService,
     config_checksum: &str,
     fs_store: Option<&ArtifactStoreSpec>,
+    runtime_password_ref: Option<&SecretKeyRef>,
     image: &str,
     owner_ref: OwnerReference,
 ) -> Result<Deployment> {
@@ -140,7 +141,7 @@ pub(crate) fn build(
             "--config".into(),
             "/etc/mars/mars.yaml".into(),
         ]),
-        env: Some(env_vars(&cr.spec.runtime.env)),
+        env: Some(env_vars_with_runtime_password(&cr.spec.runtime.env, runtime_password_ref)),
         env_from: Some(env_from(&cr.spec.runtime.env_from)),
         ports: Some(vec![ContainerPort {
             name: Some("http".into()),
@@ -203,7 +204,7 @@ mod tests {
     #[test]
     fn build_sets_replicas_and_selector() {
         let cr = test_support::cr("demo", "svc-ns");
-        let dep = build(&cr, "abc123", None, test_support::TEST_IMAGE, test_support::owner_ref()).unwrap();
+        let dep = build(&cr, "abc123", None, None, test_support::TEST_IMAGE, test_support::owner_ref()).unwrap();
         let spec = dep.spec.unwrap();
         assert_eq!(spec.replicas, Some(2));
         let match_labels = spec.selector.match_labels.unwrap();
@@ -220,11 +221,38 @@ mod tests {
     }
 
     #[test]
+    fn build_projects_runtime_password_env_when_resolved_ref_is_set() {
+        let cr = test_support::cr("demo", "svc-ns");
+        let runtime_ref = SecretKeyRef {
+            name: "demo-runtime-credentials".into(),
+            key: "password".into(),
+        };
+        let dep = build(
+            &cr,
+            "deadbeef",
+            None,
+            Some(&runtime_ref),
+            test_support::TEST_IMAGE,
+            test_support::owner_ref(),
+        )
+        .unwrap();
+        let envs = dep.spec.unwrap().template.spec.unwrap().containers[0]
+            .env
+            .clone()
+            .unwrap();
+        let injected = envs.iter().find(|e| e.name == "MARS_RUNTIME_PASSWORD").unwrap();
+        let sref = injected.value_from.as_ref().unwrap().secret_key_ref.as_ref().unwrap();
+        assert_eq!(sref.name, "demo-runtime-credentials");
+        assert_eq!(sref.key, "password");
+    }
+
+    #[test]
     fn build_propagates_config_checksum_to_pod_template_annotation() {
         let cr = test_support::cr("demo", "svc-ns");
         let dep = build(
             &cr,
             "deadbeef",
+            None,
             None,
             test_support::TEST_IMAGE,
             test_support::owner_ref(),

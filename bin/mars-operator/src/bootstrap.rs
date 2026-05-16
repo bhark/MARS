@@ -34,8 +34,13 @@ pub(crate) const BOOTSTRAP_FINALIZER: &str = "mars.forn.dk/bootstrap";
 /// Inputs the operator needs from the CR + cluster state to render a Job.
 pub(crate) struct PlanInputs<'a> {
     pub(crate) bootstrap: &'a BootstrapSpec,
-    /// Bootstrap settings extracted from `spec.config.source.bootstrap`.
+    /// Bootstrap settings extracted from `spec.config.sources[].bootstrap`.
     pub(crate) source_bootstrap: SourceBootstrap,
+    /// Resolved Secret holding the runtime role password. Either the BYO
+    /// `bootstrap.runtimePasswordSecretRef` or the operator-managed
+    /// `<svc>-runtime-credentials` Secret. The bootstrap Job reads it; the
+    /// compiler/runtime pods get the same projection as `MARS_RUNTIME_PASSWORD`.
+    pub(crate) runtime_password_ref: SecretKeyRef,
     /// resourceVersion of the admin secret; rolls the hash on rotation.
     pub(crate) admin_secret_resource_version: String,
     /// resourceVersion of the runtime password secret; rolls the hash on
@@ -77,11 +82,9 @@ pub(crate) fn plan_hash(inputs: &PlanInputs<'_>) -> String {
     h.update(b"|");
     h.update(inputs.admin_secret_resource_version.as_bytes());
     h.update(b"|");
-    if let Some(r) = &inputs.bootstrap.runtime_password_secret_ref {
-        h.update(r.name.as_bytes());
-        h.update(b":");
-        h.update(r.key.as_bytes());
-    }
+    h.update(inputs.runtime_password_ref.name.as_bytes());
+    h.update(b":");
+    h.update(inputs.runtime_password_ref.key.as_bytes());
     h.update(b"|");
     h.update(inputs.runtime_secret_resource_version.as_bytes());
 
@@ -123,11 +126,6 @@ pub(crate) fn render_bootstrap_job(
         .admin_secret_ref
         .as_ref()
         .ok_or_else(|| OperatorError::ConfigInvalid("bootstrap.adminSecretRef is required".into()))?;
-    let runtime = inputs
-        .bootstrap
-        .runtime_password_secret_ref
-        .as_ref()
-        .ok_or_else(|| OperatorError::ConfigInvalid("bootstrap.runtimePasswordSecretRef is required".into()))?;
 
     let container = Container {
         name: "bootstrap".into(),
@@ -135,7 +133,7 @@ pub(crate) fn render_bootstrap_job(
         args: Some(vec!["setup".into(), "--config".into(), "/etc/mars/mars.yaml".into()]),
         env: Some(vec![
             secret_env("MARS_ADMIN_DSN", admin),
-            secret_env("MARS_RUNTIME_PASSWORD", runtime),
+            secret_env("MARS_RUNTIME_PASSWORD", &inputs.runtime_password_ref),
         ]),
         volume_mounts: Some(vec![VolumeMount {
             name: "config".into(),
@@ -282,13 +280,15 @@ fn secret_env(name: &str, sref: &SecretKeyRef) -> EnvVar {
 }
 
 /// Pull a postgis source's `bootstrap` + the publication/slot names out of an
-/// opaque `spec.config` JSON value. Accepts both legacy singular `source: {..}`
-/// and new plural `sources: [{..}]` shapes; in the plural case, picks the
-/// first entry whose `bootstrap` block is set. Returns `None` when no
-/// bootstrap-bearing source is declared (the operator treats this as
-/// "feature off").
+/// opaque `spec.config` JSON value. Picks the first `sources[]` entry whose
+/// `bootstrap` block is set. Returns `None` when no bootstrap-bearing source
+/// is declared (the operator treats this as "feature off").
 pub(crate) fn extract_source_bootstrap(config: &serde_json::Value) -> Option<SourceBootstrap> {
-    let source = resolve_bootstrap_source(config)?;
+    let source = config
+        .get("sources")?
+        .as_array()?
+        .iter()
+        .find(|s| s.get("bootstrap").is_some())?;
     let bs = source.get("bootstrap")?;
     let cf = source.get("change_feed")?;
 
@@ -310,22 +310,6 @@ pub(crate) fn extract_source_bootstrap(config: &serde_json::Value) -> Option<Sou
         slot,
         schemas,
     })
-}
-
-// pick the bootstrap-bearing source from either wire shape. singular `source:`
-// takes precedence (back-compat); falls back to the first `sources[]` entry
-// that carries a bootstrap block.
-fn resolve_bootstrap_source(config: &serde_json::Value) -> Option<&serde_json::Value> {
-    if let Some(s) = config.get("source")
-        && s.get("bootstrap").is_some()
-    {
-        return Some(s);
-    }
-    config
-        .get("sources")?
-        .as_array()?
-        .iter()
-        .find(|s| s.get("bootstrap").is_some())
 }
 
 fn cr_name(cr: &MarsService) -> Result<String> {
@@ -372,6 +356,15 @@ mod tests {
         }
     }
 
+    fn bs_spec_managed_runtime() -> BootstrapSpec {
+        BootstrapSpec {
+            enabled: true,
+            admin_secret_ref: Some(admin()),
+            runtime_password_secret_ref: None,
+            teardown_on_delete: TeardownPolicy::default(),
+        }
+    }
+
     fn source_bootstrap() -> SourceBootstrap {
         SourceBootstrap {
             role: "mars_replicator".into(),
@@ -385,6 +378,13 @@ mod tests {
         PlanInputs {
             bootstrap: bs,
             source_bootstrap: source_bootstrap(),
+            runtime_password_ref: bs
+                .runtime_password_secret_ref
+                .clone()
+                .unwrap_or_else(|| SecretKeyRef {
+                    name: "demo-runtime-credentials".into(),
+                    key: "password".into(),
+                }),
             admin_secret_resource_version: "100".into(),
             runtime_secret_resource_version: "200".into(),
         }
@@ -427,6 +427,36 @@ mod tests {
         other.source_bootstrap.schemas = vec!["geo".into(), "public".into()];
         let h2 = plan_hash(&other);
         assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn render_bootstrap_job_uses_resolved_runtime_password_ref() {
+        let cr = test_support::cr("demo", "svc-ns");
+        let bs = bs_spec_managed_runtime();
+        let job =
+            render_bootstrap_job(&cr, test_support::TEST_IMAGE, &inputs(&bs), "abcdef0123", test_support::owner_ref())
+                .unwrap();
+        let envs = job.spec.unwrap().template.spec.unwrap().containers[0]
+            .env
+            .clone()
+            .unwrap();
+        let runtime_env = envs.iter().find(|e| e.name == "MARS_RUNTIME_PASSWORD").unwrap();
+        let sref = runtime_env.value_from.as_ref().unwrap().secret_key_ref.as_ref().unwrap();
+        assert_eq!(sref.name, "demo-runtime-credentials");
+        assert_eq!(sref.key, "password");
+    }
+
+    #[test]
+    fn plan_hash_changes_when_runtime_password_ref_changes() {
+        let bs = bs_spec();
+        let h1 = plan_hash(&inputs(&bs));
+        let mut other = inputs(&bs);
+        other.runtime_password_ref = SecretKeyRef {
+            name: "different".into(),
+            key: "different".into(),
+        };
+        let h2 = plan_hash(&other);
+        assert_ne!(h1, h2);
     }
 
     #[test]
@@ -492,7 +522,7 @@ mod tests {
     #[test]
     fn extract_source_bootstrap_returns_none_without_bootstrap_block() {
         let config = serde_json::json!({
-            "source": { "change_feed": { "publication": "p", "slot": "s" } }
+            "sources": [{ "id": "default", "change_feed": { "publication": "p", "slot": "s" } }]
         });
         assert!(extract_source_bootstrap(&config).is_none());
     }
@@ -500,10 +530,11 @@ mod tests {
     #[test]
     fn extract_source_bootstrap_pulls_names_and_schemas() {
         let config = serde_json::json!({
-            "source": {
+            "sources": [{
+                "id": "default",
                 "change_feed": { "publication": "mars_pub", "slot": "mars_slot" },
                 "bootstrap": { "role": "mars_replicator", "schemas": ["a", "b"] }
-            }
+            }]
         });
         let bs = extract_source_bootstrap(&config).unwrap();
         assert_eq!(bs.role, "mars_replicator");
