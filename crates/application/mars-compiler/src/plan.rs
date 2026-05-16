@@ -78,6 +78,16 @@ pub enum PlanError {
         #[source]
         source: mars_expr::ExprError,
     },
+    /// A label's `style: { name: ... }` references a style not present in
+    /// `styles:`. config validation usually catches this; surfaced here in
+    /// case a config bypasses validate.
+    #[error("layer {layer} label references unknown label style {name:?}")]
+    UnknownLabelStyleRef {
+        /// layer name
+        layer: LayerId,
+        /// referenced style name
+        name: String,
+    },
 }
 
 /// One (level, decimation rules) entry on a [`BindingPlan`].
@@ -363,7 +373,7 @@ fn build_label_plan(
         source,
     })?;
     let inline_style_ref = format!("{layer}__label", layer = layer.name);
-    let (style_ref, style) = resolve_label_style(cfg, &inline_style_ref, &label.style);
+    let (style_ref, style) = resolve_label_style(cfg, &layer.name, &inline_style_ref, &label.style)?;
     let placement = label.placement.clone().unwrap_or_else(|| {
         let kind = mars_style::LayerGeomKind::parse(layer.kind.as_str()).unwrap_or(mars_style::LayerGeomKind::Point);
         default_placement(kind)
@@ -387,7 +397,7 @@ fn build_class_label_plan(
         source,
     })?;
     let inline_style_ref = format!("{layer}__{class_name}__label", layer = layer.name);
-    let (style_ref, style) = resolve_label_style(cfg, &inline_style_ref, &label.style);
+    let (style_ref, style) = resolve_label_style(cfg, &layer.name, &inline_style_ref, &label.style)?;
     let placement = label.placement.clone().unwrap_or_else(|| {
         let kind = mars_style::LayerGeomKind::parse(layer.kind.as_str()).unwrap_or(mars_style::LayerGeomKind::Point);
         default_placement(kind)
@@ -400,34 +410,25 @@ fn build_class_label_plan(
     })
 }
 
-fn resolve_label_style(cfg: &Config, inline_style_ref: &str, attach: &LabelStyleAttach) -> (String, LabelStyle) {
+fn resolve_label_style(
+    cfg: &Config,
+    layer_name: &LayerId,
+    inline_style_ref: &str,
+    attach: &LabelStyleAttach,
+) -> Result<(String, LabelStyle), PlanError> {
     match attach {
         LabelStyleAttach::Ref { name } => {
-            let style = cfg.styles.get(name).and_then(|e| e.as_label().cloned()).unwrap_or_else(
-                // config validation should reject unknown refs; fall back to a
-                // safe default rather than panic if a malformed config slips
-                // through.
-                placeholder_label_style,
-            );
-            (name.clone(), style)
+            let style = cfg
+                .styles
+                .get(name)
+                .and_then(|e| e.as_label().cloned())
+                .ok_or_else(|| PlanError::UnknownLabelStyleRef {
+                    layer: layer_name.clone(),
+                    name: name.clone(),
+                })?;
+            Ok((name.clone(), style))
         }
-        LabelStyleAttach::Inline(style) => (inline_style_ref.to_string(), style.clone()),
-    }
-}
-
-fn placeholder_label_style() -> LabelStyle {
-    LabelStyle {
-        font_family: "DejaVu Sans".into(),
-        font_size: 12.0,
-        fill: mars_style::Colour::rgb(0, 0, 0),
-        halo: None,
-        priority: 0,
-        min_distance: 0.0,
-        position: mars_style::AnchorPosition::default(),
-        offset_px: (0.0, 0.0),
-        angle_deg: None,
-        partials: false,
-        force: false,
+        LabelStyleAttach::Inline(style) => Ok((inline_style_ref.to_string(), style.clone())),
     }
 }
 
@@ -1196,5 +1197,29 @@ mod tests {
             layer.label.as_ref().expect("layer label still present").style_ref,
             "vejnavne__label"
         );
+    }
+
+    /// label style: { name: ... } referencing a non-existent style must be a
+    /// typed plan-build error rather than silently substituting defaults. the
+    /// config validator already rejects this; constructing the Config directly
+    /// bypasses validation so the plan builder's own guard is exercised.
+    #[test]
+    fn unknown_label_style_ref_is_a_plan_error() {
+        use mars_config::{LabelStyleAttach, LayerLabel};
+        let mut l = layer("vejnavne", vec![binding("vejnavne")]);
+        l.label = Some(LayerLabel {
+            style: LabelStyleAttach::Ref { name: "missing".into() },
+            text: "{name}".into(),
+            placement: None,
+        });
+        let cfg = config_with(vec![l]);
+        let err = build_bootstrap_plan(&cfg).unwrap_err();
+        match err {
+            PlanError::UnknownLabelStyleRef { layer, name } => {
+                assert_eq!(layer.as_str(), "vejnavne");
+                assert_eq!(name, "missing");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 }
