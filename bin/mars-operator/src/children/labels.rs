@@ -20,6 +20,14 @@ pub(crate) const RUNTIME_PASSWORD_KEY: &str = "password";
 /// template the password into `spec.config.source.dsn` via `${MARS_RUNTIME_PASSWORD}`.
 pub(crate) const RUNTIME_PASSWORD_ENV: &str = "MARS_RUNTIME_PASSWORD";
 
+/// Fixed key the operator-managed bootstrap-admin-credentials Secret stores
+/// the composed admin DSN under.
+pub(crate) const BOOTSTRAP_ADMIN_DSN_KEY: &str = "dsn";
+
+/// Component label for the operator-managed Secret holding the composed
+/// admin DSN (component-style `adminCredentialsRef` branch).
+pub(crate) const COMPONENT_BOOTSTRAP_ADMIN_CREDENTIALS: &str = "bootstrap-admin-credentials";
+
 pub(crate) fn bootstrap_service_account_name(svc: &str) -> String {
     format!("{svc}-bootstrap")
 }
@@ -64,6 +72,12 @@ pub(crate) fn artifact_store_pvc_name(svc: &str) -> String {
 /// password when `bootstrap.runtimePasswordSecretRef` is not set.
 pub(crate) fn runtime_credentials_secret_name(svc: &str) -> String {
     format!("{svc}-runtime-credentials")
+}
+
+/// Name of the operator-managed Secret carrying the composed admin DSN when
+/// `bootstrap.adminCredentialsRef` is used.
+pub(crate) fn bootstrap_admin_credentials_secret_name(svc: &str) -> String {
+    format!("{svc}-bootstrap-admin-credentials")
 }
 
 /// Standard labels applied to every child object. `component` is per-child.

@@ -4,8 +4,8 @@
 //! container image is the same `mars` binary the runtime/compiler use, and
 //! whose command is `mars setup --config /etc/mars/mars.yaml` (or
 //! `mars teardown ...` on CR delete). The admin DSN and the runtime password
-//! are mounted from secrets only into the Job pod; the always-on
-//! compiler/runtime never sees the admin secret.
+//! are projected into the Job pod via `secretKeyRef` only; the always-on
+//! compiler/runtime never sees the admin credential.
 //!
 //! Job names embed a content hash of the bootstrap-relevant fields so a spec
 //! change spawns a new Job and the previous one's outcome stays visible.
@@ -40,27 +40,18 @@ pub(crate) struct PlanInputs {
     /// `<svc>-runtime-credentials` Secret. The bootstrap Job reads it; the
     /// compiler/runtime pods get the same projection as `MARS_RUNTIME_PASSWORD`.
     pub(crate) runtime_password_ref: SecretKeyRef,
-    /// How the bootstrap/teardown Job receives the admin DSN. Either a
-    /// secretKeyRef (BYO single-DSN Secret) or a literal composed by the
-    /// operator from a component-style Secret.
-    pub(crate) admin_dsn: AdminDsn,
-    /// resourceVersion of the admin secret; rolls the hash on rotation.
+    /// Resolved Secret reference holding the admin DSN. Either the BYO
+    /// `bootstrap.adminSecretRef` or the operator-managed
+    /// `<svc>-bootstrap-admin-credentials` Secret composed from the
+    /// component-style `bootstrap.adminCredentialsRef`. Always projected
+    /// into the Job via `secretKeyRef`; the DSN never lands on the Job spec.
+    pub(crate) admin_dsn_ref: SecretKeyRef,
+    /// resourceVersion of the resolved admin Secret; rolls the hash on
+    /// rotation (BYO Secret bump or recompose).
     pub(crate) admin_secret_resource_version: String,
     /// resourceVersion of the runtime password secret; rolls the hash on
     /// rotation.
     pub(crate) runtime_secret_resource_version: String,
-}
-
-/// How the bootstrap/teardown Job receives the admin DSN.
-#[derive(Clone, Debug)]
-pub(crate) enum AdminDsn {
-    /// Project a single Secret key. Kubelet materialises the value at pod
-    /// start, so the DSN never appears in the Job spec.
-    Secret(SecretKeyRef),
-    /// Literal DSN string composed by the operator from a component-style
-    /// Secret. Lands in the Job spec / etcd - that is the trade-off for not
-    /// staging an extra managed Secret per service.
-    Literal(String),
 }
 
 #[derive(Clone)]
@@ -89,18 +80,9 @@ pub(crate) fn plan_hash(inputs: &PlanInputs) -> String {
         h.update(b",");
     }
     h.update(b"|");
-    match &inputs.admin_dsn {
-        AdminDsn::Secret(r) => {
-            h.update(b"secret:");
-            h.update(r.name.as_bytes());
-            h.update(b":");
-            h.update(r.key.as_bytes());
-        }
-        AdminDsn::Literal(s) => {
-            h.update(b"literal:");
-            h.update(s.as_bytes());
-        }
-    }
+    h.update(inputs.admin_dsn_ref.name.as_bytes());
+    h.update(b":");
+    h.update(inputs.admin_dsn_ref.key.as_bytes());
     h.update(b"|");
     h.update(inputs.admin_secret_resource_version.as_bytes());
     h.update(b"|");
@@ -149,7 +131,7 @@ pub(crate) fn render_bootstrap_job(
         image: Some(image.to_string()),
         args: Some(vec!["setup".into(), "--config".into(), "/etc/mars/mars.yaml".into()]),
         env: Some(vec![
-            admin_dsn_env(&inputs.admin_dsn),
+            secret_env("MARS_ADMIN_DSN", &inputs.admin_dsn_ref),
             secret_env("MARS_RUNTIME_PASSWORD", &inputs.runtime_password_ref),
         ]),
         volume_mounts: Some(vec![VolumeMount {
@@ -178,7 +160,7 @@ pub(crate) fn render_bootstrap_job(
 pub(crate) fn render_teardown_job(
     cr: &MarsService,
     image: &str,
-    admin_dsn: &AdminDsn,
+    admin_dsn_ref: &SecretKeyRef,
     policy: &TeardownPolicy,
     owner: OwnerReference,
 ) -> Result<Job> {
@@ -200,7 +182,7 @@ pub(crate) fn render_teardown_job(
         name: "teardown".into(),
         image: Some(image.to_string()),
         args: Some(args),
-        env: Some(vec![admin_dsn_env(admin_dsn)]),
+        env: Some(vec![secret_env("MARS_ADMIN_DSN", admin_dsn_ref)]),
         volume_mounts: Some(vec![VolumeMount {
             name: "config".into(),
             mount_path: "/etc/mars/mars.yaml".into(),
@@ -274,17 +256,6 @@ fn render_job(
             ..Default::default()
         }),
         status: None,
-    }
-}
-
-fn admin_dsn_env(src: &AdminDsn) -> EnvVar {
-    match src {
-        AdminDsn::Secret(r) => secret_env("MARS_ADMIN_DSN", r),
-        AdminDsn::Literal(s) => EnvVar {
-            name: "MARS_ADMIN_DSN".into(),
-            value: Some(s.clone()),
-            ..Default::default()
-        },
     }
 }
 
@@ -417,18 +388,17 @@ mod tests {
     }
 
     fn inputs(bs: &BootstrapSpec) -> PlanInputs {
-        let admin_dsn = bs
-            .admin_secret_ref
-            .clone()
-            .map(AdminDsn::Secret)
-            .unwrap_or_else(|| AdminDsn::Literal("postgresql://test@test/test".into()));
+        let admin_dsn_ref = bs.admin_secret_ref.clone().unwrap_or_else(|| SecretKeyRef {
+            name: "demo-bootstrap-admin-credentials".into(),
+            key: "dsn".into(),
+        });
         PlanInputs {
             source_bootstrap: source_bootstrap(),
             runtime_password_ref: bs.runtime_password_secret_ref.clone().unwrap_or_else(|| SecretKeyRef {
                 name: "demo-runtime-credentials".into(),
                 key: "password".into(),
             }),
-            admin_dsn,
+            admin_dsn_ref,
             admin_secret_resource_version: "100".into(),
             runtime_secret_resource_version: "200".into(),
         }
@@ -543,8 +513,15 @@ mod tests {
             publication: false,
             role: false,
         };
-        let dsn = AdminDsn::Secret(admin());
-        let job = render_teardown_job(&cr, test_support::TEST_IMAGE, &dsn, &policy, test_support::owner_ref()).unwrap();
+        let dsn_ref = admin();
+        let job = render_teardown_job(
+            &cr,
+            test_support::TEST_IMAGE,
+            &dsn_ref,
+            &policy,
+            test_support::owner_ref(),
+        )
+        .unwrap();
         let args = job.spec.unwrap().template.spec.unwrap().containers[0]
             .args
             .clone()
@@ -557,11 +534,11 @@ mod tests {
     #[test]
     fn render_teardown_job_omits_runtime_password_env() {
         let cr = test_support::cr("demo", "svc-ns");
-        let dsn = AdminDsn::Secret(admin());
+        let dsn_ref = admin();
         let job = render_teardown_job(
             &cr,
             test_support::TEST_IMAGE,
-            &dsn,
+            &dsn_ref,
             &TeardownPolicy::default(),
             test_support::owner_ref(),
         )
@@ -575,11 +552,16 @@ mod tests {
     }
 
     #[test]
-    fn render_bootstrap_job_with_literal_admin_dsn_sets_value_directly() {
+    fn render_bootstrap_job_with_managed_admin_credentials_uses_secret_key_ref() {
         let cr = test_support::cr("demo", "svc-ns");
-        let bs = bs_spec();
+        let bs = bs_spec_managed_runtime();
         let mut input = inputs(&bs);
-        input.admin_dsn = AdminDsn::Literal("postgresql://pg:secret@cnpg:5432/maps?sslmode=require".into());
+        // simulate the component-style admin-credentials branch, which has
+        // already materialised the composed DSN into <svc>-bootstrap-admin-credentials.
+        input.admin_dsn_ref = SecretKeyRef {
+            name: "demo-bootstrap-admin-credentials".into(),
+            key: "dsn".into(),
+        };
         let job = render_bootstrap_job(
             &cr,
             test_support::TEST_IMAGE,
@@ -593,21 +575,23 @@ mod tests {
             .clone()
             .unwrap();
         let admin_env = envs.iter().find(|e| e.name == "MARS_ADMIN_DSN").unwrap();
-        assert!(admin_env.value_from.is_none());
-        assert_eq!(
-            admin_env.value.as_deref(),
-            Some("postgresql://pg:secret@cnpg:5432/maps?sslmode=require")
-        );
+        assert!(admin_env.value.is_none());
+        let sref = admin_env.value_from.as_ref().unwrap().secret_key_ref.as_ref().unwrap();
+        assert_eq!(sref.name, "demo-bootstrap-admin-credentials");
+        assert_eq!(sref.key, "dsn");
     }
 
     #[test]
-    fn plan_hash_distinguishes_literal_from_secret_admin_dsn() {
+    fn plan_hash_changes_when_admin_dsn_ref_changes() {
         let bs = bs_spec();
-        let h_secret = plan_hash(&inputs(&bs));
+        let h1 = plan_hash(&inputs(&bs));
         let mut other = inputs(&bs);
-        other.admin_dsn = AdminDsn::Literal("postgresql://pg:secret@cnpg:5432/maps".into());
-        let h_literal = plan_hash(&other);
-        assert_ne!(h_secret, h_literal);
+        other.admin_dsn_ref = SecretKeyRef {
+            name: "different-admin-secret".into(),
+            key: "different-key".into(),
+        };
+        let h2 = plan_hash(&other);
+        assert_ne!(h1, h2);
     }
 
     #[test]

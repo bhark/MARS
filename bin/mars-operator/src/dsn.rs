@@ -1,12 +1,11 @@
 //! Compose an admin DSN from a component-style Secret (CNPG / Zalando / Crunchy
 //! shape) plus optional host/port/database fallbacks parsed out of the
-//! service's `spec.config.source.dsn`.
+//! service's `spec.config.sources[].dsn`.
 //!
-//! The operator does not persist the assembled DSN; it sets it as the literal
-//! `MARS_ADMIN_DSN` value on the bootstrap/teardown Job container so the
-//! existing `mars setup` flow consumes it unchanged. Note that the literal
-//! value ends up in the Job spec in etcd - that is the documented trade-off
-//! for not staging an additional managed Secret per service.
+//! The composed string is persisted by the reconciler into a managed
+//! `<svc>-bootstrap-admin-credentials` Secret (owner-ref to the MarsService),
+//! and the bootstrap/teardown Job projects it via `secretKeyRef` as
+//! `MARS_ADMIN_DSN`. The DSN therefore never lands on the Job spec.
 
 use std::collections::BTreeMap;
 

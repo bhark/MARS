@@ -411,6 +411,12 @@ pub(crate) struct MarsServiceStatus {
     /// is declared or bootstrap is disabled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) runtime_credentials_secret: Option<String>,
+    /// Name of the operator-managed Secret holding the composed admin DSN.
+    /// Set only when the component-style `bootstrap.adminCredentialsRef`
+    /// branch is in use; the BYO `adminSecretRef` path leaves this absent
+    /// (the user owns that Secret directly).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) bootstrap_admin_credentials_secret: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]

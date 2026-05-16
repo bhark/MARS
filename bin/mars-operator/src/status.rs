@@ -123,6 +123,11 @@ pub(crate) struct StatusInputs<'a> {
     /// Surfaced on status so consumers can locate it without recomputing the
     /// naming convention.
     pub(crate) runtime_credentials_secret: Option<&'a str>,
+    /// Name of the operator-managed admin-credentials Secret holding the
+    /// composed admin DSN. Populated only when the component-style
+    /// `bootstrap.adminCredentialsRef` branch is in use; absent for BYO
+    /// `adminSecretRef` and for disabled/missing bootstrap.
+    pub(crate) bootstrap_admin_credentials_secret: Option<&'a str>,
 }
 
 #[derive(Clone, Copy)]
@@ -233,5 +238,6 @@ pub(crate) fn compute(inputs: StatusInputs<'_>) -> MarsServiceStatus {
         observed_generation: Some(inputs.observed_generation),
         conditions,
         runtime_credentials_secret: inputs.runtime_credentials_secret.map(str::to_string),
+        bootstrap_admin_credentials_secret: inputs.bootstrap_admin_credentials_secret.map(str::to_string),
     }
 }

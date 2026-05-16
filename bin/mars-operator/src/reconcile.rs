@@ -16,7 +16,7 @@ use serde_json::json;
 use tracing::{error, info, warn};
 
 use crate::bootstrap::{self, BOOTSTRAP_FINALIZER, PlanInputs};
-use crate::children::labels::{self, artifact_store_pvc_name};
+use crate::children::labels::{self, BOOTSTRAP_ADMIN_DSN_KEY, artifact_store_pvc_name};
 use crate::children::pvc::{self, PvcSpec};
 use crate::children::{compiler, configmap, runtime, service};
 use crate::crd::{ArtifactStoreSpec, BootstrapSpec, MarsService, SecretKeyRef};
@@ -103,6 +103,7 @@ async fn reconcile_inner(cr: Arc<MarsService>, ctx: Arc<Ctx>) -> Result<Action> 
             degraded: None,
             bootstrap: None,
             runtime_credentials_secret: None,
+            bootstrap_admin_credentials_secret: None,
         });
         patch_status(&ctx, &svc_name, &ns, status_body).await?;
         return Ok(Action::requeue(Duration::from_secs(30)));
@@ -123,6 +124,7 @@ async fn reconcile_inner(cr: Arc<MarsService>, ctx: Arc<Ctx>) -> Result<Action> 
             degraded: Some(&reason),
             bootstrap: None,
             runtime_credentials_secret: None,
+            bootstrap_admin_credentials_secret: None,
         });
         patch_status(&ctx, &svc_name, &ns, status_body).await?;
         return Ok(Action::requeue(Duration::from_secs(30)));
@@ -135,6 +137,7 @@ async fn reconcile_inner(cr: Arc<MarsService>, ctx: Arc<Ctx>) -> Result<Action> 
 
     let bootstrap_outcome = reconcile_bootstrap(&ctx, &cr, &svc_name, &ns, owner_ref.clone()).await?;
     let runtime_credentials_secret = bootstrap_outcome.runtime_password_ref.as_ref().map(|r| r.name.as_str());
+    let bootstrap_admin_credentials_secret = bootstrap_outcome.bootstrap_admin_credentials_secret.as_deref();
     if !bootstrap_outcome.proceed {
         let status_body = status::compute(StatusInputs {
             observed_generation: generation,
@@ -147,6 +150,7 @@ async fn reconcile_inner(cr: Arc<MarsService>, ctx: Arc<Ctx>) -> Result<Action> 
             degraded: None,
             bootstrap: Some(bootstrap_outcome.status),
             runtime_credentials_secret,
+            bootstrap_admin_credentials_secret,
         });
         patch_status(&ctx, &svc_name, &ns, status_body).await?;
         return Ok(Action::requeue(bootstrap_outcome.requeue));
@@ -216,6 +220,7 @@ async fn reconcile_inner(cr: Arc<MarsService>, ctx: Arc<Ctx>) -> Result<Action> 
         degraded: None,
         bootstrap: Some(bootstrap_outcome.status),
         runtime_credentials_secret,
+        bootstrap_admin_credentials_secret,
     });
     patch_status(&ctx, &svc_name, &ns, status_body).await?;
 
@@ -234,6 +239,10 @@ struct BootstrapOutcome {
     /// the legacy "no bootstrap" path and no MARS_RUNTIME_PASSWORD env is
     /// projected into compiler/runtime pods.
     runtime_password_ref: Option<SecretKeyRef>,
+    /// Name of the operator-managed admin-credentials Secret holding the
+    /// composed DSN. Some only on the component-style `adminCredentialsRef`
+    /// branch; surfaced on `status.bootstrapAdminCredentialsSecret`.
+    bootstrap_admin_credentials_secret: Option<String>,
 }
 
 async fn reconcile_bootstrap(
@@ -257,6 +266,7 @@ async fn reconcile_bootstrap(
                 },
                 requeue: Duration::from_secs(30),
                 runtime_password_ref: None,
+                bootstrap_admin_credentials_secret: None,
             });
         }
     };
@@ -272,6 +282,7 @@ async fn reconcile_bootstrap(
                 },
                 requeue: Duration::from_secs(30),
                 runtime_password_ref: None,
+                bootstrap_admin_credentials_secret: None,
             });
         }
     };
@@ -288,13 +299,15 @@ async fn reconcile_bootstrap(
             },
             requeue: Duration::from_secs(60),
             runtime_password_ref: bs_spec.runtime_password_secret_ref.clone(),
+            bootstrap_admin_credentials_secret: None,
         });
     }
 
     // resolve admin + runtime secret resourceVersions so the plan hash rolls
     // when either secret is rotated.
     let secret_api: Api<Secret> = Api::namespaced(ctx.client.clone(), ns);
-    let resolved_admin = resolve_admin_dsn(&secret_api, bs_spec, &cr.spec.config).await?;
+    let resolved_admin =
+        resolve_admin_dsn(ctx, &secret_api, svc_name, ns, bs_spec, &cr.spec.config, owner.clone()).await?;
     let runtime_password_ref = ensure_runtime_password_secret(ctx, svc_name, ns, bs_spec, owner.clone()).await?;
     let runtime_rv = secret_api
         .get_opt(&runtime_password_ref.name)
@@ -302,11 +315,12 @@ async fn reconcile_bootstrap(
         .and_then(|s| s.metadata.resource_version.clone())
         .unwrap_or_default();
 
+    let managed_admin_secret = resolved_admin.managed_secret_name.clone();
     let inputs = PlanInputs {
         source_bootstrap: source_bs,
         runtime_password_ref: runtime_password_ref.clone(),
-        admin_dsn: resolved_admin.dsn,
-        admin_secret_resource_version: resolved_admin.source_secret_resource_version,
+        admin_dsn_ref: resolved_admin.admin_dsn_ref.clone(),
+        admin_secret_resource_version: resolved_admin.resolved_secret_resource_version,
         runtime_secret_resource_version: runtime_rv,
     };
     let hash = bootstrap::plan_hash(&inputs);
@@ -338,6 +352,7 @@ async fn reconcile_bootstrap(
             },
             requeue: Duration::from_secs(10),
             runtime_password_ref: Some(runtime_password_ref),
+            bootstrap_admin_credentials_secret: managed_admin_secret,
         });
     };
     let st = existing.status.as_ref();
@@ -356,6 +371,7 @@ async fn reconcile_bootstrap(
             },
             requeue: Duration::from_secs(60),
             runtime_password_ref: Some(runtime_password_ref),
+            bootstrap_admin_credentials_secret: managed_admin_secret,
         })
     } else if failed >= 3 {
         Ok(BootstrapOutcome {
@@ -367,6 +383,7 @@ async fn reconcile_bootstrap(
             },
             requeue: Duration::from_secs(60),
             runtime_password_ref: Some(runtime_password_ref),
+            bootstrap_admin_credentials_secret: managed_admin_secret,
         })
     } else {
         Ok(BootstrapOutcome {
@@ -378,26 +395,39 @@ async fn reconcile_bootstrap(
             },
             requeue: Duration::from_secs(10),
             runtime_password_ref: Some(runtime_password_ref),
+            bootstrap_admin_credentials_secret: managed_admin_secret,
         })
     }
 }
 
-/// Outcome of admin-DSN resolution: how the Job will receive the DSN plus the
-/// resourceVersion of the underlying user Secret (drives plan_hash rotation).
+/// Outcome of admin-DSN resolution: a `SecretKeyRef` the Job consumes via
+/// `secretKeyRef`, the resourceVersion of that Secret (drives plan_hash
+/// rotation), and - for the component-style branch - the name of the
+/// operator-managed Secret holding the composed DSN.
 struct ResolvedAdminDsn {
-    dsn: bootstrap::AdminDsn,
-    source_secret_resource_version: String,
+    admin_dsn_ref: SecretKeyRef,
+    resolved_secret_resource_version: String,
+    /// Set only when the operator composed and persisted the DSN itself
+    /// (component-style `adminCredentialsRef` branch). Surfaced on
+    /// `status.bootstrapAdminCredentialsSecret`.
+    managed_secret_name: Option<String>,
 }
 
 /// Validate `bootstrap.adminSecretRef` vs `bootstrap.adminCredentialsRef` (exactly
-/// one is required when enabled), then resolve the result into an `AdminDsn`.
-/// The component-style branch reads the source Secret and composes the DSN by
-/// combining its keys with host/port/database fallbacks parsed out of the
-/// bootstrap-bearing `spec.config.sources[].dsn`.
+/// one is required when enabled), then resolve the result into a `SecretKeyRef`
+/// the bootstrap/teardown Job can mount. The component-style branch reads the
+/// user's Secret, composes the DSN by combining its keys with host/port/database
+/// fallbacks parsed out of the bootstrap-bearing `spec.config.sources[].dsn`,
+/// then persists the composed string into a managed Secret owned by the CR so
+/// the DSN never appears outside a Secret resource.
 async fn resolve_admin_dsn(
+    ctx: &Ctx,
     secret_api: &Api<Secret>,
+    svc_name: &str,
+    ns: &str,
     bs_spec: &BootstrapSpec,
     config: &serde_json::Value,
+    owner: OwnerReference,
 ) -> Result<ResolvedAdminDsn> {
     match (&bs_spec.admin_secret_ref, &bs_spec.admin_credentials_ref) {
         (Some(_), Some(_)) => Err(OperatorError::ConfigInvalid(
@@ -413,8 +443,9 @@ async fn resolve_admin_dsn(
                 .and_then(|s| s.metadata.resource_version.clone())
                 .unwrap_or_default();
             Ok(ResolvedAdminDsn {
-                dsn: bootstrap::AdminDsn::Secret(r.clone()),
-                source_secret_resource_version: rv,
+                admin_dsn_ref: r.clone(),
+                resolved_secret_resource_version: rv,
+                managed_secret_name: None,
             })
         }
         (None, Some(creds)) => {
@@ -424,7 +455,6 @@ async fn resolve_admin_dsn(
                     creds.secret_name
                 ))
             })?;
-            let rv = secret.metadata.resource_version.clone().unwrap_or_default();
             let data: std::collections::BTreeMap<String, Vec<u8>> = secret
                 .data
                 .unwrap_or_default()
@@ -435,11 +465,69 @@ async fn resolve_admin_dsn(
             let fallback = crate::dsn::parse_dsn_components(&fallback_dsn_src);
             let composed = crate::dsn::compose_admin_dsn(creds, &data, &fallback)
                 .map_err(|e| OperatorError::ConfigInvalid(format!("compose admin DSN: {e}")))?;
+            let (admin_dsn_ref, rv) =
+                ensure_bootstrap_admin_credentials_secret(ctx, svc_name, ns, &composed, owner).await?;
+            let managed_name = admin_dsn_ref.name.clone();
             Ok(ResolvedAdminDsn {
-                dsn: bootstrap::AdminDsn::Literal(composed),
-                source_secret_resource_version: rv,
+                admin_dsn_ref,
+                resolved_secret_resource_version: rv,
+                managed_secret_name: Some(managed_name),
             })
         }
+    }
+}
+
+/// SSA-apply the operator-managed `<svc>-bootstrap-admin-credentials` Secret
+/// holding the composed admin DSN. Returns the `SecretKeyRef` plus the
+/// resourceVersion of the resulting Secret (server-side apply is a no-op when
+/// bytes are unchanged, so the RV is stable across reconciles until the
+/// composition itself changes).
+async fn ensure_bootstrap_admin_credentials_secret(
+    ctx: &Ctx,
+    svc_name: &str,
+    ns: &str,
+    composed_dsn: &str,
+    owner: OwnerReference,
+) -> Result<(SecretKeyRef, String)> {
+    let name = labels::bootstrap_admin_credentials_secret_name(svc_name);
+    let key = BOOTSTRAP_ADMIN_DSN_KEY.to_string();
+    let api: Api<Secret> = Api::namespaced(ctx.client.clone(), ns);
+    let secret = build_bootstrap_admin_credentials_secret(&name, ns, svc_name, composed_dsn, owner);
+    let patched = api
+        .patch(
+            &name,
+            &PatchParams::apply(&ctx.field_manager).force(),
+            &Patch::Apply(&secret),
+        )
+        .await?;
+    let rv = patched.metadata.resource_version.unwrap_or_default();
+    Ok((SecretKeyRef { name, key }, rv))
+}
+
+fn build_bootstrap_admin_credentials_secret(
+    name: &str,
+    ns: &str,
+    svc: &str,
+    composed_dsn: &str,
+    owner: OwnerReference,
+) -> Secret {
+    use k8s_openapi::ByteString;
+    let mut data = std::collections::BTreeMap::new();
+    data.insert(
+        BOOTSTRAP_ADMIN_DSN_KEY.into(),
+        ByteString(composed_dsn.as_bytes().to_vec()),
+    );
+    Secret {
+        metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
+            name: Some(name.into()),
+            namespace: Some(ns.into()),
+            labels: Some(labels::labels(svc, labels::COMPONENT_BOOTSTRAP_ADMIN_CREDENTIALS)),
+            owner_references: Some(vec![owner]),
+            ..Default::default()
+        },
+        data: Some(data),
+        type_: Some("Opaque".into()),
+        ..Default::default()
     }
 }
 
@@ -547,17 +635,25 @@ async fn reconcile_deletion(
     let sa = bootstrap::render_service_account(svc_name, ns, owner.clone());
     apply_service_account(ctx, ns, &sa).await?;
 
-    // resolve the admin DSN the same way the bootstrap path does: either
-    // BYO single-DSN secretKeyRef or a literal composed from a component-
-    // style Secret. Required so a teardown after the user migrates from one
-    // admin form to the other still has a valid DSN to authenticate with.
+    // resolve the admin DSN the same way the bootstrap path does. Both BYO
+    // adminSecretRef and component-style adminCredentialsRef end up as a
+    // SecretKeyRef; the latter re-materialises the managed
+    // <svc>-bootstrap-admin-credentials Secret so a teardown after the user
+    // migrates between admin forms still authenticates with a valid DSN.
     let secret_api: Api<Secret> = Api::namespaced(ctx.client.clone(), ns);
-    let resolved_admin = resolve_admin_dsn(&secret_api, bs_spec, &cr.spec.config).await?;
+    let resolved_admin =
+        resolve_admin_dsn(ctx, &secret_api, svc_name, ns, bs_spec, &cr.spec.config, owner.clone()).await?;
 
     let job_name = crate::children::labels::teardown_job_name(svc_name);
     let job_api: Api<Job> = Api::namespaced(ctx.client.clone(), ns);
     let existing = job_api.get_opt(&job_name).await?;
-    let job = bootstrap::render_teardown_job(cr.as_ref(), &ctx.runtime_image, &resolved_admin.dsn, policy, owner)?;
+    let job = bootstrap::render_teardown_job(
+        cr.as_ref(),
+        &ctx.runtime_image,
+        &resolved_admin.admin_dsn_ref,
+        policy,
+        owner,
+    )?;
     let Some(existing) = existing else {
         job_api
             .patch(
