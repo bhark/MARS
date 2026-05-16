@@ -4,10 +4,10 @@ use std::collections::BTreeMap;
 
 use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec, DeploymentStrategy};
 use k8s_openapi::api::core::v1::{
-    ConfigMapEnvSource, ConfigMapKeySelector, ConfigMapVolumeSource, Container, EnvFromSource, EnvVar, EnvVarSource,
-    ObjectFieldSelector, PersistentVolumeClaim, PersistentVolumeClaimVolumeSource, PodSecurityContext, PodSpec,
-    PodTemplateSpec, ResourceRequirements, SeccompProfile, SecretEnvSource, SecretKeySelector, SecurityContext, Volume,
-    VolumeMount,
+    Affinity, ConfigMapEnvSource, ConfigMapKeySelector, ConfigMapVolumeSource, Container, EnvFromSource, EnvVar,
+    EnvVarSource, ObjectFieldSelector, PersistentVolumeClaim, PersistentVolumeClaimVolumeSource, PodSecurityContext,
+    PodSpec, PodTemplateSpec, ResourceRequirements, SeccompProfile, SecretEnvSource, SecretKeySelector,
+    SecurityContext, Toleration, Volume, VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta, OwnerReference};
@@ -19,6 +19,7 @@ use crate::children::labels::{
 use crate::children::pvc::{self, PvcSpec};
 use crate::crd::{
     ArtifactStoreSpec, EnvFromSourceSpec, EnvVarSpec, MarsService, ResourceRequirementsSpec, SecretKeyRef,
+    TolerationSpec,
 };
 use crate::error::Result;
 
@@ -200,6 +201,9 @@ pub(crate) fn build(
                     security_context: Some(pod_security_context()),
                     containers: vec![container],
                     volumes: Some(volumes),
+                    node_selector: optional_btree_map(&cr.spec.compiler.node_selector),
+                    tolerations: optional_tolerations(&cr.spec.compiler.tolerations),
+                    affinity: optional_affinity(cr.spec.compiler.affinity.as_ref())?,
                     ..Default::default()
                 }),
             },
@@ -255,6 +259,38 @@ pub(crate) fn resource_requirements(spec: &ResourceRequirementsSpec) -> Resource
         requests: if requests.is_empty() { None } else { Some(requests) },
         limits: if limits.is_empty() { None } else { Some(limits) },
         ..Default::default()
+    }
+}
+
+pub(crate) fn optional_btree_map(map: &BTreeMap<String, String>) -> Option<BTreeMap<String, String>> {
+    if map.is_empty() { None } else { Some(map.clone()) }
+}
+
+pub(crate) fn optional_tolerations(specs: &[TolerationSpec]) -> Option<Vec<Toleration>> {
+    if specs.is_empty() {
+        return None;
+    }
+    Some(
+        specs
+            .iter()
+            .map(|t| Toleration {
+                key: t.key.clone(),
+                operator: t.operator.clone(),
+                value: t.value.clone(),
+                effect: t.effect.clone(),
+                toleration_seconds: t.toleration_seconds,
+            })
+            .collect(),
+    )
+}
+
+/// Decode an opaque CRD `affinity` value (kube-validated server-side, but
+/// we re-validate here so misshapen CRs fail the reconcile with a clear
+/// JSON error rather than only at apiserver admission).
+pub(crate) fn optional_affinity(value: Option<&serde_json::Value>) -> Result<Option<Affinity>> {
+    match value {
+        None => Ok(None),
+        Some(v) => Ok(Some(serde_json::from_value(v.clone())?)),
     }
 }
 
@@ -490,5 +526,92 @@ mod tests {
             .unwrap();
         assert_eq!(mount.mount_path, "/var/lib/mars/images");
         assert_eq!(mount.read_only, Some(true));
+    }
+
+    #[test]
+    fn build_omits_scheduling_fields_when_unset() {
+        let cr = test_support::cr("demo", "svc-ns");
+        let kids = build(
+            &cr,
+            "deadbeef",
+            None,
+            None,
+            test_support::TEST_IMAGE,
+            test_support::owner_ref(),
+        )
+        .unwrap();
+        let pod = kids.deployment.spec.unwrap().template.spec.unwrap();
+        assert!(pod.node_selector.is_none());
+        assert!(pod.tolerations.is_none());
+        assert!(pod.affinity.is_none());
+    }
+
+    #[test]
+    fn build_propagates_node_selector_tolerations_and_affinity() {
+        use crate::crd::TolerationSpec;
+        let mut cr = test_support::cr("demo", "svc-ns");
+        cr.spec.compiler.node_selector.insert("disktype".into(), "ssd".into());
+        cr.spec.compiler.tolerations.push(TolerationSpec {
+            key: Some("dedicated".into()),
+            operator: Some("Equal".into()),
+            value: Some("compiler".into()),
+            effect: Some("NoSchedule".into()),
+            toleration_seconds: None,
+        });
+        cr.spec.compiler.affinity = Some(serde_json::json!({
+            "nodeAffinity": {
+                "requiredDuringSchedulingIgnoredDuringExecution": {
+                    "nodeSelectorTerms": [{
+                        "matchExpressions": [{
+                            "key": "kubernetes.io/arch",
+                            "operator": "In",
+                            "values": ["amd64"],
+                        }],
+                    }],
+                },
+            },
+        }));
+        let kids = build(
+            &cr,
+            "deadbeef",
+            None,
+            None,
+            test_support::TEST_IMAGE,
+            test_support::owner_ref(),
+        )
+        .unwrap();
+        let pod = kids.deployment.spec.unwrap().template.spec.unwrap();
+        let ns = pod.node_selector.unwrap();
+        assert_eq!(ns.get("disktype").map(String::as_str), Some("ssd"));
+        let tol = pod.tolerations.unwrap();
+        assert_eq!(tol.len(), 1);
+        assert_eq!(tol[0].key.as_deref(), Some("dedicated"));
+        assert_eq!(tol[0].effect.as_deref(), Some("NoSchedule"));
+        let aff = pod.affinity.unwrap();
+        let terms = aff
+            .node_affinity
+            .unwrap()
+            .required_during_scheduling_ignored_during_execution
+            .unwrap();
+        assert_eq!(terms.node_selector_terms.len(), 1);
+    }
+
+    #[test]
+    fn build_surfaces_malformed_affinity_as_json_error() {
+        let mut cr = test_support::cr("demo", "svc-ns");
+        // numeric where an object is expected fails serde_json::from_value.
+        cr.spec.compiler.affinity = Some(serde_json::json!({ "nodeAffinity": 42 }));
+        match build(
+            &cr,
+            "deadbeef",
+            None,
+            None,
+            test_support::TEST_IMAGE,
+            test_support::owner_ref(),
+        ) {
+            Err(crate::error::OperatorError::Json(_)) => {}
+            Err(other) => panic!("expected Json error, got {other:?}"),
+            Ok(_) => panic!("expected error, got Ok"),
+        }
     }
 }

@@ -192,6 +192,20 @@ pub(crate) struct CompilerSpec {
     /// the compiler resolves the names during pack.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) images_config_map: Option<String>,
+
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub(crate) node_selector: std::collections::BTreeMap<String, String>,
+
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) tolerations: Vec<TolerationSpec>,
+
+    /// Opaque k8s Affinity. Mirrors the upstream `corev1.Affinity` shape;
+    /// kube validates the structure server-side. Deserialised at build
+    /// time so a malformed CR fails reconcile rather than the apiserver
+    /// admission.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(schema_with = "preserve_unknown_fields_optional")]
+    pub(crate) affinity: Option<serde_json::Value>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -243,6 +257,16 @@ pub(crate) struct RuntimeSpec {
 
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) env_from: Vec<EnvFromSourceSpec>,
+
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub(crate) node_selector: std::collections::BTreeMap<String, String>,
+
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) tolerations: Vec<TolerationSpec>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(schema_with = "preserve_unknown_fields_optional")]
+    pub(crate) affinity: Option<serde_json::Value>,
 }
 
 fn default_runtime_replicas() -> i32 {
@@ -337,6 +361,24 @@ pub(crate) struct ResourceRequirementsSpec {
     pub(crate) requests: std::collections::BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub(crate) limits: std::collections::BTreeMap<String, String>,
+}
+
+/// Schema-friendly mirror of k8s_openapi Toleration. Same rationale as
+/// ResourceRequirementsSpec: avoid coupling the CRD schema to the
+/// k8s-openapi `schemars` feature.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct TolerationSpec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) operator: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) value: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) effect: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) toleration_seconds: Option<i64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
@@ -436,6 +478,25 @@ pub(crate) struct Condition {
 fn preserve_unknown_fields(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
     let mut map = serde_json::Map::new();
     map.insert("type".into(), serde_json::Value::String("object".into()));
+    map.insert(
+        "x-kubernetes-preserve-unknown-fields".into(),
+        serde_json::Value::Bool(true),
+    );
+    schemars::Schema::from(map)
+}
+
+/// Same as [`preserve_unknown_fields`] but for an `Option<serde_json::Value>`
+/// field: marks the schema nullable so the apiserver does not require the
+/// key to be present.
+fn preserve_unknown_fields_optional(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    let mut map = serde_json::Map::new();
+    map.insert(
+        "type".into(),
+        serde_json::Value::Array(vec![
+            serde_json::Value::String("object".into()),
+            serde_json::Value::String("null".into()),
+        ]),
+    );
     map.insert(
         "x-kubernetes-preserve-unknown-fields".into(),
         serde_json::Value::Bool(true),

@@ -14,7 +14,8 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta, 
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
 
 use crate::children::compiler::{
-    container_security_context, env_from, env_vars_with_runtime_password, pod_security_context, resource_requirements,
+    container_security_context, env_from, env_vars_with_runtime_password, optional_affinity, optional_btree_map,
+    optional_tolerations, pod_security_context, resource_requirements,
 };
 use crate::children::labels::{
     self, COMPONENT_RUNTIME, CONFIG_CHECKSUM_ANNOTATION, artifact_store_pvc_name, config_map_name,
@@ -187,6 +188,9 @@ pub(crate) fn build(
                     security_context: Some(pod_security_context()),
                     containers: vec![container],
                     volumes: Some(volumes),
+                    node_selector: optional_btree_map(&cr.spec.runtime.node_selector),
+                    tolerations: optional_tolerations(&cr.spec.runtime.tolerations),
+                    affinity: optional_affinity(cr.spec.runtime.affinity.as_ref())?,
                     ..Default::default()
                 }),
             },
@@ -275,5 +279,56 @@ mod tests {
             annotations.get(CONFIG_CHECKSUM_ANNOTATION).map(String::as_str),
             Some("deadbeef")
         );
+    }
+
+    #[test]
+    fn build_propagates_scheduling_fields_into_pod_spec() {
+        use crate::crd::TolerationSpec;
+        let mut cr = test_support::cr("demo", "svc-ns");
+        cr.spec.runtime.node_selector.insert("zone".into(), "eu-west-1a".into());
+        cr.spec.runtime.tolerations.push(TolerationSpec {
+            key: Some("dedicated".into()),
+            operator: Some("Equal".into()),
+            value: Some("runtime".into()),
+            effect: Some("NoSchedule".into()),
+            toleration_seconds: None,
+        });
+        cr.spec.runtime.affinity = Some(serde_json::json!({
+            "podAntiAffinity": {
+                "preferredDuringSchedulingIgnoredDuringExecution": [{
+                    "weight": 100,
+                    "podAffinityTerm": {
+                        "labelSelector": {
+                            "matchLabels": { "app.kubernetes.io/component": "runtime" }
+                        },
+                        "topologyKey": "kubernetes.io/hostname"
+                    }
+                }]
+            }
+        }));
+        let dep = build(
+            &cr,
+            "deadbeef",
+            None,
+            None,
+            test_support::TEST_IMAGE,
+            test_support::owner_ref(),
+        )
+        .unwrap();
+        let pod = dep.spec.unwrap().template.spec.unwrap();
+        assert_eq!(
+            pod.node_selector.unwrap().get("zone").map(String::as_str),
+            Some("eu-west-1a")
+        );
+        assert_eq!(pod.tolerations.unwrap()[0].key.as_deref(), Some("dedicated"));
+        let pref = pod
+            .affinity
+            .unwrap()
+            .pod_anti_affinity
+            .unwrap()
+            .preferred_during_scheduling_ignored_during_execution
+            .unwrap();
+        assert_eq!(pref.len(), 1);
+        assert_eq!(pref[0].weight, 100);
     }
 }
