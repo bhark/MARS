@@ -316,7 +316,7 @@ END
     }
 
     #[test]
-    fn translate_emits_raster_layer_as_kind_raster_scaffold() {
+    fn translate_skips_raster_layer_with_warning() {
         let src = r#"
 MAP
   NAME "demo"
@@ -332,10 +332,11 @@ MAP
 END
 "#;
         let skel = translate(src);
-        assert_eq!(skel.layers.len(), 2);
-        let ortho = skel.layers.iter().find(|l| l.name == "ortho").expect("ortho layer");
-        assert_eq!(ortho.geom_kind.as_deref(), Some("raster"));
-        assert!(ortho.sources.is_empty(), "raster scaffold has no vector sources");
+        assert_eq!(skel.layers.len(), 1);
+        assert!(
+            skel.layers.iter().all(|l| l.name != "ortho"),
+            "RASTER layer should be skipped"
+        );
         let roads = skel.layers.iter().find(|l| l.name == "roads").expect("roads layer");
         assert_eq!(roads.geom_kind.as_deref(), Some("line"));
     }

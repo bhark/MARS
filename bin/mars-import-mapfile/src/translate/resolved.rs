@@ -125,29 +125,13 @@ pub(crate) fn resolve_layer(
             return None;
         }
         if up == "RASTER" {
-            // emit a raster-kind config skeleton: the surface flows through
-            // emit -> compiler -> runtime so each layer surfaces a typed
-            // NotImplemented until the raster pipeline lands.
             warn!(
                 line = layer_line,
                 layer = %name,
                 data = ?p.data,
-                "raster layer translated as kind: raster scaffold; compile and runtime will return typed NotImplemented",
+                "skipping RASTER layer (importer cannot synthesise a `raster:` block; CONNECTION / PROJECTION are not parsed)",
             );
-            let raster_wms = layer_wms_skeleton(&p.wms_metadata);
-            return Some(ResolvedLayer {
-                name,
-                title: p.wms_metadata.title_override.clone().or(p.title.clone()),
-                abstract_: p.wms_metadata.abstract_override.clone(),
-                geom_kind: Some("raster".into()),
-                sources: Vec::new(),
-                classes: Vec::new(),
-                label: None,
-                attributes: Vec::new(),
-                group_path: normalize_group_path(p.wms_layer_group.as_deref(), p.group.as_deref()),
-                wms: raster_wms,
-                unimplemented: vec!["LAYER TYPE RASTER (compiler / runtime pipeline not yet implemented)"],
-            });
+            return None;
         }
     }
 
