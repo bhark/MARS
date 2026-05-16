@@ -392,7 +392,6 @@ impl ToSql for SqlParam {
         Self: Sized,
     {
         match self {
-            SqlParam::Null => Ok(tokio_postgres::types::IsNull::Yes),
             SqlParam::Bool(b) => match *ty {
                 Type::BOOL => b.to_sql(ty, out),
                 _ => Err(format!("cannot bind bool to {ty}").into()),

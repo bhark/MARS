@@ -30,7 +30,6 @@ mod lower;
 mod quote;
 mod replication;
 
-pub use lower::lower_to_sql;
 pub use mars_source::SourceCollectionId;
 pub use replication::{CollectionTopology, ReplicationTopology};
 
@@ -381,9 +380,7 @@ impl ChangeFeed for PgSource {
 /// Bind parameter for a lowered SQL fragment. Decoupled from `tokio-postgres`
 /// so unit tests can inspect the parameter list without any DB.
 #[derive(Debug, Clone, PartialEq)]
-pub enum SqlParam {
-    /// SQL NULL - currently produced only by callers that explicitly bind it.
-    Null,
+pub(crate) enum SqlParam {
     /// Boolean.
     Bool(bool),
     /// 64-bit signed integer.

@@ -14,7 +14,7 @@ use crate::quote::quote_ident;
 /// Lower the AST. Returned SQL emits placeholders numbered starting at
 /// `$start_index` (so callers that have already-bound parameters can pass the
 /// next free slot directly; no post-hoc renumbering is needed).
-pub fn lower_to_sql(
+pub(crate) fn lower_to_sql(
     expr: &Expr,
     binding: &SourceBinding,
     start_index: usize,
