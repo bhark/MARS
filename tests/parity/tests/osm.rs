@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use mars_bin_shared::build_stylesheet;
-use mars_compiler::{Compiler, Deps as CompilerDeps};
+use mars_compiler::{Compiler, Deps as CompilerDeps, SourceRegistry};
 use mars_config::{Config, config_dir};
 use mars_parity::diff_pngs_with_radius;
 use mars_render::{TinySkiaEncoder, TinySkiaRenderer};
@@ -547,8 +547,13 @@ async fn wait_for_dump_ready(dsn: &str) -> Result<()> {
 }
 
 async fn run_compile(cfg: &Config) -> Result<()> {
+    let pg_source_cfg = cfg
+        .sources
+        .iter()
+        .find_map(|s| s.postgis().map(|b| (s.id.clone(), b)))
+        .context("config has no postgis source")?;
     let pg_cfg = PgConfig {
-        dsn: cfg.source.dsn.clone(),
+        dsn: pg_source_cfg.1.dsn.clone(),
         publication: String::new(),
         slot: String::new(),
         ..Default::default()
@@ -557,9 +562,11 @@ async fn run_compile(cfg: &Config) -> Result<()> {
     let store = Arc::new(FsStore::new(cfg.artifacts.store.path.as_deref().unwrap()).context("open compile store")?);
     let publisher =
         Arc::new(FsPublisher::new(cfg.artifacts.store.path.as_deref().unwrap()).context("open compile publisher")?);
+    let mut registry = SourceRegistry::new();
+    registry.insert(pg_source_cfg.0, source.clone());
     let compiler = Compiler::new(
         CompilerDeps {
-            source: source.clone(),
+            sources: Arc::new(registry),
             change_feed: source.clone(),
             leader_lock: source,
             store,
