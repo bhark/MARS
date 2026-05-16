@@ -98,3 +98,6 @@ The CRD is regenerated from `bin/mars-operator/src/crd.rs` via
 - `kubectl explain marsservice.spec` (CRD-driven docs after install).
 - `bin/mars-operator/src/crd.rs` for the schema source of truth.
 - `bin/mars-operator/src/reconcile.rs` for the reconcile contract.
+- `docs/fonts.md` for mounting custom font files into the runtime via
+  `spec.runtime.extraVolumes` / `extraVolumeMounts`.
+- `docs/symbols.md` for the marker-shape vocabulary and stock preset pack.
