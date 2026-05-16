@@ -15,6 +15,7 @@ mod cli;
 mod config;
 mod controller;
 mod crd;
+mod dsn;
 mod error;
 mod metrics;
 mod reconcile;

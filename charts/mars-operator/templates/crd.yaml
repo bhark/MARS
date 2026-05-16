@@ -61,11 +61,57 @@ spec:
                   carries the Kubernetes-specific orchestration knobs.
                 nullable: true
                 properties:
+                  adminCredentialsRef:
+                    description: |-
+                      Component-style admin credentials. Each subfield names a key inside a
+                      single Secret so the operator can consume the multi-key Secret shape
+                      emitted by Postgres operators (CNPG, Zalando, Crunchy) without forcing
+                      the user to synthesise a DSN string. Mutually exclusive with
+                      `adminSecretRef`; exactly one must be set when `enabled` is true.
+                      Missing host/port/database keys fall back to the values parsed out of
+                      the bootstrap-bearing `spec.config.sources[].dsn` so a single
+                      config-level DSN can supply connection targeting while credentials
+                      come from the Postgres operator's Secret.
+                    nullable: true
+                    properties:
+                      databaseKey:
+                        description: |-
+                          Override key for the database name. When unset the operator falls
+                          back to the dbname parsed out of the bootstrap-bearing
+                          `spec.config.sources[].dsn`.
+                        nullable: true
+                        type: string
+                      hostKey:
+                        description: |-
+                          Override key for the host. When unset the operator falls back to the
+                          host parsed out of the bootstrap-bearing `spec.config.sources[].dsn`.
+                        nullable: true
+                        type: string
+                      passwordKey:
+                        default: password
+                        type: string
+                      portKey:
+                        description: |-
+                          Override key for the port. When unset the operator falls back to the
+                          port parsed out of the bootstrap-bearing `spec.config.sources[].dsn`.
+                        nullable: true
+                        type: string
+                      secretName:
+                        description: Name of the Secret holding the component-style admin credentials.
+                        type: string
+                      usernameKey:
+                        default: username
+                        type: string
+                    required:
+                    - secretName
+                    type: object
                   adminSecretRef:
                     description: |-
-                      Secret reference for the admin DSN (CREATE ROLE / CREATE PUBLICATION /
-                      pg_create_logical_replication_slot privileges). Required when
-                      `enabled` is true.
+                      Secret reference for the admin DSN as a single libpq URI string
+                      (CREATE ROLE / CREATE PUBLICATION / pg_create_logical_replication_slot
+                      privileges). Mutually exclusive with `adminCredentialsRef`; exactly one
+                      must be set when `enabled` is true. Preferred shape for non-Kubernetes
+                      Postgres (RDS, bare metal) where the user controls the DSN end-to-end.
                     nullable: true
                     properties:
                       key:

@@ -293,17 +293,9 @@ async fn reconcile_bootstrap(
 
     // resolve admin + runtime secret resourceVersions so the plan hash rolls
     // when either secret is rotated.
-    let admin_ref = bs_spec
-        .admin_secret_ref
-        .as_ref()
-        .ok_or_else(|| OperatorError::ConfigInvalid("bootstrap.adminSecretRef is required".into()))?;
-    let runtime_password_ref = ensure_runtime_password_secret(ctx, svc_name, ns, bs_spec, owner.clone()).await?;
     let secret_api: Api<Secret> = Api::namespaced(ctx.client.clone(), ns);
-    let admin_rv = secret_api
-        .get_opt(&admin_ref.name)
-        .await?
-        .and_then(|s| s.metadata.resource_version.clone())
-        .unwrap_or_default();
+    let resolved_admin = resolve_admin_dsn(&secret_api, bs_spec, &cr.spec.config).await?;
+    let runtime_password_ref = ensure_runtime_password_secret(ctx, svc_name, ns, bs_spec, owner.clone()).await?;
     let runtime_rv = secret_api
         .get_opt(&runtime_password_ref.name)
         .await?
@@ -311,10 +303,10 @@ async fn reconcile_bootstrap(
         .unwrap_or_default();
 
     let inputs = PlanInputs {
-        bootstrap: bs_spec,
         source_bootstrap: source_bs,
         runtime_password_ref: runtime_password_ref.clone(),
-        admin_secret_resource_version: admin_rv,
+        admin_dsn: resolved_admin.dsn,
+        admin_secret_resource_version: resolved_admin.source_secret_resource_version,
         runtime_secret_resource_version: runtime_rv,
     };
     let hash = bootstrap::plan_hash(&inputs);
@@ -387,6 +379,67 @@ async fn reconcile_bootstrap(
             requeue: Duration::from_secs(10),
             runtime_password_ref: Some(runtime_password_ref),
         })
+    }
+}
+
+/// Outcome of admin-DSN resolution: how the Job will receive the DSN plus the
+/// resourceVersion of the underlying user Secret (drives plan_hash rotation).
+struct ResolvedAdminDsn {
+    dsn: bootstrap::AdminDsn,
+    source_secret_resource_version: String,
+}
+
+/// Validate `bootstrap.adminSecretRef` vs `bootstrap.adminCredentialsRef` (exactly
+/// one is required when enabled), then resolve the result into an `AdminDsn`.
+/// The component-style branch reads the source Secret and composes the DSN by
+/// combining its keys with host/port/database fallbacks parsed out of the
+/// bootstrap-bearing `spec.config.sources[].dsn`.
+async fn resolve_admin_dsn(
+    secret_api: &Api<Secret>,
+    bs_spec: &BootstrapSpec,
+    config: &serde_json::Value,
+) -> Result<ResolvedAdminDsn> {
+    match (&bs_spec.admin_secret_ref, &bs_spec.admin_credentials_ref) {
+        (Some(_), Some(_)) => Err(OperatorError::ConfigInvalid(
+            "bootstrap.adminSecretRef and bootstrap.adminCredentialsRef are mutually exclusive".into(),
+        )),
+        (None, None) => Err(OperatorError::ConfigInvalid(
+            "bootstrap.adminSecretRef or bootstrap.adminCredentialsRef is required when bootstrap.enabled".into(),
+        )),
+        (Some(r), None) => {
+            let rv = secret_api
+                .get_opt(&r.name)
+                .await?
+                .and_then(|s| s.metadata.resource_version.clone())
+                .unwrap_or_default();
+            Ok(ResolvedAdminDsn {
+                dsn: bootstrap::AdminDsn::Secret(r.clone()),
+                source_secret_resource_version: rv,
+            })
+        }
+        (None, Some(creds)) => {
+            let secret = secret_api.get_opt(&creds.secret_name).await?.ok_or_else(|| {
+                OperatorError::ConfigInvalid(format!(
+                    "bootstrap.adminCredentialsRef.secretName='{}' not found in namespace",
+                    creds.secret_name
+                ))
+            })?;
+            let rv = secret.metadata.resource_version.clone().unwrap_or_default();
+            let data: std::collections::BTreeMap<String, Vec<u8>> = secret
+                .data
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(k, v)| (k, v.0))
+                .collect();
+            let fallback_dsn_src = bootstrap::source_dsn_for_fallback(config);
+            let fallback = crate::dsn::parse_dsn_components(&fallback_dsn_src);
+            let composed = crate::dsn::compose_admin_dsn(creds, &data, &fallback)
+                .map_err(|e| OperatorError::ConfigInvalid(format!("compose admin DSN: {e}")))?;
+            Ok(ResolvedAdminDsn {
+                dsn: bootstrap::AdminDsn::Literal(composed),
+                source_secret_resource_version: rv,
+            })
+        }
     }
 }
 
@@ -482,7 +535,8 @@ async fn reconcile_deletion(
     };
     let policy = &bs_spec.teardown_on_delete;
     let nothing_to_drop = !policy.slot && !policy.publication && !policy.role;
-    if nothing_to_drop || bs_spec.admin_secret_ref.is_none() {
+    let has_admin = bs_spec.admin_secret_ref.is_some() || bs_spec.admin_credentials_ref.is_some();
+    if nothing_to_drop || !has_admin {
         remove_finalizer(ctx, cr.as_ref(), svc_name, ns).await?;
         return Ok(Action::await_change());
     }
@@ -492,10 +546,17 @@ async fn reconcile_deletion(
     let sa = bootstrap::render_service_account(svc_name, ns, owner.clone());
     apply_service_account(ctx, ns, &sa).await?;
 
+    // resolve the admin DSN the same way the bootstrap path does: either
+    // BYO single-DSN secretKeyRef or a literal composed from a component-
+    // style Secret. Required so a teardown after the user migrates from one
+    // admin form to the other still has a valid DSN to authenticate with.
+    let secret_api: Api<Secret> = Api::namespaced(ctx.client.clone(), ns);
+    let resolved_admin = resolve_admin_dsn(&secret_api, bs_spec, &cr.spec.config).await?;
+
     let job_name = crate::children::labels::teardown_job_name(svc_name);
     let job_api: Api<Job> = Api::namespaced(ctx.client.clone(), ns);
     let existing = job_api.get_opt(&job_name).await?;
-    let job = bootstrap::render_teardown_job(cr.as_ref(), &ctx.runtime_image, bs_spec, policy, owner)?;
+    let job = bootstrap::render_teardown_job(cr.as_ref(), &ctx.runtime_image, &resolved_admin.dsn, policy, owner)?;
     let Some(existing) = existing else {
         job_api
             .patch(
