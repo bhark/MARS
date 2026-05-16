@@ -150,6 +150,11 @@ fn walk(tokens: &[Token], skel: &mut Skeleton, include_layers: Option<&HashSet<S
                 i = range.end;
                 continue;
             }
+            MapDirective::MaxSize(t) => {
+                if let Some(n) = parse_map_u32(t) {
+                    skel.wms_max_image_dimension = Some(n);
+                }
+            }
             MapDirective::Unsupported(t) => {
                 warn!(line = t.line, keyword = %t.keyword, "unsupported mapfile construct");
                 if is_block_opener(&t.keyword)
@@ -195,6 +200,19 @@ fn init_epsg_from(s: &str) -> Option<String> {
         return None;
     }
     Some(format!("EPSG:{digits}"))
+}
+
+/// parse a MAP-scope scalar that should be a non-negative u32 (e.g. MAXSIZE).
+/// warns at the token's line on bad input and returns None.
+fn parse_map_u32(t: &Token) -> Option<u32> {
+    let arg = t.args.first()?;
+    match arg.parse::<u32>() {
+        Ok(n) => Some(n),
+        Err(_) => {
+            warn!(line = t.line, keyword = %t.keyword, value = %arg, "could not parse as u32");
+            None
+        }
+    }
 }
 
 /// canonicalize MapServer's `MINSCALEDENOM = N+1` half-open convention.
@@ -939,6 +957,27 @@ END
             crate::emitter::BindingSource::Sql(_) => {}
             other => panic!("expected sql binding, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn map_maxsize_lifts_to_wms_max_image_dimension() {
+        let src = r#"
+MAP
+  NAME "demo"
+  MAXSIZE 8192
+  LAYER
+    NAME "x"
+    TYPE LINE
+  END
+END
+"#;
+        let skel = translate(src);
+        assert_eq!(skel.wms_max_image_dimension, Some(8192));
+        let yaml = crate::emitter::render(&skel, &crate::emitter::default_bands());
+        assert!(
+            yaml.contains("max_image_dimension: 8192"),
+            "rendered yaml missing max_image_dimension field; got:\n{yaml}"
+        );
     }
 
     #[test]

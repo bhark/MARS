@@ -28,6 +28,9 @@ pub(crate) struct Skeleton {
     /// each STYLE that uses a symbol carries the resolved marker/fill on
     /// its `StyleDef`.
     pub(crate) symbols: HashMap<String, SymbolDef>,
+    /// `MAP MAXSIZE n` lifted to `interfaces.wms.max_image_dimension`. None
+    /// keeps the runtime adapter default.
+    pub(crate) wms_max_image_dimension: Option<u32>,
 }
 
 /// outcome of folding per-layer PostGIS CONNECTION lifts into a single
@@ -1270,6 +1273,9 @@ pub(crate) fn render(skel: &Skeleton, bands: &[(String, u64)]) -> String {
     let _ = writeln!(out, "    enabled: true");
     let _ = writeln!(out, "    versions: [\"1.3.0\"]");
     let _ = writeln!(out, "    formats: [\"image/png\", \"image/jpeg\"]");
+    if let Some(n) = skel.wms_max_image_dimension {
+        let _ = writeln!(out, "    max_image_dimension: {n}");
+    }
     let _ = writeln!(out);
 
     // styles
