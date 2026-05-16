@@ -9,9 +9,16 @@ use std::sync::Arc;
 use mars_render_port::{DecodedImage, PixelRect, RenderError};
 use tiny_skia::{BlendMode, FilterQuality, Pixmap, PixmapPaint, Transform};
 
+use crate::canvas::map_blend;
 use crate::decoded_image::build_premultiplied;
 
-pub(crate) fn draw(pm: &mut Pixmap, tile: &Arc<DecodedImage>, dst: PixelRect, opacity: f32) -> Result<(), RenderError> {
+pub(crate) fn draw(
+    pm: &mut Pixmap,
+    tile: &Arc<DecodedImage>,
+    dst: PixelRect,
+    opacity: f32,
+    blend_mode: Option<mars_style::BlendMode>,
+) -> Result<(), RenderError> {
     if dst.w <= 0.0 || dst.h <= 0.0 {
         return Err(RenderError::Backend(format!(
             "DrawOp::Raster dst has non-positive dimensions w={} h={}",
@@ -35,7 +42,7 @@ pub(crate) fn draw(pm: &mut Pixmap, tile: &Arc<DecodedImage>, dst: PixelRect, op
     let transform = Transform::from_translate(dst.x, dst.y).pre_scale(sx, sy);
     let paint = PixmapPaint {
         opacity: opacity.clamp(0.0, 1.0),
-        blend_mode: BlendMode::SourceOver,
+        blend_mode: blend_mode.map(map_blend).unwrap_or(BlendMode::SourceOver),
         quality: FilterQuality::Bilinear,
     };
     pm.draw_pixmap(0, 0, tile_pm.as_ref(), &paint, transform, None);
@@ -73,6 +80,7 @@ mod tests {
                 h: 8.0,
             },
             1.0,
+            None,
         )
         .unwrap();
         // every pixel of the 8x8 canvas should be opaque red after the blit
@@ -99,6 +107,7 @@ mod tests {
                 h: 4.0,
             },
             0.5,
+            None,
         )
         .unwrap();
         let p = pm.pixel(2, 2).unwrap();
@@ -125,6 +134,7 @@ mod tests {
                 h: 4.0,
             },
             1.0,
+            None,
         )
         .unwrap();
         // outside the dst rect: transparent. inside: green.
@@ -151,6 +161,7 @@ mod tests {
                 h: 4.0,
             },
             1.0,
+            None,
         )
         .expect_err("zero-width dst must error");
         assert!(matches!(err, RenderError::Backend(msg) if msg.contains("non-positive")));
@@ -174,6 +185,7 @@ mod tests {
                 h: 4.0,
             },
             1.0,
+            None,
         )
         .expect_err("zero-sized tile must error");
         assert!(matches!(err, RenderError::Backend(msg) if msg.contains("zero-sized")));

@@ -9,7 +9,7 @@ mod image;
 
 use mars_render_port::{ImageRegistry, RenderError};
 use mars_style::FillPaint;
-use tiny_skia::Pixmap;
+use tiny_skia::{BlendMode, Pixmap};
 
 use crate::path::is_fillable;
 use crate::prepare::ResolvedFill;
@@ -18,13 +18,14 @@ pub(crate) fn draw(
     pm: &mut Pixmap,
     path: &tiny_skia::Path,
     fill: &ResolvedFill,
+    blend_mode: BlendMode,
     images: &dyn ImageRegistry,
 ) -> Result<(), RenderError> {
     if !is_fillable(path) {
         return Ok(());
     }
     match &fill.paint {
-        FillPaint::Image { name } => image::draw(pm, path, name, fill.alpha, images),
+        FillPaint::Image { name } => image::draw(pm, path, name, fill.alpha, blend_mode, images),
         FillPaint::Solid(_) | FillPaint::Hatch { .. } => Err(RenderError::Backend(
             "procedural fill paint emitted as DrawOp::Pattern; runtime must emit DrawOp::Path".into(),
         )),
@@ -57,7 +58,14 @@ mod tests {
             paint: FillPaint::Solid(Colour::rgba(255, 0, 0, 255)),
             alpha: 1.0,
         };
-        let err = draw(&mut pm, &square_path(), &fill, &EmptyImageRegistry).expect_err("routing error");
+        let err = draw(
+            &mut pm,
+            &square_path(),
+            &fill,
+            BlendMode::SourceOver,
+            &EmptyImageRegistry,
+        )
+        .expect_err("routing error");
         assert!(matches!(err, RenderError::Backend(msg) if msg.contains("DrawOp::Path")));
     }
 
@@ -70,7 +78,14 @@ mod tests {
             paint: FillPaint::Image { name: "brick".into() },
             alpha: 1.0,
         };
-        let err = draw(&mut pm, &square_path(), &fill, &EmptyImageRegistry).expect_err("missing image");
+        let err = draw(
+            &mut pm,
+            &square_path(),
+            &fill,
+            BlendMode::SourceOver,
+            &EmptyImageRegistry,
+        )
+        .expect_err("missing image");
         assert!(matches!(err, RenderError::ImageNotFound { ref name } if name == "brick"));
     }
 }

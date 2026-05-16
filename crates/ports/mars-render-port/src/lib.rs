@@ -195,6 +195,11 @@ pub enum DrawOp {
         /// Per-op opacity multiplier in `[0.0, 1.0]`. Composed with the
         /// tile's own alpha.
         opacity: f32,
+        /// Compositing operator. `None` falls back to the rasteriser's
+        /// source-over default. Threaded through so a raster source can
+        /// emit a non-default blend mode (multiply, screen, ...) just like
+        /// a vector pass.
+        blend_mode: Option<mars_style::BlendMode>,
     },
 }
 

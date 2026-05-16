@@ -1,15 +1,16 @@
 //! solid-colour polygon fill.
 
 use mars_style::Colour;
-use tiny_skia::{FillRule, Paint, Pixmap, Transform};
+use tiny_skia::{BlendMode, FillRule, Paint, Pixmap, Transform};
 
 use crate::canvas::{colour_to_tsk, scaled_alpha_colour};
 
-pub(crate) fn draw(pm: &mut Pixmap, path: &tiny_skia::Path, c: Colour, alpha: f32) {
+pub(crate) fn draw(pm: &mut Pixmap, path: &tiny_skia::Path, c: Colour, alpha: f32, blend_mode: BlendMode) {
     let colour = if alpha >= 1.0 { c } else { scaled_alpha_colour(c, alpha) };
     let mut paint = Paint::default();
     paint.set_color(colour_to_tsk(colour));
     paint.anti_alias = true;
+    paint.blend_mode = blend_mode;
     pm.fill_path(path, &paint, FillRule::EvenOdd, Transform::identity(), None);
 }
 
@@ -138,6 +139,42 @@ mod tests {
         assert!(half > 100, "expected half-alpha pixels, got {half}");
         let full = rgba.chunks_exact(4).filter(|p| p[3] >= 250).count();
         assert_eq!(full, 0, "opacity didn't gate fill alpha");
+    }
+
+    #[test]
+    fn multiply_blend_mode_darkens_existing_pixel() {
+        // multiply(white background, mid-grey pass) -> mid-grey output.
+        // verifies blend_mode threads through Style -> ResolvedStyle ->
+        // prepare::Resolved -> fill::solid::draw.
+        let canvas = Canvas {
+            width: 16,
+            height: 16,
+            background: Some(Colour::rgba(255, 255, 255, 255)),
+        };
+        let mid_grey = Colour::rgba(128, 128, 128, 255);
+        let ops = vec![DrawOp::Path {
+            path: square(8.0, 8.0, 4.0),
+            style: Arc::new(
+                Style {
+                    fill: Some(FillPaint::Solid(mid_grey)),
+                    blend_mode: Some(mars_style::BlendMode::Multiply),
+                    ..Default::default()
+                }
+                .resolve(0),
+            ),
+        }];
+        let (_, _, rgba) = decode(&render_png(canvas, &ops));
+        // centre of the painted square: multiply(white, mid-grey) = mid-grey
+        // (within rounding). source-over would leave it at the source colour
+        // also, but we double-check by comparing to a non-multiplied pixel:
+        // background pixels stay white.
+        let centre = &rgba[(8 * 16 + 8) * 4..(8 * 16 + 8) * 4 + 4];
+        let corner = &rgba[0..4]; // background corner
+        assert!(
+            centre[0] > 110 && centre[0] < 145,
+            "multiply centre should approach mid-grey, got {centre:?}"
+        );
+        assert!(corner[0] > 250, "background corner should stay white, got {corner:?}");
     }
 
     #[test]

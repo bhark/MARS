@@ -47,6 +47,21 @@ pub(crate) fn map_join(j: SLineJoin) -> LineJoin {
     }
 }
 
+/// translate the port-level [`mars_style::BlendMode`] into the equivalent
+/// tiny-skia blend mode. `BlendMode::SourceOver` is the rasteriser's default
+/// and round-trips back to a `None` parameter at draw-call time.
+pub(crate) fn map_blend(b: mars_style::BlendMode) -> tiny_skia::BlendMode {
+    use mars_style::BlendMode;
+    match b {
+        BlendMode::SourceOver => tiny_skia::BlendMode::SourceOver,
+        BlendMode::Multiply => tiny_skia::BlendMode::Multiply,
+        BlendMode::Screen => tiny_skia::BlendMode::Screen,
+        BlendMode::Overlay => tiny_skia::BlendMode::Overlay,
+        BlendMode::Darken => tiny_skia::BlendMode::Darken,
+        BlendMode::Lighten => tiny_skia::BlendMode::Lighten,
+    }
+}
+
 /// fill the pixmap with a solid colour (used for canvas background).
 pub(crate) fn fill_background(pm: &mut Pixmap, c: Colour) {
     pm.fill(colour_to_tsk(c));

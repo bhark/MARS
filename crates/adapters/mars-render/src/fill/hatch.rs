@@ -17,7 +17,7 @@
 //! current cost is acceptable for beta.
 
 use mars_style::Colour;
-use tiny_skia::{FillRule, LineCap, LineJoin, Mask, Paint, PathBuilder, Pixmap, Stroke, Transform};
+use tiny_skia::{BlendMode, FillRule, LineCap, LineJoin, Mask, Paint, PathBuilder, Pixmap, Stroke, Transform};
 
 use crate::canvas::{colour_to_tsk, scaled_alpha_colour};
 
@@ -30,6 +30,7 @@ pub(crate) fn draw(
     line_width: f32,
     colour: Colour,
     alpha: f32,
+    blend_mode: BlendMode,
 ) {
     if !(spacing.is_finite() && spacing > 0.0 && line_width.is_finite() && line_width > 0.0 && angle_deg.is_finite()) {
         return;
@@ -107,6 +108,7 @@ pub(crate) fn draw(
     let mut paint = Paint::default();
     paint.set_color(colour_to_tsk(line_colour));
     paint.anti_alias = true;
+    paint.blend_mode = blend_mode;
     let stroke = Stroke {
         width: line_width,
         line_cap: LineCap::Butt,

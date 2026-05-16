@@ -21,11 +21,11 @@ pub(crate) fn draw(pm: &mut Pixmap, path: &PortPath, style: &ResolvedStyle, font
     let resolved = prepare::resolve(style);
 
     if let Some(fill_resolved) = &resolved.fill {
-        fill::draw(pm, &tsk_path, fill_resolved)?;
+        fill::draw(pm, &tsk_path, fill_resolved, resolved.blend_mode)?;
     }
 
     if let Some(stroke_resolved) = resolved.stroke {
-        stroke::draw(pm, path, &tsk_path, &stroke_resolved);
+        stroke::draw(pm, path, &tsk_path, &stroke_resolved, resolved.blend_mode);
         if let (Some(gap), Some(marker)) = (stroke_resolved.gap, style.marker.as_ref()) {
             stroke::gap::stamp(pm, path, marker, style, gap, fonts)?;
         }

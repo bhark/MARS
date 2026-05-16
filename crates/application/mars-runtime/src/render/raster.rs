@@ -108,6 +108,7 @@ pub(crate) async fn render_raster_layer(
                     tile: Arc::new(decoded),
                     dst,
                     opacity: entry.opacity,
+                    blend_mode: None,
                 }
             })
             .collect();
@@ -478,12 +479,18 @@ mod tests {
         let calls = fake.calls.lock().unwrap();
         assert_eq!(*calls, vec![(0u32, 0u32, 0u32)]);
         match &ops[0] {
-            DrawOp::Raster { tile, dst, opacity } => {
+            DrawOp::Raster {
+                tile,
+                dst,
+                opacity,
+                blend_mode,
+            } => {
                 assert_eq!(tile.width, 256);
                 assert_eq!(tile.height, 256);
                 assert!((dst.w - 256.0).abs() < 1e-3);
                 assert!((dst.h - 256.0).abs() < 1e-3);
                 assert!((opacity - 1.0).abs() < f32::EPSILON);
+                assert_eq!(*blend_mode, None);
             }
             other => panic!("expected DrawOp::Raster, got {other:?}"),
         }

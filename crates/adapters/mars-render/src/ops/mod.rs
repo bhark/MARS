@@ -38,7 +38,12 @@ pub(crate) fn dispatch(
             style,
         } => symbol::dispatch(pm, *anchor, *rotation_rad, style, fonts),
         DrawOp::Pattern { path, style } => pattern::draw(pm, path, style, images),
-        DrawOp::Raster { tile, dst, opacity } => raster::draw(pm, tile, *dst, *opacity),
+        DrawOp::Raster {
+            tile,
+            dst,
+            opacity,
+            blend_mode,
+        } => raster::draw(pm, tile, *dst, *opacity, *blend_mode),
     }
 }
 
@@ -161,6 +166,7 @@ mod tests {
                 h: 16.0,
             },
             opacity: 1.0,
+            blend_mode: None,
         };
         let pm = renderer().render(canvas(), &[op]).expect("raster paints");
         // rendered output is premultiplied RGBA. opaque red premultiplies to

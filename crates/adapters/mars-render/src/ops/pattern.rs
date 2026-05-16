@@ -22,7 +22,7 @@ pub(crate) fn draw(
     };
     let resolved = prepare::resolve(style);
     if let Some(fill_resolved) = &resolved.fill {
-        pattern::draw(pm, &tsk_path, fill_resolved, images)?;
+        pattern::draw(pm, &tsk_path, fill_resolved, resolved.blend_mode, images)?;
     }
     Ok(())
 }

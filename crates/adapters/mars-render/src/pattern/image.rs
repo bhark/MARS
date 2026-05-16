@@ -5,7 +5,7 @@
 //! missing" from "feature not implemented".
 
 use mars_render_port::{ImageRegistry, RenderError};
-use tiny_skia::{FillRule, FilterQuality, Paint, Pattern as SkPattern, Pixmap, SpreadMode, Transform};
+use tiny_skia::{BlendMode, FillRule, FilterQuality, Paint, Pattern as SkPattern, Pixmap, SpreadMode, Transform};
 
 use crate::decoded_image::build_premultiplied;
 
@@ -14,6 +14,7 @@ pub(crate) fn draw(
     path: &tiny_skia::Path,
     name: &str,
     alpha: f32,
+    blend_mode: BlendMode,
     images: &dyn ImageRegistry,
 ) -> Result<(), RenderError> {
     let image = images
@@ -30,6 +31,7 @@ pub(crate) fn draw(
     let paint = Paint {
         shader: pattern,
         anti_alias: true,
+        blend_mode,
         ..Default::default()
     };
     pm.fill_path(path, &paint, FillRule::EvenOdd, Transform::identity(), None);
@@ -78,14 +80,30 @@ mod tests {
     #[test]
     fn missing_name_returns_typed_image_not_found() {
         let mut pm = SkPixmap::new(16, 16).unwrap();
-        let err = draw(&mut pm, &square_path(), "brick", 1.0, &EmptyImageRegistry).expect_err("missing must error");
+        let err = draw(
+            &mut pm,
+            &square_path(),
+            "brick",
+            1.0,
+            BlendMode::SourceOver,
+            &EmptyImageRegistry,
+        )
+        .expect_err("missing must error");
         assert!(matches!(err, RenderError::ImageNotFound { ref name } if name == "brick"));
     }
 
     #[test]
     fn checker_pattern_fills_with_red_tiled() {
         let mut pm = SkPixmap::new(16, 16).unwrap();
-        draw(&mut pm, &square_path(), "checker", 1.0, &CheckerRegistry).expect("fill ok");
+        draw(
+            &mut pm,
+            &square_path(),
+            "checker",
+            1.0,
+            BlendMode::SourceOver,
+            &CheckerRegistry,
+        )
+        .expect("fill ok");
         // tile is 2x2, half red, half transparent. expect roughly half the
         // filled-square's interior to carry red coverage. the 12x12 filled
         // square covers ~144 pixels; tile alternates so ~50% red.
@@ -114,7 +132,7 @@ mod tests {
             }
         }
         let mut pm = SkPixmap::new(8, 8).unwrap();
-        let err = draw(&mut pm, &square_path(), "x", 1.0, &BadRegistry).expect_err("must error");
+        let err = draw(&mut pm, &square_path(), "x", 1.0, BlendMode::SourceOver, &BadRegistry).expect_err("must error");
         assert!(matches!(err, RenderError::Backend(msg) if msg.contains("rgba length")));
     }
 }

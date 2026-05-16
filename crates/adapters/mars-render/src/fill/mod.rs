@@ -8,18 +8,23 @@ mod solid;
 
 use mars_render_port::RenderError;
 use mars_style::FillPaint;
-use tiny_skia::Pixmap;
+use tiny_skia::{BlendMode, Pixmap};
 
 use crate::path::is_fillable;
 use crate::prepare::ResolvedFill;
 
-pub(crate) fn draw(pm: &mut Pixmap, path: &tiny_skia::Path, fill: &ResolvedFill) -> Result<(), RenderError> {
+pub(crate) fn draw(
+    pm: &mut Pixmap,
+    path: &tiny_skia::Path,
+    fill: &ResolvedFill,
+    blend_mode: BlendMode,
+) -> Result<(), RenderError> {
     if !is_fillable(path) {
         return Ok(());
     }
     match fill.paint {
         FillPaint::Solid(c) => {
-            solid::draw(pm, path, c, fill.alpha);
+            solid::draw(pm, path, c, fill.alpha, blend_mode);
             Ok(())
         }
         FillPaint::Hatch {
@@ -28,7 +33,7 @@ pub(crate) fn draw(pm: &mut Pixmap, path: &tiny_skia::Path, fill: &ResolvedFill)
             line_width,
             colour,
         } => {
-            hatch::draw(pm, path, spacing, angle_deg, line_width, colour, fill.alpha);
+            hatch::draw(pm, path, spacing, angle_deg, line_width, colour, fill.alpha, blend_mode);
             Ok(())
         }
         // non-procedural fill emitted via DrawOp::Path is a runtime
@@ -64,7 +69,7 @@ mod tests {
             paint: FillPaint::Image { name: "brick".into() },
             alpha: 1.0,
         };
-        let err = draw(&mut pm, &square_path(), &fill).expect_err("routing error");
+        let err = draw(&mut pm, &square_path(), &fill, BlendMode::SourceOver).expect_err("routing error");
         assert!(matches!(err, RenderError::Backend(msg) if msg.contains("DrawOp::Pattern")));
     }
 }

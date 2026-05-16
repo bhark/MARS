@@ -5,15 +5,19 @@
 //! reads from `Resolved*` instead of re-doing the Option dance per call site.
 
 use mars_style::{FillPaint, ResolvedStyle};
-use tiny_skia::{LineCap, LineJoin, StrokeDash};
+use tiny_skia::{BlendMode, LineCap, LineJoin, StrokeDash};
 
-use crate::canvas::{map_cap, map_join};
+use crate::canvas::{map_blend, map_cap, map_join};
 use crate::stroke;
 
 #[derive(Debug)]
 pub(crate) struct Resolved {
     pub fill: Option<ResolvedFill>,
     pub stroke: Option<ResolvedStroke>,
+    /// per-pass compositing operator translated from
+    /// [`mars_style::BlendMode`]. `SourceOver` is the rasteriser default and
+    /// is passed to tiny-skia as `None` at draw-call time.
+    pub blend_mode: BlendMode,
 }
 
 #[derive(Debug, Clone)]
@@ -54,6 +58,7 @@ pub(crate) struct ResolvedStrokeGap {
 
 pub(crate) fn resolve(style: &ResolvedStyle) -> Resolved {
     let opacity = style.opacity.unwrap_or(1.0).clamp(0.0, 1.0);
+    let blend_mode = style.blend_mode.map(map_blend).unwrap_or(BlendMode::SourceOver);
 
     let fill = style.fill.clone().map(|paint| ResolvedFill { paint, alpha: opacity });
 
@@ -102,7 +107,11 @@ pub(crate) fn resolve(style: &ResolvedStyle) -> Resolved {
         })
     });
 
-    Resolved { fill, stroke }
+    Resolved {
+        fill,
+        stroke,
+        blend_mode,
+    }
 }
 
 #[cfg(test)]
