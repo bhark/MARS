@@ -123,9 +123,6 @@ fn simplifier_naive_yaml_roundtrip() {
     let yaml = "naive";
     let parsed: SimplifierKind = serde_yaml_ng::from_str(yaml).unwrap();
     assert_eq!(parsed, SimplifierKind::Naive);
-    let yaml = "topology_aware";
-    let parsed: SimplifierKind = serde_yaml_ng::from_str(yaml).unwrap();
-    assert_eq!(parsed, SimplifierKind::TopologyAware);
     let yaml = "guesswork";
     assert!(serde_yaml_ng::from_str::<SimplifierKind>(yaml).is_err());
 }

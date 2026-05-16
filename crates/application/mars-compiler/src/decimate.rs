@@ -41,15 +41,10 @@ pub fn passes_label_priority(priority: u16, min_priority: u32) -> bool {
 }
 
 /// dispatch entry. selects the simplifier strategy declared on the binding.
-/// `TopologyAware` is rejected at config validation (not yet implemented);
-/// reaching it here is a config-validation bug.
 #[must_use]
 pub fn simplify(geom: &GeomKind, tolerance_m: f64, kind: SimplifierKind) -> GeomKind {
     match kind {
         SimplifierKind::Naive => simplify_naive(geom, tolerance_m),
-        SimplifierKind::TopologyAware => unreachable!(
-            "topology_aware simplifier reached decimate dispatch; config validation should have rejected it"
-        ),
     }
 }
 
@@ -266,12 +261,5 @@ mod tests {
         let dispatched = simplify(&g, 0.5, SimplifierKind::Naive);
         let direct = simplify_naive(&g, 0.5);
         assert_eq!(dispatched, direct);
-    }
-
-    #[test]
-    #[should_panic(expected = "topology_aware simplifier")]
-    fn dispatch_topology_aware_panics_until_phase0() {
-        let g = GeomKind::LineString(vec![(0.0, 0.0), (1.0, 0.0)]);
-        let _ = simplify(&g, 0.5, SimplifierKind::TopologyAware);
     }
 }

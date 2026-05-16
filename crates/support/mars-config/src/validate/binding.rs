@@ -1,7 +1,7 @@
 use mars_types::LayerId;
 
 use crate::ConfigError;
-use crate::model::{Config, SimplifierKind, SourceBackend, SourceBinding};
+use crate::model::{Config, SourceBackend, SourceBinding};
 
 /// Resolve the `source:` field on `binding` against the service-level
 /// sources list. Returns the resolved kind so the binding-shape check can
@@ -195,15 +195,6 @@ pub(super) fn validate_binding_levels(layer: &LayerId, idx: usize, binding: &Sou
             "layer {layer} source[{idx}] sidecar_size_warn_bytes must be > 0"
         )));
     }
-    // Topology-aware simplification is not yet implemented. `TopologyAware`
-    // is the spike target, not yet ready. Reject explicitly so operators see
-    // a clear error rather than a silent fallback to naive DP.
-    if matches!(binding.simplifier, Some(SimplifierKind::TopologyAware)) {
-        return Err(ConfigError::Invalid(format!(
-            "layer {layer} source[{idx}] simplifier: topology_aware is not yet implemented; \
-             omit the field or set simplifier: naive"
-        )));
-    }
     let Some(levels) = &binding.levels else {
         return Ok(());
     };
@@ -276,7 +267,6 @@ pub(super) fn validate_binding_levels(layer: &LayerId, idx: usize, binding: &Sou
 mod tests {
     use std::path::Path;
 
-    use crate::SimplifierKind;
     use crate::model::DecimationLevelConfig;
     use crate::validate::fixtures::*;
     use crate::validate::validate;
@@ -562,18 +552,5 @@ mod tests {
         cfg.layers = vec![layer_with_binding(b)];
         let err = validate(&mut cfg, Path::new("."));
         assert!(matches!(&err, Err(crate::ConfigError::Invalid(s)) if s.contains("sidecar_size_warn_bytes")));
-    }
-
-    #[test]
-    fn rejects_topology_aware_simplifier_until_phase0_lands() {
-        let mut cfg = minimal_config();
-        let mut b = binding("buildings");
-        b.simplifier = Some(SimplifierKind::TopologyAware);
-        cfg.layers = vec![layer_with_binding(b)];
-        let err = validate(&mut cfg, Path::new("."));
-        assert!(
-            matches!(&err, Err(crate::ConfigError::Invalid(s)) if s.contains("topology_aware")),
-            "expected topology_aware rejection, got {err:?}"
-        );
     }
 }

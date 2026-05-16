@@ -30,12 +30,6 @@ fuzz/artifacts
 fuzz/coverage
 fuzz/target
 
-# topology-simplifier spike: source is committed, runtime artefacts and
-# operator fixtures stay local
-harness/topology-simplifier/target
-harness/topology-simplifier/out
-harness/topology-simplifier/**/*.tsv
-
 # kind-based e2e suite has its own [workspace] and target/ dir; the public
 # test dataset gets fetched into target/e2e-fixtures/ at run time
 tests/e2e/target

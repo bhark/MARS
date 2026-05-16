@@ -464,8 +464,8 @@ pub struct SourceBinding {
     pub sidecar_size_warn_bytes: Option<String>,
     /// Geometry simplifier strategy applied at decimation time. `None`
     /// resolves to [`SimplifierKind::Naive`] (Douglas-Peucker per part).
-    /// The switch is wired so the topology-aware simplifier can plug in
-    /// without further plumbing once the spike lands.
+    /// Kept as an enum so additional strategies can plug in without
+    /// reshaping the binding surface.
     #[serde(default)]
     pub simplifier: Option<SimplifierKind>,
     /// Policy for change events whose hilbert key falls outside every page
@@ -517,6 +517,9 @@ pub enum MissingPagePolicy {
 /// Geometry simplifier strategy. The strategy is per-binding because it
 /// reflects *how* simplification is performed; per-level *aggressiveness*
 /// is already controlled by [`DecimationLevelConfig::vertex_tolerance_m`].
+///
+/// Kept as an enum (rather than a marker struct) so additional strategies
+/// can land without reshaping the binding surface.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SimplifierKind {
@@ -524,10 +527,6 @@ pub enum SimplifierKind {
     /// parts per feature without considering shared edges between features.
     #[default]
     Naive,
-    /// Topology-aware shared-edge simplification (spike).
-    /// Currently unimplemented; selecting this variant is rejected at
-    /// config validation with [`ConfigError::Invalid`].
-    TopologyAware,
 }
 
 impl SourceBinding {
