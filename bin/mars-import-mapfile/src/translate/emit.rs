@@ -51,6 +51,7 @@ pub(crate) fn emit_layer(r: ResolvedLayer, skel: &mut Skeleton) {
         label,
         group: r.group_path,
         wms: r.wms,
+        ows: r.ows,
     });
 }
 

@@ -222,7 +222,7 @@ fn emit_leaf<W: std::io::Write>(
     if !layer.abstract_.is_empty() {
         text_element(w, "Abstract", &layer.abstract_)?;
     }
-    write_keyword_list(w, &layer.wms.keywords)?;
+    write_keyword_list(w, &layer.ows.keywords)?;
     // per-layer advertised SRS list; 1.1.1 uses <SRS> not <CRS>.
     if let Some(srses) = layer.wms.advertised_crs.as_ref() {
         for s in srses {
@@ -235,16 +235,16 @@ fn emit_leaf<W: std::io::Write>(
     }
     // 1.1.1 layer-block ordering: MetadataURL before Attribution / AuthorityURL
     // / Identifier (opposite of 1.3.0).
-    for mu in &layer.wms.metadata_urls {
+    for mu in &layer.ows.metadata_urls {
         write_metadata_url_111(w, mu)?;
     }
-    if let Some(attr) = layer.wms.attribution.as_ref() {
+    if let Some(attr) = layer.ows.attribution.as_ref() {
         write_attribution_111(w, attr)?;
     }
-    for auth in &layer.wms.authorities {
+    for auth in &layer.ows.authorities {
         write_authority_url_111(w, &auth.name, &auth.href)?;
     }
-    for ident in &layer.wms.identifiers {
+    for ident in &layer.ows.identifiers {
         write_identifier_111(w, &ident.authority, &ident.value)?;
     }
     write_default_style_with_legend_url(w, layer, formats)?;

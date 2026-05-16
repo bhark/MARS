@@ -245,7 +245,7 @@ fn emit_leaf<W: std::io::Write>(
     if !layer.abstract_.is_empty() {
         text_element(w, "Abstract", &layer.abstract_)?;
     }
-    write_keyword_list(w, &layer.wms.keywords)?;
+    write_keyword_list(w, &layer.ows.keywords)?;
     // per-layer advertised CRS override; absent = inherit from root layer.
     if let Some(crses) = layer.wms.advertised_crs.as_ref() {
         for crs in crses {
@@ -256,16 +256,16 @@ fn emit_leaf<W: std::io::Write>(
     if let Some(bb) = bbox {
         write_bbox(w, super::layer_native_crs(cfg, layer), bb)?;
     }
-    if let Some(attr) = layer.wms.attribution.as_ref() {
+    if let Some(attr) = layer.ows.attribution.as_ref() {
         write_attribution(w, attr)?;
     }
-    for auth in &layer.wms.authorities {
+    for auth in &layer.ows.authorities {
         write_authority_url(w, &auth.name, &auth.href)?;
     }
-    for ident in &layer.wms.identifiers {
+    for ident in &layer.ows.identifiers {
         write_identifier(w, &ident.authority, &ident.value)?;
     }
-    for mu in &layer.wms.metadata_urls {
+    for mu in &layer.ows.metadata_urls {
         write_metadata_url(w, mu)?;
     }
     if let Some(scale) = &layer.scale {
@@ -785,8 +785,8 @@ layers:
     #[test]
     fn per_layer_keywords_and_metadata_url_emitted() {
         let mut cfg = minimal_cfg();
-        cfg.layers[0].wms.keywords = vec!["roads".into(), "transport".into()];
-        cfg.layers[0].wms.metadata_urls = vec![mars_config::MetadataUrl {
+        cfg.layers[0].ows.keywords = vec!["roads".into(), "transport".into()];
+        cfg.layers[0].ows.metadata_urls = vec![mars_config::MetadataUrl {
             type_: "ISO19115:2003".into(),
             format: "text/xml".into(),
             href: "https://example.org/md/roads.xml".into(),
@@ -821,7 +821,7 @@ layers:
     #[test]
     fn attribution_block_emitted() {
         let mut cfg = minimal_cfg();
-        cfg.layers[0].wms.attribution = Some(mars_config::Attribution {
+        cfg.layers[0].ows.attribution = Some(mars_config::Attribution {
             title: "Acme Maps".into(),
             online_resource: Some("https://acme.example".into()),
             logo: Some(mars_config::LogoUrl {
@@ -844,11 +844,11 @@ layers:
     #[test]
     fn per_layer_authority_and_identifier_emitted() {
         let mut cfg = minimal_cfg();
-        cfg.layers[0].wms.authorities = vec![mars_config::AuthorityRef {
+        cfg.layers[0].ows.authorities = vec![mars_config::AuthorityRef {
             name: "isri".into(),
             href: "https://example.org/isri".into(),
         }];
-        cfg.layers[0].wms.identifiers = vec![mars_config::IdentifierRef {
+        cfg.layers[0].ows.identifiers = vec![mars_config::IdentifierRef {
             authority: "isri".into(),
             value: "urn:layer:roads".into(),
         }];
@@ -861,7 +861,10 @@ layers:
     #[test]
     fn layer_with_capabilities_denied_is_hidden() {
         let mut cfg = minimal_cfg();
-        cfg.layers[0].wms.request_gating.get_capabilities = Some(false);
+        cfg.layers[0]
+            .ows
+            .request_gating
+            .insert(mars_config::ServiceOp::WmsGetCapabilities, false);
         let m = Manifest::empty(1, cfg.service.name.clone());
         let xml = capabilities_xml(&cfg, &m).unwrap();
         assert!(!xml.contains("<Name>a</Name>"), "denied layer must not appear");
@@ -871,7 +874,10 @@ layers:
     fn gfi_gating_honors_explicit_request_gating_over_enable_flag() {
         let mut cfg = minimal_cfg();
         cfg.layers[0].wms.enable_get_feature_info = false;
-        cfg.layers[0].wms.request_gating.get_feature_info = Some(true);
+        cfg.layers[0]
+            .ows
+            .request_gating
+            .insert(mars_config::ServiceOp::WmsGetFeatureInfo, true);
         let m = Manifest::empty(1, cfg.service.name.clone());
         let xml = capabilities_xml(&cfg, &m).unwrap();
         assert!(xml.contains(r#"<Layer queryable="1">"#));

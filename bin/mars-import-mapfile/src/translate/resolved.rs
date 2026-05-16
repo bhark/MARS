@@ -23,7 +23,9 @@ use super::layer::{
 use super::layer_metadata::{IncludeItemsParsed, LayerMetadata};
 use super::style_block::{SinglePass, style_block_to_pass};
 use super::symbol::ParsedSymbol;
-use crate::emitter::{IncludeItemsSkeleton, LayerAttributionSkeleton, LayerGatingSkeleton, LayerWmsSkeleton};
+use crate::emitter::{
+    IncludeItemsSkeleton, LayerAttributionSkeleton, LayerGatingSkeleton, LayerOwsSkeleton, LayerWmsSkeleton,
+};
 
 #[derive(Debug)]
 pub(crate) struct ResolvedLayer {
@@ -41,6 +43,7 @@ pub(crate) struct ResolvedLayer {
     /// wins when both are set.
     pub group_path: Option<String>,
     pub wms: LayerWmsSkeleton,
+    pub ows: LayerOwsSkeleton,
     pub unimplemented: Vec<&'static str>,
 }
 
@@ -249,6 +252,7 @@ pub(crate) fn resolve_layer(
     let title = p.wms_metadata.title_override.clone().or(p.title.clone());
     let abstract_ = p.wms_metadata.abstract_override.clone();
     let wms = layer_wms_skeleton(&p.wms_metadata);
+    let ows = layer_ows_skeleton(&p.wms_metadata);
 
     Some(ResolvedLayer {
         name,
@@ -261,16 +265,24 @@ pub(crate) fn resolve_layer(
         attributes: all_attrs.into_iter().collect(),
         group_path,
         wms,
+        ows,
         unimplemented,
     })
 }
 
-/// Project the parser-side [`LayerMetadata`] into the emitter-side
-/// [`LayerWmsSkeleton`]. The two shapes differ only in field naming and the
-/// `IncludeItemsParsed` -> `IncludeItemsSkeleton` enum rename; everything
-/// else is moved as-is.
+/// WMS-only extras (opaque + advertised CRS list).
 fn layer_wms_skeleton(m: &LayerMetadata) -> LayerWmsSkeleton {
     LayerWmsSkeleton {
+        opaque: m.opaque,
+        advertised_crs: m.advertised_crs.clone(),
+    }
+}
+
+/// Cross-protocol OWS metadata + per-op gating. The
+/// `IncludeItemsParsed` -> `IncludeItemsSkeleton` rename is the only
+/// non-mechanical transform; the rest is moved as-is.
+fn layer_ows_skeleton(m: &LayerMetadata) -> LayerOwsSkeleton {
+    LayerOwsSkeleton {
         keywords: m.keywords.clone(),
         metadata_urls: m
             .metadata_urls
@@ -279,8 +291,6 @@ fn layer_wms_skeleton(m: &LayerMetadata) -> LayerWmsSkeleton {
             .collect(),
         authorities: m.authorities.clone(),
         identifiers: m.identifiers.clone(),
-        opaque: m.opaque,
-        advertised_crs: m.advertised_crs.clone(),
         attribution: m.attribution.as_ref().map(|a| LayerAttributionSkeleton {
             title: a.title.clone(),
             online_resource: a.online_resource.clone(),

@@ -295,8 +295,8 @@ layers:
     type: polygon
     sources:
       - { from: t, geometry_column: g }
-    wms:
-      request_gating: { get_map: false }
+    ows:
+      request_gating: { wms_get_map: false }
   - name: b
     title: "B layer"
     type: polygon

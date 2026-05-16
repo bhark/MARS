@@ -3,7 +3,7 @@ use mars_types::{Bbox, CrsCode, LayerId, SourceCollectionId};
 use serde::{Deserialize, Serialize};
 
 use super::ows::{LayerOws, ServiceOp};
-use super::wms::{LayerWms, WmsOperation};
+use super::wms::LayerWms;
 use crate::ConfigError;
 use crate::SourceId;
 use crate::model::source::DEFAULT_SOURCE_ID;
@@ -70,33 +70,19 @@ pub struct Layer {
 }
 
 impl Layer {
-    /// Forwarder to [`LayerWms::permits_wms_op`] kept for callsite ergonomics;
-    /// equivalent to `self.wms.permits_wms_op(op)`.
-    #[must_use]
-    pub fn permits_wms_op(&self, op: WmsOperation) -> bool {
-        self.wms.permits_wms_op(op)
-    }
-
-    /// Resolved gating decision for any OWS-family operation. The
-    /// `ows.request_gating` map is the primary source. Two back-compat
-    /// fallbacks apply when the map is silent on a given op:
-    /// - WMS operations consult the legacy `wms.request_gating` (and, for
-    ///   `WmsGetFeatureInfo`, the legacy `wms.enable_get_feature_info`
-    ///   opt-in).
-    /// - All other ops default-allow.
+    /// Resolved gating decision for any OWS-family operation. The explicit
+    /// `ows.request_gating` map wins. When it is silent, every op default-
+    /// allows except `WmsGetFeatureInfo`, which falls back to the legacy
+    /// [`LayerWms::enable_get_feature_info`] opt-in (GFI's spec-default is
+    /// deny).
     #[must_use]
     pub fn permits_op(&self, op: ServiceOp) -> bool {
         if let Some(b) = self.ows.request_gating.get(&op).copied() {
             return b;
         }
         match op {
-            ServiceOp::WmsGetMap => self.wms.permits_wms_op(WmsOperation::GetMap),
-            ServiceOp::WmsGetCapabilities => self.wms.permits_wms_op(WmsOperation::GetCapabilities),
-            ServiceOp::WmsGetFeatureInfo => self.wms.permits_wms_op(WmsOperation::GetFeatureInfo),
-            ServiceOp::WmsGetLegendGraphic => self.wms.permits_wms_op(WmsOperation::GetLegendGraphic),
-            ServiceOp::WmsGetStyles => self.wms.permits_wms_op(WmsOperation::GetStyles),
-            ServiceOp::WmsDescribeLayer => self.wms.permits_wms_op(WmsOperation::DescribeLayer),
-            ServiceOp::WmtsGetTile | ServiceOp::WmtsGetCapabilities | ServiceOp::WmtsGetFeatureInfo => true,
+            ServiceOp::WmsGetFeatureInfo => self.wms.enable_get_feature_info,
+            _ => true,
         }
     }
 }
@@ -586,5 +572,17 @@ mod tests {
         let mut l = bare_layer();
         l.ows.request_gating.insert(ServiceOp::WmtsGetTile, false);
         assert!(!l.permits_op(ServiceOp::WmtsGetTile));
+    }
+
+    #[test]
+    fn ows_request_gating_yaml_round_trip() {
+        let yaml = r#"
+request_gating:
+  wms_get_map: false
+  wmts_get_tile: false
+"#;
+        let parsed: LayerOws = serde_yaml_ng::from_str(yaml.trim_start_matches('\n')).unwrap();
+        assert_eq!(parsed.request_gating.get(&ServiceOp::WmsGetMap), Some(&false));
+        assert_eq!(parsed.request_gating.get(&ServiceOp::WmtsGetTile), Some(&false));
     }
 }

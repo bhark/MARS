@@ -57,7 +57,11 @@ layers:
     abstract: "Major and minor roads"
     type: line
     wms:
-      enable_get_feature_info: true
+      opaque: false
+      advertised_crs:
+        - "EPSG:25832"
+        - "EPSG:3857"
+    ows:
       keywords:
         - "roads"
         - "transport"
@@ -72,10 +76,6 @@ layers:
       identifiers:
         - authority: "isri"
           value: "urn:layer:roads"
-      opaque: false
-      advertised_crs:
-        - "EPSG:25832"
-        - "EPSG:3857"
       attribution:
         title: "Acme Roads"
         online_resource: "https://acme.example/"
@@ -90,11 +90,12 @@ layers:
           - "name"
           - "kind"
       request_gating:
-        get_capabilities: true
-        get_map: true
-        get_legend_graphic: true
-        get_styles: false
-        describe_layer: false
+        wms_get_capabilities: true
+        wms_get_map: true
+        wms_get_feature_info: true
+        wms_get_legend_graphic: true
+        wms_get_styles: false
+        wms_describe_layer: false
     sources:
       - { band: detail, from: "roads", geometry_column: "geom" }
       - { band: hi, from: "roads", geometry_column: "geom" }
