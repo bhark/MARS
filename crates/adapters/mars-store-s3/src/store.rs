@@ -154,6 +154,10 @@ impl ObjectStore for S3Store {
         match self.backend.delete(&path).await {
             // AWS S3 DeleteObject is idempotent; mirror that here.
             Ok(()) | Err(object_store::Error::NotFound { .. }) => Ok(()),
+            // garage routes a missing key through the Multi-Object Delete
+            // endpoint and surfaces it as Generic("...NoSuchKey..."). normalise
+            // so the idempotent contract holds across self-hosted backends.
+            Err(object_store::Error::Generic { source, .. }) if source.to_string().contains("NoSuchKey") => Ok(()),
             Err(e) => Err(StoreError::Backend(format!("s3 delete: {e}"))),
         }
     }
