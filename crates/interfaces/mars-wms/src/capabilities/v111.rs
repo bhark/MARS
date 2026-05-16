@@ -218,7 +218,11 @@ fn emit_leaf<W: std::io::Write>(
         layer_tag.push_attribute(("opaque", "1"));
     }
     w.write_event(Event::Start(layer_tag)).map_err(xml_err)?;
-    text_element(w, "Name", layer.name.as_str())?;
+    // 1.1.1 §7.1.4.5.2: same as 1.3.0 - omitting <Name> marks the layer as
+    // a metadata-only container. Hide it when GetMap is denied.
+    if layer.permits_op(mars_config::ServiceOp::WmsGetMap) {
+        text_element(w, "Name", layer.name.as_str())?;
+    }
     text_element(w, "Title", &layer.title)?;
     if !layer.abstract_.is_empty() {
         text_element(w, "Abstract", &layer.abstract_)?;
@@ -768,5 +772,18 @@ layers:
         let xml = capabilities_xml(&cfg, &m).unwrap();
         assert!(xml.contains("<Name>class-0</Name>"));
         assert!(xml.contains("rule=class-0"));
+    }
+
+    #[test]
+    fn layer_with_getmap_denied_emits_metadata_without_name_111() {
+        let mut cfg = minimal_cfg();
+        cfg.layers[0]
+            .ows
+            .request_gating
+            .insert(mars_config::ServiceOp::WmsGetMap, false);
+        let m = Manifest::empty(1, cfg.service.name.clone());
+        let xml = capabilities_xml(&cfg, &m).unwrap();
+        assert!(xml.contains("<Title>A layer</Title>"));
+        assert!(!xml.contains("<Name>a</Name>"));
     }
 }
