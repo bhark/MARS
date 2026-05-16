@@ -424,13 +424,10 @@ mod tests {
             .unwrap_or_else(|| AdminDsn::Literal("postgresql://test@test/test".into()));
         PlanInputs {
             source_bootstrap: source_bootstrap(),
-            runtime_password_ref: bs
-                .runtime_password_secret_ref
-                .clone()
-                .unwrap_or_else(|| SecretKeyRef {
-                    name: "demo-runtime-credentials".into(),
-                    key: "password".into(),
-                }),
+            runtime_password_ref: bs.runtime_password_secret_ref.clone().unwrap_or_else(|| SecretKeyRef {
+                name: "demo-runtime-credentials".into(),
+                key: "password".into(),
+            }),
             admin_dsn,
             admin_secret_resource_version: "100".into(),
             runtime_secret_resource_version: "200".into(),
@@ -480,15 +477,26 @@ mod tests {
     fn render_bootstrap_job_uses_resolved_runtime_password_ref() {
         let cr = test_support::cr("demo", "svc-ns");
         let bs = bs_spec_managed_runtime();
-        let job =
-            render_bootstrap_job(&cr, test_support::TEST_IMAGE, &inputs(&bs), "abcdef0123", test_support::owner_ref())
-                .unwrap();
+        let job = render_bootstrap_job(
+            &cr,
+            test_support::TEST_IMAGE,
+            &inputs(&bs),
+            "abcdef0123",
+            test_support::owner_ref(),
+        )
+        .unwrap();
         let envs = job.spec.unwrap().template.spec.unwrap().containers[0]
             .env
             .clone()
             .unwrap();
         let runtime_env = envs.iter().find(|e| e.name == "MARS_RUNTIME_PASSWORD").unwrap();
-        let sref = runtime_env.value_from.as_ref().unwrap().secret_key_ref.as_ref().unwrap();
+        let sref = runtime_env
+            .value_from
+            .as_ref()
+            .unwrap()
+            .secret_key_ref
+            .as_ref()
+            .unwrap();
         assert_eq!(sref.name, "demo-runtime-credentials");
         assert_eq!(sref.key, "password");
     }
@@ -572,8 +580,14 @@ mod tests {
         let bs = bs_spec();
         let mut input = inputs(&bs);
         input.admin_dsn = AdminDsn::Literal("postgresql://pg:secret@cnpg:5432/maps?sslmode=require".into());
-        let job =
-            render_bootstrap_job(&cr, test_support::TEST_IMAGE, &input, "abcdef0123", test_support::owner_ref()).unwrap();
+        let job = render_bootstrap_job(
+            &cr,
+            test_support::TEST_IMAGE,
+            &input,
+            "abcdef0123",
+            test_support::owner_ref(),
+        )
+        .unwrap();
         let envs = job.spec.unwrap().template.spec.unwrap().containers[0]
             .env
             .clone()

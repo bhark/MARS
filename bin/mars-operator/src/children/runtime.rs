@@ -141,7 +141,10 @@ pub(crate) fn build(
             "--config".into(),
             "/etc/mars/mars.yaml".into(),
         ]),
-        env: Some(env_vars_with_runtime_password(&cr.spec.runtime.env, runtime_password_ref)),
+        env: Some(env_vars_with_runtime_password(
+            &cr.spec.runtime.env,
+            runtime_password_ref,
+        )),
         env_from: Some(env_from(&cr.spec.runtime.env_from)),
         ports: Some(vec![ContainerPort {
             name: Some("http".into()),
@@ -204,7 +207,15 @@ mod tests {
     #[test]
     fn build_sets_replicas_and_selector() {
         let cr = test_support::cr("demo", "svc-ns");
-        let dep = build(&cr, "abc123", None, None, test_support::TEST_IMAGE, test_support::owner_ref()).unwrap();
+        let dep = build(
+            &cr,
+            "abc123",
+            None,
+            None,
+            test_support::TEST_IMAGE,
+            test_support::owner_ref(),
+        )
+        .unwrap();
         let spec = dep.spec.unwrap();
         assert_eq!(spec.replicas, Some(2));
         let match_labels = spec.selector.match_labels.unwrap();

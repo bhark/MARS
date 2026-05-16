@@ -469,8 +469,12 @@ async fn ensure_runtime_password_secret(
 
     let password = generate_runtime_password();
     let secret = build_runtime_credentials_secret(&name, ns, svc_name, &password, owner);
-    api.patch(&name, &PatchParams::apply(&ctx.field_manager).force(), &Patch::Apply(&secret))
-        .await?;
+    api.patch(
+        &name,
+        &PatchParams::apply(&ctx.field_manager).force(),
+        &Patch::Apply(&secret),
+    )
+    .await?;
     info!(svc = %svc_name, secret = %name, "generated operator-managed runtime password");
     Ok(SecretKeyRef { name, key })
 }
@@ -487,16 +491,13 @@ fn generate_runtime_password() -> String {
         .collect()
 }
 
-fn build_runtime_credentials_secret(
-    name: &str,
-    ns: &str,
-    svc: &str,
-    password: &str,
-    owner: OwnerReference,
-) -> Secret {
+fn build_runtime_credentials_secret(name: &str, ns: &str, svc: &str, password: &str, owner: OwnerReference) -> Secret {
     use k8s_openapi::ByteString;
     let mut data = std::collections::BTreeMap::new();
-    data.insert(labels::RUNTIME_PASSWORD_KEY.into(), ByteString(password.as_bytes().to_vec()));
+    data.insert(
+        labels::RUNTIME_PASSWORD_KEY.into(),
+        ByteString(password.as_bytes().to_vec()),
+    );
     Secret {
         metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
             name: Some(name.into()),

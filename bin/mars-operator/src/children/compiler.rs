@@ -17,7 +17,9 @@ use crate::children::labels::{
     compiler_deployment_name, compiler_work_pvc_name, config_map_name,
 };
 use crate::children::pvc::{self, PvcSpec};
-use crate::crd::{ArtifactStoreSpec, EnvFromSourceSpec, EnvVarSpec, MarsService, ResourceRequirementsSpec, SecretKeyRef};
+use crate::crd::{
+    ArtifactStoreSpec, EnvFromSourceSpec, EnvVarSpec, MarsService, ResourceRequirementsSpec, SecretKeyRef,
+};
 use crate::error::Result;
 
 pub(crate) struct CompilerChildren {
@@ -156,7 +158,10 @@ pub(crate) fn build(
             "--config".into(),
             "/etc/mars/mars.yaml".into(),
         ]),
-        env: Some(env_vars_with_runtime_password(&cr.spec.compiler.env, runtime_password_ref)),
+        env: Some(env_vars_with_runtime_password(
+            &cr.spec.compiler.env,
+            runtime_password_ref,
+        )),
         env_from: Some(env_from(&cr.spec.compiler.env_from)),
         resources: cr.spec.compiler.resources.as_ref().map(resource_requirements),
         security_context: Some(container_security_context()),
@@ -360,7 +365,15 @@ mod tests {
     #[test]
     fn build_propagates_config_checksum_to_pod_template_annotation() {
         let cr = test_support::cr("demo", "svc-ns");
-        let kids = build(&cr, "abc123", None, None, test_support::TEST_IMAGE, test_support::owner_ref()).unwrap();
+        let kids = build(
+            &cr,
+            "abc123",
+            None,
+            None,
+            test_support::TEST_IMAGE,
+            test_support::owner_ref(),
+        )
+        .unwrap();
         let template = kids.deployment.spec.unwrap().template;
         let annotations = template.metadata.unwrap().annotations.unwrap();
         assert_eq!(
@@ -374,7 +387,14 @@ mod tests {
         let mut cr = test_support::cr("demo", "svc-ns");
         cr.metadata.name = None;
         // CompilerChildren is intentionally not Debug; use match to extract the err.
-        match build(&cr, "abc123", None, None, test_support::TEST_IMAGE, test_support::owner_ref()) {
+        match build(
+            &cr,
+            "abc123",
+            None,
+            None,
+            test_support::TEST_IMAGE,
+            test_support::owner_ref(),
+        ) {
             Err(crate::error::OperatorError::MissingField(f)) => assert_eq!(f, "metadata.name"),
             Err(other) => panic!("expected MissingField, got {other:?}"),
             Ok(_) => panic!("expected error, got Ok"),
@@ -410,7 +430,15 @@ mod tests {
     #[test]
     fn build_omits_runtime_password_env_when_resolved_ref_is_absent() {
         let cr = test_support::cr("demo", "svc-ns");
-        let kids = build(&cr, "deadbeef", None, None, test_support::TEST_IMAGE, test_support::owner_ref()).unwrap();
+        let kids = build(
+            &cr,
+            "deadbeef",
+            None,
+            None,
+            test_support::TEST_IMAGE,
+            test_support::owner_ref(),
+        )
+        .unwrap();
         let envs = kids.deployment.spec.unwrap().template.spec.unwrap().containers[0]
             .env
             .clone()
