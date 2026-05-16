@@ -189,7 +189,7 @@ mod tests {
         ChangeFeed, ChangeSubscription, LeaderLock, LeaderLockGuard, RowBytes, Source, SourceError, SourceRowKey,
     };
     use mars_store::ManifestStore;
-    use mars_store::stub::{NotImplementedManifestStore, NotImplementedStore};
+    use mars_test_support::port_fakes::{NotImplementedManifestStore, NotImplementedStore};
     use mars_types::{CrsCode, DecimationLevel, HilbertKey};
     use std::sync::Arc;
 

@@ -36,6 +36,7 @@ parking_lot        = { workspace = true }
 
 [dev-dependencies]
 mars-store         = { workspace = true, features = ["test-utils"] }
+mars-test-support  = { workspace = true }
 tokio              = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 criterion          = { workspace = true }
 serde_yaml_ng      = { workspace = true }

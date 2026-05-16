@@ -11,6 +11,8 @@ pub mod postgis;
 #[cfg(feature = "docker")]
 pub mod garage;
 
+pub mod port_fakes;
+
 use std::fmt;
 
 #[derive(Debug, Clone)]

@@ -24,6 +24,17 @@ docker = ["dep:testcontainers", "dep:rand", "dep:tempfile", "dep:tokio"]
 png       = { workspace = true }
 zune-jpeg = { workspace = true }
 
+# port-level fakes used across application crate tests. always-on: every
+# downstream test consumer already pulls the port crates, so the fakes have
+# no extra dependency cost.
+mars-source  = { workspace = true }
+mars-store   = { workspace = true }
+mars-types   = { workspace = true }
+async-trait  = { workspace = true }
+bytes        = { workspace = true }
+futures-core = { workspace = true }
+futures-util = { workspace = true }
+
 testcontainers = { workspace = true, optional = true }
 rand           = { workspace = true, optional = true }
 tempfile       = { workspace = true, optional = true }

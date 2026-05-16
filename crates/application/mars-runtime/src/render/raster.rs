@@ -252,7 +252,7 @@ mod tests {
     use bytes::Bytes;
     use mars_render_port::{Canvas, RenderError};
     use mars_source::{RasterBinding, RasterSource, SourceError, TileBytes};
-    use mars_store::stub::{NotImplementedCache, NotImplementedStore};
+    use mars_test_support::port_fakes::{NotImplementedCache, NotImplementedStore};
     use mars_types::{Bbox, ImageFormat, Manifest, SourceCollectionId};
 
     use super::*;

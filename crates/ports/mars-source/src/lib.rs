@@ -544,79 +544,6 @@ pub trait RasterSource: Send + Sync + 'static {
     async fn read_tile(&self, binding: &RasterBinding, z: u32, x: u32, y: u32) -> Result<TileBytes, SourceError>;
 }
 
-/// Phase-0 stub adapters that satisfy the port traits with `NotImplemented`.
-/// Lets bins and tests compose the surface without naming a real backend.
-pub mod stub {
-    use super::{
-        BoxStream, ChangeFeed, ChangeSubscription, RasterBinding, RasterSource, RowBytes, Source, SourceBinding,
-        SourceError, TileBytes,
-    };
-    use async_trait::async_trait;
-
-    /// `Source` + `ChangeFeed` impl that always returns `NotImplemented`.
-    #[derive(Debug, Default)]
-    pub struct NotImplementedSource;
-
-    #[async_trait]
-    impl Source for NotImplementedSource {
-        async fn stream_rows<'a>(
-            &'a self,
-            _binding: &'a SourceBinding,
-        ) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError> {
-            Err(SourceError::NotImplemented { what: "stream_rows" })
-        }
-
-        async fn stream_rows_by_id<'a>(
-            &'a self,
-            _binding: &'a SourceBinding,
-            _ids: &'a [i64],
-        ) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError> {
-            Err(SourceError::NotImplemented {
-                what: "stream_rows_by_id",
-            })
-        }
-
-        async fn stream_feature_ids<'a>(
-            &'a self,
-            _binding: &'a SourceBinding,
-        ) -> Result<BoxStream<'a, Result<i64, SourceError>>, SourceError> {
-            Err(SourceError::NotImplemented {
-                what: "stream_feature_ids",
-            })
-        }
-    }
-
-    #[async_trait]
-    impl ChangeFeed for NotImplementedSource {
-        async fn subscribe(&self) -> Result<Box<dyn ChangeSubscription>, SourceError> {
-            Err(SourceError::NotImplemented {
-                what: "mars-source::stub::NotImplementedSource::subscribe",
-            })
-        }
-    }
-
-    /// `RasterSource` impl that always returns `NotImplemented`. Lets the
-    /// runtime / compiler wire the raster dispatch surface without a real
-    /// raster backend in scope.
-    #[derive(Debug, Default)]
-    pub struct NotImplementedRasterSource;
-
-    #[async_trait]
-    impl RasterSource for NotImplementedRasterSource {
-        async fn read_tile(
-            &self,
-            _binding: &RasterBinding,
-            _z: u32,
-            _x: u32,
-            _y: u32,
-        ) -> Result<TileBytes, SourceError> {
-            Err(SourceError::NotImplemented {
-                what: "RasterSource::read_tile",
-            })
-        }
-    }
-}
-
 /// Subscription-side port: a stream of committed [`ChangeBatch`]es with an
 /// ack-aware cursor.
 ///
@@ -728,18 +655,4 @@ mod tests {
     }
 
     // phase-c will reintroduce page-keyed Source surface and its tests.
-
-    #[tokio::test]
-    async fn stub_raster_source_returns_typed_not_implemented() {
-        let s = stub::NotImplementedRasterSource;
-        let binding = RasterBinding {
-            collection: SourceCollectionId::new("dem"),
-            locator: "https://example.test/{z}/{x}/{y}.png".into(),
-            source_crs: CrsCode::new("EPSG:3857"),
-            tile_size: 256,
-            max_level: 18,
-        };
-        let err = s.read_tile(&binding, 0, 0, 0).await.expect_err("stub");
-        assert!(matches!(err, SourceError::NotImplemented { what } if what == "RasterSource::read_tile"));
-    }
 }

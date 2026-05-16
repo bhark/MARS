@@ -11,7 +11,7 @@ use mars_config::CorsConfig;
 use mars_observability::Metrics;
 use mars_render_port::{Canvas, EncodeError, Encoder, ImageFormat as RenderImageFormat, Pixmap, RenderError, Renderer};
 use mars_runtime::{Deps, Runtime, RuntimeState};
-use mars_store::stub::{NotImplementedCache, NotImplementedStore};
+use mars_test_support::port_fakes::{NotImplementedCache, NotImplementedStore};
 use mars_types::{CrsCode, ImageFormat};
 use mars_wms::{GfiTemplates, WmsConfig};
 use mars_wmts::WmtsConfig;

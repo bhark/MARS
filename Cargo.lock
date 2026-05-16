@@ -2680,6 +2680,7 @@ dependencies = [
  "mars-source",
  "mars-store",
  "mars-style",
+ "mars-test-support",
  "mars-types",
  "parking_lot",
  "serde_yaml_ng",
@@ -2742,6 +2743,7 @@ dependencies = [
  "mars-runtime",
  "mars-store",
  "mars-style",
+ "mars-test-support",
  "mars-types",
  "mars-wms",
  "mars-wmts",
@@ -2869,6 +2871,7 @@ dependencies = [
  "mars-source",
  "mars-store",
  "mars-style",
+ "mars-test-support",
  "mars-text",
  "mars-types",
  "parking_lot",
@@ -3044,6 +3047,13 @@ dependencies = [
 name = "mars-test-support"
 version = "0.0.0-dev"
 dependencies = [
+ "async-trait",
+ "bytes",
+ "futures-core",
+ "futures-util",
+ "mars-source",
+ "mars-store",
+ "mars-types",
  "png",
  "rand 0.10.1",
  "tempfile",

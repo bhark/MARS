@@ -58,6 +58,7 @@ zune-jpeg          = { workspace = true }
 # silently skips targets when the feature is not active).
 mars-runtime       = { path = ".", features = ["test-fixtures"] }
 mars-store         = { workspace = true, features = ["test-utils"] }
+mars-test-support  = { workspace = true }
 tokio              = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tracing-subscriber = { workspace = true }
 criterion          = { workspace = true }

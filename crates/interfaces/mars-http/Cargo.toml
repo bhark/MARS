@@ -37,3 +37,4 @@ tower              = { workspace = true, features = ["util"] }
 mars-render-port   = { workspace = true }
 mars-store         = { workspace = true }
 mars-style         = { workspace = true }
+mars-test-support  = { workspace = true }

@@ -286,8 +286,8 @@ mod tests {
     use super::*;
     use mars_observability::Metrics;
     use mars_render_port::{EncodeError, Encoder, Pixmap, RenderError, TextMetrics};
-    use mars_store::stub::{NotImplementedCache, NotImplementedStore};
     use mars_style::ResolvedLabelStyle;
+    use mars_test_support::port_fakes::{NotImplementedCache, NotImplementedStore};
     use mars_text::Fonts;
 
     #[derive(Debug, Default)]
