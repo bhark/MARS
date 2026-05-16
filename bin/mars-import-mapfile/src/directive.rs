@@ -15,6 +15,12 @@ pub(crate) enum MapDirective<'a> {
     Title(&'a Token),
     Layer(&'a Token),
     Symbol,
+    /// `FONTSET "path"` at MAP scope. Carries the path (relative to the
+    /// mapfile) to a `<alias> <filename>` table consumed by LABEL.FONT and
+    /// SYMBOL TYPE TRUETYPE references. Path resolution happens in
+    /// [`super::translate::translate_tokens`] up front; this variant only
+    /// exists so the MAP-walk doesn't treat it as an unknown keyword.
+    Fontset,
     /// `METADATA` block at MAP scope. Carries `ows_*` / `wms_*` keys that
     /// drive WMS / WMTS capabilities metadata (online resource, contact,
     /// keywords, fees, authority refs, etc.).
@@ -41,6 +47,7 @@ impl<'a> MapDirective<'a> {
             "TITLE" => Self::Title(t),
             "LAYER" => Self::Layer(t),
             "SYMBOL" => Self::Symbol,
+            "FONTSET" => Self::Fontset,
             "METADATA" => Self::Metadata,
             "PROJECTION" => Self::Projection(t),
             "MAXSIZE" => Self::MaxSize(t),

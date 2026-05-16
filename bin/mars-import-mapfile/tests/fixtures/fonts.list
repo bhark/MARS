@@ -1,0 +1,4 @@
+# fontset.txt format: <alias> <filename>; filename is resolved relative to
+# this file. The bundled DejaVu Sans is reused from mars-text's vendored
+# test_fonts so the fixture stays deterministic across hosts.
+sans ../../../../crates/support/mars-text/test_fonts/DejaVuSans.ttf

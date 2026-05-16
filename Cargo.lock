@@ -2739,6 +2739,7 @@ version = "0.0.0-dev"
 dependencies = [
  "anyhow",
  "clap",
+ "fontdb",
  "mars-expr",
  "mars-style",
  "thiserror 2.0.18",
