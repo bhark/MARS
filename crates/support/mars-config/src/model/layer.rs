@@ -453,7 +453,10 @@ pub enum ClassStyle {
         name: String,
     },
     /// Inline geometry style (`type: inline`, plus all `Style` fields flat).
-    Inline(Style),
+    /// Boxed so the enum's stack footprint stays close to the other variants;
+    /// the `String` attribute field on `ScaledSize` makes a flat `Style` the
+    /// dominant variant otherwise.
+    Inline(Box<Style>),
     /// Ordered multi-pass stack (`type: passes`, `passes: [{...}, {...}]`).
     /// Empty list is rejected at config-load.
     Passes {

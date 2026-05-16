@@ -30,6 +30,7 @@ mod tests {
             &ResolvedMarker {
                 shape: MarkerShape::Triangle,
                 size: 12.0,
+                rotation_rad: None,
             },
             (10.0, 10.0),
         );

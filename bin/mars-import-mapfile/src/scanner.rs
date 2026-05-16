@@ -132,30 +132,9 @@ pub(crate) fn scan(src: &str) -> Vec<Token> {
             continue;
         }
         let mut iter = parts.into_iter();
-        let mut keyword = iter.next().unwrap_or_default();
-        let mut args: Vec<String> = Vec::new();
-        let mut pending = true;
-        for arg in iter {
-            if arg.eq_ignore_ascii_case("END") {
-                // flush pending keyword+args, then emit END as its own token
-                if pending && (!args.is_empty() || !keyword.is_empty()) {
-                    toks.push(Token {
-                        line: line_no,
-                        keyword: std::mem::take(&mut keyword),
-                        args: std::mem::take(&mut args),
-                    });
-                    pending = false;
-                }
-                toks.push(Token {
-                    line: line_no,
-                    keyword: arg,
-                    args: Vec::new(),
-                });
-            } else {
-                args.push(arg);
-            }
-        }
-        if pending && (!keyword.is_empty() || !args.is_empty()) {
+        let keyword = iter.next().unwrap_or_default();
+        let args: Vec<String> = iter.collect();
+        if !keyword.is_empty() || !args.is_empty() {
             toks.push(Token {
                 line: line_no,
                 keyword,
@@ -209,11 +188,17 @@ fn scan_file_recursive(path: &Path, visited: &mut HashSet<PathBuf>) -> Result<Ve
 
 /// find the matching END for the block whose opener is at `start`. returns the
 /// inclusive range covering [opener .. END].
+///
+/// SYMBOL (and the other dual-role keywords) opens a block at MAP scope but
+/// is a directive when used inside STYLE / CLASS scope with args
+/// (`SYMBOL "arrow"`). A bare keyword with no args is the block-opener form;
+/// args present means the line is a directive. Reading args here keeps the
+/// depth counter accurate without needing scope context.
 pub(crate) fn block_range(tokens: &[Token], start: usize) -> Option<Range<usize>> {
     let mut depth = 0usize;
     for (i, t) in tokens.iter().enumerate().skip(start) {
         let kw = t.keyword.to_ascii_uppercase();
-        if is_block_opener(&kw) {
+        if is_block_opener(&kw) && t.args.is_empty() {
             depth += 1;
         } else if kw == "END" {
             depth = depth.saturating_sub(1);

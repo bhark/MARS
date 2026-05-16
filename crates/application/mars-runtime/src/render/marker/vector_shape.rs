@@ -38,6 +38,7 @@ mod tests {
                 filled: true,
             },
             size: 10.0,
+            rotation_rad: None,
         };
         let p = path_at(&m, (100.0, 200.0));
         let sp = &p.subpaths[0];

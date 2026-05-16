@@ -59,6 +59,7 @@ mod tests {
                 marker: Some(MarkerSymbol {
                     shape: MarkerShape::Circle,
                     size: 12.0.into(),
+                    angle: None,
                 }),
                 ..Default::default()
             }

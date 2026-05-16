@@ -498,7 +498,7 @@ END
             .expect("point style emitted");
         let m = style.marker.as_ref().expect("marker resolved from SYMBOL");
         match m {
-            crate::emitter::EmitMarker::Builtin { kind, size } => {
+            crate::emitter::EmitMarker::Builtin { kind, size, .. } => {
                 assert_eq!(*kind, MarkerKind::Circle);
                 assert!((size - 8.0).abs() < f32::EPSILON);
             }
@@ -776,6 +776,7 @@ END
                 font_family,
                 character,
                 size,
+                ..
             } => {
                 assert_eq!(font_family, "sans");
                 assert_eq!(character, "T");

@@ -1,0 +1,39 @@
+# Attribute-driven ANGLE and SIZE: STYLE.ANGLE [bearing] rotates each marker
+# by the feature's `bearing` column; STYLE.SIZE [icon_size] reads the per-
+# feature size; LABEL.ANGLE [text_angle] rotates labels per feature.
+MAP
+  NAME "attr_driven"
+  TITLE "Attribute-Driven Style Coverage"
+
+  SYMBOL
+    NAME "arrow"
+    TYPE ELLIPSE
+    POINTS 1 1 END
+    FILLED TRUE
+  END
+
+  LAYER
+    NAME "wind"
+    TYPE POINT
+    STATUS ON
+    DATA "geom FROM wind"
+    PROCESSING "ITEMS=bearing,icon_size,text_angle,name"
+
+    CLASS
+      NAME "all"
+      STYLE
+        SYMBOL "arrow"
+        COLOR 80 80 80
+        ANGLE [bearing]
+        SIZE [icon_size]
+      END
+      LABEL
+        TEXT "{name}"
+        FONT "sans"
+        SIZE 12
+        COLOR 0 0 0
+        ANGLE [text_angle]
+      END
+    END
+  END
+END

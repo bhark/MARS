@@ -217,6 +217,7 @@ mod tests {
             marker: Some(mars_style::MarkerSymbol {
                 shape: mars_style::MarkerShape::Circle,
                 size: 4.0.into(),
+                angle: None,
             }),
             stroke_gap: Some(mars_style::StrokeGap {
                 interval_px: 12.0,
@@ -251,6 +252,7 @@ mod tests {
             marker: Some(mars_style::MarkerSymbol {
                 shape: mars_style::MarkerShape::Circle,
                 size: 4.0.into(),
+                angle: None,
             }),
             stroke_gap: Some(mars_style::StrokeGap {
                 interval_px: 0.0,

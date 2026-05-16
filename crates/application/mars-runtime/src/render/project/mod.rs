@@ -226,6 +226,7 @@ mod tests {
                 marker: Some(MarkerSymbol {
                     shape: MarkerShape::Square,
                     size: 4.0.into(),
+                    angle: None,
                 }),
                 geom_transform: Some(t),
                 ..Default::default()

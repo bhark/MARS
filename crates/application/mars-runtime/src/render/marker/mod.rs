@@ -20,7 +20,7 @@ use mars_style::{MarkerShape, ResolvedMarker};
 
 pub(super) fn path_at(m: &ResolvedMarker, pos: (f32, f32)) -> Path {
     let size = m.size;
-    match &m.shape {
+    let mut path = match &m.shape {
         MarkerShape::Circle => circle::path(size, pos),
         MarkerShape::Square => square::path(size, pos),
         MarkerShape::Triangle => triangle::path(size, pos),
@@ -29,6 +29,28 @@ pub(super) fn path_at(m: &ResolvedMarker, pos: (f32, f32)) -> Path {
         MarkerShape::Pin => pin::path(size, pos),
         MarkerShape::VectorShape { points, anchor, filled } => vector_shape::path(points, *anchor, *filled, size, pos),
         MarkerShape::Glyph { .. } => glyph::path(pos),
+    };
+    if let Some(theta) = m.rotation_rad
+        && theta.abs() > f32::EPSILON
+    {
+        rotate_subpaths(&mut path, pos, theta);
+    }
+    path
+}
+
+// rotate every vertex around `pivot` by `theta` radians counter-clockwise.
+// `Path` is the renderer-port wire type; tiny-skia interprets canvas y as
+// positive-down, so a positive theta rotates clockwise on screen - matching
+// mapserver's ANGLE semantics.
+fn rotate_subpaths(path: &mut Path, pivot: (f32, f32), theta: f32) {
+    let (s, c) = theta.sin_cos();
+    for sp in &mut path.subpaths {
+        for p in &mut sp.points {
+            let dx = p.0 - pivot.0;
+            let dy = p.1 - pivot.1;
+            p.0 = pivot.0 + c * dx - s * dy;
+            p.1 = pivot.1 + s * dx + c * dy;
+        }
     }
 }
 

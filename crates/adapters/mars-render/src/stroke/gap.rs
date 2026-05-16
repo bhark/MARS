@@ -124,6 +124,7 @@ mod tests {
             marker: Some(MarkerSymbol {
                 shape: MarkerShape::Circle,
                 size: 4.0.into(),
+                angle: None,
             }),
             stroke_gap: Some(StrokeGap {
                 interval_px: 20.0,
@@ -163,6 +164,7 @@ mod tests {
             marker: Some(MarkerSymbol {
                 shape: MarkerShape::Circle,
                 size: 4.0.into(),
+                angle: None,
             }),
             ..Default::default()
         }
@@ -195,6 +197,7 @@ mod tests {
             marker: Some(MarkerSymbol {
                 shape: MarkerShape::Square,
                 size: 3.0.into(),
+                angle: None,
             }),
             ..Default::default()
         }

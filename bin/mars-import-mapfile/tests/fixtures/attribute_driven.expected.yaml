@@ -3,8 +3,8 @@
 # Review and replace before production use.
 
 service:
-  name: "labels"
-  title: "Label Placement Parity"
+  name: "attr_driven"
+  title: "Attribute-Driven Style Coverage"
   abstract: "Imported from mapfile"
   contact_email: ops@example.org
 
@@ -52,31 +52,33 @@ interfaces:
     formats: ["image/png", "image/jpeg"]
 
 styles:
-  label_city:
+  point_wind_all:
+    type: point
+    fill: "#505050"
+    marker: { kind: circle, size: "[icon_size]", angle: "[bearing]" }
+  label_wind__all:
     type: label
-    font_family: "sans-serif"
-    font_size: 13
-    fill: "#101010"
-    priority: 8
-    min_distance: 16
-    position: uc
-    offset_px: [3, -4]
-    angle: 15
-    partials: true
-    force: true
+    font_family: "sans"
+    font_size: 12
+    fill: "#000000"
+    angle: "[text_angle]"
 
 layers:
-  - name: "city"
+  - name: "wind"
     type: point
     sources:
-      - { band: detail, from: "city", geometry_column: "geom", id_column: "OGC_FID", attributes: ["name"] }
-      - { band: hi, from: "city", geometry_column: "geom", id_column: "OGC_FID", attributes: ["name"] }
-      - { band: mid, from: "city", geometry_column: "geom", id_column: "OGC_FID", attributes: ["name"] }
-      - { band: lo, from: "city", geometry_column: "geom", id_column: "OGC_FID", attributes: ["name"] }
-      - { band: overview, from: "city", geometry_column: "geom", id_column: "OGC_FID", attributes: ["name"] }
-    label:
-      text: "{name}"
-      style: { type: ref, name: "label_city" }
+      - { band: detail, from: "wind", geometry_column: "geom", attributes: ["name"] }
+      - { band: hi, from: "wind", geometry_column: "geom", attributes: ["name"] }
+      - { band: mid, from: "wind", geometry_column: "geom", attributes: ["name"] }
+      - { band: lo, from: "wind", geometry_column: "geom", attributes: ["name"] }
+      - { band: overview, from: "wind", geometry_column: "geom", attributes: ["name"] }
+    classes:
+      - name: "all"
+        title: "all"
+        style: { type: ref, name: "point_wind_all" }
+        label:
+          text: "{name}"
+          style: { type: ref, name: "label_wind__all" }
 
 observability:
   log_level: info

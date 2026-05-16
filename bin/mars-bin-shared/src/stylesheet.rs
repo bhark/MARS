@@ -28,7 +28,7 @@ pub fn build_stylesheet(cfg: &Config) -> Stylesheet {
         for class in &layer.classes {
             let key = format!("{}__{}", layer.name, class.name);
             let passes: Option<Vec<Style>> = match &class.style {
-                ClassStyle::Inline(s) => Some(vec![s.clone()]),
+                ClassStyle::Inline(s) => Some(vec![(**s).clone()]),
                 ClassStyle::Passes { passes } => Some(passes.clone()),
                 ClassStyle::Ref { .. } => None,
             };

@@ -54,6 +54,7 @@ mod tests {
                 marker: Some(MarkerSymbol {
                     shape: MarkerShape::Square,
                     size: 6.0.into(),
+                    angle: None,
                 }),
                 ..Default::default()
             }

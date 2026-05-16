@@ -217,7 +217,7 @@ mod tests {
                 title: String::new(),
                 when: None,
                 scale: None,
-                style: ClassStyle::Inline(style),
+                style: ClassStyle::Inline(Box::new(style)),
                 label: None,
             }
         }

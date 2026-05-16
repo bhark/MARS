@@ -101,6 +101,7 @@ mod tests {
         MarkerSymbol {
             shape,
             size: size.into(),
+            angle: None,
         }
     }
 

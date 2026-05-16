@@ -156,6 +156,7 @@ fn single_pass_to_style_def(style_type: &str, name: String, pass: SinglePass) ->
         position: None,
         offset_px: None,
         angle_deg: None,
+        angle_attribute: None,
         partials: None,
         force: None,
     }
@@ -185,6 +186,7 @@ fn emit_label(r: ResolvedLabel, skel: &mut Skeleton) -> LabelSkeleton {
         position: r.position,
         offset_px: r.offset_px,
         angle_deg: r.angle_deg,
+        angle_attribute: r.angle_attribute,
         partials: r.partials,
         force: r.force,
     });

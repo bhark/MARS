@@ -39,6 +39,7 @@ mod tests {
             &ResolvedMarker {
                 shape: MarkerShape::Cross,
                 size: 12.0,
+                rotation_rad: None,
             },
             (0.0, 0.0),
         );

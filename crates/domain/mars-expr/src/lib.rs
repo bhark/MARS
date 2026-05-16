@@ -88,6 +88,18 @@ pub trait AttributeAccess {
     fn get(&self, name: &str) -> Option<Literal>;
 }
 
+/// Zero-sized attribute access that returns `None` for every column. Useful
+/// at seams that resolve sizes / angles without a feature in scope (legends,
+/// error overlays, tests).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NullAttributes;
+
+impl AttributeAccess for NullAttributes {
+    fn get(&self, _: &str) -> Option<Literal> {
+        None
+    }
+}
+
 /// Collect every identifier name referenced by `expr` into `out`. Used by
 /// config validation to confirm each binding materialises the attributes its
 /// layers consume.

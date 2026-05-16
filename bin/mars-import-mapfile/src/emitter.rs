@@ -190,6 +190,9 @@ pub(crate) struct StyleDef {
     pub(crate) offset_px: Option<(f32, f32)>,
     /// Static label rotation in degrees (numeric LABEL ANGLE).
     pub(crate) angle_deg: Option<f32>,
+    /// `[col]` form on LABEL.ANGLE - resolves rotation from the attribute
+    /// at render time. When set the `angle_deg` field is ignored on emit.
+    pub(crate) angle_attribute: Option<String>,
     /// `LABEL PARTIALS` - when true, allow labels to extend past the canvas
     /// edge. Default is `false` to match mapserver.
     pub(crate) partials: Option<bool>,
@@ -214,22 +217,40 @@ pub(crate) enum EmitFill {
     Image { name: String },
 }
 
+/// Authored numeric: a static literal or an attribute reference. Mirrors
+/// `mars_style::NumericField`; held as a thin local enum so the emitter
+/// stays string-based.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum EmitNumeric {
+    Static(f32),
+    Attribute(String),
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum EmitMarker {
-    /// Built-in marker shape with a pixel size.
-    Builtin { kind: MarkerKind, size: f32 },
+    /// Built-in marker shape with a pixel size and optional rotation.
+    Builtin {
+        kind: MarkerKind,
+        size: f32,
+        size_attribute: Option<String>,
+        angle: Option<EmitNumeric>,
+    },
     /// `mars_style::MarkerSymbol::VectorShape`: explicit point list.
     Vector {
         points: Vec<(f32, f32)>,
         anchor: Option<(f32, f32)>,
         filled: bool,
         size: f32,
+        size_attribute: Option<String>,
+        angle: Option<EmitNumeric>,
     },
     /// `mars_style::MarkerSymbol::Glyph`: TrueType character.
     Glyph {
         font_family: String,
         character: String,
         size: f32,
+        size_attribute: Option<String>,
+        angle: Option<EmitNumeric>,
     },
 }
 
@@ -866,17 +887,32 @@ fn write_geometry_style_body(out: &mut String, st: &StyleDef, indent: &str) {
 /// (`    marker: ...`) and the inline-passes path (deeper indent).
 fn write_marker_at(out: &mut String, m: &EmitMarker, indent: &str) {
     match m {
-        EmitMarker::Builtin { kind, size } => {
-            let _ = writeln!(out, "{indent}marker: {{ kind: {}, size: {size} }}", kind.as_wire());
+        EmitMarker::Builtin {
+            kind,
+            size,
+            size_attribute,
+            angle,
+        } => {
+            let size_v = size_field_wire(*size, size_attribute.as_deref());
+            let angle_field = angle_wire_field(angle.as_ref());
+            let _ = writeln!(
+                out,
+                "{indent}marker: {{ kind: {}, size: {size_v}{angle_field} }}",
+                kind.as_wire()
+            );
         }
         EmitMarker::Glyph {
             font_family,
             character,
             size,
+            size_attribute,
+            angle,
         } => {
+            let size_v = size_field_wire(*size, size_attribute.as_deref());
+            let angle_field = angle_wire_field(angle.as_ref());
             let _ = writeln!(
                 out,
-                "{indent}marker: {{ kind: glyph, font_family: {}, character: {}, size: {size} }}",
+                "{indent}marker: {{ kind: glyph, font_family: {}, character: {}, size: {size_v}{angle_field} }}",
                 yaml_quote(font_family),
                 yaml_quote(character)
             );
@@ -886,6 +922,8 @@ fn write_marker_at(out: &mut String, m: &EmitMarker, indent: &str) {
             anchor,
             filled,
             size,
+            size_attribute,
+            angle,
         } => {
             let _ = writeln!(out, "{indent}marker:");
             let _ = writeln!(out, "{indent}  kind: vector_shape");
@@ -899,8 +937,33 @@ fn write_marker_at(out: &mut String, m: &EmitMarker, indent: &str) {
                 let _ = writeln!(out, "{indent}  anchor: [{ax}, {ay}]");
             }
             let _ = writeln!(out, "{indent}  filled: {filled}");
-            let _ = writeln!(out, "{indent}  size: {size}");
+            let size_v = size_field_wire(*size, size_attribute.as_deref());
+            let _ = writeln!(out, "{indent}  size: {size_v}");
+            if let Some(a) = angle {
+                let _ = writeln!(out, "{indent}  angle: {}", numeric_wire(a));
+            }
         }
+    }
+}
+
+fn size_field_wire(size_px: f32, attr: Option<&str>) -> String {
+    match attr {
+        Some(col) => format!("\"[{col}]\""),
+        None => size_px.to_string(),
+    }
+}
+
+fn angle_wire_field(angle: Option<&EmitNumeric>) -> String {
+    match angle {
+        Some(a) => format!(", angle: {}", numeric_wire(a)),
+        None => String::new(),
+    }
+}
+
+fn numeric_wire(n: &EmitNumeric) -> String {
+    match n {
+        EmitNumeric::Static(v) => v.to_string(),
+        EmitNumeric::Attribute(col) => format!("\"[{col}]\""),
     }
 }
 
@@ -1186,8 +1249,10 @@ pub(crate) fn render(skel: &Skeleton, bands: &[(String, u64)]) -> String {
                 if let Some((dx, dy)) = st.offset_px {
                     let _ = writeln!(out, "    offset_px: [{dx}, {dy}]");
                 }
-                if let Some(a) = st.angle_deg {
-                    let _ = writeln!(out, "    angle_deg: {a}");
+                if let Some(col) = &st.angle_attribute {
+                    let _ = writeln!(out, "    angle: \"[{col}]\"");
+                } else if let Some(a) = st.angle_deg {
+                    let _ = writeln!(out, "    angle: {a}");
                 }
                 if let Some(true) = st.partials {
                     let _ = writeln!(out, "    partials: true");

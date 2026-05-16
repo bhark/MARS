@@ -214,7 +214,7 @@ fn build_two_band_config() -> Config {
                 title: String::new(),
                 when: Some("vejkategori = 'Stor vej'".into()),
                 scale: None,
-                style: ClassStyle::Inline(Default::default()),
+                style: ClassStyle::Inline(Box::default()),
                 label: None,
             }],
             label: None,

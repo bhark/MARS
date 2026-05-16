@@ -11,9 +11,10 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use mars_artifact::{
-    ArtifactReader, FeatureGeom, GeometryPayload, SectionKind, SpatialIndex, decode_class_assignment, decode_one_geom,
-    decode_style_refs,
+    ArtifactReader, AttrValue, FeatureGeom, GeometryPayload, SectionKind, SpatialIndex, decode_class_assignment,
+    decode_one_geom, decode_row, decode_style_refs,
 };
+use mars_expr::{AttributeAccess, Literal};
 use mars_render_port::DrawOp;
 use mars_style::Stylesheet;
 use mars_types::{BindingMetadata, LayerId, PageEntry};
@@ -77,6 +78,24 @@ impl ClassResolver {
 
     pub(super) fn style_refs(&self) -> &[String] {
         &self.style_refs
+    }
+}
+
+/// minimal `AttributeAccess` over a decoded row. linear lookup; rows carry a
+/// handful of columns in practice so a hashmap would just churn memory.
+struct AttrRow {
+    pairs: Vec<(String, AttrValue)>,
+}
+
+impl AttrRow {
+    fn new(pairs: Vec<(String, AttrValue)>) -> Self {
+        Self { pairs }
+    }
+}
+
+impl AttributeAccess for AttrRow {
+    fn get(&self, name: &str) -> Option<Literal> {
+        self.pairs.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone())
     }
 }
 
@@ -159,6 +178,22 @@ pub(super) fn decode_page_to_ops(
         ));
     }
 
+    // attribute-driven style fields: open the attributes section once per page
+    // when any pass on any class this layer routes through references a
+    // column. mistakes here are cheap (we just skip the lookup); the gating
+    // saves a section-open on the common static-only path.
+    let needs_attrs = stylesheet
+        .geometry
+        .values()
+        .any(|passes| passes.iter().any(mars_style::Style::needs_attributes));
+    // Bytes -> &[u8] re-open: ArtifactReader is cheap and the bytes are mmap.
+    let attrs_reader = if needs_attrs {
+        Some(reader)
+    } else {
+        drop(reader);
+        None
+    };
+
     let projected = if same_crs {
         paired
     } else {
@@ -197,6 +232,18 @@ pub(super) fn decode_page_to_ops(
         // pixel-bbox extent: shared across passes so we pay the geom walk
         // once. MINFEATURESIZE is computed lazily on demand.
         let mut extent_px: Option<f32> = None;
+        // per-feature attribute row: decode lazily once when at least one
+        // pass on this class needs it. cached for the rest of the passes on
+        // this feature.
+        let mut attr_row: Option<AttrRow> = None;
+        let row_needs = passes.iter().any(mars_style::Style::needs_attributes);
+        if row_needs
+            && let Some(ref r) = attrs_reader
+            && let Ok(Some(bytes)) = r.attributes_by_slot(slot)
+            && let Ok(pairs) = decode_row(bytes)
+        {
+            attr_row = Some(AttrRow::new(pairs));
+        }
         // ordered multi-pass emit: one DrawOp per pass, declared order. each
         // pass resolves against the request denom before crossing the
         // renderer port - the renderer never sees `ScaledSize` directly.
@@ -207,7 +254,11 @@ pub(super) fn decode_page_to_ops(
                     continue;
                 }
             }
-            let style = Arc::new(pass.resolve(denom));
+            let resolved = match attr_row.as_ref() {
+                Some(row) => pass.resolve_with_attrs(denom, row),
+                None => pass.resolve(denom),
+            };
+            let style = Arc::new(resolved);
             if let Some(op) = feature_to_drawop(&f.geom, plan.bbox, plan.width, plan.height, style) {
                 ops.push(op);
             }

@@ -117,6 +117,10 @@ pub enum LineJoin {
 pub struct MarkerSymbol {
     pub shape: MarkerShape,
     pub size: ScaledSize,
+    /// Authored rotation in degrees, counter-clockwise. `None` defers to
+    /// the renderer's default orientation. `Some(Attribute)` sources the
+    /// rotation from a per-feature column at render time.
+    pub angle: Option<NumericField>,
 }
 
 /// Point marker shape. Shape-specific bodies stay inside the variant; common
@@ -190,7 +194,9 @@ impl MarkerSymbol {
 impl Serialize for MarkerSymbol {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeMap;
-        // flat tagged shape: kind + size + shape-specific fields.
+        // flat tagged shape: kind + size + shape-specific fields + optional
+        // angle.
+        let angle_extra = usize::from(self.angle.is_some());
         match &self.shape {
             MarkerShape::Circle
             | MarkerShape::Square
@@ -199,26 +205,35 @@ impl Serialize for MarkerSymbol {
             | MarkerShape::X
             | MarkerShape::Pin => {
                 let kind = marker_shape_simple_tag(&self.shape);
-                let mut m = s.serialize_map(Some(2))?;
+                let mut m = s.serialize_map(Some(2 + angle_extra))?;
                 m.serialize_entry("kind", kind)?;
                 m.serialize_entry("size", &self.size)?;
+                if let Some(a) = &self.angle {
+                    m.serialize_entry("angle", a)?;
+                }
                 m.end()
             }
             MarkerShape::VectorShape { points, anchor, filled } => {
-                let mut m = s.serialize_map(Some(5))?;
+                let mut m = s.serialize_map(Some(5 + angle_extra))?;
                 m.serialize_entry("kind", "vector_shape")?;
                 m.serialize_entry("points", points)?;
                 m.serialize_entry("anchor", anchor)?;
                 m.serialize_entry("filled", filled)?;
                 m.serialize_entry("size", &self.size)?;
+                if let Some(a) = &self.angle {
+                    m.serialize_entry("angle", a)?;
+                }
                 m.end()
             }
             MarkerShape::Glyph { font_family, ch } => {
-                let mut m = s.serialize_map(Some(4))?;
+                let mut m = s.serialize_map(Some(4 + angle_extra))?;
                 m.serialize_entry("kind", "glyph")?;
                 m.serialize_entry("font_family", font_family)?;
                 m.serialize_entry("ch", ch)?;
                 m.serialize_entry("size", &self.size)?;
+                if let Some(a) = &self.angle {
+                    m.serialize_entry("angle", a)?;
+                }
                 m.end()
             }
         }
@@ -251,6 +266,8 @@ impl<'de> Deserialize<'de> for MarkerSymbol {
             kind: String,
             #[serde(default)]
             size: Option<ScaledSize>,
+            #[serde(default)]
+            angle: Option<NumericField>,
             // vector_shape body
             #[serde(default)]
             points: Option<Vec<(f32, f32)>>,
@@ -304,6 +321,7 @@ impl<'de> Deserialize<'de> for MarkerSymbol {
         Ok(MarkerSymbol {
             shape,
             size: f.size.unwrap_or_else(|| ScaledSize::from_px(default_size)),
+            angle: f.angle,
         })
     }
 }
@@ -517,26 +535,49 @@ pub struct Style {
 
 impl Style {
     /// Resolve every size-like authored field against `denom` and return a
-    /// renderer-facing variant with concrete pixel scalars. The renderer
-    /// never sees `ScaledSize` directly; this is the seam.
+    /// renderer-facing variant with concrete pixel scalars. Attribute-sourced
+    /// fields fall back to their authored base when no row is in scope.
     #[must_use]
     pub fn resolve(&self, denom: u64) -> ResolvedStyle {
+        self.resolve_with_attrs(denom, &mars_expr::NullAttributes)
+    }
+
+    /// Per-feature variant of [`Self::resolve`]. The decoder feeds the
+    /// feature's attribute row when any pass references an attribute
+    /// column; otherwise [`Self::resolve`] is the simpler form.
+    #[must_use]
+    pub fn resolve_with_attrs(&self, denom: u64, attrs: &dyn mars_expr::AttributeAccess) -> ResolvedStyle {
         ResolvedStyle {
             fill: self.fill.clone(),
             stroke: self.stroke,
-            stroke_width: self.stroke_width.map(|s| s.resolve(denom)),
+            stroke_width: self.stroke_width.as_ref().map(|s| s.resolve_with_attrs(denom, attrs)),
             stroke_dasharray: self.stroke_dasharray.clone(),
             stroke_linecap: self.stroke_linecap,
             stroke_linejoin: self.stroke_linejoin,
             marker: self.marker.as_ref().map(|m| ResolvedMarker {
                 shape: m.shape.clone(),
-                size: m.size.resolve(denom),
+                size: m.size.resolve_with_attrs(denom, attrs),
+                rotation_rad: m.angle.as_ref().and_then(|a| a.resolve(attrs)).map(f32::to_radians),
             }),
             opacity: self.opacity,
             stroke_offset_px: self.stroke_offset_px,
             stroke_gap: self.stroke_gap,
             geom_transform: self.geom_transform,
         }
+    }
+
+    /// True if any field on this style references a feature attribute. The
+    /// decoder uses this to skip opening the artifact's attribute section
+    /// when every pass on every class is purely static.
+    #[must_use]
+    pub fn needs_attributes(&self) -> bool {
+        self.stroke_width.as_ref().is_some_and(ScaledSize::needs_attributes)
+            || self.marker.as_ref().is_some_and(|m| {
+                m.size.needs_attributes()
+                    || m.angle
+                        .as_ref()
+                        .is_some_and(|a| matches!(a, NumericField::Attribute(_)))
+            })
     }
 }
 
@@ -561,11 +602,14 @@ pub struct ResolvedStyle {
 }
 
 /// Resolved marker: shape unchanged from authored form, `size` collapsed
-/// to a concrete pixel value.
+/// to a concrete pixel value. `rotation_rad` carries an authored or
+/// attribute-derived rotation; `None` defers to the renderer's default
+/// orientation (zero for points, tangent for stamped-along-line markers).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedMarker {
     pub shape: MarkerShape,
     pub size: f32,
+    pub rotation_rad: Option<f32>,
 }
 
 /// Label-typed style.
@@ -601,11 +645,13 @@ pub struct LabelStyle {
     /// labels with a non-zero angle. Mirrors mapserver's `OFFSET dx dy`.
     #[serde(default)]
     pub offset_px: (f32, f32),
-    /// Static label rotation in degrees, counter-clockwise. `None` defers
-    /// to the placement-derived angle (zero for points/polygons, tangent
-    /// for lines). Mirrors mapserver's numeric `ANGLE <deg>`.
-    #[serde(default)]
-    pub angle_deg: Option<f32>,
+    /// Label rotation in degrees, counter-clockwise. `None` defers to the
+    /// placement-derived angle (zero for points/polygons, tangent for lines).
+    /// `Some(NumericField::Static)` is a fixed rotation; `Some(Attribute)`
+    /// sources the angle from a per-feature column at render time. Mirrors
+    /// mapserver's `ANGLE <deg>` / `ANGLE [col]`.
+    #[serde(default, alias = "angle_deg")]
+    pub angle: Option<NumericField>,
     /// When `false`, drop labels whose bbox extends past the canvas edge.
     /// Defaults to `false` to match mapserver's `PARTIALS` default.
     #[serde(default)]
@@ -619,22 +665,41 @@ pub struct LabelStyle {
 
 impl LabelStyle {
     /// Resolve the authored font size against `denom` and return a
-    /// renderer-facing variant.
+    /// renderer-facing variant. Attribute-sourced fields fall back to their
+    /// authored base when no row is in scope.
     #[must_use]
     pub fn resolve(&self, denom: u64) -> ResolvedLabelStyle {
+        self.resolve_with_attrs(denom, &mars_expr::NullAttributes)
+    }
+
+    /// Per-feature variant of [`Self::resolve`].
+    #[must_use]
+    pub fn resolve_with_attrs(&self, denom: u64, attrs: &dyn mars_expr::AttributeAccess) -> ResolvedLabelStyle {
         ResolvedLabelStyle {
             font_family: self.font_family.clone(),
-            font_size: self.font_size.resolve(denom),
+            font_size: self.font_size.resolve_with_attrs(denom, attrs),
             fill: self.fill,
             halo: self.halo.clone(),
             priority: self.priority,
             min_distance: self.min_distance,
             position: self.position,
             offset_px: self.offset_px,
-            angle_deg: self.angle_deg,
+            angle_deg: self.angle.as_ref().and_then(|a| a.resolve(attrs)),
             partials: self.partials,
             force: self.force,
         }
+    }
+
+    /// True if any field on this label style references a feature
+    /// attribute. The label decoder uses this to gate the attribute-section
+    /// open.
+    #[must_use]
+    pub fn needs_attributes(&self) -> bool {
+        self.font_size.needs_attributes()
+            || self
+                .angle
+                .as_ref()
+                .is_some_and(|a| matches!(a, NumericField::Attribute(_)))
     }
 }
 
@@ -1175,6 +1240,7 @@ mod tests {
             (MarkerSymbol {
                 shape: MarkerShape::Circle,
                 size: ScaledSize::from_px(7.0),
+                angle: None,
             }
             .base_size()
                 - 7.0)
@@ -1189,6 +1255,7 @@ mod tests {
                     filled: true,
                 },
                 size: ScaledSize::from_px(9.0),
+                angle: None,
             }
             .base_size()
                 - 9.0)
@@ -1202,6 +1269,7 @@ mod tests {
                     ch: "X".into(),
                 },
                 size: ScaledSize::from_px(11.0),
+                angle: None,
             }
             .base_size()
                 - 11.0)
@@ -1231,7 +1299,7 @@ mod tests {
         // keep their current behaviour.
         assert_eq!(l.position, AnchorPosition::Auto);
         assert_eq!(l.offset_px, (0.0, 0.0));
-        assert!(l.angle_deg.is_none());
+        assert!(l.angle.is_none());
         assert!(!l.partials);
         assert!(!l.force);
     }
@@ -1252,7 +1320,7 @@ min_distance: 8.0
         let l: LabelStyle = serde_yaml_ng::from_str(yaml).unwrap();
         assert_eq!(l.position, AnchorPosition::Uc);
         assert_eq!(l.offset_px, (3.5, -2.0));
-        assert_eq!(l.angle_deg, Some(45.0));
+        assert_eq!(l.angle, Some(NumericField::Static(45.0)));
         assert!(l.partials);
         assert!(l.force);
         assert!((l.min_distance - 8.0).abs() < f32::EPSILON);
@@ -1376,6 +1444,7 @@ min_distance: 8.0
                 min_px: Some(2.0),
                 max_px: Some(20.0),
                 ref_denom: Some(50_000),
+                attribute: None,
             }),
             ..Default::default()
         };
@@ -1419,7 +1488,9 @@ min_distance: 8.0
                     min_px: None,
                     max_px: None,
                     ref_denom: Some(50_000),
+                    attribute: None,
                 },
+                angle: None,
             }),
             ..Default::default()
         };
@@ -1438,6 +1509,7 @@ min_distance: 8.0
                 min_px: Some(6.0),
                 max_px: Some(24.0),
                 ref_denom: Some(50_000),
+                attribute: None,
             },
             fill: Colour::rgba(0, 0, 0, 0xff),
             halo: None,
@@ -1445,7 +1517,7 @@ min_distance: 8.0
             min_distance: 0.0,
             position: AnchorPosition::Auto,
             offset_px: (0.0, 0.0),
-            angle_deg: None,
+            angle: None,
             partials: false,
             force: false,
         };

@@ -11,9 +11,21 @@ use std::collections::HashMap;
 use mars_style::Colour;
 
 use crate::directive::StyleDirective;
-use crate::emitter::{EmitFill, EmitMarker, EmitStrokeGap, MarkerKind, SymbolDef};
+use crate::emitter::{EmitFill, EmitMarker, EmitNumeric, EmitStrokeGap, MarkerKind, SymbolDef};
 use crate::parsing;
+use crate::parsing::bracketed_ident;
 use crate::scanner::Token;
+
+/// build the marker's optional rotation field from the parsed style block.
+/// `[col]` form wins over numeric when both are present in source authoring;
+/// numeric `0.0` is the implicit default and is dropped to keep the wire
+/// form terse.
+fn marker_angle(s: &StyleBlock) -> Option<EmitNumeric> {
+    if let Some(col) = &s.angle_attribute {
+        return Some(EmitNumeric::Attribute(col.clone()));
+    }
+    s.angle_deg.filter(|a| a.abs() > f32::EPSILON).map(EmitNumeric::Static)
+}
 
 fn push_unique(bag: &mut Vec<&'static str>, name: &'static str) {
     if !bag.contains(&name) {
@@ -31,10 +43,17 @@ pub(crate) struct StyleBlock {
     /// STYLE.SYMBOL "<name>" - resolved against Skeleton::symbols at emit
     /// time to decide marker:/fill: { kind: hatch, ... } shape.
     pub(crate) symbol: Option<String>,
-    /// STYLE.ANGLE - hatch angle override.
+    /// STYLE.ANGLE - hatch angle override or marker rotation.
     pub(crate) angle_deg: Option<f32>,
+    /// `[col]` form on STYLE.ANGLE - the marker resolves rotation from
+    /// this attribute at render time. Mutually exclusive with `angle_deg`
+    /// in source authoring (mapserver accepts only one form per directive).
+    pub(crate) angle_attribute: Option<String>,
     /// STYLE.SIZE - marker size or hatch spacing override.
     pub(crate) size: Option<f32>,
+    /// `[col]` form on STYLE.SIZE - the marker resolves size from this
+    /// attribute at render time.
+    pub(crate) size_attribute: Option<String>,
     /// STYLE.OPACITY <0..100> -> style-wide alpha in [0.0, 1.0].
     pub(crate) opacity: Option<f32>,
     /// STYLE.OFFSET <x> [<y>] -> perpendicular stroke offset in pixels.
@@ -82,8 +101,20 @@ pub(crate) fn parse_style_block(body: &[Token]) -> StyleBlock {
                     st.symbol = Some(s);
                 }
             }
-            StyleDirective::Angle(t) => st.angle_deg = parsing::first_parsed(t).or(st.angle_deg),
-            StyleDirective::Size(t) => st.size = parsing::first_parsed(t).or(st.size),
+            StyleDirective::Angle(t) => {
+                if let Some(col) = bracketed_ident(t) {
+                    st.angle_attribute = Some(col);
+                } else {
+                    st.angle_deg = parsing::first_parsed(t).or(st.angle_deg);
+                }
+            }
+            StyleDirective::Size(t) => {
+                if let Some(col) = bracketed_ident(t) {
+                    st.size_attribute = Some(col);
+                } else {
+                    st.size = parsing::first_parsed(t).or(st.size);
+                }
+            }
             StyleDirective::Opacity(t) => {
                 // mapserver OPACITY is 0..100; mars wants 0.0..1.0.
                 if let Some(v) = parsing::first_parsed::<f32>(t) {
@@ -189,12 +220,16 @@ pub(crate) fn style_block_to_pass(s: &StyleBlock, symbols: &HashMap<String, Symb
                 resolved_marker = Some(EmitMarker::Builtin {
                     kind: MarkerKind::Circle,
                     size: s.size.unwrap_or(6.0),
+                    size_attribute: s.size_attribute.clone(),
+                    angle: marker_angle(s),
                 });
             }
             Some(SymbolDef::NamedShape(kind)) => {
                 resolved_marker = Some(EmitMarker::Builtin {
                     kind: *kind,
                     size: s.size.unwrap_or(6.0),
+                    size_attribute: s.size_attribute.clone(),
+                    angle: marker_angle(s),
                 });
             }
             Some(SymbolDef::Hatch { angle_deg, size }) => {
@@ -215,6 +250,8 @@ pub(crate) fn style_block_to_pass(s: &StyleBlock, symbols: &HashMap<String, Symb
                     anchor: *anchor,
                     filled: *filled,
                     size: s.size.unwrap_or(6.0),
+                    size_attribute: s.size_attribute.clone(),
+                    angle: marker_angle(s),
                 });
             }
             Some(SymbolDef::Glyph { font_family, character }) => {
@@ -222,6 +259,8 @@ pub(crate) fn style_block_to_pass(s: &StyleBlock, symbols: &HashMap<String, Symb
                     font_family: font_family.clone(),
                     character: character.clone(),
                     size: s.size.unwrap_or(12.0),
+                    size_attribute: s.size_attribute.clone(),
+                    angle: marker_angle(s),
                 });
             }
             Some(SymbolDef::Pixmap { source_image }) => {
@@ -256,9 +295,10 @@ pub(crate) fn style_block_to_pass(s: &StyleBlock, symbols: &HashMap<String, Symb
         }
     }
 
-    // ANGLE outside a hatch context is silently ignored at draw time;
-    // surface it so the operator sees it in the layer-level warn.
-    if resolved_hatch.is_none() && s.angle_deg.is_some() {
+    // STYLE.ANGLE on a non-hatch style with no marker has no draw target;
+    // flag it so the operator sees the dropped directive. with a marker
+    // present the rotation flows through `EmitMarker::angle` above.
+    if resolved_hatch.is_none() && resolved_marker.is_none() && (s.angle_deg.is_some() || s.angle_attribute.is_some()) {
         push_unique(&mut unimplemented, "STYLE.ANGLE (non-hatch)");
     }
 
@@ -340,23 +380,46 @@ pub(crate) fn canonical_signature(
     }
     if let Some(m) = marker {
         match m {
-            EmitMarker::Builtin { kind, size } => {
-                let _ = write!(s, ",marker={}-{size}", kind.as_wire());
+            EmitMarker::Builtin {
+                kind,
+                size,
+                size_attribute,
+                angle,
+            } => {
+                let _ = write!(
+                    s,
+                    ",marker={}-{size}-sa{:?}-ang{:?}",
+                    kind.as_wire(),
+                    size_attribute,
+                    angle
+                );
             }
             EmitMarker::Vector {
                 points,
                 anchor,
                 filled,
                 size,
+                size_attribute,
+                angle,
             } => {
-                let _ = write!(s, ",marker=vec-{filled}-{size}-{points:?}-{anchor:?}");
+                let _ = write!(
+                    s,
+                    ",marker=vec-{filled}-{size}-{points:?}-{anchor:?}-sa{:?}-ang{:?}",
+                    size_attribute, angle
+                );
             }
             EmitMarker::Glyph {
                 font_family,
                 character,
                 size,
+                size_attribute,
+                angle,
             } => {
-                let _ = write!(s, ",marker=glyph-{font_family}-{character}-{size}");
+                let _ = write!(
+                    s,
+                    ",marker=glyph-{font_family}-{character}-{size}-sa{:?}-ang{:?}",
+                    size_attribute, angle
+                );
             }
         }
     }
@@ -443,7 +506,7 @@ mod tests {
         assert_eq!(p.fill, Some(EmitFill::Hex(Colour::rgb(10, 20, 30))));
         let m = p.marker.unwrap();
         match m {
-            EmitMarker::Builtin { kind, size } => {
+            EmitMarker::Builtin { kind, size, .. } => {
                 assert_eq!(kind, MarkerKind::Circle);
                 assert!((size - 8.0).abs() < f32::EPSILON);
             }
@@ -578,7 +641,7 @@ mod tests {
     }
 
     #[test]
-    fn style_block_to_pass_flags_angle_on_non_hatch() {
+    fn style_block_to_pass_flows_angle_into_marker_rotation() {
         let mut symbols = HashMap::new();
         symbols.insert("circle".into(), SymbolDef::Circle);
         let p = pass_of(
@@ -589,8 +652,74 @@ mod tests {
             },
             &symbols,
         );
-        assert!(p.marker.is_some());
+        assert!(p.unimplemented.is_empty(), "marker rotation is supported now");
+        match p.marker.unwrap() {
+            EmitMarker::Builtin {
+                angle: Some(EmitNumeric::Static(a)),
+                ..
+            } => {
+                assert!((a - 30.0).abs() < f32::EPSILON);
+            }
+            other => panic!("expected builtin marker with static angle, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn style_block_to_pass_flags_angle_without_marker_or_hatch() {
+        let p = pass_of(
+            StyleBlock {
+                angle_deg: Some(30.0),
+                ..Default::default()
+            },
+            &HashMap::new(),
+        );
+        assert!(p.marker.is_none());
         assert_eq!(p.unimplemented, vec!["STYLE.ANGLE (non-hatch)"]);
+    }
+
+    #[test]
+    fn style_block_to_pass_flows_angle_attribute_into_marker() {
+        let mut symbols = HashMap::new();
+        symbols.insert("circle".into(), SymbolDef::Circle);
+        let p = pass_of(
+            StyleBlock {
+                symbol: Some("circle".into()),
+                angle_attribute: Some("bearing".into()),
+                ..Default::default()
+            },
+            &symbols,
+        );
+        assert!(p.unimplemented.is_empty());
+        match p.marker.unwrap() {
+            EmitMarker::Builtin {
+                angle: Some(EmitNumeric::Attribute(ref col)),
+                ..
+            } => {
+                assert_eq!(col, "bearing");
+            }
+            other => panic!("expected builtin marker with attribute angle, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn style_block_to_pass_flows_size_attribute_into_marker() {
+        let mut symbols = HashMap::new();
+        symbols.insert("circle".into(), SymbolDef::Circle);
+        let p = pass_of(
+            StyleBlock {
+                symbol: Some("circle".into()),
+                size_attribute: Some("icon_size".into()),
+                ..Default::default()
+            },
+            &symbols,
+        );
+        match p.marker.unwrap() {
+            EmitMarker::Builtin {
+                size_attribute: Some(ref col),
+                ..
+            } => assert_eq!(col, "icon_size"),
+            other => panic!("expected builtin marker with attribute size, got {other:?}"),
+        }
     }
 
     #[test]

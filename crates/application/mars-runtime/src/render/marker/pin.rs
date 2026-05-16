@@ -46,6 +46,7 @@ mod tests {
             &ResolvedMarker {
                 shape: MarkerShape::Pin,
                 size: 8.0,
+                rotation_rad: None,
             },
             pos,
         );

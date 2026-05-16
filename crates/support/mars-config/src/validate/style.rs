@@ -203,6 +203,7 @@ mod tests {
             point_style(MarkerSymbol {
                 shape: mars_style::MarkerShape::Circle,
                 size: 6.0.into(),
+                angle: None,
             }),
         );
         validate_styles(&styles).unwrap();
@@ -265,6 +266,7 @@ mod tests {
             point_style(MarkerSymbol {
                 shape: mars_style::MarkerShape::Pin,
                 size: 0.0.into(),
+                angle: None,
             }),
         );
         let err = validate_styles(&styles).unwrap_err();
@@ -282,6 +284,7 @@ mod tests {
                     ch: String::new(),
                 },
                 size: 12.0.into(),
+                angle: None,
             }),
         );
         let err = validate_styles(&styles).unwrap_err();
@@ -306,6 +309,7 @@ mod tests {
                         ch: "A".into(),
                     },
                     size: 12.0.into(),
+                    angle: None,
                 }),
                 ..Default::default()
             }),
@@ -324,6 +328,7 @@ mod tests {
                         ch: "A".into(),
                     },
                     size: 12.0.into(),
+                    angle: None,
                 }),
                 ..Default::default()
             }),
@@ -341,6 +346,7 @@ mod tests {
                 Some(MarkerSymbol {
                     shape: mars_style::MarkerShape::Circle,
                     size: 4.0.into(),
+                    angle: None,
                 }),
                 StrokeGap {
                     interval_px: 12.0,
@@ -360,6 +366,7 @@ mod tests {
                 Some(MarkerSymbol {
                     shape: mars_style::MarkerShape::Circle,
                     size: 4.0.into(),
+                    angle: None,
                 }),
                 StrokeGap {
                     interval_px: 0.0,
@@ -380,6 +387,7 @@ mod tests {
                 Some(MarkerSymbol {
                     shape: mars_style::MarkerShape::Circle,
                     size: 4.0.into(),
+                    angle: None,
                 }),
                 StrokeGap {
                     interval_px: 10.0,

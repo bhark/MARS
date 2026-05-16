@@ -25,6 +25,7 @@ mod tests {
             &ResolvedMarker {
                 shape: MarkerShape::Square,
                 size: 8.0,
+                rotation_rad: None,
             },
             (32.0, 16.0),
         );

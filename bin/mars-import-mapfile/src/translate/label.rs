@@ -23,6 +23,9 @@ pub(crate) struct ParsedLabel {
     pub position: Option<AnchorPosition>,
     pub offset_px: Option<(f32, f32)>,
     pub angle_deg: Option<f32>,
+    /// `[col]` form on LABEL.ANGLE - the label resolves rotation from this
+    /// attribute at render time. Mutually exclusive with `angle_deg`.
+    pub angle_attribute: Option<String>,
     pub partials: Option<bool>,
     pub force: Option<bool>,
     /// Recognised-but-not-implemented LABEL directive names. Aggregated at
@@ -105,7 +108,9 @@ pub(crate) fn parse_label(body: &[Token]) -> ParsedLabel {
                 }
             }
             LabelDirective::Angle(t) => {
-                if let Some(arg) = t.args.first() {
+                if let Some(col) = parsing::bracketed_ident(t) {
+                    p.angle_attribute = Some(col);
+                } else if let Some(arg) = t.args.first() {
                     match arg.to_ascii_uppercase().as_str() {
                         "FOLLOW" => {
                             // mark placement as line + per-character orient.

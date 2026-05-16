@@ -126,7 +126,7 @@ pub(crate) fn class_inline(name: &str, when: Option<&str>) -> Class {
         title: String::new(),
         when: when.map(Into::into),
         scale: None,
-        style: ClassStyle::Inline(Default::default()),
+        style: ClassStyle::Inline(Box::default()),
         label: None,
     }
 }
@@ -144,7 +144,7 @@ pub(crate) fn inline_label(text: &str, placement: Option<mars_style::Placement>)
             min_distance: 0.0,
             position: mars_style::AnchorPosition::default(),
             offset_px: (0.0, 0.0),
-            angle_deg: None,
+            angle: None,
             partials: false,
             force: false,
         }),

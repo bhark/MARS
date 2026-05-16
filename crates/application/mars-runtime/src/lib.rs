@@ -330,7 +330,7 @@ impl Runtime {
                 min_distance: 0.0,
                 position: mars_style::AnchorPosition::default(),
                 offset_px: (0.0, 0.0),
-                angle_deg: None,
+                angle: None,
                 partials: false,
                 force: false,
             }

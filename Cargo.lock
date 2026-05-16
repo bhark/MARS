@@ -2810,6 +2810,7 @@ dependencies = [
  "hashlink",
  "mars-artifact",
  "mars-config",
+ "mars-expr",
  "mars-grid",
  "mars-observability",
  "mars-proj",

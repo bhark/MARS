@@ -36,3 +36,21 @@ pub(crate) fn rgb_triple(t: &Token) -> Option<Colour> {
 pub(crate) fn nums(t: &Token) -> Vec<f32> {
     t.args.iter().filter_map(|a| a.parse().ok()).collect()
 }
+
+/// `[col]` attribute reference on a single-arg directive (STYLE.ANGLE,
+/// STYLE.SIZE, LABEL.ANGLE). Strips quotes around the bracketed form
+/// (`"[col]"`) too, since mapfile authors sometimes wrap them. Returns
+/// `None` for any other arg shape; the caller falls back to numeric parse.
+pub(crate) fn bracketed_ident(t: &Token) -> Option<String> {
+    let arg = first(t)?.trim_matches('"');
+    let inner = arg.strip_prefix('[')?.strip_suffix(']')?;
+    let mut chars = inner.chars();
+    let first = chars.next()?;
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return None;
+    }
+    if !chars.all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return None;
+    }
+    Some(inner.to_string())
+}

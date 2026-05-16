@@ -33,6 +33,7 @@ mod tests {
             &ResolvedMarker {
                 shape: MarkerShape::Circle,
                 size: 10.0,
+                rotation_rad: None,
             },
             (50.0, 50.0),
         );

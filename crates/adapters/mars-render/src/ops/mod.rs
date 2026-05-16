@@ -81,6 +81,7 @@ mod tests {
                     marker: Some(MarkerSymbol {
                         shape: MarkerShape::Circle,
                         size: 6.0.into(),
+                        angle: None,
                     }),
                     ..Default::default()
                 }
@@ -190,6 +191,7 @@ mod tests {
                             ch: "A".into(),
                         },
                         size: 18.0.into(),
+                        angle: None,
                     }),
                     ..Default::default()
                 }
