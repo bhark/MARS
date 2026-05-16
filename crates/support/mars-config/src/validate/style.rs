@@ -16,7 +16,7 @@ pub(super) fn validate_styles(styles: &BTreeMap<String, StyleEntry>) -> Result<(
                 validate_fill_paint(name, fp)?;
             }
             if let Some(m) = &s.marker {
-                validate_marker_symbol(name, m)?;
+                validate_marker_symbol(name, m, s.fill.as_ref())?;
             }
         }
     }
@@ -55,12 +55,28 @@ fn validate_fill_paint(style_name: &str, fp: &FillPaint) -> Result<(), ConfigErr
     }
 }
 
-fn validate_marker_symbol(style_name: &str, m: &MarkerSymbol) -> Result<(), ConfigError> {
+fn validate_marker_symbol(style_name: &str, m: &MarkerSymbol, fill: Option<&FillPaint>) -> Result<(), ConfigError> {
     let size = m.size();
     if !(size.is_finite() && size > 0.0) {
         return Err(ConfigError::Invalid(format!(
             "style {style_name:?} marker.size must be a finite positive number, got {size}"
         )));
+    }
+    // glyph markers shape a single character via the text path; an empty
+    // string has no shape, and non-solid fills (hatch/image) have no
+    // meaning for a single-glyph stamp.
+    if let MarkerSymbol::Glyph { ch, .. } = m {
+        if ch.is_empty() {
+            return Err(ConfigError::Invalid(format!(
+                "style {style_name:?} marker.ch must not be empty"
+            )));
+        }
+        if let Some(FillPaint::Hatch { .. } | FillPaint::Image { .. }) = fill {
+            return Err(ConfigError::Invalid(format!(
+                "style {style_name:?} marker is Glyph but fill paint is non-solid; \
+                 Glyph markers require a solid fill (or no fill)"
+            )));
+        }
     }
     Ok(())
 }
@@ -156,5 +172,60 @@ mod tests {
         styles.insert("bad".into(), point_style(MarkerSymbol::Pin { size: 0.0 }));
         let err = validate_styles(&styles).unwrap_err();
         assert!(err.to_string().contains("marker.size"), "{err}");
+    }
+
+    #[test]
+    fn rejects_glyph_marker_with_empty_ch() {
+        let mut styles = BTreeMap::new();
+        styles.insert(
+            "bad".into(),
+            point_style(MarkerSymbol::Glyph {
+                font_family: "Sans".into(),
+                ch: String::new(),
+                size: 12.0,
+            }),
+        );
+        let err = validate_styles(&styles).unwrap_err();
+        assert!(err.to_string().contains("marker.ch"), "{err}");
+    }
+
+    #[test]
+    fn rejects_glyph_marker_with_non_solid_fill() {
+        let mut styles = BTreeMap::new();
+        styles.insert(
+            "hatch".into(),
+            StyleEntry::Point(Style {
+                fill: Some(FillPaint::Hatch {
+                    spacing: 4.0,
+                    angle_deg: 45.0,
+                    line_width: 0.5,
+                    colour: Colour::rgb(0, 0, 0),
+                }),
+                marker: Some(MarkerSymbol::Glyph {
+                    font_family: "Sans".into(),
+                    ch: "A".into(),
+                    size: 12.0,
+                }),
+                ..Default::default()
+            }),
+        );
+        let err = validate_styles(&styles).unwrap_err();
+        assert!(err.to_string().contains("non-solid"), "{err}");
+
+        let mut styles = BTreeMap::new();
+        styles.insert(
+            "img".into(),
+            StyleEntry::Point(Style {
+                fill: Some(FillPaint::Image { name: "pattern".into() }),
+                marker: Some(MarkerSymbol::Glyph {
+                    font_family: "Sans".into(),
+                    ch: "A".into(),
+                    size: 12.0,
+                }),
+                ..Default::default()
+            }),
+        );
+        let err = validate_styles(&styles).unwrap_err();
+        assert!(err.to_string().contains("non-solid"), "{err}");
     }
 }

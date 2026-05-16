@@ -27,8 +27,11 @@ pub(crate) fn draw(
     style: &Style,
     fonts: &Fonts,
 ) -> Result<(), RenderError> {
+    // defence-in-depth: config validator rejects this at load time.
     if ch.is_empty() {
-        return Err(RenderError::Backend("MarkerSymbol::Glyph with empty ch".into()));
+        return Err(RenderError::Backend(
+            "MarkerSymbol::Glyph with empty ch (config validation should have rejected this)".into(),
+        ));
     }
     let colour = effective_colour(style)?;
 
@@ -74,9 +77,10 @@ fn effective_colour(style: &Style) -> Result<Colour, RenderError> {
     let opacity = style.opacity.unwrap_or(1.0).clamp(0.0, 1.0);
     let mut c = match &style.fill {
         Some(FillPaint::Solid(c)) => *c,
+        // defence-in-depth: config validator rejects this at load time.
         Some(FillPaint::Hatch { .. } | FillPaint::Image { .. }) => {
             return Err(RenderError::Backend(
-                "MarkerSymbol::Glyph requires a solid fill paint".into(),
+                "MarkerSymbol::Glyph requires a solid fill paint (config validation should have rejected this)".into(),
             ));
         }
         None => Colour::rgba(0, 0, 0, 255),
