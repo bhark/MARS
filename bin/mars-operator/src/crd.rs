@@ -12,7 +12,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// MarsService - one CR per logical MARS service in a namespace.
-#[derive(CustomResource, Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(CustomResource, Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
 #[kube(
     group = "mars.forn.dk",
     version = "v1alpha1",
@@ -237,7 +237,7 @@ fn default_work_size() -> String {
     "2Gi".into()
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RuntimeSpec {
     #[serde(default = "default_runtime_replicas")]

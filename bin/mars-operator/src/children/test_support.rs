@@ -4,9 +4,7 @@
 
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, OwnerReference};
 
-use crate::crd::{
-    CompilerSpec, CompilerStorageSpec, MarsService, MarsServiceSpec, RuntimeCacheSpec, RuntimeServiceSpec, RuntimeSpec,
-};
+use crate::crd::{MarsService, MarsServiceSpec, RuntimeSpec};
 
 /// `repo:tag` passed to child builders in tests; production builds it once
 /// from CLI + CARGO_PKG_VERSION at startup, so tests just need a stable string.
@@ -31,39 +29,16 @@ pub(crate) fn cr(name: &str, namespace: &str) -> MarsService {
             ..Default::default()
         },
         spec: MarsServiceSpec {
-            compiler: CompilerSpec {
-                resources: None,
-                storage: CompilerStorageSpec {
-                    cache_size: "1Gi".into(),
-                    work_size: "2Gi".into(),
-                    storage_class: String::new(),
-                },
-                env: Vec::new(),
-                env_from: Vec::new(),
-                images_config_map: None,
-                node_selector: std::collections::BTreeMap::new(),
-                tolerations: Vec::new(),
-                affinity: None,
-            },
             runtime: RuntimeSpec {
                 replicas: 2,
-                resources: None,
-                cache: RuntimeCacheSpec::default(),
-                service: RuntimeServiceSpec::default(),
-                env: Vec::new(),
-                env_from: Vec::new(),
-                node_selector: std::collections::BTreeMap::new(),
-                tolerations: Vec::new(),
-                affinity: None,
-                pod_disruption_budget: None,
+                ..Default::default()
             },
-            artifact_store: None,
-            bootstrap: None,
             config: serde_json::json!({
                 "service": { "name": "demo" },
                 "sources": [{ "id": "default", "kind": "stub" }],
                 "artifacts": { "store": { "type": "fs", "path": "/var/lib/mars/artifacts" } }
             }),
+            ..Default::default()
         },
         status: None,
     }
