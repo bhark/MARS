@@ -351,7 +351,8 @@ mod tests {
             reconcile_every_cycles: 24,
             simplifier: SimplifierKind::Naive,
             missing_page_policy: MissingPagePolicy::Truncate,
-            dsn: None,        }
+            dsn: None,
+        }
     }
 
     fn level(min_size_m: f64) -> LevelPlan {

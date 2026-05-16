@@ -230,7 +230,8 @@ fn binding_plan(id: &str, page_size: u64) -> BindingPlan {
         reconcile_every_cycles: 24,
         simplifier: mars_config::SimplifierKind::Naive,
         missing_page_policy: mars_config::MissingPagePolicy::Truncate,
-        dsn: None,    }
+        dsn: None,
+    }
 }
 
 fn make_deps(source: Arc<FakeSource>, store: Arc<dyn ObjectStore>, manifest_store: Arc<dyn ManifestStore>) -> Deps {

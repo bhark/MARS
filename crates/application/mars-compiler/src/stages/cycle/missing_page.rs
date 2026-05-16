@@ -120,7 +120,8 @@ mod tests {
             reconcile_every_cycles: 24,
             simplifier: SimplifierKind::Naive,
             missing_page_policy: policy,
-            dsn: None,        }
+            dsn: None,
+        }
     }
 
     fn dirty_with_warning(binding: &str) -> DirtyPages {

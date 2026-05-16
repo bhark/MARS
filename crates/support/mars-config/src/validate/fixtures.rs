@@ -90,7 +90,8 @@ pub(crate) fn binding(from: &str) -> SourceBinding {
         sidecar_size_warn_bytes: None,
         simplifier: None,
         on_missing_page: None,
-        dsn: None,    }
+        dsn: None,
+    }
 }
 
 #[cfg(test)]
