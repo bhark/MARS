@@ -1,0 +1,125 @@
+# Example MarsService consuming a K8s-native Postgres operator's Secret
+# directly. Zero user-managed Secrets in the common case:
+#   - Admin credentials are projected key-by-key out of the Postgres
+#     operator's `*-superuser` Secret (CNPG shape by default).
+#   - The runtime role password is operator-managed: the mars-operator
+#     generates it on first reconcile and stores it in
+#     `example-cnpg-runtime-credentials` (key `password`) with an owner
+#     reference to this MarsService.
+#   - MARS_RUNTIME_PASSWORD is auto-projected into the compiler/runtime
+#     pods from that Secret so the DSN template can reference it.
+#
+# Prereqs:
+#   1. A CNPG (or compatible) Cluster named `pg-cluster` running in this
+#      namespace. CNPG provisions `pg-cluster-superuser` automatically.
+#   2. S3 credentials supplied via env or IRSA at the runtime/compiler
+#      pod level (see envFrom below).
+apiVersion: mars.forn.dk/v1alpha1
+kind: MarsService
+metadata:
+  name: example-cnpg
+  namespace: maps
+spec:
+  bootstrap:
+    enabled: true
+    # component-style admin credentials: the operator composes the admin
+    # DSN by combining the named Secret keys with host/port/database
+    # parsed out of `spec.config.sources[].dsn`. Defaults match CNPG.
+    adminCredentialsRef:
+      secretName: pg-cluster-superuser
+    # runtimePasswordSecretRef intentionally omitted: the operator
+    # generates and manages the runtime password as a child Secret.
+    teardownOnDelete:
+      slot: true
+      publication: true
+      role: false
+
+  compiler:
+    storage:
+      cacheSize: 2Gi
+      workSize: 4Gi
+    envFrom:
+      - secretRef:
+          name: mars-s3-credentials
+
+  runtime:
+    replicas: 2
+    cache:
+      sizeLimit: 2Gi
+    envFrom:
+      - secretRef:
+          name: mars-s3-credentials
+
+  config:
+    service:
+      name: example-cnpg
+      title: Example MARS service (CNPG-backed Postgres)
+      contact_email: ops@example.org
+    sources:
+      - id: default
+        type: postgis
+        # MARS_RUNTIME_PASSWORD is auto-projected by the operator from
+        # the resolved runtime-credentials Secret. host/port/database
+        # here also feed adminCredentialsRef's fallback resolution, so
+        # the admin connection lands on the same cluster + database
+        # without restating them.
+        dsn: "postgresql://mars_replicator:${MARS_RUNTIME_PASSWORD}@pg-cluster-rw.maps.svc:5432/maps?sslmode=require"
+        native_crs: "EPSG:25832"
+        change_feed:
+          type: pgoutput
+          publication: mars_pub
+          slot: mars_slot
+        bootstrap:
+          role: mars_replicator
+          schemas:
+            - public
+            - geo
+        pool:
+          max_size: 8
+          statement_timeout_ms: 300000
+          batch_send_timeout_secs: 30
+    artifacts:
+      store:
+        type: s3
+        bucket: mars-artifacts
+        region: eu-west-1
+        prefix: example-cnpg/
+      cache:
+        path: /cache
+        max_size: 1GiB
+        eviction: lru
+    compiler:
+      compile_binding_parallelism: 4
+      compile_in_flight_pages_budget_bytes: 512MiB
+      compile_spill_dir: /work/spill
+    scales:
+      bands:
+        - { name: detail, max_denom_exclusive: 12500 }
+        - { name: mid, max_denom_exclusive: 250000 }
+        - { name: lo, max_denom_exclusive: 10000000 }
+    cells:
+      grid: regular
+      origin: [0, 0]
+      size_per_band:
+        detail: 512m
+        mid: 4096m
+        lo: 16384m
+      extent:
+        min_x: 850000
+        min_y: 6090000
+        max_x: 895000
+        max_y: 6145000
+    interfaces:
+      wms:
+        enabled: true
+        versions: ["1.3.0"]
+        formats: ["image/png"]
+        max_image_dimension: 2048
+        max_pixels: 4194304
+    reprojection:
+      allowlist: ["EPSG:25832"]
+    styles: {}
+    layers: []
+    observability:
+      log_level: info
+      log_format: json

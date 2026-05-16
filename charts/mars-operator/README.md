@@ -49,8 +49,11 @@ kubectl apply -f charts/mars-operator/examples/marsservice-s3.yaml
 kubectl -n maps get marsservices
 ```
 
-See `examples/marsservice-s3.yaml` (object-store-backed) and
-`examples/marsservice-fs.yaml` (single-replica, PVC-backed).
+See `examples/marsservice-s3.yaml` (object-store-backed),
+`examples/marsservice-fs.yaml` (single-replica, PVC-backed), or
+`examples/marsservice-cnpg.yaml` (operator-driven postgres bootstrap
+consuming a K8s-native Postgres operator's Secret directly - zero
+user-managed Secrets in the common case).
 
 ## Upgrading
 

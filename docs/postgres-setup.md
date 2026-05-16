@@ -32,9 +32,12 @@ spec:
     adminSecretRef:
       name: postgres-admin
       key: dsn
-    runtimePasswordSecretRef:
-      name: postgres-runtime
-      key: password
+    # runtimePasswordSecretRef is OPTIONAL. Omit it and the operator
+    # generates a 32-char random password on first reconcile, stores it
+    # in `<msvc>-runtime-credentials` (key `password`) with an owner
+    # reference back to this MarsService, and re-uses it on every
+    # subsequent reconcile. The Secret name is surfaced on
+    # `.status.runtimeCredentialsSecret` so consumers can locate it.
     teardownOnDelete:
       slot: true
       publication: true
@@ -43,7 +46,11 @@ spec:
     sources:
       - id: default
         type: postgis
-        dsn: "${PG_DSN}"
+        # MARS_RUNTIME_PASSWORD is auto-projected into compiler/runtime
+        # pods from the resolved runtime-credentials Secret (BYO or
+        # operator-managed), so the DSN template can interpolate it
+        # without the user staging a password Secret themselves.
+        dsn: "postgresql://mars_replicator:${MARS_RUNTIME_PASSWORD}@postgis:5432/maps"
         native_crs: "EPSG:25832"
         change_feed:
           type: pgoutput
@@ -69,6 +76,62 @@ What `mars setup` does (run inside one transaction except for the slot, which po
 The admin DSN is mounted only into the bootstrap Job pod via `MARS_ADMIN_DSN`; the compiler/runtime Deployments never see it. Job names embed a content hash of the bootstrap-relevant fields, so a spec change spawns a new Job and the previous outcome stays visible.
 
 While the bootstrap Job is running the CR carries `BootstrapReady=False, Reason=InProgress` and the compiler/runtime Deployments are not created. On success the condition flips to `Ready` and reconciliation proceeds. On failure the condition is `Failed` - inspect the Job's pod logs in the same namespace.
+
+### Runtime password: operator-managed vs BYO
+
+`bootstrap.runtimePasswordSecretRef` is the bring-your-own escape hatch for installs that source credentials from an external secrets manager (Vault, SOPS, sealed-secrets, ESO). When set, behaviour is unchanged: the user owns the Secret end-to-end and the operator never writes to it.
+
+When omitted, the operator manages a single Secret per MarsService:
+
+- Name: `<metadata.name>-runtime-credentials`. Key: `password`.
+- OwnerReference: the MarsService, so `kubectl delete msvc` garbage-collects it.
+- Generated once on first reconcile (32 chars from `[A-Za-z0-9]`, ~190 bits of entropy). Never rotated in-place.
+- Consumed by the bootstrap Job and projected as `MARS_RUNTIME_PASSWORD` into the compiler/runtime pod env, so user DSNs can reference `${MARS_RUNTIME_PASSWORD}` directly.
+
+**Rotation:** delete the managed Secret and let reconcile regenerate it; the next bootstrap Job applies the new password via `ALTER ROLE`. The old password persists in postgres until that Job runs.
+
+### Admin credentials: single-DSN vs component-style
+
+The admin role is consumed twice (`mars setup` on bootstrap and `mars teardown` on CR delete) and only by the Job pod. The CRD accepts the credential in either shape, mutually exclusive; exactly one must be set when `enabled` is true:
+
+```yaml
+# Form 1: single Secret key holds a complete libpq URI. Preferred for
+# non-Kubernetes postgres (RDS, bare metal) where the operator just gets
+# a URL.
+spec:
+  bootstrap:
+    adminSecretRef:
+      name: postgres-admin
+      key: dsn
+
+# Form 2: separate Secret keys for username / password / (optional)
+# host / port / database. Preferred when a Postgres operator (CNPG,
+# Zalando, Crunchy) is in play, since those emit credentials as
+# multi-key Secrets and projecting one cross-namespace via a reflector
+# is a single annotation.
+spec:
+  bootstrap:
+    adminCredentialsRef:
+      secretName: pg-cluster-superuser
+      usernameKey: username     # defaults to "username" (CNPG shape)
+      passwordKey: password     # defaults to "password" (CNPG shape)
+      # host / port / database default to the values parsed out of the
+      # bootstrap-bearing `sources[].dsn` so a single config-level DSN
+      # can supply connection targeting. Override per-field if needed:
+      # hostKey: host
+      # portKey: port
+      # databaseKey: database
+```
+
+With `adminCredentialsRef` the operator reads the referenced Secret, composes a libpq URI by combining its keys with whatever host/port/database it can parse out of `sources[].dsn` (templated values like `${PG_DSN}` are tolerated and skipped), and passes the result as `MARS_ADMIN_DSN` on the Job container. The composed DSN lands literally in the Job spec; this is the documented trade-off for not staging an extra managed Secret per service. Switching admin shapes on a live service rolls the bootstrap plan hash and spawns a fresh Job.
+
+### Status surface
+
+The operator emits the following on `.status`:
+
+- `phase`: `Ready` / `Reconciling` / `Degraded` / `Failed`.
+- `conditions[type=BootstrapReady]`: `Ready` / `InProgress` / `Failed` / `ManualVerified` / `ManualSetupIncomplete`.
+- `runtimeCredentialsSecret`: name of the resolved runtime-password Secret, BYO or operator-managed. Absent when `spec.bootstrap` is unset.
 
 ## Path B - manual bootstrap (opt-out)
 
