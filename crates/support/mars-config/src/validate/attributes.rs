@@ -10,9 +10,8 @@ use crate::model::{Layer, SourceBinding};
 /// SQL lowering pass, so a bad filter fails at config time, not at SQL build.
 pub(super) fn validate_attribute_references(layer: &Layer) -> Result<(), ConfigError> {
     if let Some(template) = &layer.template {
-        mars_expr::parse_template(template).map_err(|e| {
-            ConfigError::Invalid(format!("layer {} template parse error: {e}", layer.name))
-        })?;
+        mars_expr::parse_template(template)
+            .map_err(|e| ConfigError::Invalid(format!("layer {} template parse error: {e}", layer.name)))?;
     }
 
     let referenced = collect_referenced_attributes(layer);

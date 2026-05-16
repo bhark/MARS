@@ -191,7 +191,10 @@ mod tests {
         cfg.layers = vec![l];
         let err = validate(&mut cfg, Path::new(".")).unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("template parse error"), "expected template parse error: {msg}");
+        assert!(
+            msg.contains("template parse error"),
+            "expected template parse error: {msg}"
+        );
     }
 
     #[test]
