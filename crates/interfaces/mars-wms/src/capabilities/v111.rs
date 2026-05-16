@@ -19,8 +19,9 @@ use quick_xml::Writer;
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
 
 use super::{
-    INFO_FORMATS, LayerNode, build_layer_tree, configured_formats, derive_layer_bboxes, resolved_request_formats,
-    union_bbox, write_contact_information, write_dcp_type, write_keyword_list, write_online_resource,
+    INFO_FORMATS, LayerNode, StyleAd, build_layer_tree, configured_formats, derive_layer_bboxes,
+    resolved_request_formats, style_advertisements, union_bbox, write_contact_information, write_dcp_type,
+    write_keyword_list, write_online_resource,
 };
 use crate::WmsError;
 
@@ -247,7 +248,7 @@ fn emit_leaf<W: std::io::Write>(
     for ident in &layer.ows.identifiers {
         write_identifier_111(w, &ident.authority, &ident.value)?;
     }
-    write_default_style_with_legend_url(w, layer, formats)?;
+    write_styles_with_legend_urls(w, layer, formats)?;
     w.write_event(Event::End(BytesEnd::new("Layer"))).map_err(xml_err)?;
     Ok(())
 }
@@ -314,16 +315,30 @@ fn write_identifier_111<W: std::io::Write>(w: &mut Writer<W>, authority: &str, v
     Ok(())
 }
 
-/// 1.1.1 default `<Style>` block. The LegendURL template pins
-/// `version=1.1.1` so the client round-trips the version it asked for.
-fn write_default_style_with_legend_url<W: std::io::Write>(
+/// 1.1.1 per-class `<Style>` blocks. The LegendURL template pins
+/// `version=1.1.1` so the client round-trips the version it asked for, and
+/// each entry carries its `rule=<class>` so the runtime renders that class
+/// only.
+fn write_styles_with_legend_urls<W: std::io::Write>(
     w: &mut Writer<W>,
     layer: &mars_config::Layer,
     formats: &[ImageFormat],
 ) -> Result<(), WmsError> {
+    for ad in style_advertisements(layer) {
+        write_style_block_111(w, layer, &ad, formats)?;
+    }
+    Ok(())
+}
+
+fn write_style_block_111<W: std::io::Write>(
+    w: &mut Writer<W>,
+    layer: &mars_config::Layer,
+    ad: &StyleAd,
+    formats: &[ImageFormat],
+) -> Result<(), WmsError> {
     w.write_event(Event::Start(BytesStart::new("Style"))).map_err(xml_err)?;
-    text_element(w, "Name", "default")?;
-    text_element(w, "Title", "Default style")?;
+    text_element(w, "Name", &ad.name)?;
+    text_element(w, "Title", &ad.title)?;
     for fmt in formats {
         let mut legend = BytesStart::new("LegendURL");
         legend.push_attribute(("width", "20"));
@@ -333,15 +348,16 @@ fn write_default_style_with_legend_url<W: std::io::Write>(
         let mut online = BytesStart::new("OnlineResource");
         online.push_attribute(("xmlns:xlink", "http://www.w3.org/1999/xlink"));
         online.push_attribute(("xlink:type", "simple"));
-        online.push_attribute((
-            "xlink:href",
-            format!(
-                "?service=WMS&version=1.1.1&request=GetLegendGraphic&layer={}&format={}",
-                layer.name.as_str(),
-                fmt.mime()
-            )
-            .as_str(),
-        ));
+        let mut href = format!(
+            "?service=WMS&version=1.1.1&request=GetLegendGraphic&layer={}&format={}",
+            layer.name.as_str(),
+            fmt.mime()
+        );
+        if let Some(rule) = ad.rule.as_deref() {
+            href.push_str("&rule=");
+            href.push_str(rule);
+        }
+        online.push_attribute(("xlink:href", href.as_str()));
         w.write_event(Event::Empty(online)).map_err(xml_err)?;
         w.write_event(Event::End(BytesEnd::new("LegendURL"))).map_err(xml_err)?;
     }
@@ -677,5 +693,80 @@ layers:
         // under <GetCapabilities>; assert it survives the configured-format
         // override path.
         assert!(xml.contains("application/vnd.ogc.wms_xml"));
+    }
+
+    fn cfg_with_classes() -> Config {
+        let yaml = r##"
+service: { name: t, title: T, abstract: A, contact_email: "" }
+source: { type: postgis, dsn: "postgres://x", native_crs: EPSG:25832 }
+artifacts:
+  store: { type: fs, path: /tmp }
+  cache: { path: /tmp/c, max_size: 1GiB }
+scales:
+  bands: [{ name: hi, max_denom_exclusive: 25000 }]
+cells:
+  grid: regular
+  origin: [0, 0]
+  size_per_band: { hi: 1024m }
+interfaces: {}
+reprojection:
+  allowlist: [EPSG:25832]
+layers:
+  - name: roads
+    title: "Roads"
+    type: polygon
+    sources: [{ from: t, geometry_column: g }]
+    classes:
+      - { name: main, title: "Main", style: { type: inline, fill: "#aabbcc" } }
+      - { name: minor, title: "Minor", style: { type: inline, stroke: "#555555" } }
+"##;
+        serde_yaml_ng::from_str(yaml).unwrap()
+    }
+
+    #[test]
+    fn emits_one_style_per_class_with_rule_param_111() {
+        let cfg = cfg_with_classes();
+        let m = Manifest::empty(1, cfg.service.name.clone());
+        let xml = capabilities_xml(&cfg, &m).unwrap();
+        assert_eq!(xml.matches("<Style>").count(), 2);
+        assert!(xml.contains("<Name>main</Name>"));
+        assert!(xml.contains("<Name>minor</Name>"));
+        assert!(xml.contains("<Title>Main</Title>"));
+        assert!(xml.contains("<Title>Minor</Title>"));
+        assert!(xml.contains("rule=main"));
+        assert!(xml.contains("rule=minor"));
+        assert!(xml.contains("version=1.1.1"));
+        assert!(!xml.contains("<Name>default</Name>"));
+    }
+
+    #[test]
+    fn classless_layer_keeps_default_style_111() {
+        let cfg = minimal_cfg();
+        let m = Manifest::empty(1, cfg.service.name.clone());
+        let xml = capabilities_xml(&cfg, &m).unwrap();
+        assert_eq!(xml.matches("<Style>").count(), 1);
+        assert!(xml.contains("<Name>default</Name>"));
+        assert!(xml.contains("<Title>Default style</Title>"));
+        assert!(!xml.contains("rule="));
+    }
+
+    #[test]
+    fn class_title_falls_back_to_name_111() {
+        let mut cfg = cfg_with_classes();
+        cfg.layers[0].classes[0].title.clear();
+        let m = Manifest::empty(1, cfg.service.name.clone());
+        let xml = capabilities_xml(&cfg, &m).unwrap();
+        assert!(xml.contains("<Name>main</Name>"));
+        assert!(xml.contains("<Title>main</Title>"));
+    }
+
+    #[test]
+    fn empty_class_name_synthesises_stable_identifier_111() {
+        let mut cfg = cfg_with_classes();
+        cfg.layers[0].classes[0].name.clear();
+        let m = Manifest::empty(1, cfg.service.name.clone());
+        let xml = capabilities_xml(&cfg, &m).unwrap();
+        assert!(xml.contains("<Name>class-0</Name>"));
+        assert!(xml.contains("rule=class-0"));
     }
 }

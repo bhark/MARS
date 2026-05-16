@@ -223,6 +223,53 @@ pub(super) fn write_contact_information<W: std::io::Write>(
     Ok(())
 }
 
+/// Per-layer `<Style>` advertisement. One entry per configured class so
+/// clients can address legends class-by-class via `RULE=`; layers without
+/// classes collapse to a single "default" style matching the runtime's
+/// fall-through swatch.
+///
+/// `rule` is `None` only for the synthesised default; class-derived entries
+/// always pass a value (empty class names get a stable `class-{idx}`
+/// fallback so the LegendURL stays addressable). `title` falls back to the
+/// style name when the class title is empty.
+pub(super) struct StyleAd {
+    pub name: String,
+    pub title: String,
+    pub rule: Option<String>,
+}
+
+pub(super) fn style_advertisements(layer: &mars_config::Layer) -> Vec<StyleAd> {
+    if layer.classes.is_empty() {
+        return vec![StyleAd {
+            name: "default".into(),
+            title: "Default style".into(),
+            rule: None,
+        }];
+    }
+    layer
+        .classes
+        .iter()
+        .enumerate()
+        .map(|(idx, c)| {
+            let name = if c.name.is_empty() {
+                format!("class-{idx}")
+            } else {
+                c.name.clone()
+            };
+            let title = if c.title.is_empty() {
+                name.clone()
+            } else {
+                c.title.clone()
+            };
+            StyleAd {
+                rule: Some(name.clone()),
+                name,
+                title,
+            }
+        })
+        .collect()
+}
+
 /// Resolve the per-operation advertised format list. When the service-level
 /// override is set, return its strings verbatim. Otherwise fall back to the
 /// renderable formats resolved by [`configured_formats`], mapped to their
