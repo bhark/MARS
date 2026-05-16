@@ -102,6 +102,7 @@ fn parse_format(s: &str) -> Result<VectorFileFormat, FragmentError> {
         "flat_geobuf" | "flatgeobuf" | "fgb" => Ok(VectorFileFormat::FlatGeobuf),
         "geo_json" | "geojson" | "json" => Ok(VectorFileFormat::GeoJson),
         "shapefile" | "shp" | "shz" => Ok(VectorFileFormat::Shapefile),
+        "geo_package" | "geopackage" | "gpkg" => Ok(VectorFileFormat::GeoPackage),
         other => Err(FragmentError::UnknownFormat(other.to_string())),
     }
 }
@@ -122,6 +123,7 @@ fn infer_from_extension(uri: &str) -> Option<VectorFileFormat> {
     match ext {
         "fgb" => Some(VectorFileFormat::FlatGeobuf),
         "geojson" | "json" => Some(VectorFileFormat::GeoJson),
+        "gpkg" => Some(VectorFileFormat::GeoPackage),
         _ => None,
     }
 }

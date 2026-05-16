@@ -104,6 +104,12 @@ clap                = { version = "4.6.1", features = ["derive", "env"] }
 criterion           = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
 deadpool-postgres   = "0.14.1"
 fallible-streaming-iterator = "0.1.9"
+# pinned to a version whose libsqlite3-sys req overlaps proj-sys 0.27.x
+# (which also declares `links = "sqlite3"`); bumping rusqlite past 0.36 here
+# requires lifting the proj-sys floor in lockstep. bundled feature compiles
+# SQLite from source so the workspace doesn't grow a system-sqlite runtime
+# dep.
+rusqlite            = { version = "0.36.0", default-features = false, features = ["bundled"] }
 # default features pull in reqwest/http for direct fetching; we use object_store
 # for transport, so only the bytes integration is needed.
 flatgeobuf          = { version = "6.0.1", default-features = false, features = ["bytes"] }

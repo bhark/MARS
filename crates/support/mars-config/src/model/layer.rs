@@ -160,6 +160,11 @@ pub enum VectorFileFormat {
     /// at a shared basename; an optional `.prj` is honoured when present.
     /// One-file packaging keeps the adapter's single-URI fetch contract.
     Shapefile,
+    /// OGC GeoPackage (`.gpkg`). SQLite-backed feature container. The
+    /// adapter writes the fetched bytes to a tempfile so SQLite can mmap
+    /// it, then iterates the configured feature table emitting OGC WKB +
+    /// attribute rows.
+    GeoPackage,
 }
 
 /// Source binding for a layer. Always points at one of the configured

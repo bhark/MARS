@@ -21,6 +21,7 @@ use mars_types::CrsCode;
 
 pub mod flatgeobuf;
 pub mod geojson;
+pub mod geopackage;
 pub mod shapefile;
 
 use crate::BindingPlan;
@@ -82,6 +83,7 @@ impl Registry {
         r.decoders.push(Box::new(flatgeobuf::FlatGeobufDecoder));
         r.decoders.push(Box::new(geojson::GeoJsonDecoder));
         r.decoders.push(Box::new(shapefile::ShapefileDecoder));
+        r.decoders.push(Box::new(geopackage::GeoPackageDecoder));
         r
     }
 

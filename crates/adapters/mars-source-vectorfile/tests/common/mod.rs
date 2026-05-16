@@ -84,6 +84,7 @@ pub(crate) fn binding_for(
         VectorFileFormat::FlatGeobuf => "flat_geobuf",
         VectorFileFormat::GeoJson => "geo_json",
         VectorFileFormat::Shapefile => "shapefile",
+        VectorFileFormat::GeoPackage => "geo_package",
     };
     let from = format!("{}{}#format={}&source_crs={}", server.uri(), path, fmt_tag, source_crs);
     SourceBinding::new(
