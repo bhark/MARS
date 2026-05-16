@@ -383,22 +383,13 @@ fn exposed_tile_matrix_sets(cfg: &Config) -> Vec<(String, TileMatrixSet)> {
 }
 
 fn configured_formats(cfg: &Config) -> Vec<ImageFormat> {
-    let configured: Vec<ImageFormat> = cfg
+    let configured = cfg
         .interfaces
         .wmts
         .as_ref()
-        .map(|w| {
-            w.formats
-                .iter()
-                .filter_map(|f| ImageFormat::from_mime(f.as_str()))
-                .collect()
-        })
-        .unwrap_or_default();
-    if configured.is_empty() {
-        vec![ImageFormat::Png]
-    } else {
-        configured
-    }
+        .map(|w| w.formats.as_slice())
+        .unwrap_or(&[]);
+    mars_ows_common::configured_formats(configured, ImageFormat::Png)
 }
 
 fn derive_layer_bboxes(cfg: &Config, _manifest: &Manifest) -> HashMap<LayerId, Bbox> {

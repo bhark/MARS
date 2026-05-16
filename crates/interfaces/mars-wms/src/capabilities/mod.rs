@@ -101,22 +101,8 @@ pub(super) fn union_bbox(a: Bbox, b: Bbox) -> Bbox {
 /// Resolve the format set the runtime advertises. Falls back to PNG when
 /// `interfaces.wms.formats` is omitted, matching `WmsConfig::from_config`.
 pub(super) fn configured_formats(cfg: &Config) -> Vec<ImageFormat> {
-    let configured: Vec<ImageFormat> = cfg
-        .interfaces
-        .wms
-        .as_ref()
-        .map(|w| {
-            w.formats
-                .iter()
-                .filter_map(|f| ImageFormat::from_mime(f.as_str()))
-                .collect()
-        })
-        .unwrap_or_default();
-    if configured.is_empty() {
-        vec![ImageFormat::Png]
-    } else {
-        configured
-    }
+    let configured = cfg.interfaces.wms.as_ref().map(|w| w.formats.as_slice()).unwrap_or(&[]);
+    mars_ows_common::configured_formats(configured, ImageFormat::Png)
 }
 
 /// Emit a `<KeywordList>` block with one `<Keyword>` child per entry. No-op
