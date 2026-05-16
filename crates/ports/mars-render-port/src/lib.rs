@@ -264,3 +264,111 @@ pub trait Encoder: Send + Sync + 'static {
     /// Encode `pixmap` to `format`-specific bytes (PNG / JPEG / ...).
     fn encode(&self, pixmap: &Pixmap, format: ImageFormat) -> Result<Vec<u8>, EncodeError>;
 }
+
+/// Draw-surface port. Lower-level than [`Renderer`]: one method per
+/// [`DrawOp`] variant + canvas-setup + finalise. Backends implement this
+/// trait to expose their draw-call surface; the port-level [`dispatch_ops`]
+/// helper routes a `&[DrawOp]` through any `Surface` impl, so adding a new
+/// rasteriser (vello, GPU, recording) only needs the trait and not a full
+/// `Renderer` from scratch.
+///
+/// The trait owns its own dependencies (font registry, image registry,
+/// pixmap buffer). [`Surface::finish`] consumes `self` and returns the
+/// rasterised pixmap.
+///
+/// Drop-call methods receive the already-resolved `ResolvedStyle` /
+/// `ResolvedLabelStyle` so the surface never needs to learn about scale
+/// attenuation; that work happened upstream.
+pub trait Surface: Send {
+    /// Fill the entire surface with a solid colour. Idiomatic call before
+    /// any draw op when the [`Canvas`]'s background is set.
+    fn fill_background(&mut self, colour: mars_style::Colour);
+
+    /// Paint a path with the style's fill and/or stroke. Mirrors
+    /// [`DrawOp::Path`].
+    fn draw_path(&mut self, path: &Path, style: &ResolvedStyle) -> Result<(), RenderError>;
+
+    /// Stamp a single upright label. Mirrors [`DrawOp::Label`]. `anchor`
+    /// is the pen position in pixel space; `angle_rad` rotates the
+    /// painted glyphs around `anchor`.
+    fn draw_label(
+        &mut self,
+        anchor: (f32, f32),
+        text: &str,
+        style: &ResolvedLabelStyle,
+        angle_rad: f32,
+    ) -> Result<(), RenderError>;
+
+    /// Stamp a label whose glyphs follow a polyline. Mirrors
+    /// [`DrawOp::FollowLabel`]; `start_arc_px` is the arc-length offset
+    /// where the first glyph centre lands.
+    fn draw_follow_label(
+        &mut self,
+        polyline_px: &[(f32, f32)],
+        start_arc_px: f32,
+        text: &str,
+        style: &ResolvedLabelStyle,
+    ) -> Result<(), RenderError>;
+
+    /// Stamp a point marker. Mirrors [`DrawOp::Symbol`].
+    fn draw_symbol(&mut self, anchor: (f32, f32), rotation_rad: f32, style: &ResolvedStyle) -> Result<(), RenderError>;
+
+    /// Fill a path with a non-procedural paint resolved through the
+    /// surface's image registry (tiled image patterns). Mirrors
+    /// [`DrawOp::Pattern`].
+    fn draw_pattern(&mut self, path: &Path, style: &ResolvedStyle) -> Result<(), RenderError>;
+
+    /// Composite a decoded raster tile at the destination rectangle.
+    /// Mirrors [`DrawOp::Raster`]. `blend_mode = None` falls back to
+    /// source-over.
+    fn draw_raster(
+        &mut self,
+        tile: &DecodedImage,
+        dst: PixelRect,
+        opacity: f32,
+        blend_mode: Option<mars_style::BlendMode>,
+    ) -> Result<(), RenderError>;
+
+    /// Consume the surface and yield the rasterised pixmap. Allows the
+    /// impl to take ownership of any internal buffer rather than copy it.
+    fn finish(self: Box<Self>) -> Pixmap;
+}
+
+/// Route every op in `ops` through `surface`. Lives at the port so any
+/// surface impl can opt into the canonical op->method translation without
+/// re-implementing the match. Returns on the first error, leaving any
+/// partially-painted state in place (the caller decides whether that's
+/// salvageable).
+pub fn dispatch_ops(surface: &mut dyn Surface, ops: &[DrawOp]) -> Result<(), RenderError> {
+    for op in ops {
+        match op {
+            DrawOp::Path { path, style } => surface.draw_path(path, style)?,
+            DrawOp::Label {
+                anchor,
+                text,
+                style,
+                angle_rad,
+            } => surface.draw_label(*anchor, text, style, *angle_rad)?,
+            DrawOp::FollowLabel {
+                polyline_px,
+                start_arc_px,
+                text,
+                style,
+                ..
+            } => surface.draw_follow_label(polyline_px, *start_arc_px, text, style)?,
+            DrawOp::Symbol {
+                anchor,
+                rotation_rad,
+                style,
+            } => surface.draw_symbol(*anchor, *rotation_rad, style)?,
+            DrawOp::Pattern { path, style } => surface.draw_pattern(path, style)?,
+            DrawOp::Raster {
+                tile,
+                dst,
+                opacity,
+                blend_mode,
+            } => surface.draw_raster(tile, *dst, *opacity, *blend_mode)?,
+        }
+    }
+    Ok(())
+}
