@@ -31,6 +31,8 @@ pub enum ExprError {
     NotImplemented { what: &'static str },
     #[error("expression nesting too deep (max {max})")]
     TooDeep { max: u32 },
+    #[error("invalid regex `{pattern}`: {msg}")]
+    InvalidRegex { pattern: String, msg: String },
 }
 
 /// Filter-expression AST. Scope is intentionally narrow.
@@ -38,11 +40,33 @@ pub enum ExprError {
 pub enum Expr {
     Literal(Literal),
     Ident(String),
-    Cmp { op: CmpOp, lhs: Box<Expr>, rhs: Box<Expr> },
-    Logic { op: LogicOp, args: Vec<Expr> },
+    Cmp {
+        op: CmpOp,
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+    },
+    Logic {
+        op: LogicOp,
+        args: Vec<Expr>,
+    },
     Not(Box<Expr>),
-    In { lhs: Box<Expr>, list: Vec<Literal> },
-    Like { lhs: Box<Expr>, pattern: String },
+    In {
+        lhs: Box<Expr>,
+        list: Vec<Literal>,
+    },
+    Like {
+        lhs: Box<Expr>,
+        pattern: String,
+    },
+    // postgres-style regex match. `~` is case-sensitive, `~*` case-insensitive.
+    // pattern flavor follows the `regex` crate (rust regex, similar to RE2);
+    // it is not a verbatim posix superset of postgres `~`, but covers the
+    // mapfile CLASSITEM `/pat/` form we lift from importers.
+    Regex {
+        lhs: Box<Expr>,
+        pattern: String,
+        case_insensitive: bool,
+    },
     IsNull(Box<Expr>),
     IsNotNull(Box<Expr>),
 }
@@ -119,7 +143,7 @@ pub fn collect_idents(expr: &Expr, out: &mut std::collections::BTreeSet<String>)
             }
         }
         Expr::Not(inner) | Expr::IsNull(inner) | Expr::IsNotNull(inner) => collect_idents(inner, out),
-        Expr::In { lhs, .. } | Expr::Like { lhs, .. } => collect_idents(lhs, out),
+        Expr::In { lhs, .. } | Expr::Like { lhs, .. } | Expr::Regex { lhs, .. } => collect_idents(lhs, out),
     }
 }
 
@@ -218,6 +242,15 @@ impl fmt::Display for Expr {
             }
             Expr::Like { lhs, pattern } => {
                 write!(f, "{lhs} LIKE ")?;
+                write_quoted(f, pattern)
+            }
+            Expr::Regex {
+                lhs,
+                pattern,
+                case_insensitive,
+            } => {
+                let op = if *case_insensitive { "~*" } else { "~" };
+                write!(f, "{lhs} {op} ")?;
                 write_quoted(f, pattern)
             }
             Expr::IsNull(inner) => write!(f, "{inner} IS NULL"),
@@ -343,8 +376,101 @@ mod tests {
     }
 
     #[test]
-    fn reject_regex() {
-        assert!(matches!(parse("a ~ '/regex/'"), Err(ExprError::Parse(_))));
+    fn parse_regex_case_sensitive() {
+        let e = parse("name ~ '^foo'").unwrap();
+        match e {
+            Expr::Regex {
+                pattern,
+                case_insensitive,
+                ..
+            } => {
+                assert_eq!(pattern, "^foo");
+                assert!(!case_insensitive);
+            }
+            _ => panic!("expected Regex"),
+        }
+    }
+
+    #[test]
+    fn parse_regex_case_insensitive() {
+        let e = parse("name ~* 'foo'").unwrap();
+        match e {
+            Expr::Regex {
+                pattern,
+                case_insensitive,
+                ..
+            } => {
+                assert_eq!(pattern, "foo");
+                assert!(case_insensitive);
+            }
+            _ => panic!("expected Regex"),
+        }
+    }
+
+    #[test]
+    fn parse_regex_requires_string_pattern() {
+        // bareword / numeric pattern is a parse error - only quoted strings.
+        assert!(matches!(parse("name ~ foo"), Err(ExprError::Parse(_))));
+        assert!(matches!(parse("name ~ 42"), Err(ExprError::Parse(_))));
+    }
+
+    #[test]
+    fn eval_regex_case_sensitive() {
+        let a = attrs(&[("s", Literal::String("Foobar".into()))]);
+        assert_eq!(eval(&parse("s ~ '^Foo'").unwrap(), &a).unwrap(), Literal::Bool(true));
+        // case-sensitive: lowercase anchor should not match
+        assert_eq!(eval(&parse("s ~ '^foo'").unwrap(), &a).unwrap(), Literal::Bool(false));
+    }
+
+    #[test]
+    fn eval_regex_case_insensitive() {
+        let a = attrs(&[("s", Literal::String("Foobar".into()))]);
+        assert_eq!(eval(&parse("s ~* '^foo'").unwrap(), &a).unwrap(), Literal::Bool(true));
+        assert_eq!(eval(&parse("s ~* 'BAR$'").unwrap(), &a).unwrap(), Literal::Bool(true));
+    }
+
+    #[test]
+    fn eval_regex_unanchored_substring() {
+        let a = attrs(&[("s", Literal::String("hello world".into()))]);
+        assert_eq!(eval(&parse("s ~ 'wor'").unwrap(), &a).unwrap(), Literal::Bool(true));
+        assert_eq!(eval(&parse("s ~ 'xyz'").unwrap(), &a).unwrap(), Literal::Bool(false));
+    }
+
+    #[test]
+    fn eval_regex_escaped_metachars() {
+        let a = attrs(&[("s", Literal::String("a.b".into()))]);
+        // escaped '.' only matches literal dot
+        assert_eq!(eval(&parse("s ~ '^a\\.b$'").unwrap(), &a).unwrap(), Literal::Bool(true));
+        // unescaped '.' would also match here, so use a value that distinguishes
+        let a2 = attrs(&[("s", Literal::String("aXb".into()))]);
+        assert_eq!(
+            eval(&parse("s ~ '^a\\.b$'").unwrap(), &a2).unwrap(),
+            Literal::Bool(false)
+        );
+        assert_eq!(eval(&parse("s ~ '^a.b$'").unwrap(), &a2).unwrap(), Literal::Bool(true));
+    }
+
+    #[test]
+    fn eval_regex_null_propagates() {
+        let a = attrs(&[("s", Literal::Null)]);
+        assert!(matches!(eval(&parse("s ~ 'foo'").unwrap(), &a).unwrap(), Literal::Null));
+    }
+
+    #[test]
+    fn eval_regex_invalid_pattern() {
+        let a = attrs(&[("s", Literal::String("x".into()))]);
+        let r = eval(&parse("s ~ '(unclosed'").unwrap(), &a);
+        assert!(matches!(r, Err(ExprError::InvalidRegex { .. })));
+    }
+
+    #[test]
+    fn regex_roundtrip_via_display() {
+        for s in ["name ~ '^foo'", "name ~* 'bar$'", "n ~ 'a\\.b'"] {
+            let e1 = parse(s).unwrap();
+            let s2 = format!("{e1}");
+            let e2 = parse(&s2).unwrap_or_else(|err| panic!("reparse `{s2}` failed: {err}"));
+            assert_eq!(e1, e2, "roundtrip mismatch for `{s}` -> `{s2}`");
+        }
     }
 
     #[test]
@@ -610,6 +736,14 @@ mod proptests {
                 lhs: Box::new(lhs),
                 pattern: pat
             }),
+            // restrict to alnum patterns so the generated regex stays
+            // parser-printable (no embedded single quotes) and valid; depth of
+            // escape semantics is covered by the unit tests above.
+            (arb_primary(), "[a-zA-Z0-9_]{0,8}", any::<bool>()).prop_map(|(lhs, pat, ci)| Expr::Regex {
+                lhs: Box::new(lhs),
+                pattern: pat,
+                case_insensitive: ci,
+            }),
             arb_primary().prop_map(|e| Expr::IsNull(Box::new(e))),
             arb_primary().prop_map(|e| Expr::IsNotNull(Box::new(e))),
         ]
@@ -664,6 +798,15 @@ mod proptests {
             Expr::Like { lhs, pattern } => Expr::Like {
                 lhs: Box::new(canonicalize(*lhs)),
                 pattern,
+            },
+            Expr::Regex {
+                lhs,
+                pattern,
+                case_insensitive,
+            } => Expr::Regex {
+                lhs: Box::new(canonicalize(*lhs)),
+                pattern,
+                case_insensitive,
             },
             Expr::IsNull(i) => Expr::IsNull(Box::new(canonicalize(*i))),
             Expr::IsNotNull(i) => Expr::IsNotNull(Box::new(canonicalize(*i))),

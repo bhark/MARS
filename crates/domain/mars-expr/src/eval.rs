@@ -77,9 +77,34 @@ pub(crate) fn eval(expr: &Expr, attrs: &dyn AttributeAccess) -> Result<Literal, 
                 other => Err(ExprError::Type(format!("LIKE requires string operand, got {other:?}"))),
             }
         }
+        Expr::Regex {
+            lhs,
+            pattern,
+            case_insensitive,
+        } => {
+            let v = eval(lhs, attrs)?;
+            match v {
+                Literal::Null => Ok(Literal::Null),
+                Literal::String(s) => {
+                    let re = compile_regex(pattern, *case_insensitive)?;
+                    Ok(Literal::Bool(re.is_match(&s)))
+                }
+                other => Err(ExprError::Type(format!("~ requires string operand, got {other:?}"))),
+            }
+        }
         Expr::IsNull(inner) => Ok(Literal::Bool(matches!(eval(inner, attrs)?, Literal::Null))),
         Expr::IsNotNull(inner) => Ok(Literal::Bool(!matches!(eval(inner, attrs)?, Literal::Null))),
     }
+}
+
+fn compile_regex(pattern: &str, case_insensitive: bool) -> Result<regex::Regex, ExprError> {
+    regex::RegexBuilder::new(pattern)
+        .case_insensitive(case_insensitive)
+        .build()
+        .map_err(|e| ExprError::InvalidRegex {
+            pattern: pattern.to_string(),
+            msg: e.to_string(),
+        })
 }
 
 /// Three-valued-logic comparator used by both `Expr::Cmp` and `Expr::In`.

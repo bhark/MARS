@@ -8,6 +8,7 @@
 //!   postfix := IS [NOT] NULL
 //!            | [NOT] IN '(' literal_list ')'
 //!            | [NOT] LIKE string
+//!            | ('~' | '~*') string
 //!            | cmp_op primary
 //!   primary := literal | ident | '(' or ')'
 
@@ -24,6 +25,9 @@ enum Tok {
     Le,
     Gt,
     Ge,
+    // postgres-style regex match operators
+    Tilde,
+    TildeStar,
     Ident(String),
     KwAnd,
     KwOr,
@@ -108,7 +112,19 @@ fn tokenize(input: &str) -> Result<Vec<Spanned>, ExprError> {
                 i = end;
             }
             b'"' => return Err(parse_err(pos, "double-quoted strings are not allowed")),
-            b'+' | b'*' | b'/' | b'~' | b'%' | b'^' | b'&' | b'|' | b'?' | b'@' | b'#' | b'$' | b':' | b';' => {
+            b'~' => {
+                if i + 1 < bytes.len() && bytes[i + 1] == b'*' {
+                    out.push(Spanned {
+                        tok: Tok::TildeStar,
+                        pos,
+                    });
+                    i += 2;
+                } else {
+                    out.push(Spanned { tok: Tok::Tilde, pos });
+                    i += 1;
+                }
+            }
+            b'+' | b'*' | b'/' | b'%' | b'^' | b'&' | b'|' | b'?' | b'@' | b'#' | b'$' | b':' | b';' => {
                 return Err(parse_err(pos, &format!("unexpected character '{}'", b as char)));
             }
             b'-' => {
@@ -466,6 +482,24 @@ impl Parser {
                 Ok(Expr::Like {
                     lhs: Box::new(lhs),
                     pattern: pat,
+                })
+            }
+            Some(Tok::Tilde) => {
+                self.bump();
+                let pat = self.expect_string("string after ~")?;
+                Ok(Expr::Regex {
+                    lhs: Box::new(lhs),
+                    pattern: pat,
+                    case_insensitive: false,
+                })
+            }
+            Some(Tok::TildeStar) => {
+                self.bump();
+                let pat = self.expect_string("string after ~*")?;
+                Ok(Expr::Regex {
+                    lhs: Box::new(lhs),
+                    pattern: pat,
+                    case_insensitive: true,
                 })
             }
             Some(Tok::KwNot) => {
