@@ -6,7 +6,7 @@ use axum::http::HeaderMap;
 use axum::middleware::Next;
 use axum::response::Response;
 
-use crate::AppState;
+use crate::state::AppState;
 
 pub async fn observe_request(State(state): State<AppState>, req: Request, next: Next) -> Response {
     let interface = interface_label(req.uri().path());

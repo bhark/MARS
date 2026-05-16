@@ -6,9 +6,11 @@ use tracing::Instrument;
 use mars_wms::WmsRequest;
 use mars_wmts::WmtsRequest;
 
-use crate::{AppState, CapabilitiesHandle};
+use crate::capabilities::serve_capabilities;
+use crate::middleware::request_id;
+use crate::state::AppState;
 use crate::{
-    request_id, runtime_error_response, wms_error_response, wms_runtime_xml_response, wms_runtime_xml_response_plain,
+    runtime_error_response, wms_error_response, wms_runtime_xml_response, wms_runtime_xml_response_plain,
     wmts_error_response, wmts_runtime_error_response,
 };
 
@@ -150,25 +152,6 @@ pub async fn handle_wmts_rest(
     .await
 }
 
-fn serve_capabilities(handle: &CapabilitiesHandle, headers: &HeaderMap) -> Response {
-    let doc = handle.load_full();
-    let etag_value = match HeaderValue::from_str(&doc.etag) {
-        Ok(v) => v,
-        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "bad etag").into_response(),
-    };
-    if let Some(req_etag) = headers.get(header::IF_NONE_MATCH)
-        && *req_etag == etag_value
-    {
-        let mut h = HeaderMap::new();
-        h.insert(header::ETAG, etag_value);
-        return (StatusCode::NOT_MODIFIED, h).into_response();
-    }
-    let mut h = HeaderMap::new();
-    h.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/xml"));
-    h.insert(header::ETAG, etag_value);
-    (StatusCode::OK, h, doc.body.clone()).into_response()
-}
-
 pub async fn handle_ready(State(state): State<AppState>) -> Response {
     if state.runtime.is_ready() {
         (StatusCode::OK, "ready").into_response()
@@ -192,10 +175,4 @@ pub async fn handle_metrics(State(state): State<AppState>) -> Response {
             (StatusCode::INTERNAL_SERVER_ERROR, "metrics encode failed").into_response()
         }
     }
-}
-
-pub fn etag_for(bytes: &[u8]) -> String {
-    let hash = blake3::hash(bytes);
-    // strong validator, hex-truncated to 16 chars (64 bits) - collision-safe for caps.
-    format!("\"{}\"", &hash.to_hex().as_str()[..16])
 }
