@@ -367,6 +367,7 @@ mod tests {
             tile_matrix_sets: sets,
             formats: vec![ImageFormat::Png],
             max_bbox_coord: 1e9,
+            layer_policies: std::collections::BTreeMap::new(),
         }
     }
 

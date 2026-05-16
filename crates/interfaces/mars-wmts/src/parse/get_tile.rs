@@ -152,6 +152,7 @@ mod tests {
             tile_matrix_sets: sets,
             formats: vec![ImageFormat::Png],
             max_bbox_coord: 1e9,
+            layer_policies: std::collections::BTreeMap::new(),
         }
     }
 
@@ -274,6 +275,7 @@ mod tests {
             tile_matrix_sets: sets,
             formats: vec![ImageFormat::Png],
             max_bbox_coord: 1e9,
+            layer_policies: std::collections::BTreeMap::new(),
         };
         let q = "request=GetTile&layer=a&format=image/png&tilematrixset=world_4326&\
                  tilematrix=0&tilecol=0&tilerow=0";
@@ -305,6 +307,7 @@ mod tests {
             tile_matrix_sets: sets,
             formats: vec![ImageFormat::Png],
             max_bbox_coord: 1e9,
+            layer_policies: std::collections::BTreeMap::new(),
         };
         let q = "request=GetTile&layer=a&format=image/png&tilematrixset=weird&\
                  tilematrix=0&tilecol=0&tilerow=0";

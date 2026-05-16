@@ -141,6 +141,12 @@ pub fn wmts_error_response(e: WmtsError) -> Response {
             locator: None,
             message: format!("Operation not supported: {what}"),
         },
+        WmtsError::OperationNotPermitted { layer, op } => EdgeException {
+            status: StatusCode::FORBIDDEN,
+            code: Some("OperationNotSupported"),
+            locator: None,
+            message: format!("Operation {} not permitted on layer '{layer}'", op.as_str()),
+        },
     };
     wmts_exception_response(exc)
 }
