@@ -54,7 +54,7 @@ pub fn wms_error_response(version: WmsVersion, e: WmsError) -> Response {
             status: StatusCode::FORBIDDEN,
             code: Some("OperationNotSupported"),
             locator: None,
-            message: format!("Operation {op:?} not permitted on layer '{layer}'"),
+            message: format!("Operation {} not permitted on layer '{layer}'", op.as_str()),
         },
     };
     wms_exception_response(version, exc)
@@ -211,8 +211,8 @@ fn internal_error() -> EdgeException {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    use mars_config::ServiceOp;
     use mars_types::LayerId;
-    use mars_wms::WmsOperation;
 
     use super::*;
 
@@ -220,7 +220,7 @@ mod tests {
     async fn operation_not_permitted_maps_to_403_with_operation_not_supported() {
         let e = mars_wms::WmsError::OperationNotPermitted {
             layer: LayerId::new("roads"),
-            op: WmsOperation::GetMap,
+            op: ServiceOp::WmsGetMap,
         };
         let resp = wms_error_response(WmsVersion::V130, e);
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);

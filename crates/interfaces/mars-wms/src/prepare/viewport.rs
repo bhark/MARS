@@ -12,7 +12,9 @@ use mars_proj::{AxisOrder, axis_order};
 use mars_runtime::RenderPlan;
 use mars_types::{Bbox, CrsCode, ImageFormat, LayerId};
 
-use crate::{WmsConfig, WmsError, WmsOperation, WmsVersion};
+use mars_config::ServiceOp;
+
+use crate::{WmsConfig, WmsError, WmsVersion};
 
 /// option-heavy viewport slice produced by the parse layer.
 #[derive(Debug, Default, Clone)]
@@ -32,7 +34,7 @@ pub(crate) fn resolve_viewport(
     p: &ParsedViewport,
     cfg: &WmsConfig,
     version: WmsVersion,
-    gate_op: WmsOperation,
+    gate_op: ServiceOp,
 ) -> Result<RenderPlan, WmsError> {
     let layers = p.layers.as_ref().ok_or(WmsError::MissingParam("layers"))?.clone();
     if layers.is_empty() {
@@ -246,11 +248,11 @@ mod tests {
             ..policy_all_allowed()
         };
         let cfg = cfg_with_policies(&[("a", denied)]);
-        let err = resolve_viewport(&happy_viewport("a"), &cfg, WmsVersion::V130, WmsOperation::GetMap).unwrap_err();
+        let err = resolve_viewport(&happy_viewport("a"), &cfg, WmsVersion::V130, ServiceOp::WmsGetMap).unwrap_err();
         assert!(matches!(
             err,
             WmsError::OperationNotPermitted {
-                op: WmsOperation::GetMap,
+                op: ServiceOp::WmsGetMap,
                 ..
             }
         ));
@@ -259,7 +261,7 @@ mod tests {
     #[test]
     fn resolve_viewport_passes_getmap_for_allowed_layer() {
         let cfg = cfg_with_policies(&[("a", policy_all_allowed())]);
-        let plan = resolve_viewport(&happy_viewport("a"), &cfg, WmsVersion::V130, WmsOperation::GetMap).unwrap();
+        let plan = resolve_viewport(&happy_viewport("a"), &cfg, WmsVersion::V130, ServiceOp::WmsGetMap).unwrap();
         assert_eq!(plan.layers[0].as_str(), "a");
     }
 
@@ -277,7 +279,7 @@ mod tests {
             scale_pixel_size_m: 0.0254 / 96.0,
             layer_policies: BTreeMap::new(),
         };
-        let plan = resolve_viewport(&happy_viewport("ghost"), &cfg, WmsVersion::V130, WmsOperation::GetMap).unwrap();
+        let plan = resolve_viewport(&happy_viewport("ghost"), &cfg, WmsVersion::V130, ServiceOp::WmsGetMap).unwrap();
         assert_eq!(plan.layers[0].as_str(), "ghost");
     }
 }

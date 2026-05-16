@@ -80,7 +80,7 @@ pub(super) fn capabilities_xml(cfg: &Config, manifest: &Manifest) -> Result<Stri
     if cfg
         .layers
         .iter()
-        .any(|l| l.permits_wms_op(mars_config::WmsOperation::GetFeatureInfo))
+        .any(|l| l.permits_op(mars_config::ServiceOp::WmsGetFeatureInfo))
     {
         write_request_op(&mut w, "GetFeatureInfo", &getfi_formats, online_href)?;
     }
@@ -200,9 +200,9 @@ fn emit_children<W: std::io::Write>(
     }
     for child in &node.layer_children {
         if let Some(layer) = child.leaf {
-            // request_gating.get_capabilities=Some(false) hides the layer
-            // entirely; permits_wms_op covers the default-allow case.
-            if !layer.permits_wms_op(mars_config::WmsOperation::GetCapabilities) {
+            // explicit ows.request_gating=false hides the layer
+            // entirely; permits_op covers the default-allow case.
+            if !layer.permits_op(mars_config::ServiceOp::WmsGetCapabilities) {
                 continue;
             }
             emit_leaf(w, layer, cfg, layer_bboxes, formats)?;
@@ -233,7 +233,7 @@ fn emit_leaf<W: std::io::Write>(
     formats: &[ImageFormat],
 ) -> Result<(), WmsError> {
     let mut layer_tag = BytesStart::new("Layer");
-    if layer.permits_wms_op(mars_config::WmsOperation::GetFeatureInfo) {
+    if layer.permits_op(mars_config::ServiceOp::WmsGetFeatureInfo) {
         layer_tag.push_attribute(("queryable", "1"));
     }
     if layer.wms.opaque {

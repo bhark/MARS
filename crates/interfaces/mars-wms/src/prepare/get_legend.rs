@@ -7,7 +7,9 @@ use mars_runtime::LegendPlan;
 use mars_types::{ImageFormat, LayerId};
 
 use super::ParsedGetLegend;
-use crate::{WmsConfig, WmsError, WmsOperation};
+use mars_config::ServiceOp;
+
+use crate::{WmsConfig, WmsError};
 
 /// Fully-validated GetLegendGraphic request.
 #[derive(Debug, Clone)]
@@ -18,10 +20,10 @@ pub struct ResolvedGetLegend {
 pub(crate) fn resolve_get_legend(p: ParsedGetLegend, cfg: &WmsConfig) -> Result<ResolvedGetLegend, WmsError> {
     let layer = p.layer.ok_or(WmsError::MissingParam("layer"))?;
     let layer = LayerId::new(layer);
-    if !cfg.permits(&layer, WmsOperation::GetLegendGraphic) {
+    if !cfg.permits(&layer, ServiceOp::WmsGetLegendGraphic) {
         return Err(WmsError::OperationNotPermitted {
             layer,
-            op: WmsOperation::GetLegendGraphic,
+            op: ServiceOp::WmsGetLegendGraphic,
         });
     }
 
@@ -186,7 +188,7 @@ mod tests {
         assert!(matches!(
             err,
             WmsError::OperationNotPermitted {
-                op: WmsOperation::GetLegendGraphic,
+                op: ServiceOp::WmsGetLegendGraphic,
                 ..
             }
         ));

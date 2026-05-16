@@ -13,8 +13,7 @@ mod prepare;
 
 use std::collections::BTreeMap;
 
-use mars_config::Config;
-pub use mars_config::WmsOperation;
+use mars_config::{Config, ServiceOp};
 use mars_types::{CrsCode, ImageFormat, LayerId};
 
 pub use capabilities::capabilities_xml;
@@ -33,8 +32,8 @@ pub enum WmsError {
     InvalidParam { name: &'static str, reason: String },
     #[error("not implemented: {what}")]
     NotImplemented { what: String },
-    #[error("layer `{layer}` does not permit operation {op:?}")]
-    OperationNotPermitted { layer: LayerId, op: WmsOperation },
+    #[error("layer `{layer}` does not permit operation {op}", op = op.as_str())]
+    OperationNotPermitted { layer: LayerId, op: ServiceOp },
 }
 
 /// hard upper bound on image dimensions to prevent oom from malicious
@@ -78,7 +77,7 @@ pub struct WmsConfig {
     /// parameter overrides this per-request.
     pub scale_pixel_size_m: f64,
     /// Resolved per-layer WMS request gating. Populated from
-    /// [`mars_config::Layer::permits_wms_op`] at config-resolve time so the
+    /// [`mars_config::Layer::permits_op`] at config-resolve time so the
     /// request path can deny without re-traversing `Config`. Unknown layers
     /// (request names a layer not in config) are absent; [`Self::permits`]
     /// returns `true` for them so the downstream layer-existence check owns
@@ -87,7 +86,7 @@ pub struct WmsConfig {
 }
 
 /// Per-layer WMS operation allow/deny flags, distilled from
-/// `Layer::permits_wms_op` at startup.
+/// `Layer::permits_op` at startup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LayerPolicy {
     pub get_map: bool,
@@ -119,10 +118,10 @@ impl WmsConfig {
                 (
                     l.name.clone(),
                     LayerPolicy {
-                        get_map: l.permits_wms_op(WmsOperation::GetMap),
-                        get_capabilities: l.permits_wms_op(WmsOperation::GetCapabilities),
-                        get_feature_info: l.permits_wms_op(WmsOperation::GetFeatureInfo),
-                        get_legend_graphic: l.permits_wms_op(WmsOperation::GetLegendGraphic),
+                        get_map: l.permits_op(ServiceOp::WmsGetMap),
+                        get_capabilities: l.permits_op(ServiceOp::WmsGetCapabilities),
+                        get_feature_info: l.permits_op(ServiceOp::WmsGetFeatureInfo),
+                        get_legend_graphic: l.permits_op(ServiceOp::WmsGetLegendGraphic),
                     },
                 )
             })
@@ -143,20 +142,22 @@ impl WmsConfig {
 
     /// True when `layer` permits `op`. Unknown layers return `true`; the
     /// downstream layer-existence check produces the right error in that
-    /// case, keeping this focused on gating semantics alone.
+    /// case, keeping this focused on gating semantics alone. Non-WMS ops
+    /// passed here default-allow; per-protocol gating lives on each
+    /// interface's own `Config::permits`.
     #[must_use]
-    pub fn permits(&self, layer: &LayerId, op: WmsOperation) -> bool {
+    pub fn permits(&self, layer: &LayerId, op: ServiceOp) -> bool {
         let Some(p) = self.layer_policies.get(layer) else {
             return true;
         };
         match op {
-            WmsOperation::GetMap => p.get_map,
-            WmsOperation::GetCapabilities => p.get_capabilities,
-            WmsOperation::GetFeatureInfo => p.get_feature_info,
-            WmsOperation::GetLegendGraphic => p.get_legend_graphic,
+            ServiceOp::WmsGetMap => p.get_map,
+            ServiceOp::WmsGetCapabilities => p.get_capabilities,
+            ServiceOp::WmsGetFeatureInfo => p.get_feature_info,
+            ServiceOp::WmsGetLegendGraphic => p.get_legend_graphic,
             // not tracked in LayerPolicy (no request path uses them yet);
             // fall back to default-allow.
-            WmsOperation::GetStyles | WmsOperation::DescribeLayer => true,
+            _ => true,
         }
     }
 }
@@ -326,15 +327,15 @@ layers:
         let cfg = cfg_with_two_layers();
         let wcfg = WmsConfig::from_config(&cfg);
         let unknown = LayerId::new("does-not-exist");
-        assert!(wcfg.permits(&unknown, WmsOperation::GetMap));
-        assert!(wcfg.permits(&unknown, WmsOperation::GetFeatureInfo));
+        assert!(wcfg.permits(&unknown, ServiceOp::WmsGetMap));
+        assert!(wcfg.permits(&unknown, ServiceOp::WmsGetFeatureInfo));
     }
 
     #[test]
     fn permits_reflects_gating() {
         let cfg = cfg_with_two_layers();
         let wcfg = WmsConfig::from_config(&cfg);
-        assert!(!wcfg.permits(&LayerId::new("a"), WmsOperation::GetMap));
-        assert!(wcfg.permits(&LayerId::new("b"), WmsOperation::GetMap));
+        assert!(!wcfg.permits(&LayerId::new("a"), ServiceOp::WmsGetMap));
+        assert!(wcfg.permits(&LayerId::new("b"), ServiceOp::WmsGetMap));
     }
 }

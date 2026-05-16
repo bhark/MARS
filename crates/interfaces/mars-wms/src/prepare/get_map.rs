@@ -6,7 +6,9 @@ use mars_runtime::RenderPlan;
 
 use super::ParsedGetMap;
 use super::viewport::resolve_viewport;
-use crate::{ExceptionsFormat, WmsConfig, WmsError, WmsOperation, WmsVersion};
+use mars_config::ServiceOp;
+
+use crate::{ExceptionsFormat, WmsConfig, WmsError, WmsVersion};
 
 /// Fully-validated GetMap request. The dispatcher in
 /// [`crate::parse::parse_request`] hands this to the handler, which reads
@@ -22,7 +24,7 @@ pub(crate) fn resolve_get_map(
     cfg: &WmsConfig,
     version: WmsVersion,
 ) -> Result<ResolvedGetMap, WmsError> {
-    let plan = resolve_viewport(&p.viewport, cfg, version, WmsOperation::GetMap)?;
+    let plan = resolve_viewport(&p.viewport, cfg, version, ServiceOp::WmsGetMap)?;
     let exceptions = resolve_exceptions(p.exceptions.as_deref())?;
     Ok(ResolvedGetMap { plan, exceptions })
 }

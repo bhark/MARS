@@ -14,7 +14,9 @@ use mars_types::LayerId;
 use super::ParsedGetFeatureInfo;
 use super::viewport::resolve_viewport;
 use crate::feature_info::info_format_mime;
-use crate::{InfoFormat, MAX_FEATURE_COUNT, WmsConfig, WmsError, WmsOperation, WmsVersion};
+use mars_config::ServiceOp;
+
+use crate::{InfoFormat, MAX_FEATURE_COUNT, WmsConfig, WmsError, WmsVersion};
 
 /// Fully-validated GetFeatureInfo request. `plan.layers` has been swapped
 /// to QUERY_LAYERS so the runtime walks only those bindings.
@@ -44,20 +46,20 @@ pub(crate) fn resolve_get_feature_info(
     if let Some(layers) = p.viewport.layers.as_mut() {
         let first_denied = layers
             .iter()
-            .find(|l| !cfg.permits(l, WmsOperation::GetFeatureInfo))
+            .find(|l| !cfg.permits(l, ServiceOp::WmsGetFeatureInfo))
             .cloned();
-        layers.retain(|l| cfg.permits(l, WmsOperation::GetFeatureInfo));
+        layers.retain(|l| cfg.permits(l, ServiceOp::WmsGetFeatureInfo));
         if layers.is_empty()
             && let Some(layer) = first_denied
         {
             return Err(WmsError::OperationNotPermitted {
                 layer,
-                op: WmsOperation::GetFeatureInfo,
+                op: ServiceOp::WmsGetFeatureInfo,
             });
         }
     }
 
-    let mut plan = resolve_viewport(&p.viewport, cfg, version, WmsOperation::GetFeatureInfo)?;
+    let mut plan = resolve_viewport(&p.viewport, cfg, version, ServiceOp::WmsGetFeatureInfo)?;
 
     let query_layers = resolve_query_layers(p.query_layers, &plan.layers, cfg)?;
     plan.layers = query_layers;
@@ -106,18 +108,18 @@ fn resolve_query_layers(
     // the first originally-denied layer.
     let first_denied = q
         .iter()
-        .find(|l| !cfg.permits(l, WmsOperation::GetFeatureInfo))
+        .find(|l| !cfg.permits(l, ServiceOp::WmsGetFeatureInfo))
         .cloned();
     let filtered: Vec<LayerId> = q
         .into_iter()
-        .filter(|l| cfg.permits(l, WmsOperation::GetFeatureInfo))
+        .filter(|l| cfg.permits(l, ServiceOp::WmsGetFeatureInfo))
         .collect();
     if filtered.is_empty()
         && let Some(layer) = first_denied
     {
         return Err(WmsError::OperationNotPermitted {
             layer,
-            op: WmsOperation::GetFeatureInfo,
+            op: ServiceOp::WmsGetFeatureInfo,
         });
     }
     for ql in &filtered {
@@ -311,7 +313,7 @@ mod tests {
         assert!(matches!(
             err,
             WmsError::OperationNotPermitted {
-                op: WmsOperation::GetFeatureInfo,
+                op: ServiceOp::WmsGetFeatureInfo,
                 ..
             }
         ));
