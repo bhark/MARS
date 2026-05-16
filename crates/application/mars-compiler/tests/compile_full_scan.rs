@@ -131,7 +131,7 @@ fn binding_plan() -> BindingPlan {
         reconcile_every_cycles: u32::MAX,
         simplifier: mars_config::SimplifierKind::Naive,
         missing_page_policy: mars_config::MissingPagePolicy::Truncate,
-    }
+        dsn: None,    }
 }
 
 /// One-level page plan covering `rows`. Single page so the test focuses on

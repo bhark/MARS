@@ -182,6 +182,14 @@ pub struct SourceBinding {
     /// name their one source.
     #[serde(default = "default_binding_source_id")]
     pub source: SourceId,
+    /// Per-binding database connection override. When set on a postgis
+    /// binding, snapshot queries route to this DSN instead of the
+    /// source-scope `dsn`. Logical-replication ownership stays on the
+    /// source-scope DSN, so override bindings are effectively snapshot-only
+    /// for change-feed purposes. Validation rejects this field on
+    /// non-postgis bindings.
+    #[serde(default)]
+    pub dsn: Option<String>,
     /// Scale window this binding is active in.
     #[serde(default)]
     pub scale: Option<ScaleWindow>,
@@ -334,6 +342,14 @@ pub enum SimplifierKind {
 }
 
 impl SourceBinding {
+    /// Effective postgres DSN for this binding: the binding-level override
+    /// when set, falling back to the source-scope DSN. Non-postgis bindings
+    /// pass an empty `default` and the result is meaningless to them.
+    #[must_use]
+    pub fn effective_dsn<'a>(&'a self, default: &'a str) -> &'a str {
+        self.dsn.as_deref().unwrap_or(default)
+    }
+
     /// Split `from` into `(schema, table)`. Single-segment names route to
     /// `public` to match the postgres adapter convention. Returns `None`
     /// when the binding is a `sql:` view rather than a table binding.

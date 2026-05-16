@@ -159,7 +159,7 @@ fn binding_plan(id: &str) -> BindingPlan {
         reconcile_every_cycles: 24,
         simplifier: mars_config::SimplifierKind::Naive,
         missing_page_policy: mars_config::MissingPagePolicy::Truncate,
-    }
+        dsn: None,    }
 }
 
 #[tokio::test]

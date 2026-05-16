@@ -141,6 +141,12 @@ pub struct BindingPlan {
     /// outside every page range. Resolved from
     /// [`mars_config::SourceBinding::resolved_missing_page_policy`].
     pub missing_page_policy: MissingPagePolicy,
+    /// Per-binding adapter-side DSN override. Postgis-only;
+    /// vector-file bindings always set this to `None`. When set, the
+    /// adapter routes this binding's snapshot/rebuild queries to the
+    /// override DSN's pool. Mirrors
+    /// [`mars_config::SourceBinding::dsn`].
+    pub dsn: Option<String>,
 }
 
 /// One pre-parsed class entry on a [`LayerPlan`]. `when` parses once at
@@ -269,6 +275,7 @@ pub fn build_bootstrap_plan(cfg: &Config) -> Result<BootstrapPlan, PlanError> {
                 reconcile_every_cycles: binding.resolved_reconcile_every_cycles(),
                 simplifier: binding.resolved_simplifier(),
                 missing_page_policy: binding.resolved_missing_page_policy(),
+                dsn: binding.dsn.clone(),
             };
 
             if let Some(existing) = bindings.iter().find(|b| b.binding_id == id) {
@@ -707,7 +714,7 @@ mod tests {
             sidecar_size_warn_bytes: None,
             simplifier: None,
             on_missing_page: None,
-        }
+            dsn: None,        }
     }
 
     fn sql_binding(sql: &str) -> SourceBinding {

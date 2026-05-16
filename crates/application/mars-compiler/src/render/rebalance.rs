@@ -131,7 +131,8 @@ async fn execute_rebalance_one_binding(
         binding_plan.attributes.clone(),
         binding_plan.native_crs.clone(),
     )?
-    .with_filter(binding_plan.filter.clone());
+    .with_filter(binding_plan.filter.clone())
+    .with_dsn(binding_plan.dsn.clone());
     let ids: Vec<i64> = feature_ids
         .iter()
         .map(|f| i64::try_from(*f).unwrap_or(i64::MAX))

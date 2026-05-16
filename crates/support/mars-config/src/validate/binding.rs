@@ -41,6 +41,15 @@ pub(super) fn validate_binding_source(
     let sql = binding.sql.as_deref();
     let uri = binding.uri.as_deref();
 
+    // per-binding DSN override is postgis-only; reject early on vectorfile so
+    // the rest of the validation can ignore the field.
+    if binding.dsn.is_some() && !matches!(backend, SourceBackend::Postgis(_)) {
+        return Err(ConfigError::Invalid(format!(
+            "layer {layer} source[{idx}] sets `dsn:` override but references a non-postgis source {:?}",
+            binding.source.as_str()
+        )));
+    }
+
     let variants_set = [from.is_some(), sql.is_some(), uri.is_some()]
         .iter()
         .filter(|b| **b)
@@ -552,5 +561,17 @@ mod tests {
         cfg.layers = vec![layer_with_binding(b)];
         let err = validate(&mut cfg, Path::new("."));
         assert!(matches!(&err, Err(crate::ConfigError::Invalid(s)) if s.contains("sidecar_size_warn_bytes")));
+    }
+
+    #[test]
+    fn accepts_postgis_binding_with_dsn_override() {
+        let mut cfg = minimal_config();
+        let mut b = binding("buildings");
+        b.dsn = Some("postgres://override@host/db".into());
+        cfg.layers = vec![layer_with_binding(b)];
+        assert!(
+            validate(&mut cfg, Path::new(".")).is_ok(),
+            "postgis binding with dsn override must validate"
+        );
     }
 }

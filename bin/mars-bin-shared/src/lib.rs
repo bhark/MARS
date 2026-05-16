@@ -54,11 +54,33 @@ pub async fn build_pg_source(cfg: &Config, topology: Option<ReplicationTopology>
     let pg = src_cfg
         .postgis()
         .ok_or_else(|| anyhow!("source {} is not a postgis backend", src_cfg.id.as_str()))?;
-    let src = connect_pg(pg, topology).await?;
+    let binding_dsns = collect_binding_dsns(cfg, &src_cfg.id);
+    let src = connect_pg(pg, topology, binding_dsns).await?;
     Ok(Arc::new(src))
 }
 
-async fn connect_pg(pg: &mars_config::PostgisBackend, topology: Option<ReplicationTopology>) -> Result<PgSource> {
+/// Gather every unique per-binding DSN override declared against `source_id`
+/// in `cfg`. The returned vector is sorted + deduplicated so the adapter can
+/// build one pool per distinct DSN without re-deduping. Bindings without
+/// override (the common case) contribute nothing.
+fn collect_binding_dsns(cfg: &Config, source_id: &mars_config::SourceId) -> Vec<String> {
+    let mut dsns: Vec<String> = cfg
+        .layers
+        .iter()
+        .flat_map(|layer| layer.sources.iter())
+        .filter(|b| &b.source == source_id)
+        .filter_map(|b| b.dsn.clone())
+        .collect();
+    dsns.sort();
+    dsns.dedup();
+    dsns
+}
+
+async fn connect_pg(
+    pg: &mars_config::PostgisBackend,
+    topology: Option<ReplicationTopology>,
+    binding_dsns: Vec<String>,
+) -> Result<PgSource> {
     let pool = &pg.pool;
     // change_feed config is meaningless without replication topology - skip it
     // entirely in snapshot mode so we don't ship empty publication/slot strings
@@ -66,6 +88,7 @@ async fn connect_pg(pg: &mars_config::PostgisBackend, topology: Option<Replicati
     let feed = topology.is_some().then_some(pg.change_feed.as_ref()).flatten();
     let pg_cfg = PgConfig {
         dsn: pg.dsn.clone(),
+        binding_dsns,
         publication: feed.and_then(|f| f.publication.clone()).unwrap_or_default(),
         slot: feed.and_then(|f| f.slot.clone()).unwrap_or_default(),
         max_pool_size: pool.max_size,
@@ -102,7 +125,10 @@ pub async fn build_sources(cfg: &Config, pg_main: Option<Arc<PgSource>>) -> Resu
         let source: Arc<dyn Source> = match &src_cfg.backend {
             SourceBackend::Postgis(pg) => match pg_main.take() {
                 Some(existing) => existing,
-                None => Arc::new(connect_pg(pg, None).await?),
+                None => {
+                    let binding_dsns = collect_binding_dsns(cfg, &src_cfg.id);
+                    Arc::new(connect_pg(pg, None, binding_dsns).await?)
+                }
             },
             SourceBackend::VectorFile(vf) => Arc::new(
                 VectorFileSource::new(src_cfg.id.clone(), src_cfg.native_crs.clone(), vf.clone())

@@ -25,7 +25,7 @@ fn minimal_binding() -> SourceBinding {
         sidecar_size_warn_bytes: None,
         simplifier: None,
         on_missing_page: None,
-    }
+        dsn: None,    }
 }
 
 #[test]

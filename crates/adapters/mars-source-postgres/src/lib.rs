@@ -9,6 +9,7 @@
 
 #![forbid(unsafe_code)]
 
+use std::collections::BTreeMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -36,8 +37,15 @@ pub use replication::{CollectionTopology, ReplicationTopology};
 /// Connection / topology configuration.
 #[derive(Clone, Default)]
 pub struct PgConfig {
-    /// libpq DSN.
+    /// libpq DSN. The source-scope default; owns the logical replication
+    /// slot.
     pub dsn: String,
+    /// Additional DSNs reachable via per-binding overrides. The adapter
+    /// pre-builds one pool per unique DSN at `PgSource::connect` time and
+    /// routes each call through `pool_for`. Override bindings are
+    /// snapshot-only - the replication slot lives on `dsn` and only sees
+    /// changes on that database.
+    pub binding_dsns: Vec<String>,
     /// Logical replication publication name.
     pub publication: String,
     /// Logical replication slot name.
@@ -117,99 +125,60 @@ fn redact_value(mut s: String, key: &str) -> String {
     s
 }
 
-/// Real PostgreSQL/PostGIS adapter. Holds a `deadpool` pool over `tokio-postgres`.
+/// Real PostgreSQL/PostGIS adapter. Holds one `deadpool` pool for the
+/// source-scope DSN (also owns logical replication) plus one extra pool per
+/// distinct per-binding override DSN declared on the config. Override pools
+/// serve snapshot/rebuild queries only.
 #[derive(Debug)]
 pub struct PgSource {
-    pool: Pool,
+    default_pool: Pool,
+    override_pools: BTreeMap<String, Pool>,
     cfg: Arc<PgConfig>,
     topology: Option<Arc<ReplicationTopology>>,
 }
 
 impl PgSource {
-    /// Connect (open the pool) using the supplied DSN. Does not establish
-    /// any connection up front; the first `fetch_cell` call will.
+    /// Connect (open the pools) using the supplied DSN list. Does not
+    /// establish any connection up front; the first query against each pool
+    /// will. One pool is built per unique DSN across `cfg.dsn` +
+    /// `cfg.binding_dsns`.
     pub async fn connect(cfg: PgConfig) -> Result<Self, SourceError> {
-        let pg_cfg = tokio_postgres::Config::from_str(&cfg.dsn).map_err(|e| SourceError::backend("dsn", e))?;
-
-        let mgr_cfg = deadpool_postgres::ManagerConfig::default();
-        let mgr = if pg_cfg.get_ssl_mode() == tokio_postgres::config::SslMode::Disable {
-            deadpool_postgres::Manager::from_config(pg_cfg, NoTls, mgr_cfg)
-        } else {
-            // install_default returns Err only when a provider is already
-            // installed in this process - benign when the host wired one up
-            // already, suspicious only on first call. surface errors from
-            // root loading, since silently trusting an empty store would
-            // make every TLS connect fail with an opaque protocol error.
-            let _ = rustls::crypto::ring::default_provider().install_default();
-            let load = rustls_native_certs::load_native_certs();
-            if !load.errors.is_empty() {
-                let summary: Vec<String> = load.errors.iter().take(3).map(|e| e.to_string()).collect();
-                tracing::warn!(
-                    errors = ?summary,
-                    total = load.errors.len(),
-                    "rustls-native-certs partial load",
-                );
+        let default_pool = build_pool(&cfg.dsn, &cfg)?;
+        let mut override_pools = BTreeMap::new();
+        let mut overrides: Vec<&str> = cfg.binding_dsns.iter().map(String::as_str).collect();
+        overrides.sort();
+        overrides.dedup();
+        for dsn in overrides {
+            if dsn == cfg.dsn {
+                // a binding override that matches the source-scope DSN routes
+                // to the default pool; no separate pool needed.
+                continue;
             }
-            if load.certs.is_empty() {
-                return Err(SourceError::backend_msg(
-                    "tls",
-                    "no native trust roots available; refusing to connect with empty trust store",
-                ));
-            }
-            let mut roots = rustls::RootCertStore::empty();
-            for cert in load.certs {
-                let _ = roots.add(cert);
-            }
-            let tls_cfg = rustls::ClientConfig::builder()
-                .with_root_certificates(roots)
-                .with_no_client_auth();
-            let tls = tokio_postgres_rustls::MakeRustlsConnect::new(tls_cfg);
-            deadpool_postgres::Manager::from_config(pg_cfg, tls, mgr_cfg)
-        };
-
-        let mut builder = Pool::builder(mgr).runtime(Runtime::Tokio1);
-        if let Some(n) = cfg.max_pool_size {
-            builder = builder.max_size(n);
+            override_pools.insert(dsn.to_string(), build_pool(dsn, &cfg)?);
         }
-        if let Some(d) = cfg.recycle_timeout {
-            builder = builder.recycle_timeout(Some(d));
-        }
-        if let Some(timeout) = cfg.statement_timeout {
-            // post_create hook fires once per fresh connection. set
-            // statement_timeout there so every checkout sees the bound.
-            let ms = timeout.as_millis() as u64;
-            let stmt = format!("SET statement_timeout = {ms}");
-            builder = builder.post_create(Hook::async_fn(move |client, _| {
-                let stmt = stmt.clone();
-                Box::pin(async move {
-                    client
-                        .batch_execute(&stmt)
-                        .await
-                        .map_err(|e| HookError::message(format!("statement_timeout: {e}")))
-                })
-            }));
-        }
-        // pre_recycle fires before every checkout from the pool. an explicit
-        // ROLLBACK guarantees no inherited transaction state, so a session
-        // that returned its connection without committing/rolling back
-        // (panic, drop, future cancellation) cannot leak its snapshot to the
-        // next checkout. ROLLBACK outside a txn is a postgres NOTICE, not an
-        // error, so this stays idempotent.
-        builder = builder.pre_recycle(Hook::async_fn(|client, _| {
-            Box::pin(async move {
-                client
-                    .batch_execute("ROLLBACK")
-                    .await
-                    .map_err(|e| HookError::message(format!("pre_recycle rollback: {e}")))
-            })
-        }));
-        let pool = builder.build().map_err(|e| SourceError::backend("pool create", e))?;
 
         Ok(Self {
-            pool,
+            default_pool,
+            override_pools,
             cfg: Arc::new(cfg),
             topology: None,
         })
+    }
+
+    /// Pick the pool serving this binding: the override DSN carried on the
+    /// binding when set and registered at connect time, otherwise the
+    /// source-scope default.
+    fn pool_for(&self, binding: &SourceBinding) -> Result<Pool, SourceError> {
+        let Some(dsn) = binding.dsn.as_deref() else {
+            return Ok(self.default_pool.clone());
+        };
+        if dsn == self.cfg.dsn {
+            return Ok(self.default_pool.clone());
+        }
+        self.override_pools
+            .get(dsn)
+            .cloned()
+            .ok_or_else(|| SourceError::InvalidBinding(format!("no pool wired for binding dsn override {dsn:?}")))
     }
 
     /// Wire the replication topology used by `subscribe`. The topology is
@@ -222,11 +191,11 @@ impl PgSource {
         self
     }
 
-    /// Borrow the underlying pool - useful for tests and future extensions
-    /// (e.g. per-call statement cache, replication cursors).
+    /// Borrow the source-scope (default) pool. Used by code paths that
+    /// aren't per-binding (catalog probes, replication setup).
     #[must_use]
     pub fn pool(&self) -> &Pool {
-        &self.pool
+        &self.default_pool
     }
 
     /// Borrow the original config.
@@ -236,13 +205,95 @@ impl PgSource {
     }
 }
 
+/// Build one `deadpool` pool for a given DSN, applying the timeouts +
+/// hooks from `cfg`. The hooks are wired identically across every pool so
+/// idle-recycle, statement timeout, and the rollback-on-recycle invariant
+/// hold for both the source-scope DSN and per-binding overrides.
+fn build_pool(dsn: &str, cfg: &PgConfig) -> Result<Pool, SourceError> {
+    let pg_cfg = tokio_postgres::Config::from_str(dsn).map_err(|e| SourceError::backend("dsn", e))?;
+
+    let mgr_cfg = deadpool_postgres::ManagerConfig::default();
+    let mgr = if pg_cfg.get_ssl_mode() == tokio_postgres::config::SslMode::Disable {
+        deadpool_postgres::Manager::from_config(pg_cfg, NoTls, mgr_cfg)
+    } else {
+        // install_default returns Err only when a provider is already
+        // installed in this process - benign when the host wired one up
+        // already, suspicious only on first call. surface errors from
+        // root loading, since silently trusting an empty store would
+        // make every TLS connect fail with an opaque protocol error.
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let load = rustls_native_certs::load_native_certs();
+        if !load.errors.is_empty() {
+            let summary: Vec<String> = load.errors.iter().take(3).map(|e| e.to_string()).collect();
+            tracing::warn!(
+                errors = ?summary,
+                total = load.errors.len(),
+                "rustls-native-certs partial load",
+            );
+        }
+        if load.certs.is_empty() {
+            return Err(SourceError::backend_msg(
+                "tls",
+                "no native trust roots available; refusing to connect with empty trust store",
+            ));
+        }
+        let mut roots = rustls::RootCertStore::empty();
+        for cert in load.certs {
+            let _ = roots.add(cert);
+        }
+        let tls_cfg = rustls::ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        let tls = tokio_postgres_rustls::MakeRustlsConnect::new(tls_cfg);
+        deadpool_postgres::Manager::from_config(pg_cfg, tls, mgr_cfg)
+    };
+
+    let mut builder = Pool::builder(mgr).runtime(Runtime::Tokio1);
+    if let Some(n) = cfg.max_pool_size {
+        builder = builder.max_size(n);
+    }
+    if let Some(d) = cfg.recycle_timeout {
+        builder = builder.recycle_timeout(Some(d));
+    }
+    if let Some(timeout) = cfg.statement_timeout {
+        // post_create hook fires once per fresh connection. set
+        // statement_timeout there so every checkout sees the bound.
+        let ms = timeout.as_millis() as u64;
+        let stmt = format!("SET statement_timeout = {ms}");
+        builder = builder.post_create(Hook::async_fn(move |client, _| {
+            let stmt = stmt.clone();
+            Box::pin(async move {
+                client
+                    .batch_execute(&stmt)
+                    .await
+                    .map_err(|e| HookError::message(format!("statement_timeout: {e}")))
+            })
+        }));
+    }
+    // pre_recycle fires before every checkout from the pool. an explicit
+    // ROLLBACK guarantees no inherited transaction state, so a session
+    // that returned its connection without committing/rolling back
+    // (panic, drop, future cancellation) cannot leak its snapshot to the
+    // next checkout. ROLLBACK outside a txn is a postgres NOTICE, not an
+    // error, so this stays idempotent.
+    builder = builder.pre_recycle(Hook::async_fn(|client, _| {
+        Box::pin(async move {
+            client
+                .batch_execute("ROLLBACK")
+                .await
+                .map_err(|e| HookError::message(format!("pre_recycle rollback: {e}")))
+        })
+    }));
+    builder.build().map_err(|e| SourceError::backend("pool create", e))
+}
+
 #[async_trait]
 impl Source for PgSource {
     async fn stream_rows<'a>(
         &'a self,
         binding: &'a SourceBinding,
     ) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError> {
-        fetch::stream_rows(self.pool.clone(), binding.clone()).await
+        fetch::stream_rows(self.pool_for(binding)?, binding.clone()).await
     }
 
     async fn stream_rows_by_id<'a>(
@@ -250,21 +301,21 @@ impl Source for PgSource {
         binding: &'a SourceBinding,
         ids: &'a [i64],
     ) -> Result<BoxStream<'a, Result<RowBytes, SourceError>>, SourceError> {
-        fetch::stream_rows_by_id(self.pool.clone(), binding.clone(), ids.to_vec()).await
+        fetch::stream_rows_by_id(self.pool_for(binding)?, binding.clone(), ids.to_vec()).await
     }
 
     async fn stream_feature_ids<'a>(
         &'a self,
         binding: &'a SourceBinding,
     ) -> Result<BoxStream<'a, Result<i64, SourceError>>, SourceError> {
-        fetch::stream_feature_ids(self.pool.clone(), binding.clone()).await
+        fetch::stream_feature_ids(self.pool_for(binding)?, binding.clone()).await
     }
 
     async fn open_compile_session<'a>(
         &'a self,
         binding: &'a SourceBinding,
     ) -> Result<Box<dyn CompileSession + 'a>, SourceError> {
-        let session = compile_session::PgCompileSession::open(self.pool.clone(), binding.clone()).await?;
+        let session = compile_session::PgCompileSession::open(self.pool_for(binding)?, binding.clone()).await?;
         Ok(Box::new(session))
     }
 
@@ -282,7 +333,10 @@ impl Source for PgSource {
         let topology = self.topology.as_ref().ok_or_else(|| {
             SourceError::InvalidBinding("ReplicationTopology not wired; call PgSource::with_topology".into())
         })?;
-        let client = self.pool.get().await.map_err(|e| SourceError::backend("pool", e))?;
+        // probe runs against the source-scope DSN; the publication that owns
+        // logical replication lives on that connection regardless of any
+        // per-binding override.
+        let client = self.pool().get().await.map_err(|e| SourceError::backend("pool", e))?;
         let rows = client
             .query(
                 "select schemaname, tablename \

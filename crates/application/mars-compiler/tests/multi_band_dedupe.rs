@@ -145,7 +145,7 @@ fn build_two_band_config() -> Config {
         sidecar_size_warn_bytes: None,
         simplifier: None,
         on_missing_page: None,
-    };
+        dsn: None,    };
     Config {
         service: ServiceMeta {
             name: "test".into(),

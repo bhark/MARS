@@ -449,7 +449,7 @@ pub fn build_minimal_config(layer_id: &LayerId, binding_id: &BindingId, label_su
                 sidecar_size_warn_bytes: None,
                 simplifier: None,
                 on_missing_page: None,
-            }],
+                dsn: None,            }],
             classes: vec![Class {
                 name: "main".into(),
                 title: String::new(),
@@ -803,7 +803,7 @@ pub fn build_multi_layer_config(layer_ids: &[LayerId], binding_ids: &[BindingId]
                 sidecar_size_warn_bytes: None,
                 simplifier: None,
                 on_missing_page: None,
-            }],
+                dsn: None,            }],
             classes: vec![Class {
                 name: "main".into(),
                 title: String::new(),

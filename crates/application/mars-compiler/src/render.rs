@@ -439,7 +439,8 @@ async fn rebuild_binding_truncate(
         binding_plan.attributes.clone(),
         binding_plan.native_crs.clone(),
     )?
-    .with_filter(binding_plan.filter.clone());
+    .with_filter(binding_plan.filter.clone())
+    .with_dsn(binding_plan.dsn.clone());
     let source = deps.source_for(binding_plan)?;
     let mut session = source.open_compile_session(&port_binding).await?;
     let work = async {
@@ -560,7 +561,8 @@ async fn rebuild_binding_incremental(
         binding_plan.attributes.clone(),
         binding_plan.native_crs.clone(),
     )?
-    .with_filter(binding_plan.filter.clone());
+    .with_filter(binding_plan.filter.clone())
+    .with_dsn(binding_plan.dsn.clone());
     let ids: Vec<i64> = feature_ids
         .iter()
         .map(|f| i64::try_from(*f).unwrap_or(i64::MAX))

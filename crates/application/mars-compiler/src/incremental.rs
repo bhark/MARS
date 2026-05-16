@@ -312,7 +312,7 @@ mod tests {
             reconcile_every_cycles: 24,
             simplifier: mars_config::SimplifierKind::Naive,
             missing_page_policy: mars_config::MissingPagePolicy::Truncate,
-        }
+            dsn: None,        }
     }
 
     fn envelope(x: f64, y: f64) -> GeometryEnvelope {

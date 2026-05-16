@@ -269,7 +269,7 @@ mod tests {
                     sidecar_size_warn_bytes: None,
                     simplifier: None,
                     on_missing_page: None,
-                })
+                    dsn: None,                })
                 .collect(),
             classes: vec![Class {
                 name: "c".into(),
@@ -387,7 +387,7 @@ mod tests {
                     sidecar_size_warn_bytes: None,
                     simplifier: None,
                     on_missing_page: None,
-                },
+                    dsn: None,                },
                 CfgBinding {
                     source: mars_config::SourceId::new("default"),
                     scale: None,
@@ -408,7 +408,7 @@ mod tests {
                     sidecar_size_warn_bytes: None,
                     simplifier: None,
                     on_missing_page: None,
-                },
+                    dsn: None,                },
                 CfgBinding {
                     source: mars_config::SourceId::new("default"),
                     scale: None,
@@ -429,7 +429,7 @@ mod tests {
                     sidecar_size_warn_bytes: None,
                     simplifier: None,
                     on_missing_page: None,
-                },
+                    dsn: None,                },
             ],
             classes: vec![Class {
                 name: "c".into(),

@@ -66,7 +66,8 @@ pub async fn reconcile_binding(
         binding_plan.attributes.clone(),
         binding_plan.native_crs.clone(),
     )?
-    .with_filter(binding_plan.filter.clone());
+    .with_filter(binding_plan.filter.clone())
+    .with_dsn(binding_plan.dsn.clone());
 
     // 1. count source rows per user_id (bag, not set - a non-unique source id
     //    contributes one count per row).
@@ -280,7 +281,7 @@ mod tests {
             reconcile_every_cycles: 24,
             simplifier: mars_config::SimplifierKind::Naive,
             missing_page_policy: mars_config::MissingPagePolicy::Truncate,
-        }
+            dsn: None,        }
     }
 
     fn make_deps(source: ReconcileSource) -> Deps {

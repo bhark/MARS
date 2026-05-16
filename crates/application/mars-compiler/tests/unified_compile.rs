@@ -140,7 +140,7 @@ fn binding_plan(id: &str, page_size: u64) -> BindingPlan {
         reconcile_every_cycles: u32::MAX,
         simplifier: mars_config::SimplifierKind::Naive,
         missing_page_policy: mars_config::MissingPagePolicy::Truncate,
-    }
+        dsn: None,    }
 }
 
 fn make_deps(rows: Vec<RowBytes>) -> (Deps, Arc<InMemoryStore>) {

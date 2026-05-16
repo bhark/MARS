@@ -256,6 +256,12 @@ pub struct SourceBinding {
     /// drives. Idents must already be in `attributes ∪ {id_field}` (the
     /// caller is expected to validate up front; lowering double-checks).
     pub filter: Option<mars_expr::Expr>,
+    /// Optional adapter-side DSN / connection-string override. Currently
+    /// honoured only by the postgis adapter, which routes the binding to a
+    /// per-DSN connection pool. Vector-file and other adapters ignore this
+    /// field. Carried on the port binding (rather than out-of-band) so the
+    /// adapter sees the override at the same boundary it sees the locator.
+    pub dsn: Option<String>,
 }
 
 impl SourceBinding {
@@ -302,6 +308,7 @@ impl SourceBinding {
             attributes,
             crs,
             filter: None,
+            dsn: None,
         })
     }
 
@@ -310,6 +317,14 @@ impl SourceBinding {
     #[must_use]
     pub fn with_filter(mut self, filter: Option<mars_expr::Expr>) -> Self {
         self.filter = filter;
+        self
+    }
+
+    /// Attach (or clear) a binding-level DSN override. Honoured by adapters
+    /// that route per-DSN (postgis); ignored elsewhere.
+    #[must_use]
+    pub fn with_dsn(mut self, dsn: Option<String>) -> Self {
+        self.dsn = dsn;
         self
     }
 }
