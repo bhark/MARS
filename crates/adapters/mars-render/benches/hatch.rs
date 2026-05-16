@@ -15,28 +15,34 @@ use std::sync::Arc;
 use criterion::{Criterion, criterion_group, criterion_main};
 use mars_render::TinySkiaRenderer;
 use mars_render_port::{Canvas, DrawOp, Path as PortPath, Renderer, Subpath};
-use mars_style::{Colour, FillPaint, Style};
+use mars_style::{Colour, FillPaint, ResolvedStyle, Style};
 
 const CANVAS_W: u32 = 1024;
 const CANVAS_H: u32 = 1024;
 
-fn solid_style() -> Arc<Style> {
-    Arc::new(Style {
-        fill: Some(FillPaint::Solid(Colour::rgba(200, 60, 40, 255))),
-        ..Default::default()
-    })
+fn solid_style() -> Arc<ResolvedStyle> {
+    Arc::new(
+        Style {
+            fill: Some(FillPaint::Solid(Colour::rgba(200, 60, 40, 255))),
+            ..Default::default()
+        }
+        .resolve(0),
+    )
 }
 
-fn hatch_style() -> Arc<Style> {
-    Arc::new(Style {
-        fill: Some(FillPaint::Hatch {
-            spacing: 4.0,
-            angle_deg: 45.0,
-            line_width: 0.6,
-            colour: Colour::rgba(40, 80, 200, 255),
-        }),
-        ..Default::default()
-    })
+fn hatch_style() -> Arc<ResolvedStyle> {
+    Arc::new(
+        Style {
+            fill: Some(FillPaint::Hatch {
+                spacing: 4.0,
+                angle_deg: 45.0,
+                line_width: 0.6,
+                colour: Colour::rgba(40, 80, 200, 255),
+            }),
+            ..Default::default()
+        }
+        .resolve(0),
+    )
 }
 
 fn polygon_path(cx: f32, cy: f32, r: f32, sides: usize) -> PortPath {
@@ -50,7 +56,7 @@ fn polygon_path(cx: f32, cy: f32, r: f32, sides: usize) -> PortPath {
     }
 }
 
-fn build_ops(n: usize, style: Arc<Style>) -> Vec<DrawOp> {
+fn build_ops(n: usize, style: Arc<ResolvedStyle>) -> Vec<DrawOp> {
     let cols = (n as f32).sqrt().ceil() as usize;
     let pad = 12.0;
     let extent = ((CANVAS_W as f32) - 2.0 * pad) / cols as f32;

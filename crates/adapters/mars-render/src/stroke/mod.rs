@@ -100,11 +100,14 @@ mod tests {
         };
         let ops = vec![DrawOp::Path {
             path,
-            style: Arc::new(Style {
-                stroke: Some(red()),
-                stroke_width: Some(2.0),
-                ..Default::default()
-            }),
+            style: Arc::new(
+                Style {
+                    stroke: Some(red()),
+                    stroke_width: Some(2.0.into()),
+                    ..Default::default()
+                }
+                .resolve(0),
+            ),
         }];
         let (w, _, rgba) = decode(&render_png(canvas, &ops));
         let row = 32usize * w as usize * 4;
@@ -130,11 +133,14 @@ mod tests {
         };
         let ops = vec![DrawOp::Path {
             path,
-            style: Arc::new(Style {
-                stroke: Some(red()),
-                stroke_width: Some(1.0),
-                ..Default::default()
-            }),
+            style: Arc::new(
+                Style {
+                    stroke: Some(red()),
+                    stroke_width: Some(1.0.into()),
+                    ..Default::default()
+                }
+                .resolve(0),
+            ),
         }];
         let (w, _, rgba) = decode(&render_png(canvas, &ops));
         let br = ((w - 2) * 4) as usize + ((w * (canvas.height - 2)) * 4) as usize;
@@ -153,12 +159,15 @@ mod tests {
         };
         let ops = vec![DrawOp::Path {
             path: square(32.0, 32.0, 16.0),
-            style: Arc::new(Style {
-                fill: Some(FillPaint::Solid(Colour::rgb(220, 240, 255))),
-                stroke: Some(Colour::rgb(40, 150, 230)),
-                stroke_width: Some(0.15),
-                ..Default::default()
-            }),
+            style: Arc::new(
+                Style {
+                    fill: Some(FillPaint::Solid(Colour::rgb(220, 240, 255))),
+                    stroke: Some(Colour::rgb(40, 150, 230)),
+                    stroke_width: Some(0.15.into()),
+                    ..Default::default()
+                }
+                .resolve(0),
+            ),
         }];
         let (_, _, rgba) = decode(&render_png(canvas, &ops));
 
@@ -187,12 +196,15 @@ mod tests {
         };
         let ops = vec![DrawOp::Path {
             path,
-            style: Arc::new(Style {
-                stroke: Some(red()),
-                stroke_width: Some(2.0),
-                stroke_offset_px: Some(8.0),
-                ..Default::default()
-            }),
+            style: Arc::new(
+                Style {
+                    stroke: Some(red()),
+                    stroke_width: Some(2.0.into()),
+                    stroke_offset_px: Some(8.0),
+                    ..Default::default()
+                }
+                .resolve(0),
+            ),
         }];
         let (w, _, rgba) = decode(&render_png(canvas, &ops));
         let row_has_pixels = |y: usize| {

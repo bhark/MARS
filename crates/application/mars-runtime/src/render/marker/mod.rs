@@ -16,9 +16,9 @@ mod vector_shape;
 mod x;
 
 use mars_render_port::Path;
-use mars_style::{MarkerShape, MarkerSymbol};
+use mars_style::{MarkerShape, ResolvedMarker};
 
-pub(super) fn path_at(m: &MarkerSymbol, pos: (f32, f32)) -> Path {
+pub(super) fn path_at(m: &ResolvedMarker, pos: (f32, f32)) -> Path {
     let size = m.size;
     match &m.shape {
         MarkerShape::Circle => circle::path(size, pos),

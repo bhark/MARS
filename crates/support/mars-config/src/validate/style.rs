@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use mars_style::{FillPaint, MarkerSymbol, StrokeGap};
+use mars_style::{FillPaint, MarkerSymbol, ScaledSize, StrokeGap};
 
 use crate::ConfigError;
 use crate::model::StyleEntry;
@@ -26,11 +26,51 @@ pub(super) fn validate_styles(styles: &BTreeMap<String, StyleEntry>) -> Result<(
                 if let Some(m) = &s.marker {
                     validate_marker_symbol(name, m, s.fill.as_ref())?;
                 }
+                if let Some(w) = &s.stroke_width {
+                    validate_scaled_size(name, "stroke_width", w)?;
+                }
                 if let Some(g) = &s.stroke_gap {
                     validate_stroke_gap(name, g, s.marker.is_some())?;
                 }
             }
         }
+        if let Some(label) = entry.as_label() {
+            validate_scaled_size(name, "font_size", &label.font_size)?;
+        }
+    }
+    Ok(())
+}
+
+// shared `ScaledSize` numeric-bound checks: positive finite base, finite-and-
+// ordered optional min/max. mirrors the renderer's behaviour: a degenerate
+// authored value never reaches the resolve path.
+fn validate_scaled_size(style_name: &str, field: &str, s: &ScaledSize) -> Result<(), ConfigError> {
+    if !(s.base_px.is_finite() && s.base_px > 0.0) {
+        return Err(ConfigError::Invalid(format!(
+            "style {style_name:?} {field}.base_px must be a finite positive number, got {}",
+            s.base_px
+        )));
+    }
+    if let Some(v) = s.min_px
+        && !(v.is_finite() && v > 0.0)
+    {
+        return Err(ConfigError::Invalid(format!(
+            "style {style_name:?} {field}.min_px must be a finite positive number, got {v}"
+        )));
+    }
+    if let Some(v) = s.max_px
+        && !(v.is_finite() && v > 0.0)
+    {
+        return Err(ConfigError::Invalid(format!(
+            "style {style_name:?} {field}.max_px must be a finite positive number, got {v}"
+        )));
+    }
+    if let (Some(lo), Some(hi)) = (s.min_px, s.max_px)
+        && lo > hi
+    {
+        return Err(ConfigError::Invalid(format!(
+            "style {style_name:?} {field}.min_px ({lo}) must not exceed max_px ({hi})"
+        )));
     }
     Ok(())
 }
@@ -68,12 +108,7 @@ fn validate_fill_paint(style_name: &str, fp: &FillPaint) -> Result<(), ConfigErr
 }
 
 fn validate_marker_symbol(style_name: &str, m: &MarkerSymbol, fill: Option<&FillPaint>) -> Result<(), ConfigError> {
-    let size = m.size();
-    if !(size.is_finite() && size > 0.0) {
-        return Err(ConfigError::Invalid(format!(
-            "style {style_name:?} marker.size must be a finite positive number, got {size}"
-        )));
-    }
+    validate_scaled_size(style_name, "marker.size", &m.size)?;
     // glyph markers shape a single character via the text path; an empty
     // string has no shape, and non-solid fills (hatch/image) have no
     // meaning for a single-glyph stamp.
@@ -137,7 +172,7 @@ mod tests {
     fn line_style_with_gap(marker: Option<MarkerSymbol>, gap: StrokeGap) -> StyleEntry {
         StyleEntry::Line(Style {
             stroke: Some(Colour::rgb(0, 0, 0)),
-            stroke_width: Some(1.0),
+            stroke_width: Some(1.0.into()),
             marker,
             stroke_gap: Some(gap),
             ..Default::default()
@@ -160,7 +195,7 @@ mod tests {
             "m".into(),
             point_style(MarkerSymbol {
                 shape: mars_style::MarkerShape::Circle,
-                size: 6.0,
+                size: 6.0.into(),
             }),
         );
         validate_styles(&styles).unwrap();
@@ -222,7 +257,7 @@ mod tests {
             "bad".into(),
             point_style(MarkerSymbol {
                 shape: mars_style::MarkerShape::Pin,
-                size: 0.0,
+                size: 0.0.into(),
             }),
         );
         let err = validate_styles(&styles).unwrap_err();
@@ -239,7 +274,7 @@ mod tests {
                     font_family: "Sans".into(),
                     ch: String::new(),
                 },
-                size: 12.0,
+                size: 12.0.into(),
             }),
         );
         let err = validate_styles(&styles).unwrap_err();
@@ -263,7 +298,7 @@ mod tests {
                         font_family: "Sans".into(),
                         ch: "A".into(),
                     },
-                    size: 12.0,
+                    size: 12.0.into(),
                 }),
                 ..Default::default()
             }),
@@ -281,7 +316,7 @@ mod tests {
                         font_family: "Sans".into(),
                         ch: "A".into(),
                     },
-                    size: 12.0,
+                    size: 12.0.into(),
                 }),
                 ..Default::default()
             }),
@@ -298,7 +333,7 @@ mod tests {
             line_style_with_gap(
                 Some(MarkerSymbol {
                     shape: mars_style::MarkerShape::Circle,
-                    size: 4.0,
+                    size: 4.0.into(),
                 }),
                 StrokeGap {
                     interval_px: 12.0,
@@ -317,7 +352,7 @@ mod tests {
             line_style_with_gap(
                 Some(MarkerSymbol {
                     shape: mars_style::MarkerShape::Circle,
-                    size: 4.0,
+                    size: 4.0.into(),
                 }),
                 StrokeGap {
                     interval_px: 0.0,
@@ -337,7 +372,7 @@ mod tests {
             line_style_with_gap(
                 Some(MarkerSymbol {
                     shape: mars_style::MarkerShape::Circle,
-                    size: 4.0,
+                    size: 4.0.into(),
                 }),
                 StrokeGap {
                     interval_px: 10.0,

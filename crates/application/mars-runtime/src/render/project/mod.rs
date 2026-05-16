@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use mars_artifact::{FeatureGeom, GeomKind};
 use mars_render_port::{DrawOp, Path, Subpath};
-use mars_style::Style;
+use mars_style::ResolvedStyle;
 use mars_types::Bbox;
 
 use crate::RuntimeError;
@@ -74,7 +74,13 @@ fn project_geom(g: &GeomKind, xform: &mars_proj::Transformer) -> Result<GeomKind
     Ok(mapped)
 }
 
-pub(super) fn feature_to_drawop(g: &GeomKind, viewport: Bbox, w: u32, h: u32, style: Arc<Style>) -> Option<DrawOp> {
+pub(super) fn feature_to_drawop(
+    g: &GeomKind,
+    viewport: Bbox,
+    w: u32,
+    h: u32,
+    style: Arc<ResolvedStyle>,
+) -> Option<DrawOp> {
     // geom_transform short-circuits the per-kind dispatch: we derive a
     // synthetic point set from the input and route through multipoint::subpaths
     // so the existing marker pipeline stamps each derived position.
@@ -156,18 +162,21 @@ mod tests {
         assert_eq!(world_to_pixel((1.0, 1.0), v, 10, 10), (0.0, 0.0));
     }
 
-    use mars_style::{Colour, FillPaint, GeomTransform, MarkerShape, MarkerSymbol};
+    use mars_style::{Colour, FillPaint, GeomTransform, MarkerShape, MarkerSymbol, Style};
 
-    fn marker_style(t: GeomTransform) -> Arc<Style> {
-        Arc::new(Style {
-            fill: Some(FillPaint::Solid(Colour::rgba(0, 0, 0, 0xff))),
-            marker: Some(MarkerSymbol {
-                shape: MarkerShape::Square,
-                size: 4.0,
-            }),
-            geom_transform: Some(t),
-            ..Default::default()
-        })
+    fn marker_style(t: GeomTransform) -> Arc<ResolvedStyle> {
+        Arc::new(
+            Style {
+                fill: Some(FillPaint::Solid(Colour::rgba(0, 0, 0, 0xff))),
+                marker: Some(MarkerSymbol {
+                    shape: MarkerShape::Square,
+                    size: 4.0.into(),
+                }),
+                geom_transform: Some(t),
+                ..Default::default()
+            }
+            .resolve(0),
+        )
     }
 
     #[test]

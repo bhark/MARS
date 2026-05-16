@@ -267,7 +267,7 @@ mod tests {
         fn measure_text(
             &self,
             text: &str,
-            style: &mars_style::LabelStyle,
+            style: &mars_style::ResolvedLabelStyle,
         ) -> Result<mars_render_port::TextMetrics, RenderError> {
             // endpoint tests don't exercise the collision pass; coarse stub.
             let chars = text.chars().count().max(1) as f32;

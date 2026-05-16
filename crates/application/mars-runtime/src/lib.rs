@@ -317,22 +317,25 @@ impl Runtime {
         if plan.width < 16 || plan.height < 16 {
             return self.blank_image(plan);
         }
-        let style = std::sync::Arc::new(mars_style::LabelStyle {
-            font_family: "DejaVu Sans".to_owned(),
-            font_size: 14.0,
-            fill: mars_style::Colour::rgba(180, 20, 20, 255),
-            halo: Some(mars_style::Halo {
-                colour: mars_style::Colour::rgba(255, 255, 255, 230),
-                width: 1.5,
-            }),
-            priority: 0,
-            min_distance: 0.0,
-            position: mars_style::AnchorPosition::default(),
-            offset_px: (0.0, 0.0),
-            angle_deg: None,
-            partials: false,
-            force: false,
-        });
+        let style = std::sync::Arc::new(
+            mars_style::LabelStyle {
+                font_family: "DejaVu Sans".to_owned(),
+                font_size: 14.0.into(),
+                fill: mars_style::Colour::rgba(180, 20, 20, 255),
+                halo: Some(mars_style::Halo {
+                    colour: mars_style::Colour::rgba(255, 255, 255, 230),
+                    width: 1.5,
+                }),
+                priority: 0,
+                min_distance: 0.0,
+                position: mars_style::AnchorPosition::default(),
+                offset_px: (0.0, 0.0),
+                angle_deg: None,
+                partials: false,
+                force: false,
+            }
+            .resolve(0),
+        );
         // single-line truncation; multi-line wrap belongs in the label
         // renderer, not here.
         let text = truncate_message(message, 80);

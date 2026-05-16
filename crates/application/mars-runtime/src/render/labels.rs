@@ -11,7 +11,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use mars_artifact::{ArtifactReader, LabelCandidate, LabelShape, SectionKind, decode_label_candidates};
 use mars_render_port::{DrawOp, Renderer};
-use mars_style::{AnchorPosition, LabelStyle, LineAngleMode, Placement, Stylesheet};
+use mars_style::{AnchorPosition, LineAngleMode, Placement, ResolvedLabelStyle, Stylesheet};
 use mars_types::BindingMetadata;
 
 use crate::{RenderPlan, RuntimeError};
@@ -35,7 +35,7 @@ pub struct PreparedLabel {
     /// rotating by `angle_rad`) to obtain the final baseline anchor.
     raw_anchor_px: (f32, f32),
     text: String,
-    style: Arc<LabelStyle>,
+    style: Arc<ResolvedLabelStyle>,
     priority: u16,
     /// counter-clockwise rotation in radians; non-zero for rotated labels
     /// (line tangent or explicit ANGLE).
@@ -86,7 +86,7 @@ pub struct PositionCandidate {
 pub fn new_prepared_label(
     raw_anchor_px: (f32, f32),
     text: String,
-    style: Arc<LabelStyle>,
+    style: Arc<ResolvedLabelStyle>,
     priority: u16,
     angle_rad: f32,
     placement: PreparedPlacement,
@@ -122,6 +122,7 @@ pub(super) fn prepare_labels(
     survival_filter: Option<&[bool]>,
     placement: &Placement,
     renderer: &dyn Renderer,
+    denom: u64,
 ) -> Result<Vec<PreparedLabel>, RuntimeError> {
     let reader = ArtifactReader::open(bytes).map_err(map_artifact_err)?;
     let label_bytes = reader.section(SectionKind::LabelCandidates).map_err(map_artifact_err)?;
@@ -151,7 +152,13 @@ pub(super) fn prepare_labels(
         let style_name = class
             .and_then(|cl| cl.style_refs().get(c.style_ref_idx as usize))
             .map(String::as_str);
-        let Some(style) = style_name.and_then(|n| stylesheet.labels.get(n).cloned()) else {
+        // resolve the authored LabelStyle to a renderer-facing form once per
+        // candidate: every downstream measure/place call consumes the
+        // resolved variant.
+        let Some(style) = style_name
+            .and_then(|n| stylesheet.labels.get(n))
+            .map(|s| Arc::new(s.resolve(denom)))
+        else {
             continue;
         };
         // polyline candidates expand into multiple samples along the line
@@ -229,7 +236,7 @@ fn sample_polyline_labels(
     angle_mode: LineAngleMode,
     text: &str,
     priority: u16,
-    style: &Arc<LabelStyle>,
+    style: &Arc<ResolvedLabelStyle>,
     renderer: &dyn Renderer,
     out: &mut Vec<PreparedLabel>,
 ) {
@@ -525,7 +532,7 @@ fn label_bbox(anchor: (f32, f32), m: &mars_render_port::TextMetrics, angle_rad: 
 /// effective label angle: explicit numeric `ANGLE <deg>` on the style
 /// overrides whatever the placement step derived (zero for points/polys,
 /// tangent for AUTO line labels).
-fn effective_angle_rad(style: &LabelStyle, placement_angle: f32) -> f32 {
+fn effective_angle_rad(style: &ResolvedLabelStyle, placement_angle: f32) -> f32 {
     match style.angle_deg {
         Some(deg) => deg.to_radians(),
         None => placement_angle,
@@ -634,7 +641,7 @@ fn filter_for_partials(placement: PreparedPlacement, partials: bool, w: u32, h: 
 fn build_placement(
     raw_anchor_px: (f32, f32),
     metrics: &mars_render_port::TextMetrics,
-    style: &LabelStyle,
+    style: &ResolvedLabelStyle,
     angle_rad: f32,
 ) -> PreparedPlacement {
     let make = |pos: AnchorPosition| -> PositionCandidate {
@@ -877,7 +884,7 @@ mod tests {
         PreparedLabel {
             raw_anchor_px: (0.0, 0.0),
             text: String::new(),
-            style: Arc::new(LabelStyle {
+            style: Arc::new(ResolvedLabelStyle {
                 font_family: String::new(),
                 font_size: 12.0,
                 fill: mars_style::Colour::rgba(0, 0, 0, 255),
@@ -985,7 +992,7 @@ mod tests {
         // bbox that collides at UC but not at LC. expect the second to
         // land in the LC slot.
         let m = metrics_8x4();
-        let style_uc = Arc::new(LabelStyle {
+        let style_uc = Arc::new(ResolvedLabelStyle {
             font_family: String::new(),
             font_size: 12.0,
             fill: mars_style::Colour::rgba(0, 0, 0, 255),
@@ -1034,7 +1041,7 @@ mod tests {
         // place a giant occupier covering the whole search area, then drop
         // an AUTO candidate at the same point. no slot fits.
         let m = metrics_8x4();
-        let style_force = Arc::new(LabelStyle {
+        let style_force = Arc::new(ResolvedLabelStyle {
             font_family: String::new(),
             font_size: 12.0,
             fill: mars_style::Colour::rgba(0, 0, 0, 255),
@@ -1180,7 +1187,7 @@ mod tests {
         let label = PreparedLabel {
             raw_anchor_px: (50.0, 50.0),
             text: "ROAD".into(),
-            style: Arc::new(LabelStyle {
+            style: Arc::new(ResolvedLabelStyle {
                 font_family: String::new(),
                 font_size: 12.0,
                 fill: mars_style::Colour::rgba(0, 0, 0, 255),
@@ -1268,7 +1275,7 @@ mod tests {
 
     #[test]
     fn effective_angle_picks_style_override_when_set() {
-        let mut s = LabelStyle {
+        let mut s = ResolvedLabelStyle {
             font_family: String::new(),
             font_size: 12.0,
             fill: mars_style::Colour::rgba(0, 0, 0, 255),

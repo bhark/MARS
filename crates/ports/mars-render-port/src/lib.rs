@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use mars_style::{LabelStyle, Style};
+use mars_style::{ResolvedLabelStyle, ResolvedStyle};
 
 pub use mars_types::ImageFormat;
 
@@ -128,8 +128,9 @@ pub enum DrawOp {
     Path {
         /// Geometry to draw.
         path: Path,
-        /// Fill / stroke style.
-        style: Arc<Style>,
+        /// Fill / stroke style. Already resolved against the request denom;
+        /// the renderer never sees `ScaledSize`.
+        style: Arc<ResolvedStyle>,
     },
     /// Place a label glyph run at an anchor point with the given style.
     Label {
@@ -137,8 +138,8 @@ pub enum DrawOp {
         anchor: (f32, f32),
         /// Plain-text content; renderer shapes and rasterises.
         text: String,
-        /// Compiled label style.
-        style: Arc<LabelStyle>,
+        /// Compiled label style. Already resolved against the request denom.
+        style: Arc<ResolvedLabelStyle>,
         /// Counter-clockwise rotation in radians. `0.0` for axis-aligned
         /// labels (the common case); line labels carry a tangent angle.
         angle_rad: f32,
@@ -158,8 +159,8 @@ pub enum DrawOp {
         start_arc_px: f32,
         /// Plain-text content; renderer shapes and rasterises per-glyph.
         text: String,
-        /// Compiled label style.
-        style: Arc<LabelStyle>,
+        /// Compiled label style. Already resolved against the request denom.
+        style: Arc<ResolvedLabelStyle>,
     },
     /// Place a point-anchored marker symbol. Use this from the runtime when a
     /// symbol cannot be tessellated to a [`DrawOp::Path`] (text glyphs,
@@ -172,7 +173,7 @@ pub enum DrawOp {
         rotation_rad: f32,
         /// Style. The `marker` field carries the symbol kind; fill / stroke
         /// fields apply to the rasterised symbol.
-        style: Arc<Style>,
+        style: Arc<ResolvedStyle>,
     },
     /// Fill a path with a non-procedural pattern (image, svg, future
     /// gradient). Procedural fills (solid, hatch) continue to flow through
@@ -181,7 +182,7 @@ pub enum DrawOp {
         /// Geometry to fill.
         path: Path,
         /// Style. The `fill` paint variant carries the pattern descriptor.
-        style: Arc<Style>,
+        style: Arc<ResolvedStyle>,
     },
     /// Composite a decoded raster tile onto a destination rectangle. Used
     /// by raster layers - the runtime fetches and decodes the tile, the
@@ -249,7 +250,7 @@ pub trait Renderer: Send + Sync + 'static {
     /// label collision pass uses the result to size each candidate's bbox so
     /// it agrees with what `render` will later paint, avoiding the
     /// fudge-factor drift of a chars-times-font-size approximation.
-    fn measure_text(&self, text: &str, style: &LabelStyle) -> Result<TextMetrics, RenderError>;
+    fn measure_text(&self, text: &str, style: &ResolvedLabelStyle) -> Result<TextMetrics, RenderError>;
 }
 
 /// Encoder port. Splits image-format encoding from rasterisation so the two

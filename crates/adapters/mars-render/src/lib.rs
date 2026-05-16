@@ -23,7 +23,7 @@ use mars_render_port::{
     Canvas, DrawOp, EmptyImageRegistry, EncodeError, Encoder, ImageFormat, ImageRegistry, Pixmap, RenderError,
     Renderer, TextMetrics,
 };
-use mars_style::LabelStyle;
+use mars_style::ResolvedLabelStyle;
 use mars_text::{FontError, Fonts};
 use tiny_skia::Pixmap as SkPixmap;
 
@@ -85,7 +85,7 @@ impl Renderer for TinySkiaRenderer {
         })
     }
 
-    fn measure_text(&self, text: &str, style: &LabelStyle) -> Result<TextMetrics, RenderError> {
+    fn measure_text(&self, text: &str, style: &ResolvedLabelStyle) -> Result<TextMetrics, RenderError> {
         let run = mars_text::measure(text, style, &self.fonts).map_err(font_err_to_render)?;
         Ok(TextMetrics {
             advance_x: run.advance_x,
@@ -236,10 +236,13 @@ mod tests {
         };
         let ops = vec![DrawOp::Path {
             path: square(32.0, 32.0, 16.0),
-            style: Arc::new(Style {
-                fill: Some(FillPaint::Solid(red())),
-                ..Default::default()
-            }),
+            style: Arc::new(
+                Style {
+                    fill: Some(FillPaint::Solid(red())),
+                    ..Default::default()
+                }
+                .resolve(0),
+            ),
         }];
         let a = render_png(canvas, &ops);
         let b = render_png(canvas, &ops);
@@ -255,10 +258,13 @@ mod tests {
         };
         let ops = vec![DrawOp::Path {
             path: square(24.0, 16.0, 8.0),
-            style: Arc::new(Style {
-                fill: Some(FillPaint::Solid(red())),
-                ..Default::default()
-            }),
+            style: Arc::new(
+                Style {
+                    fill: Some(FillPaint::Solid(red())),
+                    ..Default::default()
+                }
+                .resolve(0),
+            ),
         }];
         let png = render_png(canvas, &ops);
         let (w, h, rgba) = decode(&png);

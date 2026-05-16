@@ -137,7 +137,7 @@ pub(crate) fn inline_label(text: &str, placement: Option<mars_style::Placement>)
         text: text.into(),
         style: LabelStyleAttach::Inline(mars_style::LabelStyle {
             font_family: "DejaVu Sans".into(),
-            font_size: 12.0,
+            font_size: 12.0.into(),
             fill: mars_style::Colour::rgb(0, 0, 0),
             halo: None,
             priority: 0,

@@ -164,6 +164,7 @@ async fn render_one_layer(
             deps.renderer.as_ref(),
             page_fetch_concurrency,
             &class_active,
+            denom,
         )
         .await?;
         Ok((idx, Some(out)))
@@ -232,6 +233,7 @@ async fn render_layer_pages(
     renderer: &dyn Renderer,
     page_fetch_concurrency: usize,
     class_active: &[bool],
+    denom: u32,
 ) -> Result<LayerOutput, RuntimeError> {
     // ordered-and-bounded fan-out: fetch up to `page_fetch_concurrency`
     // pages in parallel but emit in input (page-key) order so draw-op
@@ -307,6 +309,7 @@ async fn render_layer_pages(
             &state.stylesheet,
             same_crs,
             class_active,
+            u64::from(denom),
         )?;
         if unstyled_count > 0 {
             deps.metrics
@@ -328,6 +331,7 @@ async fn render_layer_pages(
                 survival_filter,
                 placement,
                 renderer,
+                u64::from(denom),
             )?;
             out.labels.append(&mut prepared);
         }

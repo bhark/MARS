@@ -165,15 +165,18 @@ mod tests {
         };
         let ops = vec![DrawOp::Path {
             path: square(32.0, 32.0, 12.0),
-            style: Arc::new(Style {
-                fill: Some(FillPaint::Hatch {
-                    spacing: 4.0,
-                    angle_deg: 0.0,
-                    line_width: 1.0,
-                    colour: Colour::rgba(220, 30, 30, 255),
-                }),
-                ..Default::default()
-            }),
+            style: Arc::new(
+                Style {
+                    fill: Some(FillPaint::Hatch {
+                        spacing: 4.0,
+                        angle_deg: 0.0,
+                        line_width: 1.0,
+                        colour: Colour::rgba(220, 30, 30, 255),
+                    }),
+                    ..Default::default()
+                }
+                .resolve(0),
+            ),
         }];
         let (w, _, rgba) = decode(&render_png(canvas, &ops));
         let is_red = |p: &[u8]| p[0] > 150 && p[1] < 80 && p[2] < 80 && p[3] > 0;
@@ -216,15 +219,18 @@ mod tests {
         };
         let ops = vec![DrawOp::Path {
             path: square(32.0, 32.0, 12.0),
-            style: Arc::new(Style {
-                fill: Some(FillPaint::Hatch {
-                    spacing: 4.0,
-                    angle_deg: 45.0,
-                    line_width: 1.0,
-                    colour: Colour::rgba(220, 30, 30, 255),
-                }),
-                ..Default::default()
-            }),
+            style: Arc::new(
+                Style {
+                    fill: Some(FillPaint::Hatch {
+                        spacing: 4.0,
+                        angle_deg: 45.0,
+                        line_width: 1.0,
+                        colour: Colour::rgba(220, 30, 30, 255),
+                    }),
+                    ..Default::default()
+                }
+                .resolve(0),
+            ),
         }];
         let (_, _, rgba) = decode(&render_png(canvas, &ops));
         let red_count = rgba
@@ -248,17 +254,20 @@ mod tests {
         };
         let ops = vec![DrawOp::Path {
             path: square(32.0, 32.0, 12.0),
-            style: Arc::new(Style {
-                fill: Some(FillPaint::Hatch {
-                    spacing: 6.0,
-                    angle_deg: 30.0,
-                    line_width: 1.0,
-                    colour: Colour::rgba(220, 30, 30, 255),
-                }),
-                stroke: Some(Colour::rgba(0, 200, 0, 255)),
-                stroke_width: Some(2.0),
-                ..Default::default()
-            }),
+            style: Arc::new(
+                Style {
+                    fill: Some(FillPaint::Hatch {
+                        spacing: 6.0,
+                        angle_deg: 30.0,
+                        line_width: 1.0,
+                        colour: Colour::rgba(220, 30, 30, 255),
+                    }),
+                    stroke: Some(Colour::rgba(0, 200, 0, 255)),
+                    stroke_width: Some(2.0.into()),
+                    ..Default::default()
+                }
+                .resolve(0),
+            ),
         }];
         let (_, _, rgba) = decode(&render_png(canvas, &ops));
         let green_count = rgba

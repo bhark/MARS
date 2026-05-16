@@ -30,21 +30,24 @@ mod tests {
 
     use mars_artifact::GeomKind;
     use mars_render_port::DrawOp;
-    use mars_style::{Colour, FillPaint, Style};
+    use mars_style::{Colour, FillPaint, ResolvedStyle, Style};
     use mars_types::Bbox;
 
     use crate::render::project::feature_to_drawop;
 
-    fn test_style() -> Arc<Style> {
-        Arc::new(Style {
-            fill: Some(FillPaint::Solid(Colour {
-                r: 0,
-                g: 0,
-                b: 0,
-                a: 255,
-            })),
-            ..Default::default()
-        })
+    fn test_style() -> Arc<ResolvedStyle> {
+        Arc::new(
+            Style {
+                fill: Some(FillPaint::Solid(Colour {
+                    r: 0,
+                    g: 0,
+                    b: 0,
+                    a: 255,
+                })),
+                ..Default::default()
+            }
+            .resolve(0),
+        )
     }
 
     #[test]

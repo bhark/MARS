@@ -20,7 +20,7 @@ use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, 
 use mars_runtime::bench_internals::{
     PreparedLabel, PreparedPlacement, collide_and_emit_labels, new_position_candidate, new_prepared_label,
 };
-use mars_style::{AnchorPosition, Colour, LabelStyle};
+use mars_style::{AnchorPosition, Colour, LabelStyle, ResolvedLabelStyle};
 
 const CANVAS_W: u32 = 1024;
 const CANVAS_H: u32 = 1024;
@@ -49,20 +49,23 @@ struct Recipe {
     auto_candidates: usize,
 }
 
-fn label_style(priority: u16, force: bool) -> Arc<LabelStyle> {
-    Arc::new(LabelStyle {
-        font_family: String::new(),
-        font_size: 12.0,
-        fill: Colour::rgba(0, 0, 0, 255),
-        halo: None,
-        priority,
-        min_distance: 0.0,
-        position: AnchorPosition::default(),
-        offset_px: (0.0, 0.0),
-        angle_deg: None,
-        partials: true,
-        force,
-    })
+fn label_style(priority: u16, force: bool) -> Arc<ResolvedLabelStyle> {
+    Arc::new(
+        LabelStyle {
+            font_family: String::new(),
+            font_size: 12.0.into(),
+            fill: Colour::rgba(0, 0, 0, 255),
+            halo: None,
+            priority,
+            min_distance: 0.0,
+            position: AnchorPosition::default(),
+            offset_px: (0.0, 0.0),
+            angle_deg: None,
+            partials: true,
+            force,
+        }
+        .resolve(0),
+    )
 }
 
 /// fast deterministic xorshift so the bench corpus is reproducible without

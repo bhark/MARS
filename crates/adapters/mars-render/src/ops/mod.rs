@@ -70,19 +70,22 @@ mod tests {
         let op = DrawOp::Symbol {
             anchor: (8.0, 8.0),
             rotation_rad: 0.0,
-            style: Arc::new(Style {
-                fill: Some(mars_style::FillPaint::Solid(mars_style::Colour {
-                    r: 255,
-                    g: 0,
-                    b: 0,
-                    a: 255,
-                })),
-                marker: Some(MarkerSymbol {
-                    shape: MarkerShape::Circle,
-                    size: 6.0,
-                }),
-                ..Default::default()
-            }),
+            style: Arc::new(
+                Style {
+                    fill: Some(mars_style::FillPaint::Solid(mars_style::Colour {
+                        r: 255,
+                        g: 0,
+                        b: 0,
+                        a: 255,
+                    })),
+                    marker: Some(MarkerSymbol {
+                        shape: MarkerShape::Circle,
+                        size: 6.0.into(),
+                    }),
+                    ..Default::default()
+                }
+                .resolve(0),
+            ),
         };
         // smoke assertion at the DrawOp seam: per-variant pixel coverage
         // is verified inside symbol::tests; here we only confirm the arm
@@ -99,10 +102,13 @@ mod tests {
                     closed: true,
                 }],
             },
-            style: Arc::new(Style {
-                fill: Some(mars_style::FillPaint::Image { name: "brick".into() }),
-                ..Default::default()
-            }),
+            style: Arc::new(
+                Style {
+                    fill: Some(mars_style::FillPaint::Image { name: "brick".into() }),
+                    ..Default::default()
+                }
+                .resolve(0),
+            ),
         };
         let err = renderer().render(canvas(), &[op]).expect_err("missing image");
         assert!(matches!(err, RenderError::ImageNotFound { ref name } if name == "brick"));
@@ -119,15 +125,18 @@ mod tests {
                     closed: true,
                 }],
             },
-            style: Arc::new(Style {
-                fill: Some(mars_style::FillPaint::Solid(mars_style::Colour {
-                    r: 255,
-                    g: 0,
-                    b: 0,
-                    a: 255,
-                })),
-                ..Default::default()
-            }),
+            style: Arc::new(
+                Style {
+                    fill: Some(mars_style::FillPaint::Solid(mars_style::Colour {
+                        r: 255,
+                        g: 0,
+                        b: 0,
+                        a: 255,
+                    })),
+                    ..Default::default()
+                }
+                .resolve(0),
+            ),
         };
         let err = renderer().render(canvas(), &[op]).expect_err("routing error");
         assert!(matches!(err, RenderError::Backend(msg) if msg.contains("DrawOp::Path")));
@@ -172,17 +181,20 @@ mod tests {
         let op = DrawOp::Symbol {
             anchor: (16.0, 16.0),
             rotation_rad: 0.0,
-            style: Arc::new(Style {
-                fill: Some(mars_style::FillPaint::Solid(mars_style::Colour::rgba(255, 0, 0, 255))),
-                marker: Some(MarkerSymbol {
-                    shape: MarkerShape::Glyph {
-                        font_family: "DejaVu Sans".into(),
-                        ch: "A".into(),
-                    },
-                    size: 18.0,
-                }),
-                ..Default::default()
-            }),
+            style: Arc::new(
+                Style {
+                    fill: Some(mars_style::FillPaint::Solid(mars_style::Colour::rgba(255, 0, 0, 255))),
+                    marker: Some(MarkerSymbol {
+                        shape: MarkerShape::Glyph {
+                            font_family: "DejaVu Sans".into(),
+                            ch: "A".into(),
+                        },
+                        size: 18.0.into(),
+                    }),
+                    ..Default::default()
+                }
+                .resolve(0),
+            ),
         };
         dispatch(&mut pm, &op, &fonts, &mars_render_port::EmptyImageRegistry).expect("dispatch ok");
         // verify pixels actually moved - at least one painted alpha byte.

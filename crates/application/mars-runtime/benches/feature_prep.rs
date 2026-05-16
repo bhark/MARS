@@ -29,7 +29,7 @@ use mars_artifact::{
     SpatialIndexBuilder, decode_class_assignment, decode_style_refs, encode_geometry_payload,
 };
 use mars_render_port::{DrawOp, Path, Subpath};
-use mars_style::{Colour, FillPaint, Style, Stylesheet};
+use mars_style::{Colour, FillPaint, ResolvedStyle, Style, Stylesheet};
 use mars_types::{Bbox, CrsCode};
 
 const SMALL: usize = 40_000;
@@ -130,7 +130,7 @@ fn build_stylesheet() -> Stylesheet {
         let s = Style {
             fill: Some(FillPaint::Solid(Colour::rgba(20 + c as u8 * 28, 100, 200, 220))),
             stroke: Some(Colour::rgba(10, 30, 80, 255)),
-            stroke_width: Some(1.0),
+            stroke_width: Some(1.0.into()),
             ..Default::default()
         };
         geometry.insert(format!("style_{c}"), Arc::from(vec![s]));
@@ -141,13 +141,16 @@ fn build_stylesheet() -> Stylesheet {
     }
 }
 
-fn fallback_style() -> Arc<Style> {
-    Arc::new(Style {
-        fill: Some(FillPaint::Solid(Colour::rgba(64, 128, 220, 200))),
-        stroke: Some(Colour::rgba(32, 64, 110, 255)),
-        stroke_width: Some(1.0),
-        ..Default::default()
-    })
+fn fallback_style() -> Arc<ResolvedStyle> {
+    Arc::new(
+        Style {
+            fill: Some(FillPaint::Solid(Colour::rgba(64, 128, 220, 200))),
+            stroke: Some(Colour::rgba(32, 64, 110, 255)),
+            stroke_width: Some(1.0.into()),
+            ..Default::default()
+        }
+        .resolve(0),
+    )
 }
 
 const CANVAS_W: u32 = 512;
@@ -161,7 +164,7 @@ fn world_to_pixel(c: (f64, f64), v: Bbox) -> (f32, f32) {
     (px as f32, py as f32)
 }
 
-fn polygon_to_drawop(rings: &[Vec<(f64, f64)>], v: Bbox, style: Arc<Style>) -> DrawOp {
+fn polygon_to_drawop(rings: &[Vec<(f64, f64)>], v: Bbox, style: Arc<ResolvedStyle>) -> DrawOp {
     let subpaths = rings
         .iter()
         .map(|r| Subpath {
@@ -212,7 +215,7 @@ fn feature_prep_once(
     qbb: Bbox,
     viewport: Bbox,
     stylesheet: &Stylesheet,
-    fallback: &Arc<Style>,
+    fallback: &Arc<ResolvedStyle>,
     transformer: Option<&mars_proj::Transformer>,
     slot_buf: &mut Vec<u32>,
 ) -> Vec<DrawOp> {
@@ -271,7 +274,7 @@ fn feature_prep_once(
             match passes_arc {
                 Some(passes) => {
                     for pass in passes.iter() {
-                        ops.push(polygon_to_drawop(rings, viewport, Arc::new(pass.clone())));
+                        ops.push(polygon_to_drawop(rings, viewport, Arc::new(pass.resolve(0))));
                     }
                 }
                 None => ops.push(polygon_to_drawop(rings, viewport, fallback.clone())),

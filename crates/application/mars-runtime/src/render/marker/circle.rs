@@ -23,14 +23,14 @@ pub(super) fn path(size: f32, (cx, cy): (f32, f32)) -> Path {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
-    use mars_style::{MarkerShape, MarkerSymbol};
+    use mars_style::{MarkerShape, ResolvedMarker};
 
     use super::super::{assert_marker_centred, path_at};
 
     #[test]
     fn marker_circle_is_closed_and_centred() {
         let p = path_at(
-            &MarkerSymbol {
+            &ResolvedMarker {
                 shape: MarkerShape::Circle,
                 size: 10.0,
             },

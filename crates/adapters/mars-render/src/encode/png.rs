@@ -84,10 +84,13 @@ mod tests {
         };
         let ops = vec![DrawOp::Path {
             path: square(16.0, 16.0, 8.0),
-            style: Arc::new(Style {
-                fill: Some(FillPaint::Solid(red())),
-                ..Default::default()
-            }),
+            style: Arc::new(
+                Style {
+                    fill: Some(FillPaint::Solid(red())),
+                    ..Default::default()
+                }
+                .resolve(0),
+            ),
         }];
         let pm = TinySkiaRenderer::new(Arc::new(mars_text::Fonts::with_default()))
             .render(canvas, &ops)

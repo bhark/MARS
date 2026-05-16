@@ -9,24 +9,30 @@ use std::sync::Arc;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use mars_render::{TinySkiaEncoder, TinySkiaRenderer};
 use mars_render_port::{Canvas, DrawOp, Encoder, ImageFormat, Path as PortPath, Pixmap, Renderer, Subpath};
-use mars_style::{Colour, FillPaint, Style};
+use mars_style::{Colour, FillPaint, ResolvedStyle, Style};
 
 const CANVAS_W: u32 = 1024;
 const CANVAS_H: u32 = 1024;
 
-fn fill_red() -> Arc<Style> {
-    Arc::new(Style {
-        fill: Some(FillPaint::Solid(Colour::rgba(200, 60, 40, 255))),
-        ..Default::default()
-    })
+fn fill_red() -> Arc<ResolvedStyle> {
+    Arc::new(
+        Style {
+            fill: Some(FillPaint::Solid(Colour::rgba(200, 60, 40, 255))),
+            ..Default::default()
+        }
+        .resolve(0),
+    )
 }
 
-fn stroke_blue() -> Arc<Style> {
-    Arc::new(Style {
-        stroke: Some(Colour::rgba(40, 80, 200, 255)),
-        stroke_width: Some(1.5),
-        ..Default::default()
-    })
+fn stroke_blue() -> Arc<ResolvedStyle> {
+    Arc::new(
+        Style {
+            stroke: Some(Colour::rgba(40, 80, 200, 255)),
+            stroke_width: Some(1.5.into()),
+            ..Default::default()
+        }
+        .resolve(0),
+    )
 }
 
 fn polygon_path(cx: f32, cy: f32, r: f32, sides: usize) -> PortPath {

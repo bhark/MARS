@@ -10,7 +10,7 @@
 //! the anchor before rotation is applied.
 
 use mars_render_port::RenderError;
-use mars_style::{AnchorPosition, Colour, FillPaint, LabelStyle, Style};
+use mars_style::{AnchorPosition, Colour, FillPaint, ResolvedLabelStyle, ResolvedStyle};
 use mars_text::Fonts;
 use tiny_skia::Pixmap;
 
@@ -24,7 +24,7 @@ pub(crate) fn draw(
     font_family: &str,
     ch: &str,
     size: f32,
-    style: &Style,
+    style: &ResolvedStyle,
     fonts: &Fonts,
 ) -> Result<(), RenderError> {
     // defence-in-depth: config validator rejects this at load time.
@@ -35,7 +35,7 @@ pub(crate) fn draw(
     }
     let colour = effective_colour(style)?;
 
-    let label_style = LabelStyle {
+    let label_style = ResolvedLabelStyle {
         font_family: font_family.to_string(),
         font_size: size,
         fill: colour,
@@ -73,7 +73,7 @@ pub(crate) fn draw(
 // opacity contract as the path pipeline (resolve() bakes opacity into
 // ResolvedFill::alpha; we apply it directly here since glyph never goes
 // through prepare).
-fn effective_colour(style: &Style) -> Result<Colour, RenderError> {
+fn effective_colour(style: &ResolvedStyle) -> Result<Colour, RenderError> {
     let opacity = style.opacity.unwrap_or(1.0).clamp(0.0, 1.0);
     let mut c = match &style.fill {
         Some(FillPaint::Solid(c)) => *c,

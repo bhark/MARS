@@ -24,14 +24,14 @@ pub(super) fn path(points: &[(f32, f32)], anchor: (f32, f32), filled: bool, size
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
-    use mars_style::{MarkerShape, MarkerSymbol};
+    use mars_style::{MarkerShape, ResolvedMarker};
 
     use super::super::path_at;
 
     #[test]
     fn marker_vector_shape_uses_anchor_and_scale() {
         // unit-frame upward triangle, anchor at the bottom centre.
-        let m = MarkerSymbol {
+        let m = ResolvedMarker {
             shape: MarkerShape::VectorShape {
                 points: vec![(0.0, 1.0), (1.0, 1.0), (0.5, 0.0)],
                 anchor: (0.5, 1.0),

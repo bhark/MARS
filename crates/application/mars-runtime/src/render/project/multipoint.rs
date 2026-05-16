@@ -2,7 +2,7 @@
 //! subpaths (one per point).
 
 use mars_render_port::Subpath;
-use mars_style::MarkerSymbol;
+use mars_style::ResolvedMarker;
 use mars_types::Bbox;
 
 use crate::RuntimeError;
@@ -16,7 +16,7 @@ pub(super) fn subpaths(
     viewport: Bbox,
     w: u32,
     h: u32,
-    marker: Option<&MarkerSymbol>,
+    marker: Option<&ResolvedMarker>,
 ) -> Vec<Subpath> {
     match marker {
         Some(m) => coords
@@ -49,13 +49,16 @@ mod tests {
     fn feature_to_drawop_multipoint_marker_emits_one_subpath_per_point() {
         let geom = GeomKind::MultiPoint(vec![(2.0, 2.0), (5.0, 5.0), (8.0, 8.0)]);
         let v = Bbox::new(0.0, 0.0, 10.0, 10.0);
-        let style = Arc::new(Style {
-            marker: Some(MarkerSymbol {
-                shape: MarkerShape::Square,
-                size: 6.0,
-            }),
-            ..Default::default()
-        });
+        let style = Arc::new(
+            Style {
+                marker: Some(MarkerSymbol {
+                    shape: MarkerShape::Square,
+                    size: 6.0.into(),
+                }),
+                ..Default::default()
+            }
+            .resolve(0),
+        );
         let op = feature_to_drawop(&geom, v, 100, 100, style).unwrap();
         let DrawOp::Path { path, .. } = op else {
             panic!("expected path");

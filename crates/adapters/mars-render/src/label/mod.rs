@@ -10,7 +10,7 @@ pub(crate) mod follow;
 mod halo;
 
 use mars_render_port::RenderError;
-use mars_style::LabelStyle;
+use mars_style::ResolvedLabelStyle;
 use mars_text::Fonts;
 use tiny_skia::Pixmap;
 
@@ -18,7 +18,7 @@ pub(crate) fn draw(
     pm: &mut Pixmap,
     anchor: (f32, f32),
     text: &str,
-    style: &LabelStyle,
+    style: &ResolvedLabelStyle,
     angle_rad: f32,
     fonts: &Fonts,
 ) -> Result<(), RenderError> {
@@ -45,7 +45,7 @@ mod tests {
     use std::sync::Arc;
 
     use mars_render_port::{Canvas, DrawOp, Encoder, ImageFormat, Renderer};
-    use mars_style::{AnchorPosition, Colour, LabelStyle};
+    use mars_style::{AnchorPosition, Colour, ResolvedLabelStyle};
 
     use crate::{TinySkiaEncoder, TinySkiaRenderer};
 
@@ -75,7 +75,7 @@ mod tests {
         let ops = vec![DrawOp::Label {
             anchor: (0.0, 0.0),
             text: "hi".into(),
-            style: Arc::new(LabelStyle {
+            style: Arc::new(ResolvedLabelStyle {
                 font_family: "DejaVu Sans".into(),
                 font_size: 12.0,
                 fill: Colour::rgba(0, 0, 0, 255),
@@ -101,7 +101,7 @@ mod tests {
             height: 64,
             background: None,
         };
-        let label_style = Arc::new(LabelStyle {
+        let label_style = Arc::new(ResolvedLabelStyle {
             font_family: "DejaVu Sans".into(),
             font_size: 16.0,
             fill: Colour::rgba(0, 0, 0, 255),
@@ -164,7 +164,7 @@ mod tests {
     #[test]
     fn measure_text_returns_font_aware_metrics() {
         let r = TinySkiaRenderer::new(Arc::new(mars_text::Fonts::with_default()));
-        let style = LabelStyle {
+        let style = ResolvedLabelStyle {
             font_family: "DejaVu Sans".into(),
             font_size: 12.0,
             fill: Colour::rgba(0, 0, 0, 255),
@@ -189,7 +189,7 @@ mod tests {
     #[test]
     fn measure_text_unknown_font_falls_back_to_default() {
         let r = TinySkiaRenderer::new(Arc::new(mars_text::Fonts::with_default()));
-        let style = LabelStyle {
+        let style = ResolvedLabelStyle {
             font_family: "no-such-font-12345".into(),
             font_size: 12.0,
             fill: Colour::rgba(0, 0, 0, 255),

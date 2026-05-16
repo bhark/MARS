@@ -391,7 +391,7 @@ mod tests {
         fn measure_text(
             &self,
             _text: &str,
-            _style: &mars_style::LabelStyle,
+            _style: &mars_style::ResolvedLabelStyle,
         ) -> Result<mars_render_port::TextMetrics, RenderError> {
             Err(RenderError::NotImplemented { what: "test" })
         }

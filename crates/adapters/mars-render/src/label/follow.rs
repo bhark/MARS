@@ -8,7 +8,7 @@
 //! through the existing `compose::stamp_rotated` path.
 
 use mars_render_port::RenderError;
-use mars_style::LabelStyle;
+use mars_style::ResolvedLabelStyle;
 use mars_text::{Fonts, GlyphMask};
 use tiny_skia::Pixmap;
 
@@ -21,7 +21,7 @@ pub(crate) fn draw_follow(
     polyline: &[(f32, f32)],
     start_arc: f32,
     text: &str,
-    style: &LabelStyle,
+    style: &ResolvedLabelStyle,
     fonts: &Fonts,
 ) -> Result<(), RenderError> {
     if polyline.len() < 2 {
@@ -95,12 +95,12 @@ mod tests {
     use std::sync::Arc;
 
     use mars_render_port::{Canvas, DrawOp, Encoder, ImageFormat, Renderer};
-    use mars_style::{AnchorPosition, Colour, LabelStyle};
+    use mars_style::{AnchorPosition, Colour, ResolvedLabelStyle};
 
     use crate::{TinySkiaEncoder, TinySkiaRenderer};
 
-    fn style() -> Arc<LabelStyle> {
-        Arc::new(LabelStyle {
+    fn style() -> Arc<ResolvedLabelStyle> {
+        Arc::new(ResolvedLabelStyle {
             font_family: "DejaVu Sans".into(),
             font_size: 16.0,
             fill: Colour::rgba(0, 0, 0, 255),

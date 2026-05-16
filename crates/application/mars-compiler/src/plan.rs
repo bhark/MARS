@@ -1117,7 +1117,7 @@ mod tests {
         let inline = LayerLabel {
             style: LabelStyleAttach::Inline(mars_style::LabelStyle {
                 font_family: "DejaVu Sans".into(),
-                font_size: 12.0,
+                font_size: 12.0.into(),
                 fill: mars_style::Colour::rgb(0, 0, 0),
                 halo: None,
                 priority: 0,

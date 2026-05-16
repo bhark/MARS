@@ -361,8 +361,8 @@ layers:
     match &class.style {
         mars_config::ClassStyle::Passes { passes } => {
             assert_eq!(passes.len(), 2);
-            assert!((passes[0].stroke_width.unwrap() - 6.0).abs() < f32::EPSILON);
-            assert!((passes[1].stroke_width.unwrap() - 2.0).abs() < f32::EPSILON);
+            assert!((passes[0].stroke_width.unwrap().base_px - 6.0).abs() < f32::EPSILON);
+            assert!((passes[1].stroke_width.unwrap().base_px - 2.0).abs() < f32::EPSILON);
         }
         _ => panic!("expected passes variant"),
     }

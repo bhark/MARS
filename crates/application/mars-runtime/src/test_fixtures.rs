@@ -35,7 +35,7 @@ use mars_config::model::{
 use mars_render_port::{Canvas, DrawOp, EncodeError, Encoder, ImageFormat, Pixmap, RenderError, Renderer, TextMetrics};
 use mars_store::mem::{InMemoryCache, InMemoryStore};
 use mars_store::{LocalCache, ObjectStore};
-use mars_style::{Colour, FillPaint, LabelStyle, LabelSurvival, Style, Stylesheet};
+use mars_style::{Colour, FillPaint, LabelStyle, LabelSurvival, ResolvedLabelStyle, Style, Stylesheet};
 use mars_types::{
     Bbox, BindingId, BindingMetadata, CrsCode, DecimationLevel, HilbertKey, ImageFormat as TImageFormat, LayerId,
     LayerSidecarEntry, LayerSidecarKind, MANIFEST_FORMAT_VERSION, Manifest, PageEntry, PageId, PageKey,
@@ -65,7 +65,7 @@ impl Renderer for CapturingRenderer {
         })
     }
 
-    fn measure_text(&self, text: &str, style: &LabelStyle) -> Result<TextMetrics, RenderError> {
+    fn measure_text(&self, text: &str, style: &ResolvedLabelStyle) -> Result<TextMetrics, RenderError> {
         // coarse stub matches the pre-Phase-F approximation so existing
         // layout assertions are stable.
         let chars = text.chars().count().max(1) as f32;
@@ -480,7 +480,7 @@ pub fn build_minimal_stylesheet() -> Stylesheet {
         "buildings__label".into(),
         Arc::new(LabelStyle {
             font_family: "DejaVu Sans".into(),
-            font_size: 12.0,
+            font_size: 12.0.into(),
             fill: Colour {
                 r: 0,
                 g: 0,
@@ -514,7 +514,7 @@ pub fn default_style() -> Style {
             b: 64,
             a: 255,
         }),
-        stroke_width: Some(1.0),
+        stroke_width: Some(1.0.into()),
         ..Default::default()
     }
 }

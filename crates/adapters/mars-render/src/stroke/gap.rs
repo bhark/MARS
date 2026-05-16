@@ -4,7 +4,7 @@
 //! mapserver's `GAP` / `INITIALGAP`.
 
 use mars_render_port::{Path as PortPath, RenderError};
-use mars_style::{MarkerSymbol, Style};
+use mars_style::{ResolvedMarker, ResolvedStyle};
 use mars_text::Fonts;
 use tiny_skia::Pixmap;
 
@@ -18,8 +18,8 @@ use crate::symbol;
 pub(crate) fn stamp(
     pm: &mut Pixmap,
     port_path: &PortPath,
-    marker: &MarkerSymbol,
-    style: &Style,
+    marker: &ResolvedMarker,
+    style: &ResolvedStyle,
     gap: ResolvedStrokeGap,
     fonts: &Fonts,
 ) -> Result<(), RenderError> {
@@ -120,17 +120,18 @@ mod tests {
         let style = Style {
             fill: Some(FillPaint::Solid(Colour::rgba(255, 0, 0, 255))),
             stroke: Some(Colour::rgba(0, 0, 0, 255)),
-            stroke_width: Some(1.0),
+            stroke_width: Some(1.0.into()),
             marker: Some(MarkerSymbol {
                 shape: MarkerShape::Circle,
-                size: 4.0,
+                size: 4.0.into(),
             }),
             stroke_gap: Some(StrokeGap {
                 interval_px: 20.0,
                 initial_px: 4.0,
             }),
             ..Default::default()
-        };
+        }
+        .resolve(0);
         let marker = style.marker.clone().expect("marker");
         let gap = prepare::resolve(&style).stroke.expect("stroke").gap.expect("gap");
 
@@ -161,10 +162,11 @@ mod tests {
             fill: Some(FillPaint::Solid(Colour::rgba(255, 0, 0, 255))),
             marker: Some(MarkerSymbol {
                 shape: MarkerShape::Circle,
-                size: 4.0,
+                size: 4.0.into(),
             }),
             ..Default::default()
-        };
+        }
+        .resolve(0);
         let marker = style.marker.clone().expect("marker");
         let gap = crate::prepare::ResolvedStrokeGap {
             interval_px: 5.0,
@@ -192,10 +194,11 @@ mod tests {
             fill: Some(FillPaint::Solid(Colour::rgba(255, 0, 0, 255))),
             marker: Some(MarkerSymbol {
                 shape: MarkerShape::Square,
-                size: 3.0,
+                size: 3.0.into(),
             }),
             ..Default::default()
-        };
+        }
+        .resolve(0);
         let marker = style.marker.clone().expect("marker");
         let gap = crate::prepare::ResolvedStrokeGap {
             interval_px: 10.0,

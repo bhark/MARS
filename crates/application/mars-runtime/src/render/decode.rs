@@ -91,6 +91,7 @@ pub(super) fn decode_page_to_ops(
     stylesheet: &Stylesheet,
     same_crs: bool,
     class_active: &[bool],
+    denom: u64,
 ) -> Result<DecodedPage, RuntimeError> {
     let reader = ArtifactReader::open(bytes).map_err(map_artifact_err)?;
     let spatial_bytes = reader.section(SectionKind::SpatialIndex).map_err(map_artifact_err)?;
@@ -193,11 +194,11 @@ pub(super) fn decode_page_to_ops(
                 name: name.to_owned(),
             });
         };
-        // ordered multi-pass emit: one DrawOp per pass, declared order. a
-        // single-pass entry round-trips through the same loop as a one-element
-        // slice. clone is unavoidable: feature_to_drawop owns `Arc<Style>`.
+        // ordered multi-pass emit: one DrawOp per pass, declared order. each
+        // pass resolves against the request denom before crossing the
+        // renderer port - the renderer never sees `ScaledSize` directly.
         for pass in passes.iter() {
-            let style = Arc::new(pass.clone());
+            let style = Arc::new(pass.resolve(denom));
             if let Some(op) = feature_to_drawop(&f.geom, plan.bbox, plan.width, plan.height, style) {
                 ops.push(op);
             }
@@ -340,6 +341,7 @@ mod tests {
             &ss,
             true,
             &[true],
+            0,
         )
         .unwrap();
 
@@ -382,6 +384,7 @@ mod tests {
             &ss,
             true,
             &[true],
+            0,
         )
         .unwrap();
         assert_eq!(decoded.ops.len(), 1);

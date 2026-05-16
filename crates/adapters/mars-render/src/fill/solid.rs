@@ -66,10 +66,13 @@ mod tests {
         };
         let ops = vec![DrawOp::Path {
             path: square(32.0, 32.0, 16.0),
-            style: Arc::new(Style {
-                fill: Some(FillPaint::Solid(red())),
-                ..Default::default()
-            }),
+            style: Arc::new(
+                Style {
+                    fill: Some(FillPaint::Solid(red())),
+                    ..Default::default()
+                }
+                .resolve(0),
+            ),
         }];
         let (_, _, rgba) = decode(&render_png(canvas, &ops));
         let red_count = rgba
@@ -96,10 +99,13 @@ mod tests {
         };
         let ops = vec![DrawOp::Path {
             path,
-            style: Arc::new(Style {
-                fill: Some(FillPaint::Solid(red())),
-                ..Default::default()
-            }),
+            style: Arc::new(
+                Style {
+                    fill: Some(FillPaint::Solid(red())),
+                    ..Default::default()
+                }
+                .resolve(0),
+            ),
         }];
         let (_, _, rgba) = decode(&render_png(canvas, &ops));
         let opaque = rgba.chunks_exact(4).filter(|p| p[3] != 0).count();
@@ -115,11 +121,14 @@ mod tests {
         };
         let ops = vec![DrawOp::Path {
             path: square(16.0, 16.0, 8.0),
-            style: Arc::new(Style {
-                fill: Some(FillPaint::Solid(red())),
-                opacity: Some(0.5),
-                ..Default::default()
-            }),
+            style: Arc::new(
+                Style {
+                    fill: Some(FillPaint::Solid(red())),
+                    opacity: Some(0.5),
+                    ..Default::default()
+                }
+                .resolve(0),
+            ),
         }];
         let (_, _, rgba) = decode(&render_png(canvas, &ops));
         let half = rgba
@@ -140,13 +149,16 @@ mod tests {
         };
         let ops = vec![DrawOp::Path {
             path: square(8.0, 8.0, 4.0),
-            style: Arc::new(Style {
-                fill: Some(FillPaint::Solid(red())),
-                stroke: Some(red()),
-                stroke_width: Some(1.0),
-                opacity: Some(0.0),
-                ..Default::default()
-            }),
+            style: Arc::new(
+                Style {
+                    fill: Some(FillPaint::Solid(red())),
+                    stroke: Some(red()),
+                    stroke_width: Some(1.0.into()),
+                    opacity: Some(0.0),
+                    ..Default::default()
+                }
+                .resolve(0),
+            ),
         }];
         let (_, _, rgba) = decode(&render_png(canvas, &ops));
         let painted = rgba.chunks_exact(4).filter(|p| p[3] > 0).count();

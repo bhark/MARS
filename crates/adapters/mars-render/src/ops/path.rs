@@ -5,7 +5,7 @@
 //! upstream).
 
 use mars_render_port::{Path as PortPath, RenderError};
-use mars_style::Style;
+use mars_style::ResolvedStyle;
 use mars_text::Fonts;
 use tiny_skia::Pixmap;
 
@@ -14,7 +14,7 @@ use crate::path::build_path;
 use crate::prepare;
 use crate::stroke;
 
-pub(crate) fn draw(pm: &mut Pixmap, path: &PortPath, style: &Style, fonts: &Fonts) -> Result<(), RenderError> {
+pub(crate) fn draw(pm: &mut Pixmap, path: &PortPath, style: &ResolvedStyle, fonts: &Fonts) -> Result<(), RenderError> {
     let Some(tsk_path) = build_path(path) else {
         return Ok(());
     };

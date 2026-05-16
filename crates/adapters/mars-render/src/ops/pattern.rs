@@ -4,7 +4,7 @@
 //! variant appears.
 
 use mars_render_port::{ImageRegistry, Path as PortPath, RenderError};
-use mars_style::Style;
+use mars_style::ResolvedStyle;
 use tiny_skia::Pixmap;
 
 use crate::path::build_path;
@@ -14,7 +14,7 @@ use crate::prepare;
 pub(crate) fn draw(
     pm: &mut Pixmap,
     path: &PortPath,
-    style: &Style,
+    style: &ResolvedStyle,
     images: &dyn ImageRegistry,
 ) -> Result<(), RenderError> {
     let Some(tsk_path) = build_path(path) else {

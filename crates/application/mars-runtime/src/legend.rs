@@ -14,8 +14,12 @@ use std::sync::Arc;
 
 use mars_config::{Class, ClassStyle, Config, Layer};
 use mars_render_port::{Canvas, DrawOp, Path as RPath, Renderer, Subpath};
-use mars_style::{Colour, LabelStyle, LayerGeomKind, Style, Stylesheet};
+use mars_style::{Colour, LabelStyle, LayerGeomKind, ResolvedStyle, Stylesheet};
 use mars_types::{ImageFormat, LayerId};
+
+/// legends are scale-agnostic thumbnails. resolve at denom=0 so
+/// `ScaledSize::resolve` skips ref_denom scaling and only applies clamps.
+const LEGEND_DENOM: u64 = 0;
 
 use crate::{Deps, RuntimeError};
 
@@ -68,7 +72,7 @@ pub fn render_legend(
     };
 
     let mut ops: Vec<DrawOp> = Vec::with_capacity(entries.len() * 2);
-    let label_style = Arc::new(default_label_style());
+    let label_style = Arc::new(default_label_style().resolve(LEGEND_DENOM));
     for (i, entry) in entries.iter().enumerate() {
         let row_top = (i as u32) * layout.row_height;
         push_swatch_ops(
@@ -96,7 +100,7 @@ pub fn render_legend(
 
 struct ClassEntry {
     title: String,
-    style: Arc<Style>,
+    style: Arc<ResolvedStyle>,
 }
 
 fn build_entries(layer: &Layer, rule: Option<&str>, stylesheet: &Stylesheet) -> Result<Vec<ClassEntry>, RuntimeError> {
@@ -109,7 +113,7 @@ fn build_entries(layer: &Layer, rule: Option<&str>, stylesheet: &Stylesheet) -> 
     if classes.is_empty() {
         return Ok(vec![ClassEntry {
             title: layer.title.clone(),
-            style: Arc::new(Style::default()),
+            style: Arc::new(mars_style::Style::default().resolve(LEGEND_DENOM)),
         }]);
     }
     classes
@@ -126,23 +130,20 @@ fn build_entries(layer: &Layer, rule: Option<&str>, stylesheet: &Stylesheet) -> 
         .collect()
 }
 
-fn resolve_style(class: &Class, stylesheet: &Stylesheet) -> Result<Arc<Style>, RuntimeError> {
+fn resolve_style(class: &Class, stylesheet: &Stylesheet) -> Result<Arc<ResolvedStyle>, RuntimeError> {
     // legend swatches are single-style. for multi-pass class definitions we
     // take the first pass so the legend remains a thumbnail of the dominant
     // paint rather than a stack of overlapping swatches; mirrors the
     // mapserver legend image, which emits the first STYLE only.
     match &class.style {
-        ClassStyle::Inline(s) => Ok(Arc::new(s.clone())),
-        ClassStyle::Passes { passes } => {
-            passes
-                .first()
-                .cloned()
-                .map(Arc::new)
-                .ok_or_else(|| RuntimeError::StylesheetDrift {
-                    layer: class.name.clone(),
-                    name: "<empty passes>".into(),
-                })
-        }
+        ClassStyle::Inline(s) => Ok(Arc::new(s.resolve(LEGEND_DENOM))),
+        ClassStyle::Passes { passes } => passes
+            .first()
+            .map(|s| Arc::new(s.resolve(LEGEND_DENOM)))
+            .ok_or_else(|| RuntimeError::StylesheetDrift {
+                layer: class.name.clone(),
+                name: "<empty passes>".into(),
+            }),
         ClassStyle::Ref { name } => {
             let passes = stylesheet
                 .geometry
@@ -153,8 +154,7 @@ fn resolve_style(class: &Class, stylesheet: &Stylesheet) -> Result<Arc<Style>, R
                 })?;
             passes
                 .first()
-                .cloned()
-                .map(Arc::new)
+                .map(|s| Arc::new(s.resolve(LEGEND_DENOM)))
                 .ok_or_else(|| RuntimeError::StylesheetDrift {
                     layer: class.name.clone(),
                     name: name.clone(),
@@ -178,7 +178,7 @@ impl LegendLayout {
         entries: &[ClassEntry],
         renderer: &dyn Renderer,
     ) -> Result<Self, RuntimeError> {
-        let label_style = default_label_style();
+        let label_style = default_label_style().resolve(LEGEND_DENOM);
         let mut max_label_w: f32 = 0.0;
         for e in entries {
             if e.title.is_empty() {
@@ -211,7 +211,15 @@ impl LegendLayout {
     }
 }
 
-fn push_swatch_ops(ops: &mut Vec<DrawOp>, kind: LayerGeomKind, style: Arc<Style>, x: u32, y: u32, w: u32, h: u32) {
+fn push_swatch_ops(
+    ops: &mut Vec<DrawOp>,
+    kind: LayerGeomKind,
+    style: Arc<ResolvedStyle>,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+) {
     let xf = x as f32;
     let yf = y as f32;
     let wf = w as f32;
@@ -259,7 +267,7 @@ fn push_swatch_ops(ops: &mut Vec<DrawOp>, kind: LayerGeomKind, style: Arc<Style>
 fn default_label_style() -> LabelStyle {
     LabelStyle {
         font_family: "sans".to_owned(),
-        font_size: 12.0,
+        font_size: 12.0.into(),
         fill: Colour::rgb(0x20, 0x20, 0x20),
         halo: None,
         priority: 0,
@@ -279,6 +287,7 @@ mod tests {
     use mars_observability::Metrics;
     use mars_render_port::{EncodeError, Encoder, Pixmap, RenderError, TextMetrics};
     use mars_store::stub::{NotImplementedCache, NotImplementedStore};
+    use mars_style::ResolvedLabelStyle;
     use mars_text::Fonts;
 
     #[derive(Debug, Default)]
@@ -295,7 +304,7 @@ mod tests {
                 premultiplied_rgba: vec![0; (canvas.width as usize) * (canvas.height as usize) * 4],
             })
         }
-        fn measure_text(&self, text: &str, style: &LabelStyle) -> Result<TextMetrics, RenderError> {
+        fn measure_text(&self, text: &str, style: &ResolvedLabelStyle) -> Result<TextMetrics, RenderError> {
             Ok(TextMetrics {
                 advance_x: (text.chars().count() as f32) * style.font_size * 0.55,
                 ascent: style.font_size * 0.8,

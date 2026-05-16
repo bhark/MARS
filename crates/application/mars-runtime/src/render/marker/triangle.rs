@@ -20,14 +20,14 @@ pub(super) fn path(size: f32, (cx, cy): (f32, f32)) -> Path {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
-    use mars_style::{MarkerShape, MarkerSymbol};
+    use mars_style::{MarkerShape, ResolvedMarker};
 
     use super::super::path_at;
 
     #[test]
     fn marker_triangle_has_three_vertices() {
         let p = path_at(
-            &MarkerSymbol {
+            &ResolvedMarker {
                 shape: MarkerShape::Triangle,
                 size: 12.0,
             },

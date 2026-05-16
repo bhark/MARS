@@ -2,7 +2,7 @@
 //! compositing pipeline (block-rotated vs per-glyph follow respectively).
 
 use mars_render_port::RenderError;
-use mars_style::LabelStyle;
+use mars_style::ResolvedLabelStyle;
 use mars_text::Fonts;
 use tiny_skia::Pixmap;
 
@@ -12,7 +12,7 @@ pub(crate) fn draw(
     pm: &mut Pixmap,
     anchor: (f32, f32),
     text: &str,
-    style: &LabelStyle,
+    style: &ResolvedLabelStyle,
     angle_rad: f32,
     fonts: &Fonts,
 ) -> Result<(), RenderError> {
@@ -24,7 +24,7 @@ pub(crate) fn draw_follow(
     polyline_px: &[(f32, f32)],
     start_arc_px: f32,
     text: &str,
-    style: &LabelStyle,
+    style: &ResolvedLabelStyle,
     fonts: &Fonts,
 ) -> Result<(), RenderError> {
     label::follow::draw_follow(pm, polyline_px, start_arc_px, text, style, fonts)

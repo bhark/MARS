@@ -18,7 +18,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use fontdb::{Database, Family, ID, Query, Source, Stretch, Style as FontStyle, Weight};
-use mars_style::LabelStyle;
+use mars_style::ResolvedLabelStyle;
 use thiserror::Error;
 use tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Transform};
 
@@ -180,7 +180,7 @@ impl std::fmt::Debug for FaceHandle {
 /// rustybuzz is invoked once with default features. any returned cluster /
 /// glyph offsets are converted from font units to pixels using
 /// `style.font_size / units_per_em`.
-pub fn measure(text: &str, style: &LabelStyle, fonts: &Fonts) -> Result<ShapedRun, FontError> {
+pub fn measure(text: &str, style: &ResolvedLabelStyle, fonts: &Fonts) -> Result<ShapedRun, FontError> {
     let id = fonts.select(&style.font_family)?;
     let (data, index) = fonts.face_bytes(id)?;
 
@@ -490,8 +490,8 @@ mod tests {
 
     use super::*;
 
-    fn lbl(family: &str, size: f32) -> LabelStyle {
-        LabelStyle {
+    fn lbl(family: &str, size: f32) -> ResolvedLabelStyle {
+        ResolvedLabelStyle {
             font_family: family.into(),
             font_size: size,
             fill: Colour::rgba(0, 0, 0, 0xff),

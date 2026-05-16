@@ -18,7 +18,7 @@ mod vector_shape;
 mod x;
 
 use mars_render_port::{Path as PortPath, RenderError};
-use mars_style::{MarkerShape, Style};
+use mars_style::{MarkerShape, ResolvedStyle};
 use mars_text::Fonts;
 use tiny_skia::Pixmap;
 
@@ -26,7 +26,7 @@ pub(crate) fn dispatch(
     pm: &mut Pixmap,
     anchor: (f32, f32),
     rotation_rad: f32,
-    style: &Style,
+    style: &ResolvedStyle,
     fonts: &Fonts,
 ) -> Result<(), RenderError> {
     let Some(marker) = &style.marker else {
@@ -72,7 +72,7 @@ fn render(
     mut local: PortPath,
     anchor: (f32, f32),
     rotation_rad: f32,
-    style: &Style,
+    style: &ResolvedStyle,
     fonts: &Fonts,
 ) -> Result<(), RenderError> {
     let (sin_r, cos_r) = rotation_rad.sin_cos();
@@ -98,7 +98,10 @@ mod tests {
     use crate::{TinySkiaEncoder, TinySkiaRenderer};
 
     fn marker(shape: MarkerShape, size: f32) -> MarkerSymbol {
-        MarkerSymbol { shape, size }
+        MarkerSymbol {
+            shape,
+            size: size.into(),
+        }
     }
 
     fn pm() -> SkPixmap {
@@ -115,19 +118,20 @@ mod tests {
             height: side,
             background: None,
         };
+        let style = Style {
+            fill: Some(FillPaint::Solid(Colour {
+                r: 255,
+                g: 0,
+                b: 0,
+                a: 255,
+            })),
+            marker: Some(marker),
+            ..Default::default()
+        };
         let op = DrawOp::Symbol {
             anchor: (side as f32 / 2.0, side as f32 / 2.0),
             rotation_rad,
-            style: Arc::new(Style {
-                fill: Some(FillPaint::Solid(Colour {
-                    r: 255,
-                    g: 0,
-                    b: 0,
-                    a: 255,
-                })),
-                marker: Some(marker),
-                ..Default::default()
-            }),
+            style: Arc::new(style.resolve(0)),
         };
         let renderer = TinySkiaRenderer::new(Arc::new(mars_text::Fonts::with_default()));
         let pm = renderer.render(canvas, &[op]).expect("render ok");
@@ -175,7 +179,7 @@ mod tests {
 
     #[test]
     fn none_marker_is_silent_no_op() {
-        let style = Style::default();
+        let style = Style::default().resolve(0);
         let fonts = mars_text::Fonts::with_default();
         dispatch(&mut pm(), (8.0, 8.0), 0.0, &style, &fonts).expect("ok");
     }
@@ -238,7 +242,8 @@ mod tests {
                 12.0,
             )),
             ..Default::default()
-        };
+        }
+        .resolve(0);
         let fonts = mars_text::Fonts::with_default();
         let err = dispatch(&mut pm(), (8.0, 8.0), 0.0, &style, &fonts).expect_err("must error");
         assert!(matches!(err, RenderError::Backend(msg) if msg.contains("empty ch")));
@@ -256,7 +261,8 @@ mod tests {
                 12.0,
             )),
             ..Default::default()
-        };
+        }
+        .resolve(0);
         let fonts = mars_text::Fonts::with_default();
         let err = dispatch(&mut pm(), (8.0, 8.0), 0.0, &style, &fonts).expect_err("must error");
         assert!(matches!(err, RenderError::Backend(msg) if msg.contains("solid fill")));

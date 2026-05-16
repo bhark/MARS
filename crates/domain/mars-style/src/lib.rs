@@ -110,10 +110,13 @@ pub enum LineJoin {
 /// form is a flat tagged map (`kind: <shape>`, `size: <f32>`, plus shape-
 /// specific fields) so existing configs and goldens stay diff-clean across
 /// the shape extraction. Glyph defaults `size` to 12; everything else to 6.
+/// `size` is a `ScaledSize` so authored markers can attenuate with the
+/// scale denom; bare-`f32` wire forms remain accepted via `ScaledSize`'s
+/// serde.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MarkerSymbol {
     pub shape: MarkerShape,
-    pub size: f32,
+    pub size: ScaledSize,
 }
 
 /// Point marker shape. Shape-specific bodies stay inside the variant; common
@@ -175,11 +178,12 @@ impl MarkerSymbol {
         if shape_is_glyph { 12.0 } else { 6.0 }
     }
 
-    /// Marker bounding-box edge length in pixels. Pin is teardrop, so size
-    /// is the bulb diameter; the pin extends downward by ~1.5x.
+    /// Authored base size in pixels (pre-resolve). Renderer code consumes
+    /// the resolved variant; this accessor is for config validators that
+    /// check the authored value before any denom is in scope.
     #[must_use]
-    pub fn size(&self) -> f32 {
-        self.size
+    pub fn base_size(&self) -> f32 {
+        self.size.base_px
     }
 }
 
@@ -239,12 +243,14 @@ impl<'de> Deserialize<'de> for MarkerSymbol {
     fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         // flat tagged map: read `kind:` then dispatch to a per-shape body
         // that picks up `size` plus the shape-specific fields. preserves
-        // wire-format compatibility with the pre-extraction enum.
+        // wire-format compatibility with the pre-extraction enum. `size`
+        // routes through `ScaledSize`, so bare f32 / int and the tagged
+        // `{ base_px, min_px, max_px, ref_denom }` form both work.
         #[derive(Deserialize)]
         struct Flat {
             kind: String,
             #[serde(default)]
-            size: Option<f32>,
+            size: Option<ScaledSize>,
             // vector_shape body
             #[serde(default)]
             points: Option<Vec<(f32, f32)>>,
@@ -297,7 +303,7 @@ impl<'de> Deserialize<'de> for MarkerSymbol {
         };
         Ok(MarkerSymbol {
             shape,
-            size: f.size.unwrap_or(default_size),
+            size: f.size.unwrap_or_else(|| ScaledSize::from_px(default_size)),
         })
     }
 }
@@ -463,8 +469,11 @@ pub struct Style {
     pub fill: Option<FillPaint>,
     #[serde(default)]
     pub stroke: Option<Colour>,
+    /// Stroke width in pixels. `ScaledSize` so authored widths can attenuate
+    /// with the scale denom (MINWIDTH / MAXWIDTH / SYMBOLSCALEDENOM); the
+    /// renderer consumes the resolved `f32` via `ResolvedStyle`.
     #[serde(default)]
-    pub stroke_width: Option<f32>,
+    pub stroke_width: Option<ScaledSize>,
     #[serde(default)]
     pub stroke_dasharray: Option<Vec<f32>>,
     #[serde(default)]
@@ -500,11 +509,67 @@ pub struct Style {
     pub geom_transform: Option<GeomTransform>,
 }
 
+impl Style {
+    /// Resolve every size-like authored field against `denom` and return a
+    /// renderer-facing variant with concrete pixel scalars. The renderer
+    /// never sees `ScaledSize` directly; this is the seam.
+    #[must_use]
+    pub fn resolve(&self, denom: u64) -> ResolvedStyle {
+        ResolvedStyle {
+            fill: self.fill.clone(),
+            stroke: self.stroke,
+            stroke_width: self.stroke_width.map(|s| s.resolve(denom)),
+            stroke_dasharray: self.stroke_dasharray.clone(),
+            stroke_linecap: self.stroke_linecap,
+            stroke_linejoin: self.stroke_linejoin,
+            marker: self.marker.as_ref().map(|m| ResolvedMarker {
+                shape: m.shape.clone(),
+                size: m.size.resolve(denom),
+            }),
+            opacity: self.opacity,
+            stroke_offset_px: self.stroke_offset_px,
+            stroke_gap: self.stroke_gap,
+            geom_transform: self.geom_transform,
+        }
+    }
+}
+
+/// Renderer-facing geometry style with every size-like field resolved to a
+/// concrete `f32`. Produced by [`Style::resolve`] just before the renderer
+/// crosses the port boundary; the renderer reads from this type so it never
+/// has to learn about scale attenuation. Adding a new authored
+/// [`Style`] field that needs resolving also adds a field here.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedStyle {
+    pub fill: Option<FillPaint>,
+    pub stroke: Option<Colour>,
+    pub stroke_width: Option<f32>,
+    pub stroke_dasharray: Option<Vec<f32>>,
+    pub stroke_linecap: Option<LineCap>,
+    pub stroke_linejoin: Option<LineJoin>,
+    pub marker: Option<ResolvedMarker>,
+    pub opacity: Option<f32>,
+    pub stroke_offset_px: Option<f32>,
+    pub stroke_gap: Option<StrokeGap>,
+    pub geom_transform: Option<GeomTransform>,
+}
+
+/// Resolved marker: shape unchanged from authored form, `size` collapsed
+/// to a concrete pixel value.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedMarker {
+    pub shape: MarkerShape,
+    pub size: f32,
+}
+
 /// Label-typed style.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LabelStyle {
     pub font_family: String,
-    pub font_size: f32,
+    /// Font size in pixels. `ScaledSize` so authored sizes can attenuate
+    /// with the scale denom (LABEL.MINSIZE / MAXSIZE / SYMBOLSCALEDENOM);
+    /// the renderer consumes the resolved `f32` via `ResolvedLabelStyle`.
+    pub font_size: ScaledSize,
     pub fill: Colour,
     #[serde(default)]
     pub halo: Option<Halo>,
@@ -543,6 +608,44 @@ pub struct LabelStyle {
     /// remains a collision obstacle for lower-priority labels behind it.
     /// Mirrors mapserver's `FORCE`.
     #[serde(default)]
+    pub force: bool,
+}
+
+impl LabelStyle {
+    /// Resolve the authored font size against `denom` and return a
+    /// renderer-facing variant.
+    #[must_use]
+    pub fn resolve(&self, denom: u64) -> ResolvedLabelStyle {
+        ResolvedLabelStyle {
+            font_family: self.font_family.clone(),
+            font_size: self.font_size.resolve(denom),
+            fill: self.fill,
+            halo: self.halo.clone(),
+            priority: self.priority,
+            min_distance: self.min_distance,
+            position: self.position,
+            offset_px: self.offset_px,
+            angle_deg: self.angle_deg,
+            partials: self.partials,
+            force: self.force,
+        }
+    }
+}
+
+/// Renderer-facing label style with the font size resolved to a concrete
+/// `f32`. Produced by [`LabelStyle::resolve`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedLabelStyle {
+    pub font_family: String,
+    pub font_size: f32,
+    pub fill: Colour,
+    pub halo: Option<Halo>,
+    pub priority: u16,
+    pub min_distance: f32,
+    pub position: AnchorPosition,
+    pub offset_px: (f32, f32),
+    pub angle_deg: Option<f32>,
+    pub partials: bool,
     pub force: bool,
 }
 
@@ -796,7 +899,8 @@ mod tests {
         let s: Style = serde_yaml_ng::from_str(yaml).unwrap();
         assert!(matches!(s.fill, Some(FillPaint::Solid(c)) if c == Colour::rgba(0xfa, 0xfa, 0xfa, 0xff)));
         assert_eq!(s.stroke.unwrap(), Colour::rgba(0xb4, 0xb4, 0xb4, 0xff));
-        assert!((s.stroke_width.unwrap() - 0.6).abs() < f32::EPSILON);
+        // bare f32 wire form lands in ScaledSize::from_px.
+        assert_eq!(s.stroke_width.unwrap(), ScaledSize::from_px(0.6));
     }
 
     #[test]
@@ -859,7 +963,7 @@ mod tests {
         let yaml = "kind: circle\nsize: 8.0\n";
         let m: MarkerSymbol = serde_yaml_ng::from_str(yaml).unwrap();
         assert_eq!(m.shape, MarkerShape::Circle);
-        assert!((m.size - 8.0).abs() < f32::EPSILON);
+        assert!((m.size.base_px - 8.0).abs() < f32::EPSILON);
         let out = serde_yaml_ng::to_string(&m).unwrap();
         assert!(out.contains("kind: circle"));
         assert!(out.contains("size: 8"));
@@ -869,7 +973,7 @@ mod tests {
     fn marker_symbol_default_size_kicks_in() {
         let m: MarkerSymbol = serde_yaml_ng::from_str("kind: triangle").unwrap();
         assert_eq!(m.shape, MarkerShape::Triangle);
-        assert!((m.size - 6.0).abs() < f32::EPSILON);
+        assert!((m.size.base_px - 6.0).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -877,7 +981,7 @@ mod tests {
         let yaml = "kind: glyph\nfont_family: Sans\nch: A\n";
         let m: MarkerSymbol = serde_yaml_ng::from_str(yaml).unwrap();
         assert!(matches!(m.shape, MarkerShape::Glyph { .. }));
-        assert!((m.size - 12.0).abs() < f32::EPSILON);
+        assert!((m.size.base_px - 12.0).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -887,7 +991,7 @@ mod tests {
         assert!(matches!(s.fill, Some(FillPaint::Solid(c)) if c == Colour::rgba(0xff, 0, 0, 0xff)));
         let m = s.marker.expect("marker present");
         assert_eq!(m.shape, MarkerShape::Pin);
-        assert!((m.size - 10.0).abs() < f32::EPSILON);
+        assert!((m.size.base_px - 10.0).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -1042,7 +1146,7 @@ mod tests {
             }
             _ => panic!("expected vector_shape"),
         }
-        assert!((m.size - 10.0).abs() < f32::EPSILON);
+        assert!((m.size.base_px - 10.0).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -1056,17 +1160,17 @@ mod tests {
             }
             _ => panic!("expected glyph"),
         }
-        assert!((m.size - 14.0).abs() < f32::EPSILON);
+        assert!((m.size.base_px - 14.0).abs() < f32::EPSILON);
     }
 
     #[test]
-    fn marker_size_works_for_all_variants() {
+    fn marker_base_size_works_for_all_variants() {
         assert!(
             (MarkerSymbol {
                 shape: MarkerShape::Circle,
-                size: 7.0,
+                size: ScaledSize::from_px(7.0),
             }
-            .size()
+            .base_size()
                 - 7.0)
                 .abs()
                 < f32::EPSILON
@@ -1078,9 +1182,9 @@ mod tests {
                     anchor: (0.5, 0.5),
                     filled: true,
                 },
-                size: 9.0,
+                size: ScaledSize::from_px(9.0),
             }
-            .size()
+            .base_size()
                 - 9.0)
                 .abs()
                 < f32::EPSILON
@@ -1091,9 +1195,9 @@ mod tests {
                     font_family: "Sans".into(),
                     ch: "X".into(),
                 },
-                size: 11.0,
+                size: ScaledSize::from_px(11.0),
             }
-            .size()
+            .base_size()
                 - 11.0)
                 .abs()
                 < f32::EPSILON
@@ -1112,6 +1216,7 @@ mod tests {
         }"##;
         let l: LabelStyle = serde_json::from_str(json).unwrap();
         assert_eq!(l.font_family, "Arial");
+        assert_eq!(l.font_size, ScaledSize::from_px(12.0));
         assert_eq!(l.fill, Colour::rgba(0, 0, 0, 0xff));
         let halo = l.halo.unwrap();
         assert_eq!(halo.colour, Colour::rgba(0xff, 0xff, 0xff, 0xff));
@@ -1221,7 +1326,7 @@ min_distance: 8.0
         let mut ss = Stylesheet::default();
         let s = Style {
             stroke: Some(Colour::rgba(0, 0, 0, 0xff)),
-            stroke_width: Some(1.0),
+            stroke_width: Some(ScaledSize::from_px(1.0)),
             ..Default::default()
         };
         ss.geometry.insert("solo".into(), Arc::from(vec![s.clone()]));
@@ -1237,12 +1342,12 @@ min_distance: 8.0
         let mut ss = Stylesheet::default();
         let pass_a = Style {
             stroke: Some(Colour::rgba(0xff, 0, 0, 0xff)),
-            stroke_width: Some(4.0),
+            stroke_width: Some(ScaledSize::from_px(4.0)),
             ..Default::default()
         };
         let pass_b = Style {
             stroke: Some(Colour::rgba(0, 0xff, 0, 0xff)),
-            stroke_width: Some(1.0),
+            stroke_width: Some(ScaledSize::from_px(1.0)),
             ..Default::default()
         };
         ss.geometry
@@ -1254,5 +1359,93 @@ min_distance: 8.0
         // declared order preserved
         assert_eq!(passes[0], pass_a);
         assert_eq!(passes[1], pass_b);
+    }
+
+    #[test]
+    fn style_resolve_collapses_stroke_width_against_denom() {
+        let s = Style {
+            stroke: Some(Colour::rgba(0, 0, 0, 0xff)),
+            stroke_width: Some(ScaledSize {
+                base_px: 10.0,
+                min_px: Some(2.0),
+                max_px: Some(20.0),
+                ref_denom: Some(50_000),
+            }),
+            ..Default::default()
+        };
+        // at half the ref denom: 2x scaling, clamped at max_px=20.
+        let r = s.resolve(25_000);
+        assert!((r.stroke_width.unwrap() - 20.0).abs() < f32::EPSILON);
+        // at 2x: half size, no clamp (5.0).
+        let r = s.resolve(100_000);
+        assert!((r.stroke_width.unwrap() - 5.0).abs() < f32::EPSILON);
+        // far out: clamped to min_px=2.
+        let r = s.resolve(2_000_000);
+        assert!((r.stroke_width.unwrap() - 2.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn style_resolve_passes_through_non_size_fields_unchanged() {
+        let s = Style {
+            fill: Some(FillPaint::Solid(Colour::rgba(0xff, 0, 0, 0xff))),
+            stroke: Some(Colour::rgba(0, 0xff, 0, 0xff)),
+            stroke_width: Some(ScaledSize::from_px(1.5)),
+            stroke_dasharray: Some(vec![4.0, 2.0]),
+            opacity: Some(0.5),
+            ..Default::default()
+        };
+        let r = s.resolve(50_000);
+        assert!(matches!(r.fill, Some(FillPaint::Solid(c)) if c == Colour::rgba(0xff, 0, 0, 0xff)));
+        assert_eq!(r.stroke.unwrap(), Colour::rgba(0, 0xff, 0, 0xff));
+        assert_eq!(r.stroke_dasharray.as_deref(), Some(&[4.0, 2.0][..]));
+        assert!((r.opacity.unwrap() - 0.5).abs() < f32::EPSILON);
+        assert!((r.stroke_width.unwrap() - 1.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn style_resolve_marker_size_collapses() {
+        let s = Style {
+            fill: Some(FillPaint::Solid(Colour::rgba(0, 0, 0, 0xff))),
+            marker: Some(MarkerSymbol {
+                shape: MarkerShape::Circle,
+                size: ScaledSize {
+                    base_px: 8.0,
+                    min_px: None,
+                    max_px: None,
+                    ref_denom: Some(50_000),
+                },
+            }),
+            ..Default::default()
+        };
+        let r = s.resolve(25_000);
+        let m = r.marker.expect("marker resolved");
+        assert!((m.size - 16.0).abs() < f32::EPSILON);
+        assert_eq!(m.shape, MarkerShape::Circle);
+    }
+
+    #[test]
+    fn label_style_resolve_collapses_font_size() {
+        let l = LabelStyle {
+            font_family: "Sans".into(),
+            font_size: ScaledSize {
+                base_px: 12.0,
+                min_px: Some(6.0),
+                max_px: Some(24.0),
+                ref_denom: Some(50_000),
+            },
+            fill: Colour::rgba(0, 0, 0, 0xff),
+            halo: None,
+            priority: 100,
+            min_distance: 0.0,
+            position: AnchorPosition::Auto,
+            offset_px: (0.0, 0.0),
+            angle_deg: None,
+            partials: false,
+            force: false,
+        };
+        let r = l.resolve(25_000);
+        assert!((r.font_size - 24.0).abs() < f32::EPSILON);
+        assert_eq!(r.font_family, "Sans");
+        assert_eq!(r.priority, 100);
     }
 }
