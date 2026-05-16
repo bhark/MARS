@@ -3,12 +3,18 @@ name: e2e
 on:
   pull_request:
     branches: [main]
-  push:
-    tags: ['v*']
   schedule:
     # 04:17 UTC nightly. an off-the-hour time keeps us out of GitHub's
     # crowded zero-minute scheduling queue.
     - cron: '17 4 * * *'
+  # callable from release.yml on tag push. run_all forces parity + e2e-k8s
+  # to run unconditionally as part of the release gate.
+  workflow_call:
+    inputs:
+      run_all:
+        description: run parity and e2e-k8s unconditionally (release gate)
+        type: boolean
+        default: false
 
 concurrency:
   group: e2e-${{ github.ref }}
@@ -40,10 +46,12 @@ jobs:
     name: render parity (osm vs mapserver goldens)
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # gated: only runs on PRs with the `parity` label and on the nightly cron.
-    # needs docker; the OSM extract dump is auto-fetched from the pinned
-    # GitHub Release (tests/parity/fixtures/osm/manifest.sha256).
+    # gated: PRs with the `parity` label, nightly cron, and the release gate
+    # (workflow_call from release.yml with run_all=true). needs docker; the
+    # OSM extract dump is auto-fetched from the pinned GitHub Release
+    # (tests/parity/fixtures/osm/manifest.sha256).
     if: |
+      inputs.run_all ||
       github.event_name == 'schedule' ||
       (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'parity'))
     steps:
@@ -72,10 +80,12 @@ jobs:
     name: kind e2e (operator + chart + S3 + http smoke)
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    # gated: only runs on PRs with the `e2e-k8s` label and on the nightly
-    # cron. mandatory-on-every-PR is reconsidered after the suite has been
-    # green for >=30 consecutive nightly runs.
+    # gated: PRs with the `e2e-k8s` label, nightly cron, and the release gate
+    # (workflow_call from release.yml with run_all=true). mandatory-on-every-PR
+    # is reconsidered after the suite has been green for >=30 consecutive
+    # nightly runs.
     if: |
+      inputs.run_all ||
       github.event_name == 'schedule' ||
       (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'e2e-k8s'))
     steps:

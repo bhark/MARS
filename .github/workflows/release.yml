@@ -19,8 +19,22 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # release gate: run the full CI suite and the full e2e suite (including
+  # parity + kind e2e) against the tagged sha. nothing is built or published
+  # unless both pass.
+  verify-ci:
+    name: verify (ci)
+    uses: ./.github/workflows/ci.yml
+
+  verify-e2e:
+    name: verify (e2e)
+    uses: ./.github/workflows/e2e.yml
+    with:
+      run_all: true
+
   binary:
     name: build binaries (${{ matrix.target }})
+    needs: [verify-ci, verify-e2e]
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -84,6 +98,7 @@ jobs:
 
   container:
     name: build + push container (${{ matrix.bin }})
+    needs: [verify-ci, verify-e2e]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
