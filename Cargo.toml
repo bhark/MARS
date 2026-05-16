@@ -210,6 +210,10 @@ lto           = "fat"
 
 [profile.dev]
 opt-level = 0
+# line tables only - backtraces stay accurate but test binaries shrink and link
+# faster. drop to "none" if you don't need backtraces at all.
+debug     = "line-tables-only"
 
 [profile.test]
 opt-level = 1
+debug     = "line-tables-only"
