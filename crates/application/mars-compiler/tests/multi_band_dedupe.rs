@@ -222,6 +222,7 @@ fn build_two_band_config() -> Config {
             raster: None,
             wms: Default::default(),
             ows: Default::default(),
+            template: None,
         }],
         observability: Observability::default(),
         render: Render::default(),

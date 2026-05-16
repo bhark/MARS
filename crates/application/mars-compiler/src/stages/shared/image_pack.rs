@@ -242,6 +242,7 @@ mod tests {
             raster: None,
             wms: Default::default(),
             ows: Default::default(),
+            template: None,
         };
 
         let refs = collect_from_layers_and_styles(&[layer], &std::collections::BTreeMap::new());

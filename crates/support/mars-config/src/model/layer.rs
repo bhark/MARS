@@ -67,6 +67,15 @@ pub struct Layer {
     /// an empty, permissive block when omitted.
     #[serde(default)]
     pub ows: LayerOws,
+    /// Optional per-feature template body for GetFeatureInfo responses.
+    /// When set, every hit in this layer is rendered with the template and
+    /// the rendered string replaces the default key/value table in
+    /// `text/plain` and `text/html` (and surfaces as a `"rendered"` field
+    /// alongside `attrs` in `application/json`). Mirrors MapServer
+    /// `TEMPLATE "path.html"`. Identifier syntax is `{attr}`, matching the
+    /// label-text template parser ([`mars_expr::parse_template`]).
+    #[serde(default)]
+    pub template: Option<String>,
 }
 
 impl Layer {
@@ -534,6 +543,7 @@ mod tests {
             raster: None,
             wms: LayerWms::default(),
             ows: LayerOws::default(),
+            template: None,
         }
     }
 

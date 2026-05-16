@@ -284,6 +284,7 @@ mod tests {
             raster: None,
             wms: Default::default(),
             ows: Default::default(),
+            template: None,
         }
     }
 
@@ -443,6 +444,7 @@ mod tests {
             raster: None,
             wms: Default::default(),
             ows: Default::default(),
+            template: None,
         }]);
         let topo = build_replication_topology(&cfg).unwrap();
         assert_eq!(topo.collections.len(), 3);
@@ -523,6 +525,7 @@ mod tests {
             }),
             wms: Default::default(),
             ows: Default::default(),
+            template: None,
         }
     }
 

@@ -261,6 +261,7 @@ mod tests {
             raster: None,
             wms: Default::default(),
             ows: Default::default(),
+            template: None,
         }
     }
 

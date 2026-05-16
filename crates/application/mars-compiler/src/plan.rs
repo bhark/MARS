@@ -740,6 +740,7 @@ mod tests {
             raster: None,
             wms: Default::default(),
             ows: Default::default(),
+            template: None,
         }
     }
 
@@ -882,6 +883,7 @@ mod tests {
             raster: None,
             wms: Default::default(),
             ows: Default::default(),
+            template: None,
         };
         let cfg = config_with(vec![l]);
         let plan = build_bootstrap_plan(&cfg).unwrap();
@@ -1166,6 +1168,7 @@ mod tests {
             raster: None,
             wms: Default::default(),
             ows: Default::default(),
+            template: None,
         };
         let cfg = config_with(vec![l]);
         let plan = build_bootstrap_plan(&cfg).unwrap();

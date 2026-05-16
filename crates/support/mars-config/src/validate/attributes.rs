@@ -9,6 +9,12 @@ use crate::model::{Layer, SourceBinding};
 /// expressions are checked against the same per-binding allowlist used by the
 /// SQL lowering pass, so a bad filter fails at config time, not at SQL build.
 pub(super) fn validate_attribute_references(layer: &Layer) -> Result<(), ConfigError> {
+    if let Some(template) = &layer.template {
+        mars_expr::parse_template(template).map_err(|e| {
+            ConfigError::Invalid(format!("layer {} template parse error: {e}", layer.name))
+        })?;
+    }
+
     let referenced = collect_referenced_attributes(layer);
 
     for (i, binding) in layer.sources.iter().enumerate() {
@@ -33,6 +39,9 @@ fn collect_referenced_attributes(layer: &Layer) -> BTreeSet<String> {
     }
     if let Some(label) = &layer.label {
         collect_template_idents(&label.text, &mut out);
+    }
+    if let Some(template) = &layer.template {
+        collect_template_idents(template, &mut out);
     }
     out
 }

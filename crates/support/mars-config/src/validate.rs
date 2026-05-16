@@ -165,6 +165,48 @@ mod tests {
     }
 
     #[test]
+    fn rejects_template_referencing_undeclared_attribute() {
+        let mut cfg = minimal_config();
+        let mut b = binding("roads");
+        b.attributes = vec!["name".into()];
+        let mut l = layer("roads");
+        l.sources = vec![b];
+        l.template = Some("hello {missing}".into());
+        cfg.layers = vec![l];
+        let err = validate(&mut cfg, Path::new(".")).unwrap_err();
+        assert!(
+            err.to_string().contains("missing"),
+            "expected missing attribute error: {err}"
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_template() {
+        let mut cfg = minimal_config();
+        let mut b = binding("roads");
+        b.attributes = vec!["name".into()];
+        let mut l = layer("roads");
+        l.sources = vec![b];
+        l.template = Some("hello {name".into());
+        cfg.layers = vec![l];
+        let err = validate(&mut cfg, Path::new(".")).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("template parse error"), "expected template parse error: {msg}");
+    }
+
+    #[test]
+    fn accepts_template_referencing_declared_attribute() {
+        let mut cfg = minimal_config();
+        let mut b = binding("roads");
+        b.attributes = vec!["name".into()];
+        let mut l = layer("roads");
+        l.sources = vec![b];
+        l.template = Some("<b>{name}</b>".into());
+        cfg.layers = vec![l];
+        validate(&mut cfg, Path::new(".")).expect("template referencing declared attribute should validate");
+    }
+
+    #[test]
     fn rejects_class_label_text_referencing_undeclared_attribute() {
         let mut cfg = minimal_config();
         let mut b = binding("roads");

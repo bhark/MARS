@@ -110,6 +110,7 @@ pub(crate) fn layer(name: &str) -> Layer {
         raster: None,
         wms: Default::default(),
         ows: Default::default(),
+        template: None,
     }
 }
 
@@ -187,5 +188,6 @@ pub(crate) fn tiered_layer(sources: Vec<SourceBinding>) -> Layer {
         raster: None,
         wms: Default::default(),
         ows: Default::default(),
+        template: None,
     }
 }
