@@ -25,20 +25,29 @@ use crate::CompilerError;
 #[must_use]
 pub(crate) fn collect_image_refs(cfg: &Config) -> Vec<String> {
     let mut names: BTreeSet<String> = BTreeSet::new();
+    let visit = |style: &mars_style::Style, names: &mut BTreeSet<String>| {
+        if let Some(FillPaint::Image { name }) = &style.fill {
+            names.insert(name.clone());
+        }
+    };
     for layer in &cfg.layers {
         for class in &layer.classes {
-            if let mars_config::ClassStyle::Inline(style) = &class.style
-                && let Some(FillPaint::Image { name }) = &style.fill
-            {
-                names.insert(name.clone());
+            match &class.style {
+                mars_config::ClassStyle::Inline(style) => visit(style, &mut names),
+                mars_config::ClassStyle::Passes { passes } => {
+                    for s in passes {
+                        visit(s, &mut names);
+                    }
+                }
+                mars_config::ClassStyle::Ref { .. } => {}
             }
         }
     }
     for entry in cfg.styles.values() {
-        if let Some(style) = entry.as_geometry()
-            && let Some(FillPaint::Image { name }) = &style.fill
-        {
-            names.insert(name.clone());
+        if let Some(passes) = entry.as_geometry_passes() {
+            for s in passes {
+                visit(s, &mut names);
+            }
         }
     }
     names.into_iter().collect()
@@ -245,20 +254,29 @@ mod tests {
         styles: &std::collections::BTreeMap<String, mars_config::StyleEntry>,
     ) -> Vec<String> {
         let mut names: BTreeSet<String> = BTreeSet::new();
+        let visit = |style: &mars_style::Style, names: &mut BTreeSet<String>| {
+            if let Some(FillPaint::Image { name }) = &style.fill {
+                names.insert(name.clone());
+            }
+        };
         for layer in layers {
             for class in &layer.classes {
-                if let mars_config::ClassStyle::Inline(style) = &class.style
-                    && let Some(FillPaint::Image { name }) = &style.fill
-                {
-                    names.insert(name.clone());
+                match &class.style {
+                    mars_config::ClassStyle::Inline(style) => visit(style, &mut names),
+                    mars_config::ClassStyle::Passes { passes } => {
+                        for s in passes {
+                            visit(s, &mut names);
+                        }
+                    }
+                    mars_config::ClassStyle::Ref { .. } => {}
                 }
             }
         }
         for entry in styles.values() {
-            if let Some(style) = entry.as_geometry()
-                && let Some(FillPaint::Image { name }) = &style.fill
-            {
-                names.insert(name.clone());
+            if let Some(passes) = entry.as_geometry_passes() {
+                for s in passes {
+                    visit(s, &mut names);
+                }
             }
         }
         names.into_iter().collect()

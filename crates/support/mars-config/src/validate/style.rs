@@ -11,15 +11,24 @@ use crate::model::StyleEntry;
 
 pub(super) fn validate_styles(styles: &BTreeMap<String, StyleEntry>) -> Result<(), ConfigError> {
     for (name, entry) in styles {
-        if let Some(s) = entry.as_geometry() {
-            if let Some(fp) = &s.fill {
-                validate_fill_paint(name, fp)?;
-            }
-            if let Some(m) = &s.marker {
-                validate_marker_symbol(name, m, s.fill.as_ref())?;
-            }
-            if let Some(g) = &s.stroke_gap {
-                validate_stroke_gap(name, g, s.marker.is_some())?;
+        if let StyleEntry::Passes { passes } = entry
+            && passes.is_empty()
+        {
+            return Err(ConfigError::Invalid(format!(
+                "style {name:?} declares an empty passes list; at least one pass is required"
+            )));
+        }
+        if let Some(passes) = entry.as_geometry_passes() {
+            for s in passes {
+                if let Some(fp) = &s.fill {
+                    validate_fill_paint(name, fp)?;
+                }
+                if let Some(m) = &s.marker {
+                    validate_marker_symbol(name, m, s.fill.as_ref())?;
+                }
+                if let Some(g) = &s.stroke_gap {
+                    validate_stroke_gap(name, g, s.marker.is_some())?;
+                }
             }
         }
     }

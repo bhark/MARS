@@ -332,7 +332,12 @@ fn build_layer_plan(cfg: &Config, layer: &CfgLayer, binding_id: &BindingId) -> R
         };
         let style_ref = match &class.style {
             mars_config::ClassStyle::Ref { name } => name.clone(),
-            mars_config::ClassStyle::Inline(_) => format!("{layer}__{class}", layer = layer.name, class = class.name),
+            // both single-inline and multi-pass classes synthesise the same
+            // per-class style name; the bin-side stylesheet builder writes
+            // the passes (or single style as a one-element slice) under it.
+            mars_config::ClassStyle::Inline(_) | mars_config::ClassStyle::Passes { .. } => {
+                format!("{layer}__{class}", layer = layer.name, class = class.name)
+            }
         };
         let label = class
             .label

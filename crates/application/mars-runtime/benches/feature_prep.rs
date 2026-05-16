@@ -125,7 +125,7 @@ fn build_class_sidecar(n: usize) -> Bytes {
 }
 
 fn build_stylesheet() -> Stylesheet {
-    let mut geometry: BTreeMap<String, Arc<Style>> = BTreeMap::new();
+    let mut geometry: BTreeMap<String, Arc<[Style]>> = BTreeMap::new();
     for c in 0..NUM_CLASSES {
         let s = Style {
             fill: Some(FillPaint::Solid(Colour::rgba(20 + c as u8 * 28, 100, 200, 220))),
@@ -133,7 +133,7 @@ fn build_stylesheet() -> Stylesheet {
             stroke_width: Some(1.0),
             ..Default::default()
         };
-        geometry.insert(format!("style_{c}"), Arc::new(s));
+        geometry.insert(format!("style_{c}"), Arc::from(vec![s]));
     }
     Stylesheet {
         geometry,
@@ -264,12 +264,18 @@ fn feature_prep_once(
     let class = ClassJoin::open(class_bytes, page_feature_count);
     let mut ops = Vec::with_capacity(paired.len());
     for (slot, f) in paired {
-        let style = class
+        let passes_arc = class
             .style_ref_for(slot)
-            .and_then(|n| stylesheet.geometry.get(n).cloned())
-            .unwrap_or_else(|| fallback.clone());
+            .and_then(|n| stylesheet.geometry.get(n).cloned());
         if let GeomKind::Polygon(rings) = &f.geom {
-            ops.push(polygon_to_drawop(rings, viewport, style));
+            match passes_arc {
+                Some(passes) => {
+                    for pass in passes.iter() {
+                        ops.push(polygon_to_drawop(rings, viewport, Arc::new(pass.clone())));
+                    }
+                }
+                None => ops.push(polygon_to_drawop(rings, viewport, fallback.clone())),
+            }
         }
     }
     ops

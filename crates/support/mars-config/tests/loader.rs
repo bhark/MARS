@@ -319,3 +319,90 @@ layers:
     assert_eq!(s2.min, Some(10_000));
     assert_eq!(s2.max, Some(25_000));
 }
+
+#[test]
+fn class_style_passes_round_trips() {
+    let dir = tempfile::tempdir().unwrap();
+    let yaml = r##"
+service: { name: t }
+sources:
+  - id: pg
+    type: postgis
+    dsn: postgres://example/x
+    native_crs: EPSG:25832
+artifacts:
+  store: { type: fs, path: /tmp/s }
+  cache: { path: /tmp/c, max_size: 1MiB }
+scales:
+  bands: [{ name: hi, max_denom_exclusive: 25000 }]
+cells: { grid: regular, origin: [0, 0], size_per_band: { hi: 1024m } }
+interfaces: {}
+layers:
+  - name: roads
+    type: line
+    sources:
+      - source: pg
+        band: hi
+        from: t.roads
+        geometry_column: g
+    classes:
+      - name: highway
+        style:
+          type: passes
+          passes:
+            - { stroke: "#000000", stroke_width: 6.0 }
+            - { stroke: "#ffff00", stroke_width: 2.0 }
+"##;
+    let p = dir.path().join("c.yaml");
+    fs::write(&p, yaml).unwrap();
+    let mut cfg = load(&p).expect("load");
+    validate(&mut cfg, dir.path()).expect("validate");
+    let class = &cfg.layers[0].classes[0];
+    match &class.style {
+        mars_config::ClassStyle::Passes { passes } => {
+            assert_eq!(passes.len(), 2);
+            assert!((passes[0].stroke_width.unwrap() - 6.0).abs() < f32::EPSILON);
+            assert!((passes[1].stroke_width.unwrap() - 2.0).abs() < f32::EPSILON);
+        }
+        _ => panic!("expected passes variant"),
+    }
+}
+
+#[test]
+fn empty_class_passes_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let yaml = r##"
+service: { name: t }
+sources:
+  - id: pg
+    type: postgis
+    dsn: postgres://example/x
+    native_crs: EPSG:25832
+artifacts:
+  store: { type: fs, path: /tmp/s }
+  cache: { path: /tmp/c, max_size: 1MiB }
+scales:
+  bands: [{ name: hi, max_denom_exclusive: 25000 }]
+cells: { grid: regular, origin: [0, 0], size_per_band: { hi: 1024m } }
+interfaces: {}
+layers:
+  - name: roads
+    type: line
+    sources:
+      - source: pg
+        band: hi
+        from: t.roads
+        geometry_column: g
+    classes:
+      - name: empty
+        style:
+          type: passes
+          passes: []
+"##;
+    let p = dir.path().join("c.yaml");
+    fs::write(&p, yaml).unwrap();
+    let mut cfg = load(&p).expect("load");
+    let err = validate(&mut cfg, dir.path()).expect_err("empty passes must be rejected");
+    let msg = err.to_string();
+    assert!(msg.contains("empty"), "expected mention of empty: {msg}");
+}

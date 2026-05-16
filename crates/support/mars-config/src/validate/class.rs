@@ -9,6 +9,7 @@ pub(super) fn validate_classes(layer: &Layer, styles: &BTreeMap<String, StyleEnt
     validate_class_count(layer)?;
     for class in &layer.classes {
         validate_class_style_ref(layer, class, styles)?;
+        validate_class_passes(layer, class)?;
         validate_class_when(layer, class)?;
         validate_class_scale(layer, class)?;
     }
@@ -57,6 +58,20 @@ fn validate_class_style_ref(
         return Err(ConfigError::Invalid(format!(
             "layer {} class {:?} references unknown style {:?}",
             layer.name, class.name, name
+        )));
+    }
+    Ok(())
+}
+
+fn validate_class_passes(layer: &Layer, class: &crate::model::Class) -> Result<(), ConfigError> {
+    // empty passes list collapses to no rendering for the class; importer
+    // never emits this so it's a misconfiguration in handwritten configs.
+    if let ClassStyle::Passes { passes } = &class.style
+        && passes.is_empty()
+    {
+        return Err(ConfigError::Invalid(format!(
+            "layer {} class {:?} declares an empty passes list; at least one pass is required",
+            layer.name, class.name
         )));
     }
     Ok(())

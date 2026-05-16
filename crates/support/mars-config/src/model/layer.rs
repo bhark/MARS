@@ -439,7 +439,11 @@ pub struct Class {
 }
 
 /// Style attachment for a class. Wire form is internally tagged on `type:`:
-/// `type: ref` for a named reference, `type: inline` for an embedded style.
+/// `type: ref` for a named reference, `type: inline` for a single embedded
+/// style, `type: passes` for an ordered multi-pass stack. Single-pass and
+/// `Inline` are equivalent on the render path; `Passes` declares an explicit
+/// ordered list (fill + stroke + marker etc.) that the runtime emits one
+/// `DrawOp` per pass in declared order.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ClassStyle {
@@ -450,6 +454,12 @@ pub enum ClassStyle {
     },
     /// Inline geometry style (`type: inline`, plus all `Style` fields flat).
     Inline(Style),
+    /// Ordered multi-pass stack (`type: passes`, `passes: [{...}, {...}]`).
+    /// Empty list is rejected at config-load.
+    Passes {
+        /// Ordered list of style passes emitted per feature.
+        passes: Vec<Style>,
+    },
 }
 
 /// Label declaration on a layer.

@@ -127,13 +127,34 @@ fn build_entries(layer: &Layer, rule: Option<&str>, stylesheet: &Stylesheet) -> 
 }
 
 fn resolve_style(class: &Class, stylesheet: &Stylesheet) -> Result<Arc<Style>, RuntimeError> {
+    // legend swatches are single-style. for multi-pass class definitions we
+    // take the first pass so the legend remains a thumbnail of the dominant
+    // paint rather than a stack of overlapping swatches; mirrors the
+    // mapserver legend image, which emits the first STYLE only.
     match &class.style {
         ClassStyle::Inline(s) => Ok(Arc::new(s.clone())),
+        ClassStyle::Passes { passes } => {
+            passes
+                .first()
+                .cloned()
+                .map(Arc::new)
+                .ok_or_else(|| RuntimeError::StylesheetDrift {
+                    layer: class.name.clone(),
+                    name: "<empty passes>".into(),
+                })
+        }
         ClassStyle::Ref { name } => {
-            stylesheet
+            let passes = stylesheet
                 .geometry
                 .get(name)
+                .ok_or_else(|| RuntimeError::StylesheetDrift {
+                    layer: class.name.clone(),
+                    name: name.clone(),
+                })?;
+            passes
+                .first()
                 .cloned()
+                .map(Arc::new)
                 .ok_or_else(|| RuntimeError::StylesheetDrift {
                     layer: class.name.clone(),
                     name: name.clone(),

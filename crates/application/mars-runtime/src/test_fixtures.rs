@@ -474,7 +474,8 @@ pub fn build_minimal_config(layer_id: &LayerId, binding_id: &BindingId, label_su
 
 pub fn build_minimal_stylesheet() -> Stylesheet {
     let mut ss = Stylesheet::default();
-    ss.geometry.insert("buildings__main".into(), Arc::new(default_style()));
+    ss.geometry
+        .insert("buildings__main".into(), Arc::from(vec![default_style()]));
     ss.labels.insert(
         "buildings__label".into(),
         Arc::new(LabelStyle {
@@ -884,7 +885,7 @@ pub fn build_multi_layer_stylesheet(n_layers: usize) -> Stylesheet {
             })),
             ..Default::default()
         };
-        ss.geometry.insert(format!("layer_{i}__main"), Arc::new(style));
+        ss.geometry.insert(format!("layer_{i}__main"), Arc::from(vec![style]));
     }
     ss
 }
