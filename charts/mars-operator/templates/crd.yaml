@@ -171,6 +171,15 @@ spec:
                 type: object
               compiler:
                 properties:
+                  affinity:
+                    description: |-
+                      Opaque k8s Affinity. Mirrors the upstream `corev1.Affinity` shape;
+                      kube validates the structure server-side. Deserialised at build
+                      time so a malformed CR fails reconcile rather than the apiserver
+                      admission.
+                    nullable: true
+                    type: object
+                    x-kubernetes-preserve-unknown-fields: true
                   env:
                     items:
                       properties:
@@ -265,6 +274,10 @@ spec:
                       the compiler resolves the names during pack.
                     nullable: true
                     type: string
+                  nodeSelector:
+                    additionalProperties:
+                      type: string
+                    type: object
                   resources:
                     description: |-
                       Resource requests/limits. Mirrors k8s ResourceRequirements but kept
@@ -297,6 +310,31 @@ spec:
                         default: 2Gi
                         type: string
                     type: object
+                  tolerations:
+                    items:
+                      description: |-
+                        Schema-friendly mirror of k8s_openapi Toleration. Same rationale as
+                        ResourceRequirementsSpec: avoid coupling the CRD schema to the
+                        k8s-openapi `schemars` feature.
+                      properties:
+                        effect:
+                          nullable: true
+                          type: string
+                        key:
+                          nullable: true
+                          type: string
+                        operator:
+                          nullable: true
+                          type: string
+                        tolerationSeconds:
+                          format: int64
+                          nullable: true
+                          type: integer
+                        value:
+                          nullable: true
+                          type: string
+                      type: object
+                    type: array
                 type: object
               config:
                 description: |-
@@ -306,6 +344,10 @@ spec:
                 x-kubernetes-preserve-unknown-fields: true
               runtime:
                 properties:
+                  affinity:
+                    nullable: true
+                    type: object
+                    x-kubernetes-preserve-unknown-fields: true
                   cache:
                     default:
                       sizeLimit: 1Gi
@@ -403,6 +445,10 @@ spec:
                           type: object
                       type: object
                     type: array
+                  nodeSelector:
+                    additionalProperties:
+                      type: string
+                    type: object
                   replicas:
                     default: 2
                     format: int32
@@ -426,9 +472,26 @@ spec:
                     type: object
                   service:
                     default:
+                      metricsScrape: true
                       port: 8080
                       serviceType: ClusterIP
                     properties:
+                      annotations:
+                        additionalProperties:
+                          type: string
+                        description: |-
+                          Extra annotations to set on the runtime Service. Useful for ingress
+                          controllers, scrape overrides, cloud-LB hints. Merged on top of any
+                          operator-managed defaults (user keys win on collision).
+                        type: object
+                      metricsScrape:
+                        default: true
+                        description: |-
+                          Emit the standard `prometheus.io/{scrape,port,path}` annotations on
+                          the runtime Service so Prometheus pod/service-monitor scrape discovers
+                          it out of the box. User-supplied `annotations` win on key collision,
+                          so this stays compatible with non-Prometheus stacks (Datadog, etc.).
+                        type: boolean
                       port:
                         default: 8080
                         format: int32
@@ -437,6 +500,31 @@ spec:
                         default: ClusterIP
                         type: string
                     type: object
+                  tolerations:
+                    items:
+                      description: |-
+                        Schema-friendly mirror of k8s_openapi Toleration. Same rationale as
+                        ResourceRequirementsSpec: avoid coupling the CRD schema to the
+                        k8s-openapi `schemars` feature.
+                      properties:
+                        effect:
+                          nullable: true
+                          type: string
+                        key:
+                          nullable: true
+                          type: string
+                        operator:
+                          nullable: true
+                          type: string
+                        tolerationSeconds:
+                          format: int64
+                          nullable: true
+                          type: integer
+                        value:
+                          nullable: true
+                          type: string
+                      type: object
+                    type: array
                 type: object
             required:
             - compiler
@@ -446,6 +534,14 @@ spec:
           status:
             nullable: true
             properties:
+              bootstrapAdminCredentialsSecret:
+                description: |-
+                  Name of the operator-managed Secret holding the composed admin DSN.
+                  Set only when the component-style `bootstrap.adminCredentialsRef`
+                  branch is in use; the BYO `adminSecretRef` path leaves this absent
+                  (the user owns that Secret directly).
+                nullable: true
+                type: string
               conditions:
                 items:
                   properties:
