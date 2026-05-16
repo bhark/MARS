@@ -1,0 +1,128 @@
+# stock symbol preset pack. each entry is a `StyleEntry` keyed by a stable
+# name; layers reference them via `style: { type: ref, name: <preset> }`.
+#
+# the pack is intentionally monochrome (black fill, black stroke). copy any
+# entry into your own `styles:` block and override `fill` / `stroke` /
+# `stroke_width` if you need a different palette.
+#
+# load: vendor this file under your config directory, then
+#
+#     styles: !include presets/symbols.yaml
+#
+# (or merge it alongside your own entries; see docs/symbols.md.)
+
+preset_circle_filled:
+  type: point
+  fill: "#000000"
+  marker: { kind: circle, size: 6.0 }
+
+preset_circle_hollow:
+  type: point
+  stroke: "#000000"
+  stroke_width: 1.0
+  marker: { kind: circle, size: 6.0 }
+
+preset_square_filled:
+  type: point
+  fill: "#000000"
+  marker: { kind: square, size: 6.0 }
+
+preset_square_hollow:
+  type: point
+  stroke: "#000000"
+  stroke_width: 1.0
+  marker: { kind: square, size: 6.0 }
+
+preset_triangle_filled:
+  type: point
+  fill: "#000000"
+  marker: { kind: triangle, size: 6.0 }
+
+preset_triangle_hollow:
+  type: point
+  stroke: "#000000"
+  stroke_width: 1.0
+  marker: { kind: triangle, size: 6.0 }
+
+preset_cross:
+  type: point
+  stroke: "#000000"
+  stroke_width: 1.2
+  marker: { kind: cross, size: 6.0 }
+
+preset_x:
+  type: point
+  stroke: "#000000"
+  stroke_width: 1.2
+  marker: { kind: x, size: 6.0 }
+
+preset_pin:
+  type: point
+  fill: "#000000"
+  marker: { kind: pin, size: 8.0 }
+
+# diamond (rhombus). vertices listed clockwise from the top in the unit-
+# square local frame; anchor sits at the centre.
+preset_diamond_filled:
+  type: point
+  fill: "#000000"
+  marker:
+    kind: vector_shape
+    points: [[0.5, 0.0], [1.0, 0.5], [0.5, 1.0], [0.0, 0.5]]
+    anchor: [0.5, 0.5]
+    filled: true
+    size: 8.0
+
+preset_diamond_hollow:
+  type: point
+  stroke: "#000000"
+  stroke_width: 1.0
+  marker:
+    kind: vector_shape
+    points: [[0.5, 0.0], [1.0, 0.5], [0.5, 1.0], [0.0, 0.5]]
+    anchor: [0.5, 0.5]
+    filled: false
+    size: 8.0
+
+# five-pointed star pointing up. outer radius 0.5, inner radius 0.2,
+# vertices precomputed in clockwise order from the top point.
+preset_star_filled:
+  type: point
+  fill: "#000000"
+  marker:
+    kind: vector_shape
+    points:
+      - [0.500, 0.000]
+      - [0.618, 0.338]
+      - [0.976, 0.345]
+      - [0.690, 0.562]
+      - [0.794, 0.905]
+      - [0.500, 0.700]
+      - [0.206, 0.905]
+      - [0.310, 0.562]
+      - [0.024, 0.345]
+      - [0.382, 0.338]
+    anchor: [0.5, 0.5]
+    filled: true
+    size: 10.0
+
+preset_star_hollow:
+  type: point
+  stroke: "#000000"
+  stroke_width: 1.0
+  marker:
+    kind: vector_shape
+    points:
+      - [0.500, 0.000]
+      - [0.618, 0.338]
+      - [0.976, 0.345]
+      - [0.690, 0.562]
+      - [0.794, 0.905]
+      - [0.500, 0.700]
+      - [0.206, 0.905]
+      - [0.310, 0.562]
+      - [0.024, 0.345]
+      - [0.382, 0.338]
+    anchor: [0.5, 0.5]
+    filled: false
+    size: 10.0
