@@ -12,9 +12,10 @@ use std::collections::HashMap;
 use std::io::Cursor;
 
 use mars_config::{Config, ContactInfo, TileMatrixSet};
+use mars_ows_common::{text_element, xml_err};
 use mars_types::{Bbox, ImageFormat, LayerId, Manifest};
 use quick_xml::Writer;
-use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
+use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
 
 use crate::WmtsError;
 
@@ -344,20 +345,6 @@ fn write_bbox<W: std::io::Write>(w: &mut Writer<W>, crs: &str, bbox: Bbox) -> Re
     w.write_event(Event::End(BytesEnd::new("ows:BoundingBox")))
         .map_err(xml_err)?;
     Ok(())
-}
-
-fn text_element<W: std::io::Write>(w: &mut Writer<W>, name: &str, text: &str) -> Result<(), WmtsError> {
-    w.write_event(Event::Start(BytesStart::new(name))).map_err(xml_err)?;
-    w.write_event(Event::Text(BytesText::new(text))).map_err(xml_err)?;
-    w.write_event(Event::End(BytesEnd::new(name))).map_err(xml_err)?;
-    Ok(())
-}
-
-fn xml_err(e: std::io::Error) -> WmtsError {
-    WmtsError::InvalidParam {
-        name: "capabilities",
-        reason: e.to_string(),
-    }
 }
 
 /// Resolve a layer's native CRS for bbox labelling. Raster layers take

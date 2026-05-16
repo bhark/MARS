@@ -16,9 +16,10 @@ mod v130;
 use std::collections::HashMap;
 
 use mars_config::{Config, ContactInfo};
+use mars_ows_common::{text_element, xml_err};
 use mars_types::{Bbox, ImageFormat, LayerId, Manifest};
 use quick_xml::Writer;
-use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
+use quick_xml::events::{BytesEnd, BytesStart, Event};
 
 use crate::{WmsError, WmsVersion};
 
@@ -116,13 +117,6 @@ pub(super) fn configured_formats(cfg: &Config) -> Vec<ImageFormat> {
     } else {
         configured
     }
-}
-
-pub(super) fn text_element<W: std::io::Write>(w: &mut Writer<W>, name: &str, text: &str) -> Result<(), WmsError> {
-    w.write_event(Event::Start(BytesStart::new(name))).map_err(xml_err)?;
-    w.write_event(Event::Text(BytesText::new(text))).map_err(xml_err)?;
-    w.write_event(Event::End(BytesEnd::new(name))).map_err(xml_err)?;
-    Ok(())
 }
 
 /// Emit a `<KeywordList>` block with one `<Keyword>` child per entry. No-op
@@ -252,13 +246,6 @@ pub(super) fn resolved_request_formats(override_list: &[String], fallback: &[Ima
         override_list.to_vec()
     } else {
         fallback.iter().map(|f| f.mime().to_string()).collect()
-    }
-}
-
-pub(super) fn xml_err(e: std::io::Error) -> WmsError {
-    WmsError::InvalidParam {
-        name: "capabilities",
-        reason: e.to_string(),
     }
 }
 

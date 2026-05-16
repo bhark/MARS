@@ -8,5 +8,7 @@
 #![forbid(unsafe_code)]
 
 pub mod parse;
+pub mod xml;
 
 pub use parse::{Kvp, OwsParseError, nonempty, parse_kvp, parse_optional_u32, pct_decode, require};
+pub use xml::{text_element, xml_err};

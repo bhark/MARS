@@ -3,14 +3,14 @@
 use std::io::Cursor;
 
 use mars_config::Config;
+use mars_ows_common::{text_element, xml_err};
 use mars_types::{Bbox, ImageFormat, Manifest};
 use quick_xml::Writer;
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, Event};
 
 use super::{
     INFO_FORMATS, LayerNode, build_layer_tree, configured_formats, derive_layer_bboxes, resolved_request_formats,
-    text_element, union_bbox, write_contact_information, write_dcp_type, write_keyword_list, write_online_resource,
-    xml_err,
+    union_bbox, write_contact_information, write_dcp_type, write_keyword_list, write_online_resource,
 };
 use crate::WmsError;
 
