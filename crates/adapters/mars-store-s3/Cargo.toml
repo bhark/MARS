@@ -25,6 +25,15 @@ futures-util   = { workspace = true }
 tracing        = { workspace = true }
 object_store   = { workspace = true }
 
+[features]
+default = []
+# in-process integration tests that spin up a garage container; gated
+# because docker is not always available. plain `cargo test` skips them.
+integration = []
+
 [dev-dependencies]
 tokio        = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 object_store = { workspace = true, features = ["aws"] }
+mars-artifact    = { workspace = true }
+mars-test-support = { workspace = true, features = ["docker"] }
+rand              = { workspace = true }
