@@ -536,14 +536,16 @@ fn resolve_sources(
     let id_col = processing_items.and_then(guess_id_column);
 
     // parse the layer-level FILTER body once. Ok = normalised DSL string;
-    // Err = a TODO comment surfacing the raw text so the operator notices
-    // rather than have the predicate silently dropped.
+    // Err = the predicate could not be translated; emit `false` so the
+    // generated YAML still parses and the class matches no features. the
+    // raw mapfile text is surfaced via the stderr `warn!` channel; `--strict`
+    // exits 2 if any warnings fired.
     let layer_filter: Option<Result<String, String>> =
         layer_filter.map(|(raw, line)| match parse_mapfile_expression(raw, *line) {
             Ok(expr) => Ok(format!("{expr}")),
             Err(e) => {
-                warn!(line = *line, error = %e, "could not parse layer FILTER");
-                Err(format!("# TODO: hand-translate FILTER: {raw}"))
+                warn!(line = *line, raw = %raw, error = %e, "could not parse layer FILTER");
+                Err("false".to_string())
             }
         });
 
@@ -665,9 +667,14 @@ fn resolve_class(
 ///
 /// `BareLiteral`, `Set`, and `Range` are CLASSITEM-relative by construction -
 /// they pick up the column at this point. `Regex` is also CLASSITEM-relative
-/// but emits a TODO (mars_expr has no regex AST). `Predicate` is
-/// self-contained and passes through. `None` falls back to the CLASS NAME /
-/// CLASSITEM expansion that has always existed for un-EXPRESSION'd classes.
+/// but yields `false` (mars_expr has no regex AST); the raw pattern is
+/// surfaced via stderr. `Predicate` is self-contained and passes through.
+/// `None` falls back to the CLASS NAME / CLASSITEM expansion that has always
+/// existed for un-EXPRESSION'd classes.
+///
+/// untranslatable expressions emit `when: "false"` so the generated YAML
+/// always parses cleanly; the human-readable signal is the stderr `warn!`
+/// (counted by the CLI's `--strict` gate).
 fn resolve_when(
     expression: Option<ParsedExpression>,
     class_item: Option<&str>,
@@ -683,24 +690,25 @@ fn resolve_when(
                 warn!(
                     layer = %layer_name,
                     line = class_line,
-                    "CLASS EXPRESSION literal without CLASSITEM - emitting TODO"
+                    literal = %lit,
+                    "CLASS EXPRESSION literal without CLASSITEM; emitting when:false",
                 );
-                Some(format!("# TODO: bare EXPRESSION without CLASSITEM: {lit}"))
+                Some("false".to_string())
             }
         },
         Some(ParsedExpression::Set(lits)) => match (class_item, lits.is_empty()) {
             (Some(ci), false) => Some(format_in(ci, &lits)),
             (Some(_), true) => {
-                warn!(layer = %layer_name, line = class_line, "CLASS EXPRESSION empty set");
-                Some("# TODO: empty EXPRESSION set".to_string())
+                warn!(layer = %layer_name, line = class_line, "CLASS EXPRESSION empty set; emitting when:false");
+                Some("false".to_string())
             }
             (None, _) => {
                 warn!(
                     layer = %layer_name,
                     line = class_line,
-                    "CLASS EXPRESSION set without CLASSITEM - emitting TODO"
+                    "CLASS EXPRESSION set without CLASSITEM; emitting when:false",
                 );
-                Some("# TODO: EXPRESSION set requires CLASSITEM".to_string())
+                Some("false".to_string())
             }
         },
         Some(ParsedExpression::Regex {
@@ -715,24 +723,29 @@ fn resolve_when(
                 warn!(
                     layer = %layer_name,
                     line = class_line,
-                    "CLASS EXPRESSION regex without CLASSITEM - emitting TODO"
+                    pattern = %pattern,
+                    "CLASS EXPRESSION regex without CLASSITEM; emitting when:false",
                 );
-                Some(format!("# TODO: regex EXPRESSION requires CLASSITEM: /{pattern}/"))
+                Some("false".to_string())
             }
         },
         Some(ParsedExpression::Range { lo, hi }) => match class_item {
             Some(ci) => Some(format_range(ci, &lo, hi.as_ref())),
             None => {
+                let suffix = hi.as_ref().map(|h| format!("{h}")).unwrap_or_default();
                 warn!(
                     layer = %layer_name,
                     line = class_line,
-                    "CLASS EXPRESSION range without CLASSITEM - emitting TODO"
+                    range = format!("{lo}-{suffix}"),
+                    "CLASS EXPRESSION range without CLASSITEM; emitting when:false",
                 );
-                let suffix = hi.as_ref().map(|h| format!("{h}")).unwrap_or_default();
-                Some(format!("# TODO: range without CLASSITEM: {lo}-{suffix}"))
+                Some("false".to_string())
             }
         },
-        Some(ParsedExpression::Todo(raw)) => Some(format!("# TODO: hand-translate: {raw}")),
+        Some(ParsedExpression::Todo(raw)) => {
+            warn!(layer = %layer_name, line = class_line, raw = %raw, "CLASS EXPRESSION not translatable; emitting when:false");
+            Some("false".to_string())
+        }
         None => match (class_item, title) {
             (Some(item), Some(value)) => Some(format!("{item} = '{}'", value.replace('\'', "''"))),
             _ => None,
@@ -981,7 +994,7 @@ mod tests {
     }
 
     #[test]
-    fn regex_without_classitem_emits_todo() {
+    fn regex_without_classitem_emits_false() {
         let w = resolve_when(
             Some(ParsedExpression::Regex {
                 pattern: "foo".into(),
@@ -992,7 +1005,9 @@ mod tests {
             "layer",
             1,
         );
-        assert_eq!(w.as_deref(), Some("# TODO: regex EXPRESSION requires CLASSITEM: /foo/"),);
+        // untranslatable -> when:false so the YAML still parses; the raw
+        // pattern is surfaced via the stderr `warn!` channel.
+        assert_eq!(w.as_deref(), Some("false"));
     }
 
     #[test]
@@ -1061,7 +1076,7 @@ mod tests {
     }
 
     #[test]
-    fn range_without_classitem_emits_todo() {
+    fn range_without_classitem_emits_false() {
         let w = resolve_when(
             Some(ParsedExpression::Range {
                 lo: Literal::Int(2),
@@ -1072,7 +1087,8 @@ mod tests {
             "layer",
             1,
         );
-        assert_eq!(w.as_deref(), Some("# TODO: range without CLASSITEM: 2-12"));
+        // untranslatable -> when:false; the raw range is surfaced via warn!.
+        assert_eq!(w.as_deref(), Some("false"));
     }
 
     #[test]
