@@ -141,12 +141,7 @@ fn pick_placement(
     }
 }
 
-fn collides(
-    bbox: (f32, f32, f32, f32),
-    cand_md: f32,
-    placed: &[PlacedFootprint],
-    grid: &CollisionGrid,
-) -> bool {
+fn collides(bbox: (f32, f32, f32, f32), cand_md: f32, placed: &[PlacedFootprint], grid: &CollisionGrid) -> bool {
     let mut hit = false;
     grid.for_each_candidate(bbox, cand_md, |idx| {
         let p = &placed[idx as usize];

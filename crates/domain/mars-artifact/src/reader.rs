@@ -96,8 +96,8 @@ impl ArtifactReader {
                     if kind_to_section_idx[slot].is_some() {
                         return Err(ArtifactError::DuplicateSection(kind));
                     }
-                    let idx = u8::try_from(sections.len())
-                        .map_err(|_| ArtifactError::Malformed("too many sections"))?;
+                    let idx =
+                        u8::try_from(sections.len()).map_err(|_| ArtifactError::Malformed("too many sections"))?;
                     kind_to_section_idx[slot] = Some(idx);
                 } else if sections.iter().any(|s: &SectionIndexEntry| s.kind == kind) {
                     return Err(ArtifactError::DuplicateSection(kind));

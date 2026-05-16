@@ -515,7 +515,9 @@ fn collision_grid_matches_brute_force_on_dense_random_set() {
     // min_distance varies so the candidate/placed pad asymmetry exercises
     // both branches of `max(cand_md, p.min_distance)`.
     fn lcg(state: &mut u64) -> u32 {
-        *state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+        *state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
         (*state >> 32) as u32
     }
     fn frand(state: &mut u64, max: f32) -> f32 {
