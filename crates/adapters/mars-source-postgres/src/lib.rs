@@ -30,6 +30,9 @@ mod lower;
 mod quote;
 mod replication;
 
+#[cfg(all(test, feature = "integration"))]
+mod eval_sql_parity_tests;
+
 pub use mars_source::SourceCollectionId;
 pub use replication::{CollectionTopology, ReplicationTopology};
 

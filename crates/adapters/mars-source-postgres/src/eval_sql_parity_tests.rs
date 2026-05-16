@@ -3,15 +3,16 @@
 //!
 //! New operators added to `mars-expr` must extend the case list here so
 //! divergence between eval and lowering is caught before it reaches production.
+//!
+//! lives inside the crate so the test can exercise the `pub(crate)` lowering
+//! surface directly without leaking it to downstream callers.
 
-#![cfg(feature = "integration")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::collections::BTreeSet;
 
 use mars_expr::{AttributeAccess, CmpOp, Expr, Literal, LogicOp, eval};
 use mars_source::{SourceBinding, SourceCollectionId};
-use mars_source_postgres::{SqlParam, lower_to_sql};
 use mars_types::CrsCode;
 use rand::distr::{Alphanumeric, SampleString};
 use testcontainers::{
@@ -20,6 +21,8 @@ use testcontainers::{
     runners::AsyncRunner,
 };
 use tokio_postgres::types::ToSql;
+
+use crate::{SqlParam, lower::lower_to_sql};
 
 #[derive(Clone)]
 struct Row {
@@ -113,7 +116,6 @@ fn eval_matches(expr: &Expr) -> BTreeSet<i64> {
 
 fn param_box(p: &SqlParam) -> Box<dyn ToSql + Sync + Send> {
     match p {
-        SqlParam::Null => Box::new(Option::<i64>::None),
         SqlParam::Bool(b) => Box::new(*b),
         SqlParam::Int(i) => Box::new(*i),
         SqlParam::Float(f) => Box::new(*f),
