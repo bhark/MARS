@@ -1263,11 +1263,8 @@ pub(crate) fn render(skel: &Skeleton, bands: &[(String, u64)]) -> String {
         }
         LiftedSourceDsn::Placeholder => "\"${PG_DSN}\"".to_string(),
     };
+    let _ = writeln!(out, "sources:");
     if has_vectorfile {
-        // plural form: postgis + vectorfile coexist. per-binding `source:`
-        // fields disambiguate; mars-config folds the wire shape into the
-        // typed `sources:` model.
-        let _ = writeln!(out, "sources:");
         let _ = writeln!(out, "  - id: pg");
         let _ = writeln!(out, "    type: postgis");
         let _ = writeln!(out, "    dsn: {dsn_line}");
@@ -1277,10 +1274,10 @@ pub(crate) fn render(skel: &Skeleton, bands: &[(String, u64)]) -> String {
         let _ = writeln!(out, "    native_crs: ${{MARS_NATIVE_CRS:-EPSG:25832}}");
         let _ = writeln!(out, "    cache_dir: /var/cache/mars/vectorfile");
     } else {
-        let _ = writeln!(out, "source:");
-        let _ = writeln!(out, "  type: postgis");
-        let _ = writeln!(out, "  dsn: {dsn_line}");
-        let _ = writeln!(out, "  native_crs: ${{MARS_NATIVE_CRS:-EPSG:25832}}");
+        let _ = writeln!(out, "  - id: default");
+        let _ = writeln!(out, "    type: postgis");
+        let _ = writeln!(out, "    dsn: {dsn_line}");
+        let _ = writeln!(out, "    native_crs: ${{MARS_NATIVE_CRS:-EPSG:25832}}");
     }
     let _ = writeln!(out);
 

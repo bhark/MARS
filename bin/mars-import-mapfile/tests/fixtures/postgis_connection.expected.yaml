@@ -8,10 +8,11 @@ service:
   abstract: "Imported from mapfile"
   contact_email: ops@example.org
 
-source:
-  type: postgis
-  dsn: "host=db.example.org port=5432 dbname=gis user=mars password=secret"
-  native_crs: ${MARS_NATIVE_CRS:-EPSG:25832}
+sources:
+  - id: default
+    type: postgis
+    dsn: "host=db.example.org port=5432 dbname=gis user=mars password=secret"
+    native_crs: ${MARS_NATIVE_CRS:-EPSG:25832}
 
 artifacts:
   store:

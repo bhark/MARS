@@ -54,10 +54,11 @@ service:
       get_legend_graphic:
         - "image/png"
 
-source:
-  type: postgis
-  dsn: "${PG_DSN}"
-  native_crs: ${MARS_NATIVE_CRS:-EPSG:25832}
+sources:
+  - id: default
+    type: postgis
+    dsn: "${PG_DSN}"
+    native_crs: ${MARS_NATIVE_CRS:-EPSG:25832}
 
 artifacts:
   store:
