@@ -11,6 +11,11 @@ use crate::{
 const HEADER_LEN: usize = 8 + 4 + 4;
 const TRAILER_LEN: usize = 4 + 8;
 
+// covers every SectionKind discriminant comfortably; small enough to stay
+// inline in the reader. lookup is `kind_to_section_idx[kind as usize]`, so
+// a value past this slot count would silently miss - guarded at insertion.
+const SECTION_KIND_SLOTS: usize = 16;
+
 #[derive(Debug, Clone)]
 pub struct ArtifactReader {
     bytes: Bytes,
@@ -18,6 +23,7 @@ pub struct ArtifactReader {
     bbox: Bbox,
     feature_count: u64,
     sections: Vec<SectionIndexEntry>,
+    kind_to_section_idx: [Option<u8>; SECTION_KIND_SLOTS],
     source_ref: Option<SourceRef>,
 }
 
@@ -78,12 +84,22 @@ impl ArtifactReader {
             .sections()
             .map_err(|_| ArtifactError::Malformed("footer sections"))?;
         let mut sections = Vec::new();
+        let mut kind_to_section_idx: [Option<u8>; SECTION_KIND_SLOTS] = [None; SECTION_KIND_SLOTS];
         if let Some(list) = sections_vec {
             for entry in list.iter() {
                 let kind = entry.kind();
-                // duplicate kinds would be silently shadowed by `section()`'s
-                // first-match lookup; reject up front.
-                if sections.iter().any(|s: &SectionIndexEntry| s.kind == kind) {
+                let slot = usize::from(kind);
+                // unknown-kind sections (past the slot table) are ignored for
+                // lookup; the section data is still validated below. duplicate
+                // kinds are rejected up front so `section()` cannot shadow.
+                if slot < SECTION_KIND_SLOTS {
+                    if kind_to_section_idx[slot].is_some() {
+                        return Err(ArtifactError::DuplicateSection(kind));
+                    }
+                    let idx = u8::try_from(sections.len())
+                        .map_err(|_| ArtifactError::Malformed("too many sections"))?;
+                    kind_to_section_idx[slot] = Some(idx);
+                } else if sections.iter().any(|s: &SectionIndexEntry| s.kind == kind) {
                     return Err(ArtifactError::DuplicateSection(kind));
                 }
                 sections.push(SectionIndexEntry {
@@ -150,7 +166,7 @@ impl ArtifactReader {
         // mirror writer's invariant: the geometry payload's leading u32 must
         // match footer.feature_count. cheap, catches malformed/forged blobs.
         let geom_target = SectionKind::GeometryPayload.as_u16();
-        if let Some(s) = sections.iter().find(|e| e.kind == geom_target) {
+        if let Some(s) = lookup_section(&sections, &kind_to_section_idx, geom_target) {
             let file_offset: usize = s
                 .file_offset
                 .try_into()
@@ -175,6 +191,7 @@ impl ArtifactReader {
             bbox,
             feature_count,
             sections,
+            kind_to_section_idx,
             source_ref,
         })
     }
@@ -214,15 +231,16 @@ impl ArtifactReader {
         Ok(sec.lookup(feature_idx)?)
     }
 
+    /// O(1) lookup of an index entry by `SectionKind`. Returns `None` for
+    /// unknown kinds and for kinds not present in this artifact.
+    fn entry_for(&self, kind: SectionKind) -> Option<&SectionIndexEntry> {
+        lookup_section(&self.sections, &self.kind_to_section_idx, kind.as_u16())
+    }
+
     /// Borrow a section payload by kind without copying. Used by typed
     /// accessors such as [`Self::attributes_section`].
     fn section_slice(&self, kind: SectionKind) -> Result<&[u8], ArtifactError> {
-        let target = kind.as_u16();
-        let entry = self
-            .sections
-            .iter()
-            .find(|e| e.kind == target)
-            .ok_or(ArtifactError::SectionMissing(kind))?;
+        let entry = self.entry_for(kind).ok_or(ArtifactError::SectionMissing(kind))?;
         let file_offset: usize = entry
             .file_offset
             .try_into()
@@ -241,11 +259,7 @@ impl ArtifactReader {
     /// any section flagged compressed (reserved for future use).
     pub fn section(&self, kind: SectionKind) -> Result<Bytes, ArtifactError> {
         let target = kind.as_u16();
-        let entry = self
-            .sections
-            .iter()
-            .find(|e| e.kind == target)
-            .ok_or(ArtifactError::SectionMissing(kind))?;
+        let entry = self.entry_for(kind).ok_or(ArtifactError::SectionMissing(kind))?;
 
         // re-read the section header to enforce compressed-flag check
         let file_offset: usize = entry
@@ -273,4 +287,18 @@ impl ArtifactReader {
             .ok_or(ArtifactError::Malformed("section span overflow"))?;
         Ok(self.bytes.slice(start..end))
     }
+}
+
+fn lookup_section<'a>(
+    sections: &'a [SectionIndexEntry],
+    by_kind: &[Option<u8>; SECTION_KIND_SLOTS],
+    target: u16,
+) -> Option<&'a SectionIndexEntry> {
+    let slot = usize::from(target);
+    if slot < SECTION_KIND_SLOTS {
+        return by_kind[slot].and_then(|i| sections.get(usize::from(i)));
+    }
+    // unknown-kind fallthrough; legacy/forward-compat path. linear over a
+    // handful of entries is fine since the fast path skipped it.
+    sections.iter().find(|e| e.kind == target)
 }
