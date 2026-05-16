@@ -107,6 +107,7 @@ fn emit_single_pass_to_registry(style_type: &str, style_name: &str, pass: Single
         pass.stroke_offset_px,
         pass.stroke_gap.as_ref(),
         pass.stroke_linejoin,
+        pass.stroke_linecap,
         pass.geom_transform,
         pass.min_feature_size_px,
     );
@@ -122,6 +123,7 @@ fn emit_single_pass_to_registry(style_type: &str, style_name: &str, pass: Single
             s.stroke_offset_px,
             s.stroke_gap.as_ref(),
             s.stroke_linejoin,
+            s.stroke_linecap,
             s.geom_transform,
             s.min_feature_size_px,
         ) == canonical
@@ -144,6 +146,7 @@ fn single_pass_to_style_def(style_type: &str, name: String, pass: SinglePass) ->
         stroke_width: pass.width,
         stroke_dasharray: pass.dasharray,
         stroke_linejoin: pass.stroke_linejoin,
+        stroke_linecap: pass.stroke_linecap,
         marker: pass.marker,
         opacity: pass.opacity,
         stroke_offset_px: pass.stroke_offset_px,
@@ -175,6 +178,7 @@ fn emit_label(r: ResolvedLabel, skel: &mut Skeleton) -> LabelSkeleton {
         stroke_width: None,
         stroke_dasharray: None,
         stroke_linejoin: None,
+        stroke_linecap: None,
         marker: None,
         opacity: None,
         stroke_offset_px: None,

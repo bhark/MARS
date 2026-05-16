@@ -199,6 +199,7 @@ pub(crate) struct StyleDef {
     pub(crate) stroke_width: Option<f32>,
     pub(crate) stroke_dasharray: Option<Vec<f32>>,
     pub(crate) stroke_linejoin: Option<&'static str>,
+    pub(crate) stroke_linecap: Option<&'static str>,
     pub(crate) marker: Option<EmitMarker>,
     pub(crate) opacity: Option<f32>,
     pub(crate) stroke_offset_px: Option<f32>,
@@ -931,6 +932,9 @@ fn write_geometry_style_body(out: &mut String, st: &StyleDef, indent: &str) {
     }
     if let Some(lj) = st.stroke_linejoin {
         let _ = writeln!(out, "{indent}stroke_linejoin: {lj}");
+    }
+    if let Some(lc) = st.stroke_linecap {
+        let _ = writeln!(out, "{indent}stroke_linecap: {lc}");
     }
     if let Some(o) = st.opacity {
         let _ = writeln!(out, "{indent}opacity: {o}");

@@ -109,6 +109,7 @@ const STYLE_DIRECTIVES: &[&str] = &[
     "GAP",
     "INITIALGAP",
     "LINEJOIN",
+    "LINECAP",
     "GEOMTRANSFORM",
     "MINWIDTH",
     "MAXWIDTH",

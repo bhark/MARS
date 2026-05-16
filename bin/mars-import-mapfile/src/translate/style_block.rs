@@ -65,6 +65,8 @@ pub(crate) struct StyleBlock {
     pub(crate) initial_gap_px: Option<f32>,
     /// STYLE.LINEJOIN -> mars stroke_linejoin wire value.
     pub(crate) linejoin: Option<&'static str>,
+    /// STYLE.LINECAP -> mars stroke_linecap wire value.
+    pub(crate) linecap: Option<&'static str>,
     /// STYLE.GEOMTRANSFORM "<variant>" -> mars geom_transform wire value.
     /// Carries the lowercase wire string ("start" | "end" | "vertices") so
     /// emission stays stringly-typed alongside `linejoin`.
@@ -147,6 +149,16 @@ pub(crate) fn parse_style_block(body: &[Token]) -> StyleBlock {
                     }
                 }
             }
+            StyleDirective::LineCap(t) => {
+                if let Some(arg) = t.args.first() {
+                    match arg.to_ascii_lowercase().as_str() {
+                        "butt" => st.linecap = Some("butt"),
+                        "round" => st.linecap = Some("round"),
+                        "square" => st.linecap = Some("square"),
+                        _ => push_unique(&mut st.unimplemented, "STYLE.LINECAP (unknown value)"),
+                    }
+                }
+            }
             StyleDirective::GeomTransform(t) => {
                 // mapserver accepts the variant quoted ("start") or bare; the
                 // unimplemented bag is the right home for the wider vocabulary
@@ -200,6 +212,7 @@ pub(crate) struct SinglePass {
     pub(crate) stroke_offset_px: Option<f32>,
     pub(crate) stroke_gap: Option<EmitStrokeGap>,
     pub(crate) stroke_linejoin: Option<&'static str>,
+    pub(crate) stroke_linecap: Option<&'static str>,
     pub(crate) geom_transform: Option<&'static str>,
     pub(crate) min_feature_size_px: Option<f32>,
     pub(crate) blend_mode: Option<mars_style::BlendMode>,
@@ -315,6 +328,7 @@ pub(crate) fn style_block_to_pass(s: &StyleBlock, symbols: &HashMap<String, Symb
         initial_px: s.initial_gap_px.unwrap_or(0.0),
     });
     let stroke_linejoin = s.linejoin;
+    let stroke_linecap = s.linecap;
     let geom_transform = s.geom_transform;
     let min_feature_size_px = s.min_feature_size_px;
 
@@ -328,6 +342,7 @@ pub(crate) fn style_block_to_pass(s: &StyleBlock, symbols: &HashMap<String, Symb
         stroke_offset_px,
         stroke_gap,
         stroke_linejoin,
+        stroke_linecap,
         geom_transform,
         min_feature_size_px,
         blend_mode: None,
@@ -347,6 +362,7 @@ pub(crate) fn canonical_signature(
     stroke_offset_px: Option<f32>,
     stroke_gap: Option<&EmitStrokeGap>,
     stroke_linejoin: Option<&'static str>,
+    stroke_linecap: Option<&'static str>,
     geom_transform: Option<&'static str>,
     min_feature_size_px: Option<f32>,
 ) -> String {
@@ -436,6 +452,9 @@ pub(crate) fn canonical_signature(
     }
     if let Some(lj) = stroke_linejoin {
         let _ = write!(s, ",linejoin={lj}");
+    }
+    if let Some(lc) = stroke_linecap {
+        let _ = write!(s, ",linecap={lc}");
     }
     if let Some(gt) = geom_transform {
         let _ = write!(s, ",geom_transform={gt}");
@@ -821,6 +840,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             Some("start"),
             None,
         );
@@ -835,11 +855,12 @@ mod tests {
             None,
             None,
             None,
+            None,
             Some("vertices"),
             None,
         );
         let none = canonical_signature(
-            "polygon", None, None, None, None, None, None, None, None, None, None, None,
+            "polygon", None, None, None, None, None, None, None, None, None, None, None, None,
         );
         assert_ne!(a, b);
         assert_ne!(a, none);
@@ -849,6 +870,7 @@ mod tests {
     fn canonical_signature_differs_per_min_feature_size() {
         let a = canonical_signature(
             "polygon",
+            None,
             None,
             None,
             None,
@@ -873,10 +895,88 @@ mod tests {
             None,
             None,
             None,
+            None,
             Some(8.0),
         );
         let none = canonical_signature(
-            "polygon", None, None, None, None, None, None, None, None, None, None, None,
+            "polygon", None, None, None, None, None, None, None, None, None, None, None, None,
+        );
+        assert_ne!(a, b);
+        assert_ne!(a, none);
+    }
+
+    #[test]
+    fn parse_style_block_accepts_linecap_values() {
+        for (raw, expected) in [("butt", "butt"), ("Round", "round"), ("SQUARE", "square")] {
+            let toks = vec![Token {
+                line: 1,
+                keyword: "LINECAP".into(),
+                args: vec![raw.into()],
+            }];
+            let st = parse_style_block(&toks);
+            assert_eq!(st.linecap, Some(expected), "raw={raw}");
+            assert!(st.unimplemented.is_empty());
+        }
+    }
+
+    #[test]
+    fn parse_style_block_flags_unknown_linecap() {
+        let toks = vec![Token {
+            line: 1,
+            keyword: "LINECAP".into(),
+            args: vec!["zigzag".into()],
+        }];
+        let st = parse_style_block(&toks);
+        assert!(st.linecap.is_none());
+        assert_eq!(st.unimplemented, vec!["STYLE.LINECAP (unknown value)"]);
+    }
+
+    #[test]
+    fn style_block_to_pass_propagates_stroke_linecap() {
+        let p = pass_of(
+            StyleBlock {
+                linecap: Some("round"),
+                ..Default::default()
+            },
+            &Default::default(),
+        );
+        assert_eq!(p.stroke_linecap, Some("round"));
+    }
+
+    #[test]
+    fn canonical_signature_differs_per_stroke_linecap() {
+        let a = canonical_signature(
+            "line",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("butt"),
+            None,
+            None,
+        );
+        let b = canonical_signature(
+            "line",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("round"),
+            None,
+            None,
+        );
+        let none = canonical_signature(
+            "line", None, None, None, None, None, None, None, None, None, None, None, None,
         );
         assert_ne!(a, b);
         assert_ne!(a, none);

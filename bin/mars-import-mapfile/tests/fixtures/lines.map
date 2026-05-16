@@ -1,5 +1,5 @@
 # LINE-layer fixture covering style fields that the minimal fixture misses:
-# PATTERN (dasharray), LINEJOIN, OFFSET, GAP/INITIALGAP, OPACITY.
+# PATTERN (dasharray), LINEJOIN, LINECAP, OFFSET, GAP/INITIALGAP, OPACITY.
 MAP
   NAME "lines"
   TITLE "Line Style Coverage"
@@ -18,6 +18,7 @@ MAP
         COLOR 60 120 200
         WIDTH 2.0
         LINEJOIN round
+        LINECAP square
         OPACITY 75
         OFFSET 1.5 -99
         GAP -20

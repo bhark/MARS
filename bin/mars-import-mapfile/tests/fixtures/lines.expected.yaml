@@ -57,6 +57,7 @@ styles:
     fill: "#3c78c8"
     stroke_width: 2
     stroke_linejoin: round
+    stroke_linecap: square
     opacity: 0.75
     stroke_offset_px: 1.5
     stroke_gap: { interval_px: 20, initial_px: 4 }

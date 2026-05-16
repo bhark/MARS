@@ -230,6 +230,7 @@ pub(crate) enum StyleDirective<'a> {
     Gap(&'a Token),
     InitialGap(&'a Token),
     LineJoin(&'a Token),
+    LineCap(&'a Token),
     /// `GEOMTRANSFORM "<variant>"`: vertex-extraction subset (start | end |
     /// vertices). Unknown variants land in the layer-level unimplemented bag.
     GeomTransform(&'a Token),
@@ -258,6 +259,7 @@ impl<'a> StyleDirective<'a> {
             "GAP" => Self::Gap(t),
             "INITIALGAP" => Self::InitialGap(t),
             "LINEJOIN" => Self::LineJoin(t),
+            "LINECAP" => Self::LineCap(t),
             "GEOMTRANSFORM" => Self::GeomTransform(t),
             "MINFEATURESIZE" => Self::MinFeatureSize(t),
             "MINWIDTH" | "MAXWIDTH" => Self::NotImplementedAttenuation(t),
