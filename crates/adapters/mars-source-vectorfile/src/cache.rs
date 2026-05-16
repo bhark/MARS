@@ -81,7 +81,10 @@ impl DiskCache {
             return Ok(());
         }
 
-        let tmp_path = parent.join(format!(".{etag}.tmp.{}", std::process::id()));
+        // random suffix prevents two processes that happen to share a pid
+        // (post-restart pid reuse, separate hosts on a shared mount) from
+        // colliding on the same tmp name for the same etag.
+        let tmp_path = parent.join(format!(".{etag}.tmp.{:016x}", rand::random::<u64>()));
         {
             let mut f = fs::File::create(&tmp_path).await.map_err(|e| VectorFileError::Io {
                 what: "cache tmp create",

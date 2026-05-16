@@ -2942,6 +2942,7 @@ dependencies = [
  "mars-source",
  "mars-types",
  "object_store",
+ "rand 0.10.1",
  "rusqlite",
  "serde",
  "serde_json",
