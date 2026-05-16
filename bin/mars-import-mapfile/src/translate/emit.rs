@@ -8,10 +8,12 @@
 
 use tracing::warn;
 
-use crate::emitter::{ClassSkeleton, EmitFill, LabelSkeleton, LayerSkeleton, Skeleton, SourceSkeleton, StyleDef};
+use crate::emitter::{
+    ClassSkeleton, ClassStyleAttach, EmitFill, LabelSkeleton, LayerSkeleton, Skeleton, SourceSkeleton, StyleDef,
+};
 
 use super::resolved::{ResolvedClass, ResolvedLabel, ResolvedLayer, ResolvedSymbol};
-use super::style_block::canonical_signature;
+use super::style_block::{SinglePass, canonical_signature};
 
 pub(crate) fn emit_layer(r: ResolvedLayer, skel: &mut Skeleton) {
     if !r.unimplemented.is_empty() {
@@ -53,21 +55,58 @@ pub(crate) fn emit_layer(r: ResolvedLayer, skel: &mut Skeleton) {
 }
 
 fn emit_class(r: ResolvedClass, skel: &mut Skeleton) -> ClassSkeleton {
-    let canonical = canonical_signature(
-        &r.style_type,
-        r.collapsed.fill.as_ref(),
-        r.collapsed.stroke.as_ref(),
-        r.collapsed.width,
-        r.collapsed.dasharray.as_ref(),
-        r.collapsed.marker.as_ref(),
-        r.collapsed.opacity,
-        r.collapsed.stroke_offset_px,
-        r.collapsed.stroke_gap.as_ref(),
-        r.collapsed.stroke_linejoin,
-        r.collapsed.geom_transform,
-    );
+    // single-pass: emit one StyleDef into the registry, dedup by canonical
+    // signature; the class refers via ClassStyleAttach::Ref. multi-pass: each
+    // SinglePass becomes one inline StyleDef; the class carries them through
+    // ClassStyleAttach::Passes and no registry entry is created. zero-pass
+    // (a CLASS with no STYLE block) falls back to a single empty Ref entry so
+    // the class always has a renderable style attachment.
+    let style = match r.passes.len() {
+        0 | 1 => ClassStyleAttach::Ref(emit_single_pass_to_registry(
+            &r.style_type,
+            &r.style_name,
+            r.passes.into_iter().next().unwrap_or_default(),
+            skel,
+        )),
+        _ => ClassStyleAttach::Passes(
+            r.passes
+                .into_iter()
+                .map(|p| single_pass_to_style_def(&r.style_type, String::new(), p))
+                .collect(),
+        ),
+    };
 
-    let existing = skel.styles.iter().find(|s| {
+    let label = r.label.map(|rl| emit_label(rl, skel));
+
+    ClassSkeleton {
+        name: r.class_name,
+        title: r.title,
+        when: r.when,
+        min_scale_denom: r.min_scale_denom,
+        max_scale_denom: r.max_scale_denom,
+        style,
+        label,
+    }
+}
+
+/// push or dedup a single-pass [`StyleDef`] into [`Skeleton::styles`] and
+/// return the name the class should reference. dedup uses
+/// [`canonical_signature`] over the wire-facing fields.
+fn emit_single_pass_to_registry(style_type: &str, style_name: &str, pass: SinglePass, skel: &mut Skeleton) -> String {
+    let canonical = canonical_signature(
+        style_type,
+        pass.fill.as_ref(),
+        pass.stroke.as_ref(),
+        pass.width,
+        pass.dasharray.as_ref(),
+        pass.marker.as_ref(),
+        pass.opacity,
+        pass.stroke_offset_px,
+        pass.stroke_gap.as_ref(),
+        pass.stroke_linejoin,
+        pass.geom_transform,
+    );
+    if let Some(st) = skel.styles.iter().find(|s| {
         canonical_signature(
             &s.style_type,
             s.fill.as_ref(),
@@ -81,49 +120,41 @@ fn emit_class(r: ResolvedClass, skel: &mut Skeleton) -> ClassSkeleton {
             s.stroke_linejoin,
             s.geom_transform,
         ) == canonical
-    });
+    }) {
+        return st.name.clone();
+    }
+    skel.styles
+        .push(single_pass_to_style_def(style_type, style_name.to_string(), pass));
+    style_name.to_string()
+}
 
-    let style_ref = if let Some(st) = existing {
-        st.name.clone()
-    } else {
-        skel.styles.push(StyleDef {
-            name: r.style_name.clone(),
-            style_type: r.style_type,
-            fill: r.collapsed.fill,
-            stroke: r.collapsed.stroke,
-            stroke_width: r.collapsed.width,
-            stroke_dasharray: r.collapsed.dasharray,
-            stroke_linejoin: r.collapsed.stroke_linejoin,
-            marker: r.collapsed.marker,
-            opacity: r.collapsed.opacity,
-            stroke_offset_px: r.collapsed.stroke_offset_px,
-            stroke_gap: r.collapsed.stroke_gap,
-            geom_transform: r.collapsed.geom_transform,
-            font_family: None,
-            font_size: None,
-            halo_color: None,
-            halo_width: None,
-            priority: None,
-            min_distance: None,
-            position: None,
-            offset_px: None,
-            angle_deg: None,
-            partials: None,
-            force: None,
-        });
-        r.style_name
-    };
-
-    let label = r.label.map(|rl| emit_label(rl, skel));
-
-    ClassSkeleton {
-        name: r.class_name,
-        title: r.title,
-        when: r.when,
-        min_scale_denom: r.min_scale_denom,
-        max_scale_denom: r.max_scale_denom,
-        style_ref,
-        label,
+/// Lower a [`SinglePass`] to a [`StyleDef`]. `name` is used only by the
+/// registry path; inline-pass entries pass an empty string.
+fn single_pass_to_style_def(style_type: &str, name: String, pass: SinglePass) -> StyleDef {
+    StyleDef {
+        name,
+        style_type: style_type.to_string(),
+        fill: pass.fill,
+        stroke: pass.stroke,
+        stroke_width: pass.width,
+        stroke_dasharray: pass.dasharray,
+        stroke_linejoin: pass.stroke_linejoin,
+        marker: pass.marker,
+        opacity: pass.opacity,
+        stroke_offset_px: pass.stroke_offset_px,
+        stroke_gap: pass.stroke_gap,
+        geom_transform: pass.geom_transform,
+        font_family: None,
+        font_size: None,
+        halo_color: None,
+        halo_width: None,
+        priority: None,
+        min_distance: None,
+        position: None,
+        offset_px: None,
+        angle_deg: None,
+        partials: None,
+        force: None,
     }
 }
 

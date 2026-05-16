@@ -1,15 +1,14 @@
-//! STYLE block parser and resolution helpers.
+//! STYLE block parser and per-block resolution.
 //!
 //! A STYLE block (inside CLASS) collects scalar directives into a
-//! [`StyleBlock`]. Multiple STYLE blocks per class are then collapsed into
-//! a single resolved fill / stroke / marker / dash / opacity tuple via
-//! [`collapse_styles`]. Class-level dedup of the emitted [`StyleDef`] uses
-//! [`canonical_signature`].
+//! [`StyleBlock`]. Each parsed block becomes one emitted [`SinglePass`] via
+//! [`style_block_to_pass`]; the class-level emitter chooses between a
+//! single-pass `Ref` and a multi-pass `Passes` attach. Class-level dedup of
+//! the emitted single-pass [`StyleDef`] uses [`canonical_signature`].
 
 use std::collections::HashMap;
 
 use mars_style::Colour;
-use tracing::warn;
 
 use crate::directive::StyleDirective;
 use crate::emitter::{EmitFill, EmitMarker, EmitStrokeGap, MarkerKind, SymbolDef};
@@ -144,13 +143,13 @@ pub(crate) fn parse_style_block(body: &[Token]) -> StyleBlock {
     st
 }
 
-/// outputs of [`collapse_styles`]: a single resolved fill/stroke/width/dash/
-/// marker tuple that drives `StyleDef` construction in `parse_class`. The
+/// Per-block resolution result: one parsed [`StyleBlock`] lowered into the
+/// shape a single [`StyleDef`] (or one entry of a `passes:` list) needs. The
 /// `unimplemented` bag carries directive names that survived parsing but were
-/// dropped during symbol resolution; `resolve_class` merges it into the
-/// class-level bag alongside the parser-side `StyleBlock.unimplemented`.
+/// dropped during symbol resolution; `resolve_class` merges it (alongside the
+/// parser-side `StyleBlock.unimplemented`) into the class-level bag.
 #[derive(Debug, Default)]
-pub(crate) struct CollapsedStyle {
+pub(crate) struct SinglePass {
     pub(crate) fill: Option<EmitFill>,
     pub(crate) stroke: Option<Colour>,
     pub(crate) width: Option<f32>,
@@ -164,123 +163,109 @@ pub(crate) struct CollapsedStyle {
     pub(crate) unimplemented: Vec<&'static str>,
 }
 
-pub(crate) fn collapse_styles(
-    styles: &[StyleBlock],
-    line: usize,
-    symbols: &HashMap<String, SymbolDef>,
-) -> CollapsedStyle {
-    if styles.len() > 1 {
-        warn!(
-            line = line,
-            count = styles.len(),
-            "STYLE: collapsed multi-pass stack to single fill+stroke"
-        );
-    }
-    // resolve a symbol reference into either a marker or a hatch fill,
-    // overriding the plain solid fill. ANGLE/SIZE/WIDTH on STYLE take
-    // precedence over the symbol's own defaults.
+/// Lower one parsed STYLE block into a [`SinglePass`]. Resolves STYLE.SYMBOL
+/// against the mapfile-level symbol table, applies STYLE.COLOR / WIDTH / etc.
+/// as overrides, and surfaces dropped-directive signals via `unimplemented`.
+/// One block in, one pass out - there is no aggregation across blocks here.
+pub(crate) fn style_block_to_pass(s: &StyleBlock, symbols: &HashMap<String, SymbolDef>) -> SinglePass {
+    let mut unimplemented: Vec<&'static str> = Vec::new();
     let mut resolved_marker: Option<EmitMarker> = None;
     let mut resolved_hatch: Option<EmitFill> = None;
-    let mut unimplemented: Vec<&'static str> = Vec::new();
 
-    for s in styles {
-        if let Some(sym_name) = &s.symbol {
-            match symbols.get(sym_name) {
-                Some(SymbolDef::Circle) => {
-                    resolved_marker = Some(EmitMarker::Builtin {
-                        kind: MarkerKind::Circle,
-                        size: s.size.unwrap_or(6.0),
-                    });
+    if let Some(sym_name) = &s.symbol {
+        match symbols.get(sym_name) {
+            Some(SymbolDef::Circle) => {
+                resolved_marker = Some(EmitMarker::Builtin {
+                    kind: MarkerKind::Circle,
+                    size: s.size.unwrap_or(6.0),
+                });
+            }
+            Some(SymbolDef::NamedShape(kind)) => {
+                resolved_marker = Some(EmitMarker::Builtin {
+                    kind: *kind,
+                    size: s.size.unwrap_or(6.0),
+                });
+            }
+            Some(SymbolDef::Hatch { angle_deg, size }) => {
+                let spacing = s.size.or(*size).unwrap_or(6.0);
+                let angle = s.angle_deg.or(*angle_deg).unwrap_or(0.0);
+                let line_width = s.width.unwrap_or(1.0);
+                let colour = s.color.unwrap_or(Colour::rgb(0, 0, 0));
+                resolved_hatch = Some(EmitFill::Hatch {
+                    spacing,
+                    angle_deg: angle,
+                    line_width,
+                    colour,
+                });
+            }
+            Some(SymbolDef::VectorShape { points, anchor, filled }) => {
+                resolved_marker = Some(EmitMarker::Vector {
+                    points: points.clone(),
+                    anchor: *anchor,
+                    filled: *filled,
+                    size: s.size.unwrap_or(6.0),
+                });
+            }
+            Some(SymbolDef::Glyph { font_family, character }) => {
+                resolved_marker = Some(EmitMarker::Glyph {
+                    font_family: font_family.clone(),
+                    character: character.clone(),
+                    size: s.size.unwrap_or(12.0),
+                });
+            }
+            Some(SymbolDef::Pixmap { source_image }) => {
+                // PIXMAP styles tile the named bitmap. The compiler resolves
+                // `name` against `compiler.images_dir` and packs the bytes
+                // into the manifest's image_artifact; the runtime renderer
+                // then resolves the same name through its `ImageRegistry`.
+                // The source_image path on the mapfile is preserved as a
+                // one-time hint so the operator knows which file to copy.
+                resolved_hatch = Some(EmitFill::Image { name: sym_name.clone() });
+                if let Some(p) = source_image {
+                    tracing::info!(
+                        symbol = sym_name,
+                        source_image = %p,
+                        "PIXMAP symbol translated to FillPaint::Image; copy the source bitmap into compiler.images_dir as <name>.<ext>"
+                    );
                 }
-                Some(SymbolDef::NamedShape(kind)) => {
-                    resolved_marker = Some(EmitMarker::Builtin {
-                        kind: *kind,
-                        size: s.size.unwrap_or(6.0),
-                    });
-                }
-                Some(SymbolDef::Hatch { angle_deg, size }) => {
-                    let spacing = s.size.or(*size).unwrap_or(6.0);
-                    let angle = s.angle_deg.or(*angle_deg).unwrap_or(0.0);
-                    let line_width = s.width.unwrap_or(1.0);
-                    let colour = s.color.unwrap_or(Colour::rgb(0, 0, 0));
-                    resolved_hatch = Some(EmitFill::Hatch {
-                        spacing,
-                        angle_deg: angle,
-                        line_width,
-                        colour,
-                    });
-                }
-                Some(SymbolDef::VectorShape { points, anchor, filled }) => {
-                    resolved_marker = Some(EmitMarker::Vector {
-                        points: points.clone(),
-                        anchor: *anchor,
-                        filled: *filled,
-                        size: s.size.unwrap_or(6.0),
-                    });
-                }
-                Some(SymbolDef::Glyph { font_family, character }) => {
-                    resolved_marker = Some(EmitMarker::Glyph {
-                        font_family: font_family.clone(),
-                        character: character.clone(),
-                        size: s.size.unwrap_or(12.0),
-                    });
-                }
-                Some(SymbolDef::Pixmap { source_image }) => {
-                    // PIXMAP styles tile the named bitmap. The compiler
-                    // resolves `name` against `compiler.images_dir` and packs
-                    // the bytes into the manifest's image_artifact; the
-                    // runtime renderer then resolves the same name through
-                    // its `ImageRegistry`. The source_image path on the
-                    // mapfile is preserved as a one-time hint so the
-                    // operator knows which file to copy.
-                    resolved_hatch = Some(EmitFill::Image { name: sym_name.clone() });
-                    if let Some(p) = source_image {
-                        tracing::info!(
-                            symbol = sym_name,
-                            source_image = %p,
-                            "PIXMAP symbol translated to FillPaint::Image; copy the source bitmap into compiler.images_dir as <name>.<ext>"
-                        );
-                    }
-                }
-                Some(SymbolDef::NotImplemented { raw_type }) => {
-                    // map known mapfile TYPE keywords to specific bag entries
-                    // so the operator sees which kind of symbol was dropped.
-                    let name: &'static str = match raw_type.as_str() {
-                        "SVG" => "STYLE.SYMBOL SVG",
-                        "OGR" => "STYLE.SYMBOL OGR",
-                        _ => "STYLE.SYMBOL (unimplemented type)",
-                    };
-                    push_unique(&mut unimplemented, name);
-                }
-                None => {
-                    push_unique(&mut unimplemented, "STYLE.SYMBOL (undefined)");
-                }
+            }
+            Some(SymbolDef::NotImplemented { raw_type }) => {
+                // map known mapfile TYPE keywords to specific bag entries so
+                // the operator sees which kind of symbol was dropped.
+                let name: &'static str = match raw_type.as_str() {
+                    "SVG" => "STYLE.SYMBOL SVG",
+                    "OGR" => "STYLE.SYMBOL OGR",
+                    _ => "STYLE.SYMBOL (unimplemented type)",
+                };
+                push_unique(&mut unimplemented, name);
+            }
+            None => {
+                push_unique(&mut unimplemented, "STYLE.SYMBOL (undefined)");
             }
         }
     }
 
     // ANGLE outside a hatch context is silently ignored at draw time;
     // surface it so the operator sees it in the layer-level warn.
-    if resolved_hatch.is_none() && styles.iter().any(|s| s.angle_deg.is_some()) {
+    if resolved_hatch.is_none() && s.angle_deg.is_some() {
         push_unique(&mut unimplemented, "STYLE.ANGLE (non-hatch)");
     }
 
-    let solid_fill = styles.iter().rev().find_map(|s| s.color).map(EmitFill::Hex);
+    let solid_fill = s.color.map(EmitFill::Hex);
     let fill = resolved_hatch.or(solid_fill);
-    let stroke = styles.iter().find_map(|s| s.outlinecolor);
-    let width = styles.iter().find_map(|s| s.width.or(s.outlinewidth));
-    let dasharray = styles.iter().find_map(|s| s.pattern.clone());
-    let opacity = styles.iter().find_map(|s| s.opacity);
-    let stroke_offset_px = styles.iter().find_map(|s| s.offset_px);
-    let stroke_gap = styles.iter().find_map(|s| {
-        s.gap_px.map(|gap| EmitStrokeGap {
-            interval_px: gap,
-            initial_px: s.initial_gap_px.unwrap_or(0.0),
-        })
+    let stroke = s.outlinecolor;
+    let width = s.width.or(s.outlinewidth);
+    let dasharray = s.pattern.clone();
+    let opacity = s.opacity;
+    let stroke_offset_px = s.offset_px;
+    let stroke_gap = s.gap_px.map(|gap| EmitStrokeGap {
+        interval_px: gap,
+        initial_px: s.initial_gap_px.unwrap_or(0.0),
     });
-    let stroke_linejoin = styles.iter().find_map(|s| s.linejoin);
-    let geom_transform = styles.iter().find_map(|s| s.geom_transform);
-    CollapsedStyle {
+    let stroke_linejoin = s.linejoin;
+    let geom_transform = s.geom_transform;
+
+    SinglePass {
         fill,
         stroke,
         width,
@@ -384,6 +369,10 @@ pub(crate) fn canonical_signature(
 mod tests {
     use super::*;
 
+    fn pass_of(block: StyleBlock, symbols: &HashMap<String, SymbolDef>) -> SinglePass {
+        style_block_to_pass(&block, symbols)
+    }
+
     #[test]
     fn parse_style_block_extracts_color_and_width() {
         let toks = vec![
@@ -404,34 +393,38 @@ mod tests {
     }
 
     #[test]
-    fn collapse_styles_picks_first_fill_and_stroke() {
-        let styles = vec![StyleBlock {
-            color: Some(Colour::rgb(255, 0, 0)),
-            outlinecolor: Some(Colour::rgb(0, 0, 0)),
-            width: Some(1.0),
-            ..Default::default()
-        }];
-        let c = collapse_styles(&styles, 1, &Default::default());
-        assert_eq!(c.fill, Some(EmitFill::Hex(Colour::rgb(255, 0, 0))));
-        assert_eq!(c.stroke, Some(Colour::rgb(0, 0, 0)));
-        assert_eq!(c.width, Some(1.0));
-        assert!(c.marker.is_none());
+    fn style_block_to_pass_emits_fill_and_stroke() {
+        let p = pass_of(
+            StyleBlock {
+                color: Some(Colour::rgb(255, 0, 0)),
+                outlinecolor: Some(Colour::rgb(0, 0, 0)),
+                width: Some(1.0),
+                ..Default::default()
+            },
+            &Default::default(),
+        );
+        assert_eq!(p.fill, Some(EmitFill::Hex(Colour::rgb(255, 0, 0))));
+        assert_eq!(p.stroke, Some(Colour::rgb(0, 0, 0)));
+        assert_eq!(p.width, Some(1.0));
+        assert!(p.marker.is_none());
     }
 
     #[test]
-    fn collapse_styles_resolves_named_circle_symbol_to_marker() {
+    fn style_block_to_pass_resolves_named_circle_symbol_to_marker() {
         let mut symbols = HashMap::new();
         symbols.insert("circle".into(), SymbolDef::Circle);
-        let styles = vec![StyleBlock {
-            color: Some(Colour::rgb(10, 20, 30)),
-            symbol: Some("circle".into()),
-            size: Some(8.0),
-            ..Default::default()
-        }];
-        let c = collapse_styles(&styles, 1, &symbols);
+        let p = pass_of(
+            StyleBlock {
+                color: Some(Colour::rgb(10, 20, 30)),
+                symbol: Some("circle".into()),
+                size: Some(8.0),
+                ..Default::default()
+            },
+            &symbols,
+        );
         // STYLE.COLOR still emits a solid fill - it's the marker body.
-        assert_eq!(c.fill, Some(EmitFill::Hex(Colour::rgb(10, 20, 30))));
-        let m = c.marker.unwrap();
+        assert_eq!(p.fill, Some(EmitFill::Hex(Colour::rgb(10, 20, 30))));
+        let m = p.marker.unwrap();
         match m {
             EmitMarker::Builtin { kind, size } => {
                 assert_eq!(kind, MarkerKind::Circle);
@@ -442,7 +435,7 @@ mod tests {
     }
 
     #[test]
-    fn collapse_styles_resolves_hatch_symbol_to_fill_kind_hatch() {
+    fn style_block_to_pass_resolves_hatch_symbol_to_fill_kind_hatch() {
         let mut symbols = HashMap::new();
         symbols.insert(
             "lines".into(),
@@ -451,14 +444,16 @@ mod tests {
                 size: Some(4.0),
             },
         );
-        let styles = vec![StyleBlock {
-            color: Some(Colour::rgb(64, 64, 64)),
-            width: Some(0.5),
-            symbol: Some("lines".into()),
-            ..Default::default()
-        }];
-        let c = collapse_styles(&styles, 1, &symbols);
-        match c.fill {
+        let p = pass_of(
+            StyleBlock {
+                color: Some(Colour::rgb(64, 64, 64)),
+                width: Some(0.5),
+                symbol: Some("lines".into()),
+                ..Default::default()
+            },
+            &symbols,
+        );
+        match p.fill {
             Some(EmitFill::Hatch {
                 spacing,
                 angle_deg,
@@ -472,7 +467,7 @@ mod tests {
             }
             other => panic!("expected hatch fill, got {other:?}"),
         }
-        assert!(c.marker.is_none());
+        assert!(p.marker.is_none());
     }
 
     #[test]
@@ -511,18 +506,20 @@ mod tests {
     }
 
     #[test]
-    fn collapse_styles_flags_undefined_symbol() {
-        let styles = vec![StyleBlock {
-            symbol: Some("ghost".into()),
-            ..Default::default()
-        }];
-        let c = collapse_styles(&styles, 1, &HashMap::new());
-        assert_eq!(c.unimplemented, vec!["STYLE.SYMBOL (undefined)"]);
-        assert!(c.marker.is_none());
+    fn style_block_to_pass_flags_undefined_symbol() {
+        let p = pass_of(
+            StyleBlock {
+                symbol: Some("ghost".into()),
+                ..Default::default()
+            },
+            &HashMap::new(),
+        );
+        assert_eq!(p.unimplemented, vec!["STYLE.SYMBOL (undefined)"]);
+        assert!(p.marker.is_none());
     }
 
     #[test]
-    fn collapse_styles_resolves_pixmap_symbol_to_image_fill() {
+    fn style_block_to_pass_resolves_pixmap_symbol_to_image_fill() {
         let mut symbols = HashMap::new();
         symbols.insert(
             "brick".into(),
@@ -530,20 +527,22 @@ mod tests {
                 source_image: Some("/abs/path/to/brick.png".into()),
             },
         );
-        let styles = vec![StyleBlock {
-            symbol: Some("brick".into()),
-            ..Default::default()
-        }];
-        let c = collapse_styles(&styles, 1, &symbols);
-        assert!(c.unimplemented.is_empty(), "PIXMAP no longer surfaces as unimplemented");
-        match c.fill {
+        let p = pass_of(
+            StyleBlock {
+                symbol: Some("brick".into()),
+                ..Default::default()
+            },
+            &symbols,
+        );
+        assert!(p.unimplemented.is_empty(), "PIXMAP no longer surfaces as unimplemented");
+        match p.fill {
             Some(EmitFill::Image { name }) => assert_eq!(name, "brick"),
             other => panic!("expected EmitFill::Image, got {other:?}"),
         }
     }
 
     #[test]
-    fn collapse_styles_flags_not_implemented_symbol_type_unknown() {
+    fn style_block_to_pass_flags_not_implemented_symbol_type_unknown() {
         let mut symbols = HashMap::new();
         symbols.insert(
             "weird".into(),
@@ -551,30 +550,34 @@ mod tests {
                 raw_type: "BIZARRO".into(),
             },
         );
-        let styles = vec![StyleBlock {
-            symbol: Some("weird".into()),
-            ..Default::default()
-        }];
-        let c = collapse_styles(&styles, 1, &symbols);
-        assert_eq!(c.unimplemented, vec!["STYLE.SYMBOL (unimplemented type)"]);
+        let p = pass_of(
+            StyleBlock {
+                symbol: Some("weird".into()),
+                ..Default::default()
+            },
+            &symbols,
+        );
+        assert_eq!(p.unimplemented, vec!["STYLE.SYMBOL (unimplemented type)"]);
     }
 
     #[test]
-    fn collapse_styles_flags_angle_on_non_hatch() {
+    fn style_block_to_pass_flags_angle_on_non_hatch() {
         let mut symbols = HashMap::new();
         symbols.insert("circle".into(), SymbolDef::Circle);
-        let styles = vec![StyleBlock {
-            symbol: Some("circle".into()),
-            angle_deg: Some(30.0),
-            ..Default::default()
-        }];
-        let c = collapse_styles(&styles, 1, &symbols);
-        assert!(c.marker.is_some());
-        assert_eq!(c.unimplemented, vec!["STYLE.ANGLE (non-hatch)"]);
+        let p = pass_of(
+            StyleBlock {
+                symbol: Some("circle".into()),
+                angle_deg: Some(30.0),
+                ..Default::default()
+            },
+            &symbols,
+        );
+        assert!(p.marker.is_some());
+        assert_eq!(p.unimplemented, vec!["STYLE.ANGLE (non-hatch)"]);
     }
 
     #[test]
-    fn collapse_styles_does_not_flag_angle_on_hatch() {
+    fn style_block_to_pass_does_not_flag_angle_on_hatch() {
         let mut symbols = HashMap::new();
         symbols.insert(
             "lines".into(),
@@ -583,13 +586,15 @@ mod tests {
                 size: None,
             },
         );
-        let styles = vec![StyleBlock {
-            symbol: Some("lines".into()),
-            angle_deg: Some(45.0),
-            ..Default::default()
-        }];
-        let c = collapse_styles(&styles, 1, &symbols);
-        assert!(c.unimplemented.is_empty());
+        let p = pass_of(
+            StyleBlock {
+                symbol: Some("lines".into()),
+                angle_deg: Some(45.0),
+                ..Default::default()
+            },
+            &symbols,
+        );
+        assert!(p.unimplemented.is_empty());
     }
 
     #[test]
@@ -644,13 +649,15 @@ mod tests {
     }
 
     #[test]
-    fn collapse_styles_propagates_geom_transform() {
-        let styles = vec![StyleBlock {
-            geom_transform: Some("vertices"),
-            ..Default::default()
-        }];
-        let c = collapse_styles(&styles, 1, &Default::default());
-        assert_eq!(c.geom_transform, Some("vertices"));
+    fn style_block_to_pass_propagates_geom_transform() {
+        let p = pass_of(
+            StyleBlock {
+                geom_transform: Some("vertices"),
+                ..Default::default()
+            },
+            &Default::default(),
+        );
+        assert_eq!(p.geom_transform, Some("vertices"));
     }
 
     #[test]

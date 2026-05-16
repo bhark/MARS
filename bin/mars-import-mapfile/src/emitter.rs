@@ -374,8 +374,25 @@ pub(crate) struct ClassSkeleton {
     pub(crate) when: Option<String>,
     pub(crate) min_scale_denom: Option<u64>,
     pub(crate) max_scale_denom: Option<u64>,
-    pub(crate) style_ref: String,
+    /// Per-class style attachment. Single-pass classes route through the
+    /// styles registry via `Ref`; multi-pass classes emit inline `Passes` so
+    /// the per-block ordering survives without coupling the named-style
+    /// registry to the pass ordering.
+    pub(crate) style: ClassStyleAttach,
     pub(crate) label: Option<LabelSkeleton>,
+}
+
+/// Style attachment shape on a [`ClassSkeleton`]. Mirrors
+/// `mars_config::ClassStyle` minus the `Inline` variant the importer never
+/// emits.
+#[derive(Debug, Clone)]
+pub(crate) enum ClassStyleAttach {
+    /// Reference to a named [`StyleDef`] in [`Skeleton::styles`].
+    Ref(String),
+    /// Ordered inline multi-pass stack. Each [`StyleDef`] carries the
+    /// per-pass body verbatim; the `style_type` field is shared across
+    /// passes and matches the class's geometry kind.
+    Passes(Vec<StyleDef>),
 }
 
 #[derive(Debug, Clone)]
@@ -710,52 +727,10 @@ fn line_angle_mode_yaml(m: mars_style::LineAngleMode) -> &'static str {
     }
 }
 
-/// render a marker into the style block under `    marker:`. flow-mapping
-/// for built-ins and glyph (compact), block-mapping for vector shapes since
-/// the point list is open-ended.
-fn write_marker(out: &mut String, m: &EmitMarker) {
-    match m {
-        EmitMarker::Builtin { kind, size } => {
-            let _ = writeln!(out, "    marker: {{ kind: {}, size: {size} }}", kind.as_wire());
-        }
-        EmitMarker::Glyph {
-            font_family,
-            character,
-            size,
-        } => {
-            let _ = writeln!(
-                out,
-                "    marker: {{ kind: glyph, font_family: {}, character: {}, size: {size} }}",
-                yaml_quote(font_family),
-                yaml_quote(character)
-            );
-        }
-        EmitMarker::Vector {
-            points,
-            anchor,
-            filled,
-            size,
-        } => {
-            let _ = writeln!(out, "    marker:");
-            let _ = writeln!(out, "      kind: vector_shape");
-            let pts = points
-                .iter()
-                .map(|(x, y)| format!("[{x}, {y}]"))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let _ = writeln!(out, "      points: [{pts}]");
-            if let Some((ax, ay)) = anchor {
-                let _ = writeln!(out, "      anchor: [{ax}, {ay}]");
-            }
-            let _ = writeln!(out, "      filled: {filled}");
-            let _ = writeln!(out, "      size: {size}");
-        }
-    }
-}
-
 /// render one class entry under `    classes:`. compact flow-mapping when the
-/// class has no per-class label; expanded block-mapping when it does, so the
-/// label sub-tree can be rendered on its own lines.
+/// class has no per-class label and the style is a single `Ref`; expanded
+/// block-mapping when there's a label or the style is a multi-pass `Passes`
+/// list (which never fits cleanly in flow form).
 fn write_class(out: &mut String, cls: &ClassSkeleton) {
     let mut parts = vec![format!("name: {}", yaml_quote(&cls.name))];
     if let Some(title) = &cls.title {
@@ -774,14 +749,20 @@ fn write_class(out: &mut String, cls: &ClassSkeleton) {
         }
         parts.push(format!("scale: {{ {} }}", scale_parts.join(", ")));
     }
-    parts.push(format!("style: {{ type: ref, name: {} }}", yaml_quote(&cls.style_ref)));
 
-    let Some(lbl) = cls.label.as_ref() else {
+    let style_is_ref = matches!(cls.style, ClassStyleAttach::Ref(_));
+    if let ClassStyleAttach::Ref(name) = &cls.style {
+        parts.push(format!("style: {{ type: ref, name: {} }}", yaml_quote(name)));
+    }
+
+    // compact flow form: single-ref style, no per-class label.
+    if cls.label.is_none() && style_is_ref {
         let _ = writeln!(out, "      - {{ {} }}", parts.join(", "));
         return;
-    };
+    }
 
-    // expanded form: scalars + style on their own lines, then label: block.
+    // expanded form: scalars (and the style ref if any) on their own lines;
+    // then either the inline passes block, the per-class label block, or both.
     let mut iter = parts.into_iter();
     if let Some(first) = iter.next() {
         let _ = writeln!(out, "      - {first}");
@@ -789,8 +770,132 @@ fn write_class(out: &mut String, cls: &ClassSkeleton) {
     for p in iter {
         let _ = writeln!(out, "        {p}");
     }
-    let _ = writeln!(out, "        label:");
-    write_label_body(out, lbl, "          ");
+    if let ClassStyleAttach::Passes(passes) = &cls.style {
+        write_inline_passes(out, passes, "        ");
+    }
+    if let Some(lbl) = cls.label.as_ref() {
+        let _ = writeln!(out, "        label:");
+        write_label_body(out, lbl, "          ");
+    }
+}
+
+/// Render an inline `style: { type: passes, passes: [...] }` block at
+/// `indent`. Each pass is a [`StyleDef`] body written as a YAML map.
+fn write_inline_passes(out: &mut String, passes: &[StyleDef], indent: &str) {
+    let _ = writeln!(out, "{indent}style:");
+    let _ = writeln!(out, "{indent}  type: passes");
+    let _ = writeln!(out, "{indent}  passes:");
+    let item_indent = format!("{indent}    ");
+    let body_indent = format!("{indent}      ");
+    for pass in passes {
+        let _ = writeln!(out, "{item_indent}-");
+        write_geometry_style_body(out, pass, &body_indent);
+    }
+}
+
+/// Render the wire-form body of a single geometry [`StyleDef`] at `indent`.
+/// Shared between the standalone `styles:` registry entry and the per-pass
+/// items inside a `passes:` list. Label-typed entries are not emitted here -
+/// they always live in the registry.
+fn write_geometry_style_body(out: &mut String, st: &StyleDef, indent: &str) {
+    match &st.fill {
+        Some(EmitFill::Hex(c)) => {
+            let _ = writeln!(out, "{indent}fill: {}", quote_colour(*c));
+        }
+        Some(EmitFill::Hatch {
+            spacing,
+            angle_deg,
+            line_width,
+            colour,
+        }) => {
+            let _ = writeln!(
+                out,
+                "{indent}fill: {{ kind: hatch, spacing: {spacing}, angle_deg: {angle_deg}, line_width: {line_width}, colour: {} }}",
+                quote_colour(*colour)
+            );
+        }
+        Some(EmitFill::Image { name }) => {
+            let _ = writeln!(out, "{indent}fill: {{ kind: image, name: {} }}", yaml_quote(name));
+        }
+        None => {}
+    }
+    if let Some(c) = st.stroke {
+        let _ = writeln!(out, "{indent}stroke: {}", quote_colour(c));
+    }
+    if let Some(v) = st.stroke_width {
+        let _ = writeln!(out, "{indent}stroke_width: {v}");
+    }
+    if let Some(ref arr) = st.stroke_dasharray {
+        let _ = writeln!(
+            out,
+            "{indent}stroke_dasharray: [{}]",
+            arr.iter().map(|f| f.to_string()).collect::<Vec<_>>().join(", ")
+        );
+    }
+    if let Some(lj) = st.stroke_linejoin {
+        let _ = writeln!(out, "{indent}stroke_linejoin: {lj}");
+    }
+    if let Some(o) = st.opacity {
+        let _ = writeln!(out, "{indent}opacity: {o}");
+    }
+    if let Some(off) = st.stroke_offset_px {
+        let _ = writeln!(out, "{indent}stroke_offset_px: {off}");
+    }
+    if let Some(g) = st.stroke_gap {
+        let _ = writeln!(
+            out,
+            "{indent}stroke_gap: {{ interval_px: {}, initial_px: {} }}",
+            g.interval_px, g.initial_px
+        );
+    }
+    if let Some(gt) = st.geom_transform {
+        let _ = writeln!(out, "{indent}geom_transform: {gt}");
+    }
+    if let Some(m) = st.marker.as_ref() {
+        write_marker_at(out, m, indent);
+    }
+}
+
+/// Render a marker at the given indent. Used by both the registry emitter
+/// (`    marker: ...`) and the inline-passes path (deeper indent).
+fn write_marker_at(out: &mut String, m: &EmitMarker, indent: &str) {
+    match m {
+        EmitMarker::Builtin { kind, size } => {
+            let _ = writeln!(out, "{indent}marker: {{ kind: {}, size: {size} }}", kind.as_wire());
+        }
+        EmitMarker::Glyph {
+            font_family,
+            character,
+            size,
+        } => {
+            let _ = writeln!(
+                out,
+                "{indent}marker: {{ kind: glyph, font_family: {}, character: {}, size: {size} }}",
+                yaml_quote(font_family),
+                yaml_quote(character)
+            );
+        }
+        EmitMarker::Vector {
+            points,
+            anchor,
+            filled,
+            size,
+        } => {
+            let _ = writeln!(out, "{indent}marker:");
+            let _ = writeln!(out, "{indent}  kind: vector_shape");
+            let pts = points
+                .iter()
+                .map(|(x, y)| format!("[{x}, {y}]"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let _ = writeln!(out, "{indent}  points: [{pts}]");
+            if let Some((ax, ay)) = anchor {
+                let _ = writeln!(out, "{indent}  anchor: [{ax}, {ay}]");
+            }
+            let _ = writeln!(out, "{indent}  filled: {filled}");
+            let _ = writeln!(out, "{indent}  size: {size}");
+        }
+    }
 }
 
 /// render a [`LabelSkeleton`] under an externally-emitted `label:` key at
@@ -1085,62 +1190,7 @@ pub(crate) fn render(skel: &Skeleton, bands: &[(String, u64)]) -> String {
                     let _ = writeln!(out, "    force: true");
                 }
             } else {
-                match &st.fill {
-                    Some(EmitFill::Hex(c)) => {
-                        let _ = writeln!(out, "    fill: {}", quote_colour(*c));
-                    }
-                    Some(EmitFill::Hatch {
-                        spacing,
-                        angle_deg,
-                        line_width,
-                        colour,
-                    }) => {
-                        let _ = writeln!(
-                            out,
-                            "    fill: {{ kind: hatch, spacing: {spacing}, angle_deg: {angle_deg}, line_width: {line_width}, colour: {} }}",
-                            quote_colour(*colour)
-                        );
-                    }
-                    Some(EmitFill::Image { name }) => {
-                        let _ = writeln!(out, "    fill: {{ kind: image, name: {} }}", yaml_quote(name));
-                    }
-                    None => {}
-                }
-                if let Some(c) = st.stroke {
-                    let _ = writeln!(out, "    stroke: {}", quote_colour(c));
-                }
-                if let Some(v) = st.stroke_width {
-                    let _ = writeln!(out, "    stroke_width: {v}");
-                }
-                if let Some(ref arr) = st.stroke_dasharray {
-                    let _ = writeln!(
-                        out,
-                        "    stroke_dasharray: [{}]",
-                        arr.iter().map(|f| f.to_string()).collect::<Vec<_>>().join(", ")
-                    );
-                }
-                if let Some(lj) = st.stroke_linejoin {
-                    let _ = writeln!(out, "    stroke_linejoin: {lj}");
-                }
-                if let Some(o) = st.opacity {
-                    let _ = writeln!(out, "    opacity: {o}");
-                }
-                if let Some(off) = st.stroke_offset_px {
-                    let _ = writeln!(out, "    stroke_offset_px: {off}");
-                }
-                if let Some(g) = st.stroke_gap {
-                    let _ = writeln!(
-                        out,
-                        "    stroke_gap: {{ interval_px: {}, initial_px: {} }}",
-                        g.interval_px, g.initial_px
-                    );
-                }
-                if let Some(gt) = st.geom_transform {
-                    let _ = writeln!(out, "    geom_transform: {gt}");
-                }
-                if let Some(m) = st.marker.as_ref() {
-                    write_marker(&mut out, m);
-                }
+                write_geometry_style_body(&mut out, st, "    ");
             }
         }
         let _ = writeln!(out);

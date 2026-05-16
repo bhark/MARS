@@ -1,0 +1,30 @@
+# Multi-pass STYLE fixture: a CLASS with three STYLE blocks should emit an
+# inline `style: { type: passes, passes: [...] }` attachment in declared
+# order. Polygon fill + thick dark stroke + thin light stroke is a classic
+# road / boundary casing pattern that single-pass collapse cannot express.
+MAP
+  NAME "multi_pass"
+  TITLE "Multi-pass STYLE Coverage"
+
+  LAYER
+    NAME "boundaries"
+    TYPE POLYGON
+    STATUS ON
+    DATA "geom FROM boundaries"
+
+    CLASS
+      NAME "all"
+      STYLE
+        COLOR 240 240 230
+      END
+      STYLE
+        OUTLINECOLOR 40 40 60
+        WIDTH 4
+      END
+      STYLE
+        OUTLINECOLOR 220 220 240
+        WIDTH 1.5
+      END
+    END
+  END
+END

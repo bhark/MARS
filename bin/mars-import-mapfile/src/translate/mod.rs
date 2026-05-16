@@ -786,6 +786,86 @@ END
     }
 
     #[test]
+    fn multi_style_class_emits_passes_in_declared_order() {
+        let src = r#"
+MAP
+  NAME "demo"
+  LAYER
+    NAME "boundaries"
+    TYPE POLYGON
+    DATA "geom FROM b"
+    CLASS
+      NAME "default"
+      STYLE
+        COLOR 240 240 230
+      END
+      STYLE
+        OUTLINECOLOR 40 40 60
+        WIDTH 4
+      END
+      STYLE
+        OUTLINECOLOR 220 220 240
+        WIDTH 1.5
+      END
+    END
+  END
+END
+"#;
+        let skel = translate(src);
+        let layer = &skel.layers[0];
+        let cls = &layer.classes[0];
+        match &cls.style {
+            crate::emitter::ClassStyleAttach::Passes(passes) => {
+                assert_eq!(passes.len(), 3, "three STYLE blocks should yield three passes");
+                // pass 0: solid fill, no stroke
+                assert!(matches!(passes[0].fill, Some(crate::emitter::EmitFill::Hex(_))));
+                assert!(passes[0].stroke.is_none());
+                // pass 1: thick dark stroke, no fill
+                assert!(passes[1].fill.is_none());
+                assert_eq!(passes[1].stroke, Some(mars_style::Colour::rgb(40, 40, 60)));
+                assert_eq!(passes[1].stroke_width, Some(4.0));
+                // pass 2: thin light stroke, no fill
+                assert!(passes[2].fill.is_none());
+                assert_eq!(passes[2].stroke, Some(mars_style::Colour::rgb(220, 220, 240)));
+                assert_eq!(passes[2].stroke_width, Some(1.5));
+            }
+            other => panic!("expected ClassStyleAttach::Passes, got {other:?}"),
+        }
+        // multi-pass classes do not register named entries in the styles
+        // registry; this layer's class should not appear by its style_name.
+        assert!(skel.styles.iter().all(|s| !s.name.starts_with("poly_boundaries_")));
+    }
+
+    #[test]
+    fn single_style_class_still_emits_ref_attachment() {
+        let src = r#"
+MAP
+  NAME "demo"
+  LAYER
+    NAME "x"
+    TYPE LINE
+    DATA "geom FROM x"
+    CLASS
+      NAME "default"
+      STYLE
+        COLOR 0 0 0
+        WIDTH 1
+      END
+    END
+  END
+END
+"#;
+        let skel = translate(src);
+        let cls = &skel.layers[0].classes[0];
+        match &cls.style {
+            crate::emitter::ClassStyleAttach::Ref(name) => {
+                assert!(skel.styles.iter().any(|s| &s.name == name));
+            }
+            other => panic!("expected ClassStyleAttach::Ref, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn symbol_vector_with_points_resolves_to_vector_shape() {
         let src = r#"
 MAP

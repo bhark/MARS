@@ -132,6 +132,28 @@ fn ogr_vsicurl_fixture_matches() {
 }
 
 #[test]
+fn multi_pass_fixture_matches() {
+    assert_fixture_matches("multi_pass");
+}
+
+#[test]
+fn multi_pass_does_not_emit_collapse_warning() {
+    // the legacy importer collapsed multi-STYLE classes into one fill+stroke
+    // and warned per occurrence. multi-pass attachments now preserve order
+    // verbatim, so the warning should be gone.
+    let out = Command::new(bin_path())
+        .arg(fixture_dir().join("multi_pass.map"))
+        .output()
+        .expect("run binary");
+    assert!(out.status.success(), "non-strict run should succeed");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("collapsed multi-pass"),
+        "should not emit the legacy collapse warning; stderr={stderr}",
+    );
+}
+
+#[test]
 fn strict_exits_two_on_unsupported() {
     let out = Command::new(bin_path())
         .arg("--strict")

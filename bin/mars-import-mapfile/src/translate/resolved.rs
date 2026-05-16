@@ -21,7 +21,7 @@ use super::layer::{
     ParsedLayer, guess_id_column, lift_inline_subquery, lifted_to_source, mapfile_type_to_geom, parse_data,
 };
 use super::layer_metadata::{IncludeItemsParsed, LayerMetadata};
-use super::style_block::{CollapsedStyle, collapse_styles};
+use super::style_block::{SinglePass, style_block_to_pass};
 use super::symbol::ParsedSymbol;
 use crate::emitter::{IncludeItemsSkeleton, LayerAttributionSkeleton, LayerGatingSkeleton, LayerWmsSkeleton};
 
@@ -62,7 +62,10 @@ pub(crate) struct ResolvedClass {
     pub max_scale_denom: Option<u64>,
     pub style_type: String,
     pub style_name: String,
-    pub collapsed: CollapsedStyle,
+    /// One [`SinglePass`] per parsed STYLE block, in declared order. Length
+    /// 1 emits a single named [`StyleDef`] entry; length 2+ emits a
+    /// `ClassStyleAttach::Passes` inline on the class.
+    pub passes: Vec<SinglePass>,
     pub label: Option<ResolvedLabel>,
     pub unimplemented: Vec<&'static str>,
 }
@@ -518,7 +521,7 @@ fn resolve_class(
     let style_prefix = if geom_kind == "polygon" { "poly" } else { geom_kind };
     let style_name = format!("{}_{}_{}", style_prefix, slugify(layer_name), class_name);
 
-    let collapsed = collapse_styles(&p.styles, p.class_line, symbols);
+    let passes: Vec<SinglePass> = p.styles.iter().map(|sb| style_block_to_pass(sb, symbols)).collect();
 
     let when = resolve_when(p.expression, class_item, title.as_deref(), layer_name, p.class_line);
 
@@ -534,9 +537,11 @@ fn resolve_class(
             }
         }
     }
-    for u in &collapsed.unimplemented {
-        if !unimplemented.contains(u) {
-            unimplemented.push(*u);
+    for pass in &passes {
+        for u in &pass.unimplemented {
+            if !unimplemented.contains(u) {
+                unimplemented.push(*u);
+            }
         }
     }
 
@@ -548,7 +553,7 @@ fn resolve_class(
         max_scale_denom: p.max_scale_denom,
         style_type: geom_kind.to_string(),
         style_name,
-        collapsed,
+        passes,
         label,
         unimplemented,
     }
