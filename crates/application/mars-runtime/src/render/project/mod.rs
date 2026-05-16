@@ -156,12 +156,15 @@ mod tests {
         assert_eq!(world_to_pixel((1.0, 1.0), v, 10, 10), (0.0, 0.0));
     }
 
-    use mars_style::{Colour, FillPaint, GeomTransform, MarkerSymbol};
+    use mars_style::{Colour, FillPaint, GeomTransform, MarkerShape, MarkerSymbol};
 
     fn marker_style(t: GeomTransform) -> Arc<Style> {
         Arc::new(Style {
             fill: Some(FillPaint::Solid(Colour::rgba(0, 0, 0, 0xff))),
-            marker: Some(MarkerSymbol::Square { size: 4.0 }),
+            marker: Some(MarkerSymbol {
+                shape: MarkerShape::Square,
+                size: 4.0,
+            }),
             geom_transform: Some(t),
             ..Default::default()
         })

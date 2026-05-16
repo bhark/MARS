@@ -40,7 +40,7 @@ mod tests {
 
     use mars_artifact::GeomKind;
     use mars_render_port::DrawOp;
-    use mars_style::{MarkerSymbol, Style};
+    use mars_style::{MarkerShape, MarkerSymbol, Style};
     use mars_types::Bbox;
 
     use crate::render::project::feature_to_drawop;
@@ -50,7 +50,10 @@ mod tests {
         let geom = GeomKind::MultiPoint(vec![(2.0, 2.0), (5.0, 5.0), (8.0, 8.0)]);
         let v = Bbox::new(0.0, 0.0, 10.0, 10.0);
         let style = Arc::new(Style {
-            marker: Some(MarkerSymbol::Square { size: 6.0 }),
+            marker: Some(MarkerSymbol {
+                shape: MarkerShape::Square,
+                size: 6.0,
+            }),
             ..Default::default()
         });
         let op = feature_to_drawop(&geom, v, 100, 100, style).unwrap();

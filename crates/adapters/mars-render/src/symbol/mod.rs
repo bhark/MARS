@@ -1,5 +1,5 @@
 //! point-marker dispatch hub. mirrors the variant-per-file shape of
-//! `fill/` and `stroke/`: each `MarkerSymbol` variant lives in a sibling
+//! `fill/` and `stroke/`: each `MarkerShape` variant lives in a sibling
 //! module and is reached through a single exhaustive match. adding a
 //! variant in `mars-style` breaks the build here, forcing the conversation
 //! about whether the new marker is wired or staged.
@@ -18,7 +18,7 @@ mod vector_shape;
 mod x;
 
 use mars_render_port::{Path as PortPath, RenderError};
-use mars_style::{MarkerSymbol, Style};
+use mars_style::{MarkerShape, Style};
 use mars_text::Fonts;
 use tiny_skia::Pixmap;
 
@@ -32,23 +32,23 @@ pub(crate) fn dispatch(
     let Some(marker) = &style.marker else {
         return Ok(());
     };
-    match marker {
-        MarkerSymbol::Glyph { font_family, ch, size } => {
-            glyph::draw(pm, anchor, rotation_rad, font_family, ch, *size, style, fonts)
+    let size = marker.size;
+    match &marker.shape {
+        MarkerShape::Glyph { font_family, ch } => {
+            glyph::draw(pm, anchor, rotation_rad, font_family, ch, size, style, fonts)
         }
-        MarkerSymbol::Circle { size } => render(pm, circle::build_path(*size), anchor, rotation_rad, style, fonts),
-        MarkerSymbol::Square { size } => render(pm, square::build_path(*size), anchor, rotation_rad, style, fonts),
-        MarkerSymbol::Triangle { size } => render(pm, triangle::build_path(*size), anchor, rotation_rad, style, fonts),
-        MarkerSymbol::Cross { size } => render(pm, cross::build_path(*size), anchor, rotation_rad, style, fonts),
-        MarkerSymbol::X { size } => render(pm, x::build_path(*size), anchor, rotation_rad, style, fonts),
-        MarkerSymbol::Pin { size } => render(pm, pin::build_path(*size), anchor, rotation_rad, style, fonts),
-        MarkerSymbol::VectorShape {
+        MarkerShape::Circle => render(pm, circle::build_path(size), anchor, rotation_rad, style, fonts),
+        MarkerShape::Square => render(pm, square::build_path(size), anchor, rotation_rad, style, fonts),
+        MarkerShape::Triangle => render(pm, triangle::build_path(size), anchor, rotation_rad, style, fonts),
+        MarkerShape::Cross => render(pm, cross::build_path(size), anchor, rotation_rad, style, fonts),
+        MarkerShape::X => render(pm, x::build_path(size), anchor, rotation_rad, style, fonts),
+        MarkerShape::Pin => render(pm, pin::build_path(size), anchor, rotation_rad, style, fonts),
+        MarkerShape::VectorShape {
             points,
             anchor: local_anchor,
             filled,
-            size,
         } => {
-            let path = vector_shape::build_path(points, *local_anchor, *filled, *size);
+            let path = vector_shape::build_path(points, *local_anchor, *filled, size);
             if *filled {
                 render(pm, path, anchor, rotation_rad, style, fonts)
             } else {
@@ -91,11 +91,15 @@ mod tests {
     use std::sync::Arc;
 
     use mars_render_port::{Canvas, DrawOp, Encoder, ImageFormat, Renderer};
-    use mars_style::{Colour, FillPaint, Style};
+    use mars_style::{Colour, FillPaint, MarkerSymbol, Style};
     use tiny_skia::Pixmap as SkPixmap;
 
     use super::*;
     use crate::{TinySkiaEncoder, TinySkiaRenderer};
+
+    fn marker(shape: MarkerShape, size: f32) -> MarkerSymbol {
+        MarkerSymbol { shape, size }
+    }
 
     fn pm() -> SkPixmap {
         SkPixmap::new(16, 16).unwrap()
@@ -178,11 +182,13 @@ mod tests {
 
     #[test]
     fn glyph_marker_paints_pixels_at_anchor() {
-        let png = render_marker(MarkerSymbol::Glyph {
-            font_family: "DejaVu Sans".into(),
-            ch: "A".into(),
-            size: 18.0,
-        });
+        let png = render_marker(marker(
+            MarkerShape::Glyph {
+                font_family: "DejaVu Sans".into(),
+                ch: "A".into(),
+            },
+            18.0,
+        ));
         let n = red_pixel_count(&png);
         // exact glyph coverage depends on the bundled font; loose bounds
         // confirm the glyph rasterises at the requested colour without
@@ -193,20 +199,24 @@ mod tests {
     #[test]
     fn glyph_marker_rotation_changes_painted_aspect() {
         let upright = render_marker_at(
-            MarkerSymbol::Glyph {
-                font_family: "DejaVu Sans".into(),
-                ch: "I".into(),
-                size: 18.0,
-            },
+            marker(
+                MarkerShape::Glyph {
+                    font_family: "DejaVu Sans".into(),
+                    ch: "I".into(),
+                },
+                18.0,
+            ),
             32,
             0.0,
         );
         let rotated = render_marker_at(
-            MarkerSymbol::Glyph {
-                font_family: "DejaVu Sans".into(),
-                ch: "I".into(),
-                size: 18.0,
-            },
+            marker(
+                MarkerShape::Glyph {
+                    font_family: "DejaVu Sans".into(),
+                    ch: "I".into(),
+                },
+                18.0,
+            ),
             32,
             std::f32::consts::FRAC_PI_2,
         );
@@ -220,11 +230,13 @@ mod tests {
     fn glyph_marker_empty_string_is_typed_error() {
         let style = Style {
             fill: Some(FillPaint::Solid(Colour::rgba(255, 0, 0, 255))),
-            marker: Some(MarkerSymbol::Glyph {
-                font_family: "DejaVu Sans".into(),
-                ch: String::new(),
-                size: 12.0,
-            }),
+            marker: Some(marker(
+                MarkerShape::Glyph {
+                    font_family: "DejaVu Sans".into(),
+                    ch: String::new(),
+                },
+                12.0,
+            )),
             ..Default::default()
         };
         let fonts = mars_text::Fonts::with_default();
@@ -236,11 +248,13 @@ mod tests {
     fn glyph_marker_rejects_non_solid_fill() {
         let style = Style {
             fill: Some(FillPaint::Image { name: "brick".into() }),
-            marker: Some(MarkerSymbol::Glyph {
-                font_family: "DejaVu Sans".into(),
-                ch: "A".into(),
-                size: 12.0,
-            }),
+            marker: Some(marker(
+                MarkerShape::Glyph {
+                    font_family: "DejaVu Sans".into(),
+                    ch: "A".into(),
+                },
+                12.0,
+            )),
             ..Default::default()
         };
         let fonts = mars_text::Fonts::with_default();
@@ -250,7 +264,7 @@ mod tests {
 
     #[test]
     fn circle_marker_paints_red_pixels() {
-        let png = render_marker(MarkerSymbol::Circle { size: 12.0 });
+        let png = render_marker(marker(MarkerShape::Circle, 12.0));
         // 12px diameter circle = pi * 6^2 ≈ 113 covered pixels; allow slack
         // for antialiased edge softening and tiny-skia coverage rounding.
         let n = red_pixel_count(&png);
@@ -262,7 +276,7 @@ mod tests {
 
     #[test]
     fn square_marker_paints_red_pixels() {
-        let png = render_marker(MarkerSymbol::Square { size: 10.0 });
+        let png = render_marker(marker(MarkerShape::Square, 10.0));
         // 10x10 square = 100 fully covered pixels; antialiased edges round
         // slightly under, so allow some slack.
         let n = red_pixel_count(&png);
@@ -274,7 +288,7 @@ mod tests {
 
     #[test]
     fn triangle_marker_paints_red_pixels() {
-        let png = render_marker(MarkerSymbol::Triangle { size: 12.0 });
+        let png = render_marker(marker(MarkerShape::Triangle, 12.0));
         // equilateral triangle with base 12 has area ~= 12^2 * sqrt(3)/4
         // ≈ 62; allow generous slack for antialiased apex/edge softening.
         let n = red_pixel_count(&png);
@@ -286,7 +300,7 @@ mod tests {
 
     #[test]
     fn cross_marker_paints_red_pixels() {
-        let png = render_marker(MarkerSymbol::Cross { size: 12.0 });
+        let png = render_marker(marker(MarkerShape::Cross, 12.0));
         // + sign with arm length 12 and thickness 4 covers a 12x4 bar plus
         // a 4x12 bar minus the shared 4x4 centre = 48 + 48 - 16 = 80.
         let n = red_pixel_count(&png);
@@ -298,7 +312,7 @@ mod tests {
 
     #[test]
     fn x_marker_paints_red_pixels() {
-        let png = render_marker(MarkerSymbol::X { size: 12.0 });
+        let png = render_marker(marker(MarkerShape::X, 12.0));
         // same coverage as cross (it's the same polygon rotated 45°).
         let n = red_pixel_count(&png);
         assert!(n > 60 && n < 100, "expected ~80 fully-red pixels for a 12px x, got {n}");
@@ -306,7 +320,7 @@ mod tests {
 
     #[test]
     fn pin_marker_paints_red_pixels() {
-        let png = render_marker(MarkerSymbol::Pin { size: 12.0 });
+        let png = render_marker(marker(MarkerShape::Pin, 12.0));
         // bulb area = pi*36 ≈ 113 + tail triangle from tangents to apex
         // ≈ 47, minus overlap; allow generous slack for arc + apex AA.
         let n = red_pixel_count(&png);
@@ -318,12 +332,14 @@ mod tests {
 
     #[test]
     fn vector_shape_filled_paints_polygon_interior() {
-        let png = render_marker(MarkerSymbol::VectorShape {
-            points: vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)],
-            anchor: (0.5, 0.5),
-            filled: true,
-            size: 10.0,
-        });
+        let png = render_marker(marker(
+            MarkerShape::VectorShape {
+                points: vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)],
+                anchor: (0.5, 0.5),
+                filled: true,
+            },
+            10.0,
+        ));
         // unit-square scaled to 10px = ~100 fully-red pixels.
         let n = red_pixel_count(&png);
         assert!(

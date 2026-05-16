@@ -207,7 +207,10 @@ mod tests {
         let s = Style {
             stroke: Some(Colour::rgba(0, 0, 0, 255)),
             stroke_width: Some(1.0),
-            marker: Some(mars_style::MarkerSymbol::Circle { size: 4.0 }),
+            marker: Some(mars_style::MarkerSymbol {
+                shape: mars_style::MarkerShape::Circle,
+                size: 4.0,
+            }),
             stroke_gap: Some(mars_style::StrokeGap {
                 interval_px: 12.0,
                 initial_px: 3.0,
@@ -238,7 +241,10 @@ mod tests {
         let s = Style {
             stroke: Some(Colour::rgba(0, 0, 0, 255)),
             stroke_width: Some(1.0),
-            marker: Some(mars_style::MarkerSymbol::Circle { size: 4.0 }),
+            marker: Some(mars_style::MarkerSymbol {
+                shape: mars_style::MarkerShape::Circle,
+                size: 4.0,
+            }),
             stroke_gap: Some(mars_style::StrokeGap {
                 interval_px: 0.0,
                 initial_px: 0.0,

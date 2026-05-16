@@ -59,7 +59,7 @@ pub(crate) fn stamp(
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use mars_render_port::{Path as PortPath, Subpath};
-    use mars_style::{Colour, FillPaint, MarkerSymbol, StrokeGap, Style};
+    use mars_style::{Colour, FillPaint, MarkerShape, MarkerSymbol, StrokeGap, Style};
     use tiny_skia::Pixmap;
 
     use crate::prepare;
@@ -121,7 +121,10 @@ mod tests {
             fill: Some(FillPaint::Solid(Colour::rgba(255, 0, 0, 255))),
             stroke: Some(Colour::rgba(0, 0, 0, 255)),
             stroke_width: Some(1.0),
-            marker: Some(MarkerSymbol::Circle { size: 4.0 }),
+            marker: Some(MarkerSymbol {
+                shape: MarkerShape::Circle,
+                size: 4.0,
+            }),
             stroke_gap: Some(StrokeGap {
                 interval_px: 20.0,
                 initial_px: 4.0,
@@ -156,7 +159,10 @@ mod tests {
         };
         let style = Style {
             fill: Some(FillPaint::Solid(Colour::rgba(255, 0, 0, 255))),
-            marker: Some(MarkerSymbol::Circle { size: 4.0 }),
+            marker: Some(MarkerSymbol {
+                shape: MarkerShape::Circle,
+                size: 4.0,
+            }),
             ..Default::default()
         };
         let marker = style.marker.clone().expect("marker");
@@ -184,7 +190,10 @@ mod tests {
         };
         let style = Style {
             fill: Some(FillPaint::Solid(Colour::rgba(255, 0, 0, 255))),
-            marker: Some(MarkerSymbol::Square { size: 3.0 }),
+            marker: Some(MarkerSymbol {
+                shape: MarkerShape::Square,
+                size: 3.0,
+            }),
             ..Default::default()
         };
         let marker = style.marker.clone().expect("marker");

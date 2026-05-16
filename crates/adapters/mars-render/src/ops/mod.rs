@@ -48,7 +48,7 @@ mod tests {
     use std::sync::Arc;
 
     use mars_render_port::{Canvas, DrawOp, Path as PortPath, RenderError, Renderer, Subpath};
-    use mars_style::{MarkerSymbol, Style};
+    use mars_style::{MarkerShape, MarkerSymbol, Style};
 
     use super::dispatch;
     use crate::TinySkiaRenderer;
@@ -77,7 +77,10 @@ mod tests {
                     b: 0,
                     a: 255,
                 })),
-                marker: Some(MarkerSymbol::Circle { size: 6.0 }),
+                marker: Some(MarkerSymbol {
+                    shape: MarkerShape::Circle,
+                    size: 6.0,
+                }),
                 ..Default::default()
             }),
         };
@@ -171,9 +174,11 @@ mod tests {
             rotation_rad: 0.0,
             style: Arc::new(Style {
                 fill: Some(mars_style::FillPaint::Solid(mars_style::Colour::rgba(255, 0, 0, 255))),
-                marker: Some(MarkerSymbol::Glyph {
-                    font_family: "DejaVu Sans".into(),
-                    ch: "A".into(),
+                marker: Some(MarkerSymbol {
+                    shape: MarkerShape::Glyph {
+                        font_family: "DejaVu Sans".into(),
+                        ch: "A".into(),
+                    },
                     size: 18.0,
                 }),
                 ..Default::default()

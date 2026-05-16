@@ -68,7 +68,7 @@ fn validate_marker_symbol(style_name: &str, m: &MarkerSymbol, fill: Option<&Fill
     // glyph markers shape a single character via the text path; an empty
     // string has no shape, and non-solid fills (hatch/image) have no
     // meaning for a single-glyph stamp.
-    if let MarkerSymbol::Glyph { ch, .. } = m {
+    if let mars_style::MarkerShape::Glyph { ch, .. } = &m.shape {
         if ch.is_empty() {
             return Err(ConfigError::Invalid(format!(
                 "style {style_name:?} marker.ch must not be empty"
@@ -147,7 +147,13 @@ mod tests {
                 colour: Colour::rgb(0, 0, 0),
             }),
         );
-        styles.insert("m".into(), point_style(MarkerSymbol::Circle { size: 6.0 }));
+        styles.insert(
+            "m".into(),
+            point_style(MarkerSymbol {
+                shape: mars_style::MarkerShape::Circle,
+                size: 6.0,
+            }),
+        );
         validate_styles(&styles).unwrap();
     }
 
@@ -203,7 +209,13 @@ mod tests {
     #[test]
     fn rejects_zero_marker_size() {
         let mut styles = BTreeMap::new();
-        styles.insert("bad".into(), point_style(MarkerSymbol::Pin { size: 0.0 }));
+        styles.insert(
+            "bad".into(),
+            point_style(MarkerSymbol {
+                shape: mars_style::MarkerShape::Pin,
+                size: 0.0,
+            }),
+        );
         let err = validate_styles(&styles).unwrap_err();
         assert!(err.to_string().contains("marker.size"), "{err}");
     }
@@ -213,9 +225,11 @@ mod tests {
         let mut styles = BTreeMap::new();
         styles.insert(
             "bad".into(),
-            point_style(MarkerSymbol::Glyph {
-                font_family: "Sans".into(),
-                ch: String::new(),
+            point_style(MarkerSymbol {
+                shape: mars_style::MarkerShape::Glyph {
+                    font_family: "Sans".into(),
+                    ch: String::new(),
+                },
                 size: 12.0,
             }),
         );
@@ -235,9 +249,11 @@ mod tests {
                     line_width: 0.5,
                     colour: Colour::rgb(0, 0, 0),
                 }),
-                marker: Some(MarkerSymbol::Glyph {
-                    font_family: "Sans".into(),
-                    ch: "A".into(),
+                marker: Some(MarkerSymbol {
+                    shape: mars_style::MarkerShape::Glyph {
+                        font_family: "Sans".into(),
+                        ch: "A".into(),
+                    },
                     size: 12.0,
                 }),
                 ..Default::default()
@@ -251,9 +267,11 @@ mod tests {
             "img".into(),
             StyleEntry::Point(Style {
                 fill: Some(FillPaint::Image { name: "pattern".into() }),
-                marker: Some(MarkerSymbol::Glyph {
-                    font_family: "Sans".into(),
-                    ch: "A".into(),
+                marker: Some(MarkerSymbol {
+                    shape: mars_style::MarkerShape::Glyph {
+                        font_family: "Sans".into(),
+                        ch: "A".into(),
+                    },
                     size: 12.0,
                 }),
                 ..Default::default()
@@ -269,7 +287,10 @@ mod tests {
         styles.insert(
             "ok".into(),
             line_style_with_gap(
-                Some(MarkerSymbol::Circle { size: 4.0 }),
+                Some(MarkerSymbol {
+                    shape: mars_style::MarkerShape::Circle,
+                    size: 4.0,
+                }),
                 StrokeGap {
                     interval_px: 12.0,
                     initial_px: 3.0,
@@ -285,7 +306,10 @@ mod tests {
         styles.insert(
             "bad".into(),
             line_style_with_gap(
-                Some(MarkerSymbol::Circle { size: 4.0 }),
+                Some(MarkerSymbol {
+                    shape: mars_style::MarkerShape::Circle,
+                    size: 4.0,
+                }),
                 StrokeGap {
                     interval_px: 0.0,
                     initial_px: 0.0,
@@ -302,7 +326,10 @@ mod tests {
         styles.insert(
             "bad".into(),
             line_style_with_gap(
-                Some(MarkerSymbol::Circle { size: 4.0 }),
+                Some(MarkerSymbol {
+                    shape: mars_style::MarkerShape::Circle,
+                    size: 4.0,
+                }),
                 StrokeGap {
                     interval_px: 10.0,
                     initial_px: -1.0,

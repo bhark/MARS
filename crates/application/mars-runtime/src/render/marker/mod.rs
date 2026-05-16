@@ -1,4 +1,4 @@
-//! point marker tessellation. dispatch hub on `MarkerSymbol` variant.
+//! point marker tessellation. dispatch hub on `MarkerShape`.
 //!
 //! adding a marker variant: one new file under `marker/`, one mod line
 //! here, one match arm. dispatch is exhaustive (no `_` arm) so a new
@@ -16,23 +16,19 @@ mod vector_shape;
 mod x;
 
 use mars_render_port::Path;
-use mars_style::MarkerSymbol;
+use mars_style::{MarkerShape, MarkerSymbol};
 
 pub(super) fn path_at(m: &MarkerSymbol, pos: (f32, f32)) -> Path {
-    match m {
-        MarkerSymbol::Circle { size } => circle::path(*size, pos),
-        MarkerSymbol::Square { size } => square::path(*size, pos),
-        MarkerSymbol::Triangle { size } => triangle::path(*size, pos),
-        MarkerSymbol::Cross { size } => cross::path(*size, pos),
-        MarkerSymbol::X { size } => x::path(*size, pos),
-        MarkerSymbol::Pin { size } => pin::path(*size, pos),
-        MarkerSymbol::VectorShape {
-            points,
-            anchor,
-            filled,
-            size,
-        } => vector_shape::path(points, *anchor, *filled, *size, pos),
-        MarkerSymbol::Glyph { .. } => glyph::path(pos),
+    let size = m.size;
+    match &m.shape {
+        MarkerShape::Circle => circle::path(size, pos),
+        MarkerShape::Square => square::path(size, pos),
+        MarkerShape::Triangle => triangle::path(size, pos),
+        MarkerShape::Cross => cross::path(size, pos),
+        MarkerShape::X => x::path(size, pos),
+        MarkerShape::Pin => pin::path(size, pos),
+        MarkerShape::VectorShape { points, anchor, filled } => vector_shape::path(points, *anchor, *filled, size, pos),
+        MarkerShape::Glyph { .. } => glyph::path(pos),
     }
 }
 

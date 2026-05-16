@@ -29,7 +29,7 @@ mod tests {
 
     use mars_artifact::GeomKind;
     use mars_render_port::DrawOp;
-    use mars_style::{Colour, FillPaint, MarkerSymbol, Style};
+    use mars_style::{Colour, FillPaint, MarkerShape, MarkerSymbol, Style};
     use mars_types::Bbox;
 
     use crate::render::project::feature_to_drawop;
@@ -52,7 +52,10 @@ mod tests {
         let v = Bbox::new(0.0, 0.0, 10.0, 10.0);
         let style = Arc::new(Style {
             fill: Some(FillPaint::Solid(Colour::rgba(0, 0, 0, 255))),
-            marker: Some(MarkerSymbol::Circle { size: 12.0 }),
+            marker: Some(MarkerSymbol {
+                shape: MarkerShape::Circle,
+                size: 12.0,
+            }),
             ..Default::default()
         });
         let op = feature_to_drawop(&geom, v, 100, 100, style).unwrap();
