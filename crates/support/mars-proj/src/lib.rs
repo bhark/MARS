@@ -43,16 +43,17 @@ thread_local! {
 
     // per-thread (from,to) -> Transformer cache. Rc (not Arc) keeps the
     // single-thread invariant at the type level; Transformer is !Send because
-    // its PJ binds to PROJ_CTX above.
-    static TRANSFORMER_CACHE: RefCell<HashMap<(String, String), Rc<Transformer>>> = RefCell::new(HashMap::new());
+    // its PJ binds to PROJ_CTX above. CrsCode is Arc<str> with content-based
+    // Hash/Eq, so cache hits are zero-alloc and inserts only bump refcounts.
+    static TRANSFORMER_CACHE: RefCell<HashMap<(CrsCode, CrsCode), Rc<Transformer>>> = RefCell::new(HashMap::new());
 }
 
 /// Look up a cached `(from, to)` transformer for the calling thread,
 /// constructing one on the first miss. Returned `Rc` is `!Send`, keeping the
 /// PJ-context invariant enforced at the type level.
 pub fn cached_transformer(from: &CrsCode, to: &CrsCode) -> Result<Rc<Transformer>, ProjError> {
-    let key = (from.as_str().to_owned(), to.as_str().to_owned());
     TRANSFORMER_CACHE.with(|c| {
+        let key = (from.clone(), to.clone());
         if let Some(existing) = c.borrow().get(&key) {
             return Ok(existing.clone());
         }
