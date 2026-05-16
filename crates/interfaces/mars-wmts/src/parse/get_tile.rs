@@ -380,4 +380,32 @@ mod tests {
             }
         ));
     }
+
+    #[test]
+    fn denied_layer_returns_operation_not_permitted() {
+        use mars_config::ServiceOp;
+        use mars_types::LayerId;
+
+        use crate::WmtsLayerPolicy;
+
+        let mut c = cfg();
+        c.layer_policies.insert(
+            LayerId::new("denied"),
+            WmtsLayerPolicy {
+                get_tile: false,
+                get_capabilities: true,
+                get_feature_info: true,
+            },
+        );
+        let q = "request=GetTile&layer=denied&format=image/png&tilematrixset=dk_25832&\
+                 tilematrix=0&tilecol=0&tilerow=0";
+        let err = parse_get_tile(q, &c).unwrap_err();
+        assert!(matches!(
+            err,
+            WmtsError::OperationNotPermitted {
+                op: ServiceOp::WmtsGetTile,
+                ..
+            }
+        ));
+    }
 }

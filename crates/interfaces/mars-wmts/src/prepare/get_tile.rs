@@ -3,7 +3,7 @@
 //! at the parse layer, then flow through this single resolver - so REST and
 //! KVP cache keys / bbox math can never drift.
 
-use mars_config::TileMatrixSet;
+use mars_config::{ServiceOp, TileMatrixSet};
 use mars_runtime::RenderPlan;
 use mars_types::{Bbox, LayerId};
 
@@ -31,6 +31,12 @@ pub(crate) fn resolve_get_tile(p: ParsedGetTile, cfg: &WmtsConfig) -> Result<Res
         return Err(WmtsError::MissingParam("layer"));
     }
     let layer = LayerId::new(layer_raw.to_owned());
+    if !cfg.permits(&layer, ServiceOp::WmtsGetTile) {
+        return Err(WmtsError::OperationNotPermitted {
+            layer,
+            op: ServiceOp::WmtsGetTile,
+        });
+    }
 
     let format = p.format.ok_or(WmtsError::MissingParam("format"))?;
     if !cfg.formats.is_empty() && !cfg.formats.contains(&format) {

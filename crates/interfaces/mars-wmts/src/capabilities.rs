@@ -50,6 +50,11 @@ pub fn capabilities_xml(cfg: &Config, manifest: &Manifest) -> Result<String, Wmt
         .map_err(xml_err)?;
     let advertised_formats = configured_formats(cfg);
     for layer in &cfg.layers {
+        // explicit ows.request_gating denial hides the layer entirely.
+        // permits_op covers the default-allow case.
+        if !layer.permits_op(mars_config::ServiceOp::WmtsGetTile) {
+            continue;
+        }
         write_layer(
             &mut w,
             cfg,
@@ -647,6 +652,20 @@ layers:
         parses_balanced(&xml);
         assert!(xml.contains("<Contents>"));
         assert!(xml.contains("</Contents>"));
+    }
+
+    #[test]
+    fn layer_with_wmts_get_tile_denied_is_hidden() {
+        let mut cfg = minimal_cfg();
+        cfg.layers[0]
+            .ows
+            .request_gating
+            .insert(mars_config::ServiceOp::WmtsGetTile, false);
+        let xml = capabilities_xml(&cfg, &empty_manifest(&cfg)).unwrap();
+        assert!(
+            !xml.contains("<ows:Identifier>a</ows:Identifier>"),
+            "denied layer must not surface in Contents",
+        );
     }
 
     // phase-d: re-add `derives_layer_bbox_from_manifest_cells` once v3 page
