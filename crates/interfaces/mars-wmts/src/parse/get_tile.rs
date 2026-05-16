@@ -9,6 +9,8 @@
 use mars_runtime::RenderPlan;
 use mars_types::ImageFormat;
 
+use mars_ows_common::nonempty;
+
 use super::common::{Kvp, parse_kvp, parse_optional_u32};
 use crate::prepare::{ParsedGetTile, ResolvedGetTile, resolve_get_tile};
 use crate::{WmtsConfig, WmtsError};
@@ -34,10 +36,6 @@ fn parse_kvp_get_tile(kvp: &Kvp) -> Result<ParsedGetTile, WmtsError> {
         tilecol: parse_optional_u32(kvp, "tilecol")?,
         tilerow: parse_optional_u32(kvp, "tilerow")?,
     })
-}
-
-fn nonempty(kvp: &Kvp, name: &str) -> Option<String> {
-    kvp.get(name).filter(|s| !s.is_empty()).cloned()
 }
 
 /// Parse a REST-form tile request. The router strips the path prefix and

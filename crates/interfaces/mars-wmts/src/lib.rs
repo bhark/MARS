@@ -28,6 +28,15 @@ pub enum WmtsError {
     NotImplemented { what: String },
 }
 
+impl mars_ows_common::OwsParseError for WmtsError {
+    fn missing(name: &'static str) -> Self {
+        Self::MissingParam(name)
+    }
+    fn invalid(name: &'static str, reason: String) -> Self {
+        Self::InvalidParam { name, reason }
+    }
+}
+
 /// hard upper bound on absolute bbox coordinates to prevent infinite cell
 /// enumeration from astronomical computed values (mirrors the WMS guard).
 const DEFAULT_MAX_BBOX_COORD: f64 = 1e9;

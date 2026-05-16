@@ -17,6 +17,7 @@ members = [
     "crates/adapters/mars-render",
     "crates/application/mars-compiler",
     "crates/application/mars-runtime",
+    "crates/interfaces/mars-ows-common",
     "crates/interfaces/mars-wms",
     "crates/interfaces/mars-wmts",
     "crates/interfaces/mars-http",
@@ -78,6 +79,7 @@ mars-render          = { path = "crates/adapters/mars-render" }
 mars-compiler       = { path = "crates/application/mars-compiler" }
 mars-runtime        = { path = "crates/application/mars-runtime" }
 # interfaces
+mars-ows-common     = { path = "crates/interfaces/mars-ows-common" }
 mars-wms            = { path = "crates/interfaces/mars-wms" }
 mars-wmts           = { path = "crates/interfaces/mars-wmts" }
 mars-http           = { path = "crates/interfaces/mars-http" }

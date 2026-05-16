@@ -36,6 +36,15 @@ pub enum WmsError {
     OperationNotPermitted { layer: LayerId, op: ServiceOp },
 }
 
+impl mars_ows_common::OwsParseError for WmsError {
+    fn missing(name: &'static str) -> Self {
+        Self::MissingParam(name)
+    }
+    fn invalid(name: &'static str, reason: String) -> Self {
+        Self::InvalidParam { name, reason }
+    }
+}
+
 /// hard upper bound on image dimensions to prevent oom from malicious
 /// width / height parameters.
 const DEFAULT_MAX_IMAGE_DIMENSION: u32 = 8192;

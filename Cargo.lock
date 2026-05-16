@@ -2763,6 +2763,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mars-ows-common"
+version = "0.0.0-dev"
+dependencies = [
+ "mars-types",
+ "percent-encoding",
+ "quick-xml",
+]
+
+[[package]]
 name = "mars-proj"
 version = "0.0.0-dev"
 dependencies = [
@@ -3015,10 +3024,10 @@ name = "mars-wms"
 version = "0.0.0-dev"
 dependencies = [
  "mars-config",
+ "mars-ows-common",
  "mars-proj",
  "mars-runtime",
  "mars-types",
- "percent-encoding",
  "quick-xml",
  "serde_json",
  "serde_yaml_ng",
@@ -3030,9 +3039,9 @@ name = "mars-wmts"
 version = "0.0.0-dev"
 dependencies = [
  "mars-config",
+ "mars-ows-common",
  "mars-runtime",
  "mars-types",
- "percent-encoding",
  "quick-xml",
  "serde_yaml_ng",
  "thiserror 2.0.18",

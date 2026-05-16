@@ -13,14 +13,14 @@ description = "WMS 1.3.0 parameter parsing, capabilities document, GFI."
 workspace = true
 
 [dependencies]
-mars-runtime  = { workspace = true }
-mars-config   = { workspace = true }
-mars-types    = { workspace = true }
-mars-proj     = { workspace = true }
-quick-xml     = "0.39"
-thiserror     = { workspace = true }
-percent-encoding = "2"
-serde_json    = { workspace = true }
+mars-runtime    = { workspace = true }
+mars-config     = { workspace = true }
+mars-types      = { workspace = true }
+mars-proj       = { workspace = true }
+mars-ows-common = { workspace = true }
+quick-xml       = "0.39"
+thiserror       = { workspace = true }
+serde_json      = { workspace = true }
 
 [dev-dependencies]
 serde_yaml_ng = { workspace = true }

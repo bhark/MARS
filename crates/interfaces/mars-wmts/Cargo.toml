@@ -13,12 +13,12 @@ description = "WMTS 1.0.0 parameter parsing, capabilities, tile-cache key shape.
 workspace = true
 
 [dependencies]
-mars-types    = { workspace = true }
-mars-runtime  = { workspace = true }
-mars-config   = { workspace = true }
-thiserror     = { workspace = true }
-percent-encoding = { workspace = true }
-quick-xml     = { workspace = true }
+mars-types      = { workspace = true }
+mars-runtime    = { workspace = true }
+mars-config     = { workspace = true }
+mars-ows-common = { workspace = true }
+thiserror       = { workspace = true }
+quick-xml       = { workspace = true }
 
 [dev-dependencies]
 serde_yaml_ng = { workspace = true }

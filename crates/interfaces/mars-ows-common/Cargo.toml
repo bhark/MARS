@@ -1,0 +1,18 @@
+[package]
+name        = "mars-ows-common"
+version.workspace = true
+edition.workspace     = true
+license.workspace     = true
+repository.workspace  = true
+authors.workspace     = true
+publish.workspace     = true
+rust-version.workspace = true
+description = "OWS Common substrate shared across OGC interface adapters (WMS, WMTS, ...). KVP parsing helpers, XML utilities, format negotiation."
+
+[lints]
+workspace = true
+
+[dependencies]
+mars-types       = { workspace = true }
+quick-xml        = "0.39"
+percent-encoding = { workspace = true }

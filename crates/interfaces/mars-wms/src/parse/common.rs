@@ -1,68 +1,8 @@
-//! Shared KVP-parsing helpers used by every WMS operation.
-//!
-//! KVP semantics: parameter names are case-insensitive (lowercased on parse,
-//! per OGC 06-042 §11.5.2); values are preserved as-is. Repeated keys
-//! follow last-win semantics - the spec does not pin a behaviour, so this
-//! is an adapter choice that matches common WMS server practice.
+//! Thin re-export of the KVP helpers lifted into `mars-ows-common`. Kept as
+//! a local module so existing `super::common::*` imports stay valid; new
+//! callers can reach for `mars_ows_common` directly.
 
-use std::collections::HashMap;
-
-use percent_encoding::percent_decode_str;
-
-use crate::WmsError;
-
-pub(super) type Kvp = HashMap<String, String>;
-
-pub(super) fn parse_kvp(query: &str) -> Kvp {
-    let mut out = HashMap::new();
-    for pair in query.trim_start_matches('?').split('&') {
-        if pair.is_empty() {
-            continue;
-        }
-        let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
-        // wms is case-insensitive on parameter names per OGC 06-042
-        out.insert(k.to_ascii_lowercase(), pct_decode(v));
-    }
-    out
-}
-
-/// percent-decode a KVP value with `+` -> space (form-style). invalid escapes
-/// pass through literally, matching the prior hand-rolled behaviour.
-fn pct_decode(s: &str) -> String {
-    // form-style first: + means space.
-    let plus_decoded: String = s.chars().map(|c| if c == '+' { ' ' } else { c }).collect();
-    percent_decode_str(&plus_decoded).decode_utf8_lossy().into_owned()
-}
-
-pub(super) fn require(kvp: &Kvp, name: &'static str) -> Result<String, WmsError> {
-    kvp.get(name)
-        .filter(|s| !s.is_empty())
-        .cloned()
-        .ok_or(WmsError::MissingParam(name))
-}
-
-/// extract a non-empty KVP value as an owned String. parse-layer counterpart
-/// to `require` that does not error on absence - prepare reports MissingParam.
-pub(super) fn nonempty(kvp: &Kvp, name: &str) -> Option<String> {
-    kvp.get(name).filter(|s| !s.is_empty()).cloned()
-}
-
-/// extract `Option<u32>` from a KVP value: missing/empty -> `Ok(None)`;
-/// present but malformed -> `WmsError::InvalidParam`. semantic `required`
-/// vs `optional` distinction lives in prepare, not parse.
-pub(super) fn parse_optional_u32(kvp: &Kvp, name: &'static str) -> Result<Option<u32>, WmsError> {
-    let raw = match kvp.get(name) {
-        Some(s) if !s.is_empty() => s,
-        _ => return Ok(None),
-    };
-    let n = raw
-        .parse()
-        .map_err(|e: std::num::ParseIntError| WmsError::InvalidParam {
-            name,
-            reason: e.to_string(),
-        })?;
-    Ok(Some(n))
-}
+pub(super) use mars_ows_common::{Kvp, nonempty, parse_kvp, parse_optional_u32, require};
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::panic)]
@@ -95,7 +35,6 @@ mod tests {
 
     #[test]
     fn malformed_percent_encoding_passes_through() {
-        // %ZZ and %G are invalid hex → passed through literally in the value
         let q = "request=GetMap&version=1.3.0&layers=foo%ZZ%G&crs=EPSG:25832&\
                  bbox=0,0,1,1&width=1&height=1&format=image/png";
         let plan = parse_get_map(q, &cfg()).unwrap();
@@ -106,7 +45,6 @@ mod tests {
     fn percent_decode_at_end_of_input() {
         // boundary: %xx at the very end of the value must decode (the previous
         // hand-rolled implementation had an off-by-one that emitted it literally).
-        // `%2F` decodes to `/`; we feed it as the final 3 bytes of a value.
         let q = "request=GetMap&version=1.3.0&layers=ab%2F&crs=EPSG:25832&\
                  bbox=0,0,1,1&width=1&height=1&format=image/png";
         let plan = parse_get_map(q, &cfg()).unwrap();
