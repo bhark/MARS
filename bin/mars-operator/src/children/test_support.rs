@@ -55,6 +55,7 @@ pub(crate) fn cr(name: &str, namespace: &str) -> MarsService {
                 node_selector: std::collections::BTreeMap::new(),
                 tolerations: Vec::new(),
                 affinity: None,
+                pod_disruption_budget: None,
             },
             artifact_store: None,
             bootstrap: None,

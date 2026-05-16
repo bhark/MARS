@@ -267,6 +267,26 @@ pub(crate) struct RuntimeSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(schema_with = "preserve_unknown_fields_optional")]
     pub(crate) affinity: Option<serde_json::Value>,
+
+    /// Reconcile a sibling PodDisruptionBudget targeting the runtime
+    /// Deployment's pods. Absent = no PDB; presence = the operator
+    /// creates/updates one, and clearing the field deletes the prior PDB.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) pod_disruption_budget: Option<PodDisruptionBudgetSpec>,
+}
+
+/// Schema-friendly mirror of the relevant subset of upstream
+/// `PodDisruptionBudgetSpec`. `min_available` and `max_unavailable` are
+/// mutually exclusive; the apiserver validates this, so we do not.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PodDisruptionBudgetSpec {
+    /// Integer (`"2"`) or percentage string (`"50%"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) min_available: Option<String>,
+    /// Integer (`"1"`) or percentage string (`"50%"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) max_unavailable: Option<String>,
 }
 
 fn default_runtime_replicas() -> i32 {

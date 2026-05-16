@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use k8s_openapi::api::apps::v1::Deployment;
 use k8s_openapi::api::batch::v1::Job;
 use k8s_openapi::api::core::v1::{ConfigMap, PersistentVolumeClaim, Secret, Service, ServiceAccount};
+use k8s_openapi::api::policy::v1::PodDisruptionBudget;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::OwnerReference;
 use kube::Resource;
 use kube::api::{Api, Patch, PatchParams};
@@ -18,7 +19,7 @@ use tracing::{error, info, warn};
 use crate::bootstrap::{self, BOOTSTRAP_FINALIZER, PlanInputs};
 use crate::children::labels::{self, BOOTSTRAP_ADMIN_DSN_KEY, artifact_store_pvc_name};
 use crate::children::pvc::{self, PvcSpec};
-use crate::children::{compiler, configmap, runtime, service};
+use crate::children::{compiler, configmap, pdb, runtime, service};
 use crate::crd::{ArtifactStoreSpec, BootstrapSpec, MarsService, SecretKeyRef};
 use crate::error::{OperatorError, Result};
 use crate::metrics::Metrics;
@@ -194,8 +195,13 @@ async fn reconcile_inner(cr: Arc<MarsService>, ctx: Arc<Ctx>) -> Result<Action> 
     )?;
     apply_deployment(&ctx, &ns, &runtime_deployment).await?;
 
-    let runtime_service = service::build(&cr, owner_ref)?;
+    let runtime_service = service::build(&cr, owner_ref.clone())?;
     apply_service(&ctx, &ns, &runtime_service).await?;
+
+    // sibling PDB: present when spec.runtime.podDisruptionBudget is set,
+    // removed otherwise so clearing the field garbage-collects the prior one.
+    let runtime_pdb = pdb::build(&cr, owner_ref)?;
+    reconcile_runtime_pdb(&ctx, &ns, &svc_name, runtime_pdb.as_ref()).await?;
 
     // re-read deployments for readiness
     let dep_api: Api<Deployment> = Api::namespaced(ctx.client.clone(), &ns);
@@ -821,6 +827,29 @@ async fn apply_service(ctx: &Ctx, ns: &str, svc: &Service) -> Result<()> {
         &Patch::Apply(svc),
     )
     .await?;
+    Ok(())
+}
+
+/// Apply when present, garbage-collect when absent. Toggling the
+/// CR's `runtime.podDisruptionBudget` off removes the sibling.
+async fn reconcile_runtime_pdb(ctx: &Ctx, ns: &str, svc_name: &str, pdb: Option<&PodDisruptionBudget>) -> Result<()> {
+    let api: Api<PodDisruptionBudget> = Api::namespaced(ctx.client.clone(), ns);
+    let name = labels::runtime_pdb_name(svc_name);
+    match pdb {
+        Some(obj) => {
+            api.patch(
+                &name,
+                &PatchParams::apply(&ctx.field_manager).force(),
+                &Patch::Apply(obj),
+            )
+            .await?;
+        }
+        None => match api.delete(&name, &Default::default()).await {
+            Ok(_) => {}
+            Err(kube::Error::Api(e)) if e.code == 404 => {}
+            Err(e) => return Err(e.into()),
+        },
+    }
     Ok(())
 }
 

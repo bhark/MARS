@@ -64,6 +64,10 @@ pub(crate) fn runtime_service_name(svc: &str) -> String {
     format!("{svc}-runtime")
 }
 
+pub(crate) fn runtime_pdb_name(svc: &str) -> String {
+    format!("{svc}-runtime")
+}
+
 pub(crate) fn artifact_store_pvc_name(svc: &str) -> String {
     format!("{svc}-artifact-store")
 }
