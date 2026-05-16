@@ -120,10 +120,8 @@ impl ImageRegistry for EmptyImageRegistry {
 }
 
 /// One draw operation. Intentionally narrow - adding shapes goes through this
-/// enum. Variants the adapter has not yet wired return
-/// [`RenderError::NotImplemented`] from the dispatch hub; the runtime is free
-/// to emit them so the type system carries the contract instead of a debug
-/// log.
+/// enum so the type system carries the contract: the runtime emits a variant,
+/// the renderer is statically required to handle it.
 #[derive(Debug, Clone)]
 pub enum DrawOp {
     /// Fill or stroke a path with the given style.
@@ -163,8 +161,7 @@ pub enum DrawOp {
         /// Compiled label style.
         style: Arc<LabelStyle>,
     },
-    /// Place a point-anchored marker symbol. Stub today: dispatch returns
-    /// [`RenderError::NotImplemented`]. Use this from the runtime when a
+    /// Place a point-anchored marker symbol. Use this from the runtime when a
     /// symbol cannot be tessellated to a [`DrawOp::Path`] (text glyphs,
     /// future svg / raster markers); for shapes the runtime still
     /// tessellates (circle, square, vector polygon), keep emitting `Path`.
@@ -178,9 +175,8 @@ pub enum DrawOp {
         style: Arc<Style>,
     },
     /// Fill a path with a non-procedural pattern (image, svg, future
-    /// gradient). Stub today: dispatch returns
-    /// [`RenderError::NotImplemented`]. Procedural fills (solid, hatch)
-    /// continue to flow through [`DrawOp::Path`].
+    /// gradient). Procedural fills (solid, hatch) continue to flow through
+    /// [`DrawOp::Path`].
     Pattern {
         /// Geometry to fill.
         path: Path,
@@ -190,7 +186,6 @@ pub enum DrawOp {
     /// Composite a decoded raster tile onto a destination rectangle. Used
     /// by raster layers - the runtime fetches and decodes the tile, the
     /// renderer paints it at the requested rect with the requested opacity.
-    /// Stub today: dispatch returns [`RenderError::NotImplemented`].
     Raster {
         /// Decoded RGBA tile.
         tile: Arc<DecodedImage>,
