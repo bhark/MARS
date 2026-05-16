@@ -504,3 +504,89 @@ fn negative_mindistance_treated_as_zero() {
     let ops = collide_and_emit_labels(vec![a, b], 100, 100);
     assert_eq!(ops.len(), 2, "negative mindistance clamps to 0");
 }
+
+#[test]
+fn collision_grid_matches_brute_force_on_dense_random_set() {
+    // exercises the spatial grid's cell math against a reference O(N^2)
+    // implementation that mirrors the algorithm structure but does linear
+    // scans. uses a small deterministic LCG so failures are reproducible.
+    //
+    // bbox coords land in [0, 512), priorities are uniformly distributed,
+    // min_distance varies so the candidate/placed pad asymmetry exercises
+    // both branches of `max(cand_md, p.min_distance)`.
+    fn lcg(state: &mut u64) -> u32 {
+        *state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+        (*state >> 32) as u32
+    }
+    fn frand(state: &mut u64, max: f32) -> f32 {
+        (lcg(state) as f32 / u32::MAX as f32) * max
+    }
+
+    // brute-force reference: same sort + same exact predicate, no grid.
+    fn brute_force(mut labels: Vec<PreparedLabel>) -> Vec<DrawOp> {
+        labels.sort_by_key(|l| (std::cmp::Reverse(l.style.force), std::cmp::Reverse(l.priority)));
+        let mut placed: Vec<(f32, f32, f32, f32, f32)> = Vec::new();
+        let mut ops = Vec::new();
+        for label in labels {
+            let cand_md = label.style.min_distance.max(0.0);
+            let bbox = match &label.placement {
+                PreparedPlacement::Fixed { bbox_px, .. } => *bbox_px,
+                _ => unreachable!("test fixture only uses Fixed placements"),
+            };
+            let collides = placed.iter().any(|(x0, y0, x1, y1, p_md)| {
+                let pad = cand_md.max(*p_md);
+                let a = (bbox.0 - pad, bbox.1 - pad, bbox.2 + pad, bbox.3 + pad);
+                a.0 < *x1 && a.2 > *x0 && a.1 < *y1 && a.3 > *y0
+            });
+            if collides {
+                continue;
+            }
+            placed.push((bbox.0, bbox.1, bbox.2, bbox.3, cand_md));
+            ops.push(DrawOp::Label {
+                anchor: (0.0, 0.0),
+                text: label.text.clone(),
+                style: label.style.clone(),
+                angle_rad: label.angle_rad,
+            });
+        }
+        ops
+    }
+
+    // seed list chosen so each run hits a different priority shape /
+    // density. 256 labels in a 512x512 canvas plus mindistance up to 16
+    // exercises the multi-cell straddle path on the 64px grid.
+    for seed in [0xdead_beef_u64, 0xcafe_f00d, 0x1234_5678, 0xfeed_face, 1] {
+        let mut state = seed;
+        let labels: Vec<PreparedLabel> = (0..256)
+            .map(|_| {
+                let x = frand(&mut state, 480.0);
+                let y = frand(&mut state, 480.0);
+                let w = 8.0 + frand(&mut state, 24.0);
+                let h = 8.0 + frand(&mut state, 16.0);
+                let priority = (lcg(&mut state) % 1000) as u16;
+                let min_distance = frand(&mut state, 16.0);
+                prepared((x, y, x + w, y + h), priority, min_distance)
+            })
+            .collect();
+        let from_grid = collide_and_emit_labels(labels.clone(), 512, 512);
+        let from_brute = brute_force(labels);
+        assert_eq!(
+            from_grid.len(),
+            from_brute.len(),
+            "seed {seed:#x}: placement count differs"
+        );
+        for (i, (g, b)) in from_grid.iter().zip(from_brute.iter()).enumerate() {
+            // each survivor carries an Arc<ResolvedLabelStyle>; compare by
+            // priority/min_distance which uniquely tag each fixture label.
+            let (g_prio, g_md) = match g {
+                DrawOp::Label { style, .. } => (style.priority, style.min_distance),
+                _ => unreachable!(),
+            };
+            let (b_prio, b_md) = match b {
+                DrawOp::Label { style, .. } => (style.priority, style.min_distance),
+                _ => unreachable!(),
+            };
+            assert_eq!((g_prio, g_md), (b_prio, b_md), "seed {seed:#x}: label {i} mismatch");
+        }
+    }
+}
