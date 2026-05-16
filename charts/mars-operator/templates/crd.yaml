@@ -449,6 +449,22 @@ spec:
                     additionalProperties:
                       type: string
                     type: object
+                  podDisruptionBudget:
+                    description: |-
+                      Reconcile a sibling PodDisruptionBudget targeting the runtime
+                      Deployment's pods. Absent = no PDB; presence = the operator
+                      creates/updates one, and clearing the field deletes the prior PDB.
+                    nullable: true
+                    properties:
+                      maxUnavailable:
+                        description: Integer (`"1"`) or percentage string (`"50%"`).
+                        nullable: true
+                        type: string
+                      minAvailable:
+                        description: Integer (`"2"`) or percentage string (`"50%"`).
+                        nullable: true
+                        type: string
+                    type: object
                   replicas:
                     default: 2
                     format: int32
