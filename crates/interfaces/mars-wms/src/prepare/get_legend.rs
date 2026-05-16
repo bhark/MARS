@@ -7,7 +7,7 @@ use mars_runtime::LegendPlan;
 use mars_types::{ImageFormat, LayerId};
 
 use super::ParsedGetLegend;
-use crate::{WmsConfig, WmsError};
+use crate::{WmsConfig, WmsError, WmsOperation};
 
 /// Fully-validated GetLegendGraphic request.
 #[derive(Debug, Clone)]
@@ -18,6 +18,12 @@ pub struct ResolvedGetLegend {
 pub(crate) fn resolve_get_legend(p: ParsedGetLegend, cfg: &WmsConfig) -> Result<ResolvedGetLegend, WmsError> {
     let layer = p.layer.ok_or(WmsError::MissingParam("layer"))?;
     let layer = LayerId::new(layer);
+    if !cfg.permits(&layer, WmsOperation::GetLegendGraphic) {
+        return Err(WmsError::OperationNotPermitted {
+            layer,
+            op: WmsOperation::GetLegendGraphic,
+        });
+    }
 
     let format_raw = p.format.as_deref().ok_or(WmsError::MissingParam("format"))?;
     let format = resolve_format(format_raw, cfg)?;
@@ -78,6 +84,7 @@ mod tests {
             max_layers: 100,
             max_bbox_coord: 1e9,
             scale_pixel_size_m: 0.0254 / 96.0,
+            layer_policies: std::collections::BTreeMap::new(),
         }
     }
 
@@ -150,6 +157,36 @@ mod tests {
             err,
             WmsError::InvalidParam {
                 name: "width|height",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn legend_denied_when_get_legend_graphic_gated() {
+        use mars_types::LayerId;
+        let mut c = cfg();
+        c.layer_policies.insert(
+            LayerId::new("roads"),
+            crate::LayerPolicy {
+                get_map: true,
+                get_capabilities: true,
+                get_feature_info: true,
+                get_legend_graphic: false,
+            },
+        );
+        let p = ParsedGetLegend {
+            layer: Some("roads".into()),
+            format: Some("image/png".into()),
+            width: None,
+            height: None,
+            rule: None,
+        };
+        let err = resolve_get_legend(p, &c).unwrap_err();
+        assert!(matches!(
+            err,
+            WmsError::OperationNotPermitted {
+                op: WmsOperation::GetLegendGraphic,
                 ..
             }
         ));

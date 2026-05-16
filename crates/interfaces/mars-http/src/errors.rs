@@ -50,6 +50,12 @@ pub fn wms_error_response(version: WmsVersion, e: WmsError) -> Response {
             locator: None,
             message: format!("Operation not supported: {what}"),
         },
+        WmsError::OperationNotPermitted { layer, op } => EdgeException {
+            status: StatusCode::FORBIDDEN,
+            code: Some("OperationNotSupported"),
+            locator: None,
+            message: format!("Operation {op:?} not permitted on layer '{layer}'"),
+        },
     };
     wms_exception_response(version, exc)
 }
@@ -199,5 +205,29 @@ fn internal_error() -> EdgeException {
         code: None,
         locator: None,
         message: "Internal server error".into(),
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use mars_types::LayerId;
+    use mars_wms::WmsOperation;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn operation_not_permitted_maps_to_403_with_operation_not_supported() {
+        let e = mars_wms::WmsError::OperationNotPermitted {
+            layer: LayerId::new("roads"),
+            op: WmsOperation::GetMap,
+        };
+        let resp = wms_error_response(WmsVersion::V130, e);
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+        let body = std::str::from_utf8(&bytes).unwrap();
+        assert!(body.contains("ServiceException"));
+        assert!(body.contains("code=\"OperationNotSupported\""));
+        assert!(body.contains("roads"));
     }
 }

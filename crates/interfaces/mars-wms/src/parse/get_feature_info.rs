@@ -72,6 +72,7 @@ mod tests {
             max_layers: 100,
             max_bbox_coord: 1e9,
             scale_pixel_size_m: 0.0254 / 96.0,
+            layer_policies: std::collections::BTreeMap::new(),
         }
     }
 

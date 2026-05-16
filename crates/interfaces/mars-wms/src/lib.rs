@@ -11,7 +11,10 @@ mod feature_info;
 mod parse;
 mod prepare;
 
+use std::collections::BTreeMap;
+
 use mars_config::Config;
+pub use mars_config::WmsOperation;
 use mars_types::{CrsCode, ImageFormat, LayerId};
 
 pub use capabilities::capabilities_xml;
@@ -30,6 +33,8 @@ pub enum WmsError {
     InvalidParam { name: &'static str, reason: String },
     #[error("not implemented: {what}")]
     NotImplemented { what: String },
+    #[error("layer `{layer}` does not permit operation {op:?}")]
+    OperationNotPermitted { layer: LayerId, op: WmsOperation },
 }
 
 /// hard upper bound on image dimensions to prevent oom from malicious
@@ -72,6 +77,23 @@ pub struct WmsConfig {
     /// Drives the OGC scale-denominator calc; an in-request `&DPI=`
     /// parameter overrides this per-request.
     pub scale_pixel_size_m: f64,
+    /// Resolved per-layer WMS request gating. Populated from
+    /// [`mars_config::Layer::permits_wms_op`] at config-resolve time so the
+    /// request path can deny without re-traversing `Config`. Unknown layers
+    /// (request names a layer not in config) are absent; [`Self::permits`]
+    /// returns `true` for them so the downstream layer-existence check owns
+    /// that error.
+    pub layer_policies: BTreeMap<LayerId, LayerPolicy>,
+}
+
+/// Per-layer WMS operation allow/deny flags, distilled from
+/// `Layer::permits_wms_op` at startup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LayerPolicy {
+    pub get_map: bool,
+    pub get_capabilities: bool,
+    pub get_feature_info: bool,
+    pub get_legend_graphic: bool,
 }
 
 impl WmsConfig {
@@ -90,6 +112,21 @@ impl WmsConfig {
             })
             .filter(|v| !v.is_empty())
             .unwrap_or_else(|| vec![ImageFormat::Png]);
+        let layer_policies = cfg
+            .layers
+            .iter()
+            .map(|l| {
+                (
+                    l.name.clone(),
+                    LayerPolicy {
+                        get_map: l.permits_wms_op(WmsOperation::GetMap),
+                        get_capabilities: l.permits_wms_op(WmsOperation::GetCapabilities),
+                        get_feature_info: l.permits_wms_op(WmsOperation::GetFeatureInfo),
+                        get_legend_graphic: l.permits_wms_op(WmsOperation::GetLegendGraphic),
+                    },
+                )
+            })
+            .collect();
         Self {
             allowlist_crs,
             formats,
@@ -100,6 +137,26 @@ impl WmsConfig {
             max_layers: DEFAULT_MAX_LAYERS,
             max_bbox_coord: DEFAULT_MAX_BBOX_COORD,
             scale_pixel_size_m: cfg.service.scale_pixel_size_m(),
+            layer_policies,
+        }
+    }
+
+    /// True when `layer` permits `op`. Unknown layers return `true`; the
+    /// downstream layer-existence check produces the right error in that
+    /// case, keeping this focused on gating semantics alone.
+    #[must_use]
+    pub fn permits(&self, layer: &LayerId, op: WmsOperation) -> bool {
+        let Some(p) = self.layer_policies.get(layer) else {
+            return true;
+        };
+        match op {
+            WmsOperation::GetMap => p.get_map,
+            WmsOperation::GetCapabilities => p.get_capabilities,
+            WmsOperation::GetFeatureInfo => p.get_feature_info,
+            WmsOperation::GetLegendGraphic => p.get_legend_graphic,
+            // not tracked in LayerPolicy (no request path uses them yet);
+            // fall back to default-allow.
+            WmsOperation::GetStyles | WmsOperation::DescribeLayer => true,
         }
     }
 }
@@ -208,4 +265,74 @@ pub fn queryable_layer_ids(cfg: &Config) -> Vec<LayerId> {
         .filter(|l| l.enable_get_feature_info)
         .map(|l| l.name.clone())
         .collect()
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod policy_tests {
+    use super::*;
+
+    fn cfg_with_two_layers() -> Config {
+        let yaml = r#"
+service: { name: t, title: "T", abstract: "A", contact_email: ops@x }
+source: { type: postgis, dsn: "postgres://x", native_crs: EPSG:25832 }
+artifacts:
+  store: { type: fs, path: /tmp }
+  cache: { path: /tmp/c, max_size: 1GiB }
+scales:
+  bands: [{ name: hi, max_denom_exclusive: 25000 }]
+cells:
+  grid: regular
+  origin: [0, 0]
+  size_per_band: { hi: 1024m }
+interfaces: {}
+reprojection:
+  allowlist: [EPSG:25832]
+layers:
+  - name: a
+    title: "A layer"
+    type: polygon
+    sources:
+      - { from: t, geometry_column: g }
+    request_gating: { get_map: false }
+  - name: b
+    title: "B layer"
+    type: polygon
+    enable_get_feature_info: true
+    sources:
+      - { from: t, geometry_column: g }
+"#;
+        serde_yaml_ng::from_str(yaml).unwrap()
+    }
+
+    #[test]
+    fn from_config_populates_layer_policies() {
+        let cfg = cfg_with_two_layers();
+        let wcfg = WmsConfig::from_config(&cfg);
+        let pa = wcfg.layer_policies.get(&LayerId::new("a")).unwrap();
+        let pb = wcfg.layer_policies.get(&LayerId::new("b")).unwrap();
+        assert!(!pa.get_map);
+        assert!(pa.get_capabilities);
+        assert!(!pa.get_feature_info);
+        assert!(pa.get_legend_graphic);
+        assert!(pb.get_map);
+        assert!(pb.get_feature_info);
+    }
+
+    #[test]
+    fn permits_returns_true_for_unknown_layer() {
+        let cfg = cfg_with_two_layers();
+        let wcfg = WmsConfig::from_config(&cfg);
+        let unknown = LayerId::new("does-not-exist");
+        assert!(wcfg.permits(&unknown, WmsOperation::GetMap));
+        assert!(wcfg.permits(&unknown, WmsOperation::GetFeatureInfo));
+    }
+
+    #[test]
+    fn permits_reflects_gating() {
+        let cfg = cfg_with_two_layers();
+        let wcfg = WmsConfig::from_config(&cfg);
+        assert!(!wcfg.permits(&LayerId::new("a"), WmsOperation::GetMap));
+        assert!(wcfg.permits(&LayerId::new("b"), WmsOperation::GetMap));
+    }
 }

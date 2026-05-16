@@ -14,7 +14,7 @@ use mars_types::LayerId;
 use super::ParsedGetFeatureInfo;
 use super::viewport::resolve_viewport;
 use crate::feature_info::info_format_mime;
-use crate::{InfoFormat, MAX_FEATURE_COUNT, WmsConfig, WmsError, WmsVersion};
+use crate::{InfoFormat, MAX_FEATURE_COUNT, WmsConfig, WmsError, WmsOperation, WmsVersion};
 
 /// Fully-validated GetFeatureInfo request. `plan.layers` has been swapped
 /// to QUERY_LAYERS so the runtime walks only those bindings.
@@ -34,13 +34,32 @@ pub struct ResolvedGetFeatureInfo {
 }
 
 pub(crate) fn resolve_get_feature_info(
-    p: ParsedGetFeatureInfo,
+    mut p: ParsedGetFeatureInfo,
     cfg: &WmsConfig,
     version: WmsVersion,
 ) -> Result<ResolvedGetFeatureInfo, WmsError> {
-    let mut plan = resolve_viewport(&p.viewport, cfg, version)?;
+    // silently drop gfi-denied entries from LAYERS so resolve_viewport's
+    // per-op gate (called with GetFeatureInfo here) doesn't error on them.
+    // empty post-filter => OperationNotPermitted on the first denied layer.
+    if let Some(layers) = p.viewport.layers.as_mut() {
+        let first_denied = layers
+            .iter()
+            .find(|l| !cfg.permits(l, WmsOperation::GetFeatureInfo))
+            .cloned();
+        layers.retain(|l| cfg.permits(l, WmsOperation::GetFeatureInfo));
+        if layers.is_empty()
+            && let Some(layer) = first_denied
+        {
+            return Err(WmsError::OperationNotPermitted {
+                layer,
+                op: WmsOperation::GetFeatureInfo,
+            });
+        }
+    }
 
-    let query_layers = resolve_query_layers(p.query_layers, &plan.layers)?;
+    let mut plan = resolve_viewport(&p.viewport, cfg, version, WmsOperation::GetFeatureInfo)?;
+
+    let query_layers = resolve_query_layers(p.query_layers, &plan.layers, cfg)?;
     plan.layers = query_layers;
 
     let i = p.i.ok_or(WmsError::MissingParam("i"))?;
@@ -69,7 +88,11 @@ pub(crate) fn resolve_get_feature_info(
     })
 }
 
-fn resolve_query_layers(query_layers: Option<Vec<LayerId>>, layers: &[LayerId]) -> Result<Vec<LayerId>, WmsError> {
+fn resolve_query_layers(
+    query_layers: Option<Vec<LayerId>>,
+    layers: &[LayerId],
+    cfg: &WmsConfig,
+) -> Result<Vec<LayerId>, WmsError> {
     let q = query_layers.ok_or(WmsError::MissingParam("query_layers"))?;
     if q.is_empty() {
         return Err(WmsError::InvalidParam {
@@ -77,7 +100,27 @@ fn resolve_query_layers(query_layers: Option<Vec<LayerId>>, layers: &[LayerId]) 
             reason: "no layer names".into(),
         });
     }
-    for ql in &q {
+    // silently drop gfi-denied entries first so the subset check below sees
+    // the same filtered set the caller-side LAYERS filter applied. empty
+    // post-filter (non-empty original) => OperationNotPermitted pinned to
+    // the first originally-denied layer.
+    let first_denied = q
+        .iter()
+        .find(|l| !cfg.permits(l, WmsOperation::GetFeatureInfo))
+        .cloned();
+    let filtered: Vec<LayerId> = q
+        .into_iter()
+        .filter(|l| cfg.permits(l, WmsOperation::GetFeatureInfo))
+        .collect();
+    if filtered.is_empty()
+        && let Some(layer) = first_denied
+    {
+        return Err(WmsError::OperationNotPermitted {
+            layer,
+            op: WmsOperation::GetFeatureInfo,
+        });
+    }
+    for ql in &filtered {
         if !layers.iter().any(|l| l == ql) {
             return Err(WmsError::InvalidParam {
                 name: "query_layers",
@@ -85,7 +128,7 @@ fn resolve_query_layers(query_layers: Option<Vec<LayerId>>, layers: &[LayerId]) 
             });
         }
     }
-    Ok(q)
+    Ok(filtered)
 }
 
 fn resolve_feature_count(opt: Option<u32>) -> Result<u32, WmsError> {
@@ -116,6 +159,22 @@ mod tests {
             max_layers: 100,
             max_bbox_coord: 1e9,
             scale_pixel_size_m: 0.0254 / 96.0,
+            layer_policies: std::collections::BTreeMap::new(),
+        }
+    }
+
+    fn cfg_with_policies(policies: &[(&str, crate::LayerPolicy)]) -> WmsConfig {
+        let mut c = cfg();
+        c.layer_policies = policies.iter().map(|(n, p)| (LayerId::new(*n), *p)).collect();
+        c
+    }
+
+    fn policy_all_allowed() -> crate::LayerPolicy {
+        crate::LayerPolicy {
+            get_map: true,
+            get_capabilities: true,
+            get_feature_info: true,
+            get_legend_graphic: true,
         }
     }
 
@@ -222,6 +281,37 @@ mod tests {
             err,
             WmsError::InvalidParam {
                 name: "feature_count",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn gfi_silently_drops_denied_query_layer() {
+        let denied = crate::LayerPolicy {
+            get_feature_info: false,
+            ..policy_all_allowed()
+        };
+        let c = cfg_with_policies(&[("a", policy_all_allowed()), ("b", denied)]);
+        let p = parsed(vec!["a", "b"], 0, 0, "text/plain", None);
+        let r = resolve_get_feature_info(p, &c, WmsVersion::V130).unwrap();
+        assert_eq!(r.plan.layers.len(), 1);
+        assert_eq!(r.plan.layers[0].as_str(), "a");
+    }
+
+    #[test]
+    fn gfi_returns_error_when_all_query_layers_denied() {
+        let denied = crate::LayerPolicy {
+            get_feature_info: false,
+            ..policy_all_allowed()
+        };
+        let c = cfg_with_policies(&[("a", denied), ("b", denied)]);
+        let p = parsed(vec!["a", "b"], 0, 0, "text/plain", None);
+        let err = resolve_get_feature_info(p, &c, WmsVersion::V130).unwrap_err();
+        assert!(matches!(
+            err,
+            WmsError::OperationNotPermitted {
+                op: WmsOperation::GetFeatureInfo,
                 ..
             }
         ));
