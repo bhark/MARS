@@ -96,9 +96,12 @@ async fn snapshot_bootstrap_e2e() -> Result<()> {
     let store = Arc::new(FsStore::new(cfg.artifacts.store.path.as_deref().unwrap()).context("open store")?);
     let publisher = Arc::new(FsPublisher::new(cfg.artifacts.store.path.as_deref().unwrap()).context("open publisher")?);
 
+    let sources = mars_bin_shared::build_sources(&cfg, Some(source.clone()))
+        .await
+        .context("build sources registry")?;
     let compiler = Compiler::new(
         CompilerDeps {
-            source: source.clone(),
+            sources: Arc::new(sources),
             change_feed: source.clone(),
             // snapshot does not exercise the leader lock against real pg here;
             // a permissive stub is fine for a single-process test run.

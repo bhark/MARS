@@ -113,7 +113,7 @@ pub async fn boot_garage_with(opts: GarageOptions) -> GarageFixture {
 
     let container = GenericImage::new("dxflrs/garage", &opts.image_tag)
         .with_exposed_port(3900.tcp())
-        .with_wait_for(WaitFor::message_on_stdout("S3 API server listening"))
+        .with_wait_for(WaitFor::message_on_stderr("S3 API server listening"))
         .with_mount(Mount::bind_mount(host_config, "/etc/garage.toml"))
         .start()
         .await

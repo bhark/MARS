@@ -109,9 +109,12 @@ async fn e2e_change_feed_cycle_publishes_v3_manifest() -> Result<()> {
     let store = Arc::new(FsStore::new(cfg.artifacts.store.path.as_deref().unwrap()).context("open store")?);
     let publisher = Arc::new(FsPublisher::new(cfg.artifacts.store.path.as_deref().unwrap()).context("open publisher")?);
 
+    let sources = mars_bin_shared::build_sources(&cfg, Some(source.clone()))
+        .await
+        .context("build sources registry")?;
     let compiler = Compiler::new(
         CompilerDeps {
-            source: source.clone(),
+            sources: Arc::new(sources),
             change_feed: source.clone(),
             leader_lock: source.clone(),
             store: store.clone(),
