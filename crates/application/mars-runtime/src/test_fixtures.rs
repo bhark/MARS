@@ -465,6 +465,7 @@ pub fn build_minimal_config(layer_id: &LayerId, binding_id: &BindingId, label_su
                 enable_get_feature_info: true,
                 ..Default::default()
             },
+            ows: Default::default(),
         }],
         observability: Observability::default(),
         render: Render::default(),
@@ -814,6 +815,7 @@ pub fn build_multi_layer_config(layer_ids: &[LayerId], binding_ids: &[BindingId]
             label_survival: LabelSurvival::Independent,
             raster: None,
             wms: Default::default(),
+            ows: Default::default(),
         })
         .collect();
     Config {

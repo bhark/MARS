@@ -260,6 +260,7 @@ mod tests {
             label_survival: LabelSurvival::default(),
             raster: None,
             wms: Default::default(),
+            ows: Default::default(),
         }
     }
 

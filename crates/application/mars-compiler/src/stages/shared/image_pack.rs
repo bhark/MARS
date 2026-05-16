@@ -241,6 +241,7 @@ mod tests {
             label_survival: mars_config::LabelSurvival::Independent,
             raster: None,
             wms: Default::default(),
+            ows: Default::default(),
         };
 
         let refs = collect_from_layers_and_styles(&[layer], &std::collections::BTreeMap::new());

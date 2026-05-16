@@ -2,6 +2,7 @@ use mars_style::{LabelStyle, LabelSurvival, Placement, Style};
 use mars_types::{Bbox, CrsCode, LayerId, SourceCollectionId};
 use serde::{Deserialize, Serialize};
 
+use super::ows::{LayerOws, ServiceOp};
 use super::wms::{LayerWms, WmsOperation};
 use crate::ConfigError;
 use crate::SourceId;
@@ -62,6 +63,10 @@ pub struct Layer {
     /// permissive block when omitted.
     #[serde(default)]
     pub wms: LayerWms,
+    /// Per-layer OWS metadata + cross-protocol request gating. Defaults to
+    /// an empty, permissive block when omitted.
+    #[serde(default)]
+    pub ows: LayerOws,
 }
 
 impl Layer {
@@ -70,6 +75,29 @@ impl Layer {
     #[must_use]
     pub fn permits_wms_op(&self, op: WmsOperation) -> bool {
         self.wms.permits_wms_op(op)
+    }
+
+    /// Resolved gating decision for any OWS-family operation. The
+    /// `ows.request_gating` map is the primary source. Two back-compat
+    /// fallbacks apply when the map is silent on a given op:
+    /// - WMS operations consult the legacy `wms.request_gating` (and, for
+    ///   `WmsGetFeatureInfo`, the legacy `wms.enable_get_feature_info`
+    ///   opt-in).
+    /// - All other ops default-allow.
+    #[must_use]
+    pub fn permits_op(&self, op: ServiceOp) -> bool {
+        if let Some(b) = self.ows.request_gating.get(&op).copied() {
+            return b;
+        }
+        match op {
+            ServiceOp::WmsGetMap => self.wms.permits_wms_op(WmsOperation::GetMap),
+            ServiceOp::WmsGetCapabilities => self.wms.permits_wms_op(WmsOperation::GetCapabilities),
+            ServiceOp::WmsGetFeatureInfo => self.wms.permits_wms_op(WmsOperation::GetFeatureInfo),
+            ServiceOp::WmsGetLegendGraphic => self.wms.permits_wms_op(WmsOperation::GetLegendGraphic),
+            ServiceOp::WmsGetStyles => self.wms.permits_wms_op(WmsOperation::GetStyles),
+            ServiceOp::WmsDescribeLayer => self.wms.permits_wms_op(WmsOperation::DescribeLayer),
+            ServiceOp::WmtsGetTile | ServiceOp::WmtsGetCapabilities | ServiceOp::WmtsGetFeatureInfo => true,
+        }
     }
 }
 
@@ -490,4 +518,73 @@ pub enum LabelStyleAttach {
     },
     /// Inline label style (`type: inline`).
     Inline(LabelStyle),
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use mars_types::LayerId;
+
+    use super::*;
+
+    fn bare_layer() -> Layer {
+        Layer {
+            name: LayerId::new("a"),
+            title: String::new(),
+            abstract_: String::new(),
+            kind: "polygon".into(),
+            scale: None,
+            group: None,
+            bbox: None,
+            sources: Vec::new(),
+            classes: Vec::new(),
+            label: None,
+            label_survival: LabelSurvival::default(),
+            raster: None,
+            wms: LayerWms::default(),
+            ows: LayerOws::default(),
+        }
+    }
+
+    #[test]
+    fn permits_op_defaults_allow_for_wms_non_gfi() {
+        let l = bare_layer();
+        assert!(l.permits_op(ServiceOp::WmsGetMap));
+        assert!(l.permits_op(ServiceOp::WmsGetCapabilities));
+        assert!(l.permits_op(ServiceOp::WmsGetLegendGraphic));
+    }
+
+    #[test]
+    fn permits_op_defaults_deny_gfi_until_legacy_opt_in() {
+        let mut l = bare_layer();
+        assert!(!l.permits_op(ServiceOp::WmsGetFeatureInfo));
+        l.wms.enable_get_feature_info = true;
+        assert!(l.permits_op(ServiceOp::WmsGetFeatureInfo));
+    }
+
+    #[test]
+    fn permits_op_ows_gating_overrides_legacy_paths() {
+        let mut l = bare_layer();
+        l.wms.enable_get_feature_info = true;
+        l.ows.request_gating.insert(ServiceOp::WmsGetFeatureInfo, false);
+        assert!(!l.permits_op(ServiceOp::WmsGetFeatureInfo));
+
+        l.ows.request_gating.insert(ServiceOp::WmsGetMap, false);
+        assert!(!l.permits_op(ServiceOp::WmsGetMap));
+    }
+
+    #[test]
+    fn permits_op_wmts_defaults_allow() {
+        let l = bare_layer();
+        assert!(l.permits_op(ServiceOp::WmtsGetTile));
+        assert!(l.permits_op(ServiceOp::WmtsGetCapabilities));
+        assert!(l.permits_op(ServiceOp::WmtsGetFeatureInfo));
+    }
+
+    #[test]
+    fn permits_op_wmts_explicit_deny_wins() {
+        let mut l = bare_layer();
+        l.ows.request_gating.insert(ServiceOp::WmtsGetTile, false);
+        assert!(!l.permits_op(ServiceOp::WmtsGetTile));
+    }
 }

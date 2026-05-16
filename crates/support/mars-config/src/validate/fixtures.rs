@@ -109,6 +109,7 @@ pub(crate) fn layer(name: &str) -> Layer {
         label_survival: mars_style::LabelSurvival::Independent,
         raster: None,
         wms: Default::default(),
+        ows: Default::default(),
     }
 }
 
@@ -185,5 +186,6 @@ pub(crate) fn tiered_layer(sources: Vec<SourceBinding>) -> Layer {
         label_survival: mars_style::LabelSurvival::Independent,
         raster: None,
         wms: Default::default(),
+        ows: Default::default(),
     }
 }

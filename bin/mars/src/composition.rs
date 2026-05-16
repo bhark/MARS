@@ -283,6 +283,7 @@ mod tests {
             label_survival: mars_config::LabelSurvival::Independent,
             raster: None,
             wms: Default::default(),
+            ows: Default::default(),
         }
     }
 
@@ -441,6 +442,7 @@ mod tests {
             label_survival: mars_config::LabelSurvival::Independent,
             raster: None,
             wms: Default::default(),
+            ows: Default::default(),
         }]);
         let topo = build_replication_topology(&cfg).unwrap();
         assert_eq!(topo.collections.len(), 3);
@@ -520,6 +522,7 @@ mod tests {
                 opacity: 1.0,
             }),
             wms: Default::default(),
+            ows: Default::default(),
         }
     }
 

@@ -221,6 +221,7 @@ fn build_two_band_config() -> Config {
             label_survival: mars_config::LabelSurvival::Independent,
             raster: None,
             wms: Default::default(),
+            ows: Default::default(),
         }],
         observability: Observability::default(),
         render: Render::default(),

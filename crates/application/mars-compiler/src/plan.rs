@@ -738,6 +738,7 @@ mod tests {
             label_survival: mars_config::LabelSurvival::Independent,
             raster: None,
             wms: Default::default(),
+            ows: Default::default(),
         }
     }
 
@@ -879,6 +880,7 @@ mod tests {
             label_survival: mars_config::LabelSurvival::Independent,
             raster: None,
             wms: Default::default(),
+            ows: Default::default(),
         };
         let cfg = config_with(vec![l]);
         let plan = build_bootstrap_plan(&cfg).unwrap();
@@ -1162,6 +1164,7 @@ mod tests {
             label_survival: mars_config::LabelSurvival::Independent,
             raster: None,
             wms: Default::default(),
+            ows: Default::default(),
         };
         let cfg = config_with(vec![l]);
         let plan = build_bootstrap_plan(&cfg).unwrap();
