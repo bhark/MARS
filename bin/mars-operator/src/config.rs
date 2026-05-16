@@ -52,34 +52,38 @@ pub(crate) fn validate(value: &JsonValue) -> Result<()> {
 /// post-parse Config does not require the operator to know which env vars
 /// the pod will see. The sentinel is structural - just enough to keep the
 /// YAML parse + serde deserialise honest.
+///
+/// Scans for `$`, `{`, and `}` directly on the `&str`: all three are
+/// single-byte ASCII, so splitting at their byte offsets is safe even when
+/// surrounding content includes multi-byte UTF-8 (label text, comments, ...).
 fn strip_placeholders(src: &str) -> String {
-    // simple state machine - the env_subst regex is not exposed publicly by
-    // mars-config, and we explicitly do not want to call substitute() here
-    // because it would consume the placeholder. duplicating the recogniser
-    // here is light and bounded.
-    let bytes = src.as_bytes();
     let mut out = String::with_capacity(src.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'$' {
+    let mut remaining = src;
+    while let Some(idx) = remaining.find('$') {
+        out.push_str(&remaining[..idx]);
+        let after = &remaining[idx + 1..];
+        if let Some(rest) = after.strip_prefix('$') {
+            // $$ -> literal $
             out.push('$');
-            i += 2;
+            remaining = rest;
             continue;
         }
-        if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
-            let mut j = i + 2;
-            while j < bytes.len() && bytes[j] != b'}' {
-                j += 1;
-            }
-            if j < bytes.len() {
+        if let Some(rest) = after.strip_prefix('{') {
+            if let Some(close) = rest.find('}') {
                 out.push_str("MARS_OPERATOR_PLACEHOLDER");
-                i = j + 1;
+                remaining = &rest[close + 1..];
                 continue;
             }
+            // unclosed placeholder: emit the bare '$' and continue scanning
+            // from the '{'. mirrors the prior byte-loop fallthrough.
+            out.push('$');
+            remaining = after;
+            continue;
         }
-        out.push(bytes[i] as char);
-        i += 1;
+        out.push('$');
+        remaining = after;
     }
+    out.push_str(remaining);
     out
 }
 
@@ -106,6 +110,22 @@ mod tests {
     fn strip_placeholders_keeps_double_dollar_literal() {
         let out = strip_placeholders("cost: $$5\n");
         assert_eq!(out, "cost: $5\n");
+    }
+
+    #[test]
+    fn strip_placeholders_preserves_non_ascii_content() {
+        // multi-byte UTF-8 around the placeholder must round-trip untouched.
+        let out = strip_placeholders("label: \"Åbenrå – ${TOKEN} 🚀\"\n");
+        assert!(out.contains("Åbenrå – "));
+        assert!(out.contains(" 🚀"));
+        assert!(out.contains("MARS_OPERATOR_PLACEHOLDER"));
+        assert!(!out.contains("${"));
+    }
+
+    #[test]
+    fn strip_placeholders_leaves_unclosed_placeholder_literal() {
+        let out = strip_placeholders("a${UNCLOSED");
+        assert_eq!(out, "a${UNCLOSED");
     }
 
     #[test]
