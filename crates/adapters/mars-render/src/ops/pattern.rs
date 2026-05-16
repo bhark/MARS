@@ -9,20 +9,20 @@ use tiny_skia::Pixmap;
 
 use crate::path::build_path;
 use crate::pattern;
-use crate::prepare::{self, UnimplementedFeatures};
+use crate::prepare;
 
 pub(crate) fn draw(
     pm: &mut Pixmap,
     path: &PortPath,
     style: &Style,
     images: &dyn ImageRegistry,
-) -> Result<UnimplementedFeatures, RenderError> {
+) -> Result<(), RenderError> {
     let Some(tsk_path) = build_path(path) else {
-        return Ok(UnimplementedFeatures::default());
+        return Ok(());
     };
     let resolved = prepare::resolve(style);
     if let Some(fill_resolved) = &resolved.fill {
         pattern::draw(pm, &tsk_path, fill_resolved, images)?;
     }
-    Ok(resolved.unimplemented)
+    Ok(())
 }

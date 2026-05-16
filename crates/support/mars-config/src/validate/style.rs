@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use mars_style::{FillPaint, MarkerSymbol};
+use mars_style::{FillPaint, MarkerSymbol, StrokeGap};
 
 use crate::ConfigError;
 use crate::model::StyleEntry;
@@ -17,6 +17,9 @@ pub(super) fn validate_styles(styles: &BTreeMap<String, StyleEntry>) -> Result<(
             }
             if let Some(m) = &s.marker {
                 validate_marker_symbol(name, m, s.fill.as_ref())?;
+            }
+            if let Some(g) = &s.stroke_gap {
+                validate_stroke_gap(name, g, s.marker.is_some())?;
             }
         }
     }
@@ -81,11 +84,32 @@ fn validate_marker_symbol(style_name: &str, m: &MarkerSymbol, fill: Option<&Fill
     Ok(())
 }
 
+fn validate_stroke_gap(style_name: &str, sg: &StrokeGap, has_marker: bool) -> Result<(), ConfigError> {
+    if !(sg.interval_px.is_finite() && sg.interval_px > 0.0) {
+        return Err(ConfigError::Invalid(format!(
+            "style {style_name:?} stroke_gap.interval_px must be a finite positive number, got {}",
+            sg.interval_px
+        )));
+    }
+    if !(sg.initial_px.is_finite() && sg.initial_px >= 0.0) {
+        return Err(ConfigError::Invalid(format!(
+            "style {style_name:?} stroke_gap.initial_px must be a finite non-negative number, got {}",
+            sg.initial_px
+        )));
+    }
+    if !has_marker {
+        return Err(ConfigError::Invalid(format!(
+            "style {style_name:?} sets stroke_gap but no marker; stroke_gap stamps the marker along the line, so a marker is required"
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
-    use mars_style::{Colour, Style};
+    use mars_style::{Colour, StrokeGap, Style};
 
     fn polygon_style(fill: FillPaint) -> StyleEntry {
         StyleEntry::Polygon(Style {
@@ -97,6 +121,16 @@ mod tests {
     fn point_style(marker: MarkerSymbol) -> StyleEntry {
         StyleEntry::Point(Style {
             marker: Some(marker),
+            ..Default::default()
+        })
+    }
+
+    fn line_style_with_gap(marker: Option<MarkerSymbol>, gap: StrokeGap) -> StyleEntry {
+        StyleEntry::Line(Style {
+            stroke: Some(Colour::rgb(0, 0, 0)),
+            stroke_width: Some(1.0),
+            marker,
+            stroke_gap: Some(gap),
             ..Default::default()
         })
     }
@@ -227,5 +261,73 @@ mod tests {
         );
         let err = validate_styles(&styles).unwrap_err();
         assert!(err.to_string().contains("non-solid"), "{err}");
+    }
+
+    #[test]
+    fn accepts_well_formed_stroke_gap() {
+        let mut styles = BTreeMap::new();
+        styles.insert(
+            "ok".into(),
+            line_style_with_gap(
+                Some(MarkerSymbol::Circle { size: 4.0 }),
+                StrokeGap {
+                    interval_px: 12.0,
+                    initial_px: 3.0,
+                },
+            ),
+        );
+        validate_styles(&styles).unwrap();
+    }
+
+    #[test]
+    fn rejects_zero_stroke_gap_interval() {
+        let mut styles = BTreeMap::new();
+        styles.insert(
+            "bad".into(),
+            line_style_with_gap(
+                Some(MarkerSymbol::Circle { size: 4.0 }),
+                StrokeGap {
+                    interval_px: 0.0,
+                    initial_px: 0.0,
+                },
+            ),
+        );
+        let err = validate_styles(&styles).unwrap_err();
+        assert!(err.to_string().contains("stroke_gap.interval_px"), "{err}");
+    }
+
+    #[test]
+    fn rejects_negative_initial_gap() {
+        let mut styles = BTreeMap::new();
+        styles.insert(
+            "bad".into(),
+            line_style_with_gap(
+                Some(MarkerSymbol::Circle { size: 4.0 }),
+                StrokeGap {
+                    interval_px: 10.0,
+                    initial_px: -1.0,
+                },
+            ),
+        );
+        let err = validate_styles(&styles).unwrap_err();
+        assert!(err.to_string().contains("stroke_gap.initial_px"), "{err}");
+    }
+
+    #[test]
+    fn rejects_stroke_gap_without_marker() {
+        let mut styles = BTreeMap::new();
+        styles.insert(
+            "bad".into(),
+            line_style_with_gap(
+                None,
+                StrokeGap {
+                    interval_px: 10.0,
+                    initial_px: 0.0,
+                },
+            ),
+        );
+        let err = validate_styles(&styles).unwrap_err();
+        assert!(err.to_string().contains("stroke_gap"), "{err}");
+        assert!(err.to_string().contains("marker"), "{err}");
     }
 }

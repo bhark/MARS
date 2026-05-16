@@ -11,6 +11,7 @@ mod ops;
 mod path;
 mod path_offset;
 mod pattern;
+mod polyline;
 mod prepare;
 mod raster;
 mod stroke;
@@ -70,14 +71,8 @@ impl Renderer for TinySkiaRenderer {
             crate::canvas::fill_background(&mut pm, bg);
         }
 
-        let mut unimplemented = crate::prepare::UnimplementedFeatures::default();
         for op in ops {
-            unimplemented.merge(ops::dispatch(&mut pm, op, &self.fonts, self.images.as_ref())?);
-        }
-        if unimplemented.any() {
-            for what in unimplemented.names() {
-                tracing::warn!(feature = what, "render feature not yet implemented");
-            }
+            ops::dispatch(&mut pm, op, &self.fonts, self.images.as_ref())?;
         }
 
         let width = pm.width();

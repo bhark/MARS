@@ -6,16 +6,17 @@
 
 use mars_render_port::{Path as PortPath, RenderError};
 use mars_style::Style;
+use mars_text::Fonts;
 use tiny_skia::Pixmap;
 
 use crate::fill;
 use crate::path::build_path;
-use crate::prepare::{self, UnimplementedFeatures};
+use crate::prepare;
 use crate::stroke;
 
-pub(crate) fn draw(pm: &mut Pixmap, path: &PortPath, style: &Style) -> Result<UnimplementedFeatures, RenderError> {
+pub(crate) fn draw(pm: &mut Pixmap, path: &PortPath, style: &Style, fonts: &Fonts) -> Result<(), RenderError> {
     let Some(tsk_path) = build_path(path) else {
-        return Ok(UnimplementedFeatures::default());
+        return Ok(());
     };
     let resolved = prepare::resolve(style);
 
@@ -24,8 +25,11 @@ pub(crate) fn draw(pm: &mut Pixmap, path: &PortPath, style: &Style) -> Result<Un
     }
 
     if let Some(stroke_resolved) = resolved.stroke {
-        stroke::draw(pm, path, &tsk_path, stroke_resolved);
+        stroke::draw(pm, path, &tsk_path, &stroke_resolved);
+        if let (Some(gap), Some(marker)) = (stroke_resolved.gap, style.marker.as_ref()) {
+            stroke::gap::stamp(pm, path, marker, style, gap, fonts)?;
+        }
     }
 
-    Ok(resolved.unimplemented)
+    Ok(())
 }

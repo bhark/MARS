@@ -14,30 +14,6 @@ use crate::stroke;
 pub(crate) struct Resolved {
     pub fill: Option<ResolvedFill>,
     pub stroke: Option<ResolvedStroke>,
-    /// style fields the renderer accepts in the wire form but does not yet
-    /// honour. populated by `resolve`; the dispatch hub warns once per render
-    /// so partial-render silent-drops are visible without aborting. when a
-    /// strict-mode hook lands, this is the single chokepoint.
-    pub unimplemented: UnimplementedFeatures,
-}
-
-#[derive(Debug, Default, Clone, Copy)]
-pub(crate) struct UnimplementedFeatures {
-    pub stroke_gap: bool,
-}
-
-impl UnimplementedFeatures {
-    pub(crate) fn any(self) -> bool {
-        self.stroke_gap
-    }
-
-    pub(crate) fn names(self) -> impl Iterator<Item = &'static str> {
-        [self.stroke_gap.then_some("Style::stroke_gap")].into_iter().flatten()
-    }
-
-    pub(crate) fn merge(&mut self, other: Self) {
-        self.stroke_gap |= other.stroke_gap;
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -65,14 +41,19 @@ pub(crate) struct ResolvedStroke {
     /// 0 if unset; positive = right of direction of travel in y-down pixel
     /// space.
     pub offset_px: f32,
+    /// stamped-marker repeat policy. `Some` only when `style.marker` is also
+    /// set; a gap with no marker has nothing to stamp.
+    pub gap: Option<ResolvedStrokeGap>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ResolvedStrokeGap {
+    pub interval_px: f32,
+    pub initial_px: f32,
 }
 
 pub(crate) fn resolve(style: &Style) -> Resolved {
     let opacity = style.opacity.unwrap_or(1.0).clamp(0.0, 1.0);
-
-    let unimplemented = UnimplementedFeatures {
-        stroke_gap: style.stroke_gap.is_some(),
-    };
 
     let fill = style.fill.clone().map(|paint| ResolvedFill { paint, alpha: opacity });
 
@@ -91,6 +72,24 @@ pub(crate) fn resolve(style: &Style) -> Resolved {
             Some(d) if d.is_finite() && d.abs() > f32::EPSILON => d,
             _ => 0.0,
         };
+        // marker absent -> nothing to stamp; treat as no-op. defensive
+        // bounds match the config validator so the renderer never sees
+        // a degenerate interval.
+        let gap = style.stroke_gap.and_then(|g| {
+            style.marker.as_ref()?;
+            if !(g.interval_px.is_finite() && g.interval_px > 0.0) {
+                return None;
+            }
+            let initial_px = if g.initial_px.is_finite() && g.initial_px >= 0.0 {
+                g.initial_px
+            } else {
+                0.0
+            };
+            Some(ResolvedStrokeGap {
+                interval_px: g.interval_px,
+                initial_px,
+            })
+        });
         Some(ResolvedStroke {
             colour,
             alpha: alpha_scale * opacity,
@@ -99,14 +98,11 @@ pub(crate) fn resolve(style: &Style) -> Resolved {
             join: style.stroke_linejoin.map(map_join).unwrap_or(LineJoin::Miter),
             dash,
             offset_px,
+            gap,
         })
     });
 
-    Resolved {
-        fill,
-        stroke,
-        unimplemented,
-    }
+    Resolved { fill, stroke }
 }
 
 #[cfg(test)]
@@ -207,7 +203,24 @@ mod tests {
     }
 
     #[test]
-    fn unimplemented_flags_stroke_gap() {
+    fn stroke_gap_resolves_when_marker_present() {
+        let s = Style {
+            stroke: Some(Colour::rgba(0, 0, 0, 255)),
+            stroke_width: Some(1.0),
+            marker: Some(mars_style::MarkerSymbol::Circle { size: 4.0 }),
+            stroke_gap: Some(mars_style::StrokeGap {
+                interval_px: 12.0,
+                initial_px: 3.0,
+            }),
+            ..Default::default()
+        };
+        let gap = resolve(&s).stroke.expect("stroke").gap.expect("gap");
+        assert!((gap.interval_px - 12.0).abs() < 1e-6);
+        assert!((gap.initial_px - 3.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn stroke_gap_drops_when_marker_absent() {
         let s = Style {
             stroke: Some(Colour::rgba(0, 0, 0, 255)),
             stroke_width: Some(1.0),
@@ -217,22 +230,22 @@ mod tests {
             }),
             ..Default::default()
         };
-        let r = resolve(&s);
-        assert!(r.unimplemented.stroke_gap);
-        assert!(r.unimplemented.any());
-        let names: Vec<_> = r.unimplemented.names().collect();
-        assert_eq!(names, vec!["Style::stroke_gap"]);
+        assert!(resolve(&s).stroke.expect("stroke").gap.is_none());
     }
 
     #[test]
-    fn unimplemented_empty_when_no_unsupported_fields() {
+    fn stroke_gap_drops_when_interval_non_positive() {
         let s = Style {
-            fill: Some(FillPaint::Solid(Colour::rgba(0, 0, 0, 255))),
+            stroke: Some(Colour::rgba(0, 0, 0, 255)),
+            stroke_width: Some(1.0),
+            marker: Some(mars_style::MarkerSymbol::Circle { size: 4.0 }),
+            stroke_gap: Some(mars_style::StrokeGap {
+                interval_px: 0.0,
+                initial_px: 0.0,
+            }),
             ..Default::default()
         };
-        let r = resolve(&s);
-        assert!(!r.unimplemented.any());
-        assert_eq!(r.unimplemented.names().count(), 0);
+        assert!(resolve(&s).stroke.expect("stroke").gap.is_none());
     }
 
     #[test]

@@ -2,11 +2,11 @@
 //!
 //! takes a `ResolvedStroke` (already opacity-folded and sub-pixel-clamped)
 //! and emits a single tiny-skia stroke pass. supports parallel-offset via
-//! `path_offset` when `offset_px != 0`. `stroke_gap` (stamped marker along
-//! line) is a parity stub - the dispatch hub warns once via
-//! `Resolved::unimplemented`, this module ignores it.
+//! `path_offset` when `offset_px != 0`. when `stroke_gap` is set, the
+//! `gap` submodule stamps the parent style's marker along the line.
 
 pub(crate) mod dash;
+pub(crate) mod gap;
 
 use mars_render_port::Path as PortPath;
 use tiny_skia::{Paint, Pixmap, Stroke, Transform};
@@ -16,7 +16,7 @@ use crate::path::build_path;
 use crate::path_offset::offset_polyline;
 use crate::prepare::ResolvedStroke;
 
-pub(crate) fn draw(pm: &mut Pixmap, port_path: &PortPath, tsk_path: &tiny_skia::Path, stroke: ResolvedStroke) {
+pub(crate) fn draw(pm: &mut Pixmap, port_path: &PortPath, tsk_path: &tiny_skia::Path, stroke: &ResolvedStroke) {
     let mut paint = Paint::default();
     paint.set_color(scaled_alpha(stroke.colour, stroke.alpha));
     paint.anti_alias = true;
@@ -30,7 +30,7 @@ pub(crate) fn draw(pm: &mut Pixmap, port_path: &PortPath, tsk_path: &tiny_skia::
         width: stroke.width,
         line_cap: stroke.cap,
         line_join: stroke.join,
-        dash: stroke.dash,
+        dash: stroke.dash.clone(),
         ..Stroke::default()
     };
     let path = offset_path.as_ref().unwrap_or(tsk_path);

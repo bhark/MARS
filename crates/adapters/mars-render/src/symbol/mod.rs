@@ -22,29 +22,26 @@ use mars_style::{MarkerSymbol, Style};
 use mars_text::Fonts;
 use tiny_skia::Pixmap;
 
-use crate::prepare::UnimplementedFeatures;
-
 pub(crate) fn dispatch(
     pm: &mut Pixmap,
     anchor: (f32, f32),
     rotation_rad: f32,
     style: &Style,
     fonts: &Fonts,
-) -> Result<UnimplementedFeatures, RenderError> {
+) -> Result<(), RenderError> {
     let Some(marker) = &style.marker else {
-        return Ok(UnimplementedFeatures::default());
+        return Ok(());
     };
     match marker {
         MarkerSymbol::Glyph { font_family, ch, size } => {
             glyph::draw(pm, anchor, rotation_rad, font_family, ch, *size, style, fonts)
-                .map(|()| UnimplementedFeatures::default())
         }
-        MarkerSymbol::Circle { size } => render(pm, circle::build_path(*size), anchor, rotation_rad, style),
-        MarkerSymbol::Square { size } => render(pm, square::build_path(*size), anchor, rotation_rad, style),
-        MarkerSymbol::Triangle { size } => render(pm, triangle::build_path(*size), anchor, rotation_rad, style),
-        MarkerSymbol::Cross { size } => render(pm, cross::build_path(*size), anchor, rotation_rad, style),
-        MarkerSymbol::X { size } => render(pm, x::build_path(*size), anchor, rotation_rad, style),
-        MarkerSymbol::Pin { size } => render(pm, pin::build_path(*size), anchor, rotation_rad, style),
+        MarkerSymbol::Circle { size } => render(pm, circle::build_path(*size), anchor, rotation_rad, style, fonts),
+        MarkerSymbol::Square { size } => render(pm, square::build_path(*size), anchor, rotation_rad, style, fonts),
+        MarkerSymbol::Triangle { size } => render(pm, triangle::build_path(*size), anchor, rotation_rad, style, fonts),
+        MarkerSymbol::Cross { size } => render(pm, cross::build_path(*size), anchor, rotation_rad, style, fonts),
+        MarkerSymbol::X { size } => render(pm, x::build_path(*size), anchor, rotation_rad, style, fonts),
+        MarkerSymbol::Pin { size } => render(pm, pin::build_path(*size), anchor, rotation_rad, style, fonts),
         MarkerSymbol::VectorShape {
             points,
             anchor: local_anchor,
@@ -53,14 +50,14 @@ pub(crate) fn dispatch(
         } => {
             let path = vector_shape::build_path(points, *local_anchor, *filled, *size);
             if *filled {
-                render(pm, path, anchor, rotation_rad, style)
+                render(pm, path, anchor, rotation_rad, style, fonts)
             } else {
                 // open polyline: clear fill so the polygon pipeline is bypassed.
                 // a fill paint on an open path would be auto-closed by
                 // tiny-skia, which is the wrong semantics.
                 let mut s = style.clone();
                 s.fill = None;
-                render(pm, path, anchor, rotation_rad, &s)
+                render(pm, path, anchor, rotation_rad, &s, fonts)
             }
         }
     }
@@ -76,7 +73,8 @@ fn render(
     anchor: (f32, f32),
     rotation_rad: f32,
     style: &Style,
-) -> Result<UnimplementedFeatures, RenderError> {
+    fonts: &Fonts,
+) -> Result<(), RenderError> {
     let (sin_r, cos_r) = rotation_rad.sin_cos();
     for sub in &mut local.subpaths {
         for p in &mut sub.points {
@@ -84,7 +82,7 @@ fn render(
             *p = (anchor.0 + cos_r * x - sin_r * y, anchor.1 + sin_r * x + cos_r * y);
         }
     }
-    crate::ops::path::draw(pm, &local, style)
+    crate::ops::path::draw(pm, &local, style, fonts)
 }
 
 #[cfg(test)]
@@ -175,8 +173,7 @@ mod tests {
     fn none_marker_is_silent_no_op() {
         let style = Style::default();
         let fonts = mars_text::Fonts::with_default();
-        let flags = dispatch(&mut pm(), (8.0, 8.0), 0.0, &style, &fonts).expect("ok");
-        assert!(!flags.any(), "no-op must not flag");
+        dispatch(&mut pm(), (8.0, 8.0), 0.0, &style, &fonts).expect("ok");
     }
 
     #[test]

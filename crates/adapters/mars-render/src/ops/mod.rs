@@ -10,7 +10,6 @@ use mars_render_port::{DrawOp, ImageRegistry, RenderError};
 use mars_text::Fonts;
 use tiny_skia::Pixmap;
 
-use crate::prepare::UnimplementedFeatures;
 use crate::{raster, symbol};
 
 pub(crate) fn dispatch(
@@ -18,9 +17,9 @@ pub(crate) fn dispatch(
     op: &DrawOp,
     fonts: &Fonts,
     images: &dyn ImageRegistry,
-) -> Result<UnimplementedFeatures, RenderError> {
+) -> Result<(), RenderError> {
     match op {
-        DrawOp::Path { path, style } => path::draw(pm, path, style),
+        DrawOp::Path { path, style } => path::draw(pm, path, style, fonts),
         DrawOp::Label {
             anchor,
             text,
@@ -39,9 +38,7 @@ pub(crate) fn dispatch(
             style,
         } => symbol::dispatch(pm, *anchor, *rotation_rad, style, fonts),
         DrawOp::Pattern { path, style } => pattern::draw(pm, path, style, images),
-        DrawOp::Raster { tile, dst, opacity } => {
-            raster::draw(pm, tile, *dst, *opacity).map(|()| UnimplementedFeatures::default())
-        }
+        DrawOp::Raster { tile, dst, opacity } => raster::draw(pm, tile, *dst, *opacity),
     }
 }
 
@@ -182,11 +179,7 @@ mod tests {
                 ..Default::default()
             }),
         };
-        let flags = dispatch(&mut pm, &op, &fonts, &mars_render_port::EmptyImageRegistry).expect("dispatch ok");
-        assert!(
-            !flags.any(),
-            "glyph implementation must not surface unimplemented flags"
-        );
+        dispatch(&mut pm, &op, &fonts, &mars_render_port::EmptyImageRegistry).expect("dispatch ok");
         // verify pixels actually moved - at least one painted alpha byte.
         assert!(
             pm.data().chunks_exact(4).any(|p| p[3] > 0),
