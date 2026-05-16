@@ -91,6 +91,11 @@ pub(crate) enum LayerDirective<'a> {
     /// only; COMPOP (multiply/screen/etc.) is renderer work and stays out of
     /// scope.
     Composite(&'a Token),
+    /// `TEMPLATE "path.html"` - lowered into `Layer.template` on the YAML
+    /// side. The mapfile arg is a filesystem path to an html template; we
+    /// pass the raw token through and let the operator either replace it
+    /// with an inline `{ident}` template or leave the path as a stub.
+    Template(&'a Token),
     Unsupported(&'a Token),
     Unknown,
 }
@@ -118,6 +123,7 @@ impl<'a> LayerDirective<'a> {
             "CONNECTIONTYPE" => Self::ConnectionType(t),
             "PROJECTION" => Self::Projection(t),
             "COMPOSITE" => Self::Composite(t),
+            "TEMPLATE" => Self::Template(t),
             other if is_unsupported(other) => Self::Unsupported(t),
             _ => Self::Unknown,
         }

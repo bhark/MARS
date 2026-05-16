@@ -1,0 +1,22 @@
+# TEMPLATE coverage fixture. Mapfile-level TEMPLATE "path.html" lowers into
+# the per-layer `template:` YAML field consumed by the GFI renderer.
+MAP
+  NAME "template"
+  TITLE "Template Coverage"
+
+  LAYER
+    NAME "areas"
+    TYPE POLYGON
+    STATUS ON
+    DATA "geom FROM areas"
+    PROCESSING "ITEMS=ogc_fid,kind,name"
+    TEMPLATE "areas_info.html"
+
+    CLASS
+      NAME "default"
+      STYLE
+        COLOR 200 200 200
+      END
+    END
+  END
+END

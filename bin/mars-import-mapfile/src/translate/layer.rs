@@ -71,6 +71,9 @@ pub(crate) struct ParsedLayer {
     /// per-style STYLE.OPACITY at resolve time. COMPOP / FILTER /
     /// COMPFILTER inside COMPOSITE are renderer work and ignored.
     pub composite_opacity: Option<f32>,
+    /// Raw mapfile `TEMPLATE "path.html"` arg. Threaded into `Layer.template`
+    /// in the emitted YAML.
+    pub template: Option<String>,
 }
 
 pub(crate) fn handle_layer(
@@ -224,6 +227,10 @@ pub(crate) fn parse_layer(body: &[Token]) -> ParsedLayer {
                     continue;
                 }
             }
+            LayerDirective::Template(t) if p.template.is_none() => {
+                p.template = parsing::first_unquoted(t);
+            }
+            LayerDirective::Template(_) => {}
             LayerDirective::Unsupported(t) => {
                 warn!(line = t.line, keyword = %t.keyword, "unsupported mapfile construct");
                 if is_block_opener(&t.keyword)

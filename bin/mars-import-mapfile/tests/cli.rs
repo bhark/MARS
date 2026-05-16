@@ -162,6 +162,11 @@ fn fontset_alias_resolves_to_family_name() {
 }
 
 #[test]
+fn template_fixture_matches() {
+    assert_fixture_matches("template");
+}
+
+#[test]
 fn multi_pass_does_not_emit_collapse_warning() {
     // the legacy importer collapsed multi-STYLE classes into one fill+stroke
     // and warned per occurrence. multi-pass attachments now preserve order

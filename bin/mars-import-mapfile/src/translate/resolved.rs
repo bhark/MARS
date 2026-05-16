@@ -49,6 +49,11 @@ pub(crate) struct ResolvedLayer {
     pub postgis_dsn: Option<String>,
     pub wms: LayerWmsSkeleton,
     pub ows: LayerOwsSkeleton,
+    /// Mapfile `TEMPLATE "path.html"` lowered for the YAML emitter. The
+    /// importer passes the path through verbatim; the operator either points
+    /// MARS at a `{ident}`-style template or rewrites the path as inline
+    /// template text post-import.
+    pub template: Option<String>,
     pub unimplemented: Vec<&'static str>,
 }
 
@@ -142,6 +147,7 @@ pub(crate) fn resolve_layer(
             postgis_dsn: None,
             wms: layer_wms_skeleton(&p.wms_metadata),
             ows: layer_ows_skeleton(&p.wms_metadata),
+            template: p.template.clone(),
             unimplemented: Vec::new(),
         });
     }
@@ -301,6 +307,7 @@ pub(crate) fn resolve_layer(
         postgis_dsn,
         wms,
         ows,
+        template: p.template,
         unimplemented,
     })
 }

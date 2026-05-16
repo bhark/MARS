@@ -315,6 +315,9 @@ pub(crate) struct LayerSkeleton {
     /// time into a single MAP-scope `source.dsn` when every PostGIS layer
     /// agrees; see [`fold_postgis_dsns`].
     pub(crate) postgis_dsn: Option<String>,
+    /// Mapfile `TEMPLATE "path.html"`, threaded into the emitted YAML's
+    /// `template:` field for the GetFeatureInfo template renderer.
+    pub(crate) template: Option<String>,
 }
 
 /// Per-layer WMS-only extras (opaque, advertised CRS list). The cross-
@@ -1353,6 +1356,9 @@ pub(crate) fn render(skel: &Skeleton, bands: &[(String, u64)]) -> String {
             }
             if let Some(g) = &layer.group {
                 let _ = writeln!(out, "    group: {}", yaml_quote(g));
+            }
+            if let Some(tpl) = &layer.template {
+                let _ = writeln!(out, "    template: {}", yaml_quote(tpl));
             }
             write_layer_wms_metadata(&mut out, &layer.wms);
             write_layer_ows_metadata(&mut out, &layer.ows);
