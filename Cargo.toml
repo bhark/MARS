@@ -109,7 +109,7 @@ fallible-streaming-iterator = "0.1.9"
 # requires lifting the proj-sys floor in lockstep. bundled feature compiles
 # SQLite from source so the workspace doesn't grow a system-sqlite runtime
 # dep.
-rusqlite            = { version = "0.36.0", default-features = false, features = ["bundled"] }
+rusqlite            = { version = "0.37.0", default-features = false, features = ["bundled"] }
 # default features pull in reqwest/http for direct fetching; we use object_store
 # for transport, so only the bytes integration is needed.
 flatgeobuf          = { version = "6.0.1", default-features = false, features = ["bytes"] }
