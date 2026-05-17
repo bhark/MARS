@@ -14,5 +14,5 @@ workspace = true
 
 [dependencies]
 mars-types       = { workspace = true }
-quick-xml        = "0.39"
+quick-xml        = "0.40"
 percent-encoding = { workspace = true }

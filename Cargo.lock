@@ -2811,7 +2811,7 @@ version = "0.0.0-dev"
 dependencies = [
  "mars-types",
  "percent-encoding",
- "quick-xml",
+ "quick-xml 0.40.1",
 ]
 
 [[package]]
@@ -3095,7 +3095,7 @@ dependencies = [
  "mars-proj",
  "mars-runtime",
  "mars-types",
- "quick-xml",
+ "quick-xml 0.40.1",
  "serde_json",
  "serde_yaml_ng",
  "thiserror 2.0.18",
@@ -3109,7 +3109,7 @@ dependencies = [
  "mars-ows-common",
  "mars-runtime",
  "mars-types",
- "quick-xml",
+ "quick-xml 0.40.1",
  "serde_yaml_ng",
  "thiserror 2.0.18",
 ]
@@ -3336,7 +3336,7 @@ dependencies = [
  "md-5 0.10.6",
  "parking_lot",
  "percent-encoding",
- "quick-xml",
+ "quick-xml 0.39.4",
  "rand 0.10.1",
  "reqwest 0.12.28",
  "ring",
@@ -3905,6 +3905,15 @@ checksum = "cdcc8dd4e2f670d309a5f0e83fe36dfdc05af317008fea29144da1a2ac858e5e"
 dependencies = [
  "memchr",
  "serde",
+]
+
+[[package]]
+name = "quick-xml"
+version = "0.40.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2474bd2e5029e7ccb6abb2ba48cf2383a333851dedf495901544281590c7da7f"
+dependencies = [
+ "memchr",
 ]
 
 [[package]]
