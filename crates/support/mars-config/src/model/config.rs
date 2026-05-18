@@ -163,6 +163,17 @@ fn intersect_reprojection(deployment: &Reprojection, definition: &Reprojection) 
 }
 
 impl RenderDefinition {
+    /// Parse a render definition from a YAML string. Thin serde wrapper that
+    /// surfaces parse failures as [`ConfigError::Parse`] for symmetry with
+    /// [`crate::load`]; callers that already own a `serde_yaml_ng::Value`
+    /// should use serde directly.
+    pub fn from_yaml(yaml: &str) -> Result<Self, ConfigError> {
+        serde_yaml_ng::from_str(yaml).map_err(|e| ConfigError::Parse {
+            path: "<string>".to_string(),
+            source: e,
+        })
+    }
+
     /// Validate the render-side fields and resolve derived state (band
     /// routing) on the layers. Excludes any check that depends on a `Source`
     /// catalog - those run on the composed [`Config`] via [`crate::validate`].
