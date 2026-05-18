@@ -287,11 +287,6 @@ impl Parser {
                 self.bump();
                 let e = self.parse_or()?;
                 self.expect(&Tok::RParen, "')'")?;
-                // function call would be ident immediately followed by lparen, which would
-                // hit this branch via parse_primary on the lparen - but our caller already
-                // consumed the ident first. detect that case in parse_predicate is hard;
-                // instead, function calls are caught because ident is parsed as primary,
-                // and the next token being '(' is rejected here as no postfix matches.
                 Ok(e)
             }
             Some(Tok::Ident(name)) => {
