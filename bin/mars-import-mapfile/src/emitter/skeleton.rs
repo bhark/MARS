@@ -106,10 +106,6 @@ pub(crate) struct LayerSkeleton {
     pub(crate) wms: LayerWmsSkeleton,
     /// Per-layer OWS metadata + cross-protocol gating.
     pub(crate) ows: LayerOwsSkeleton,
-    /// PostGIS DSN lifted from this layer's `CONNECTION`. folded at render
-    /// time into a single MAP-scope `source.dsn` when every PostGIS layer
-    /// agrees; see [`super::dsn::fold_postgis_dsns`].
-    pub(crate) postgis_dsn: Option<String>,
     /// Mapfile `TEMPLATE "path.html"`, threaded into the emitted YAML's
     /// `template:` field for the GetFeatureInfo template renderer.
     pub(crate) template: Option<String>,
@@ -124,12 +120,6 @@ pub(crate) struct LayerWmsSkeleton {
     pub(crate) advertised_crs: Vec<String>,
 }
 
-impl LayerWmsSkeleton {
-    pub(crate) fn is_empty(&self) -> bool {
-        self.opaque.is_none() && self.advertised_crs.is_empty()
-    }
-}
-
 /// Per-layer OWS metadata that flows from the importer into the emitted
 /// YAML's per-layer `ows:` block. Each field is absent by default and the
 /// emitter writes only fields with content.
@@ -142,18 +132,6 @@ pub(crate) struct LayerOwsSkeleton {
     pub(crate) attribution: Option<LayerAttributionSkeleton>,
     pub(crate) include_items: Option<IncludeItemsSkeleton>,
     pub(crate) request_gating: LayerGatingSkeleton,
-}
-
-impl LayerOwsSkeleton {
-    pub(crate) fn is_empty(&self) -> bool {
-        self.keywords.is_empty()
-            && self.metadata_urls.is_empty()
-            && self.authorities.is_empty()
-            && self.identifiers.is_empty()
-            && self.attribution.is_none()
-            && self.include_items.is_none()
-            && self.request_gating.is_empty()
-    }
 }
 
 #[derive(Debug, Default)]
@@ -184,20 +162,6 @@ pub(crate) struct LayerGatingSkeleton {
     pub(crate) wmts_get_capabilities: Option<bool>,
     pub(crate) wmts_get_tile: Option<bool>,
     pub(crate) wmts_get_feature_info: Option<bool>,
-}
-
-impl LayerGatingSkeleton {
-    pub(crate) fn is_empty(&self) -> bool {
-        self.get_capabilities.is_none()
-            && self.get_map.is_none()
-            && self.get_feature_info.is_none()
-            && self.get_legend_graphic.is_none()
-            && self.get_styles.is_none()
-            && self.describe_layer.is_none()
-            && self.wmts_get_capabilities.is_none()
-            && self.wmts_get_tile.is_none()
-            && self.wmts_get_feature_info.is_none()
-    }
 }
 
 #[derive(Debug, Clone)]

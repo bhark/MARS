@@ -34,11 +34,6 @@ pub(crate) struct ResolvedLayer {
     /// (flat) and `wms_layer_group` (hierarchical); the hierarchical form
     /// wins when both are set.
     pub group_path: Option<String>,
-    /// Lifted PostGIS DSN from `CONNECTIONTYPE POSTGIS` + `CONNECTION "<dsn>"`.
-    /// `Some` only for layers that declare both; non-PostGIS layers and
-    /// layers without an explicit CONNECTION leave this `None` so the
-    /// MAP-scope lift can distinguish agreement, mixed input, and absence.
-    pub postgis_dsn: Option<String>,
     pub wms: LayerWmsSkeleton,
     pub ows: LayerOwsSkeleton,
     /// Mapfile `TEMPLATE "path.html"` lowered for the YAML emitter. The
@@ -83,7 +78,6 @@ pub(crate) fn resolve_layer(
             label: None,
             attributes: Vec::new(),
             group_path: normalize_group_path(p.wms_layer_group.as_deref(), p.group.as_deref()),
-            postgis_dsn: None,
             wms: layer_wms_skeleton(&p.wms_metadata),
             ows: layer_ows_skeleton(&p.wms_metadata),
             template: p.template.clone(),
@@ -108,7 +102,9 @@ pub(crate) fn resolve_layer(
         }
     }
 
-    let postgis_dsn = lift_postgis_dsn(p.connection_type.as_ref(), p.connection.as_deref(), &name, layer_line);
+    // walk CONNECTION for its warning side effects; the DSN itself is a
+    // deployment concern and no longer lifted into the emitted definition.
+    let _ = lift_postgis_dsn(p.connection_type.as_ref(), p.connection.as_deref(), &name, layer_line);
 
     let geom_kind_str = p.layer_type.as_deref().and_then(mapfile_type_to_geom);
     let geom_for_classes = geom_kind_str.unwrap_or("polygon");
@@ -236,7 +232,6 @@ pub(crate) fn resolve_layer(
         label,
         attributes: all_attrs.into_iter().collect(),
         group_path,
-        postgis_dsn,
         wms,
         ows,
         template: p.template,
