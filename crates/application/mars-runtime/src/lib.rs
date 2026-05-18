@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwapOption;
 use mars_observability::Metrics;
-use mars_render_port::{Encoder, Pixmap, Renderer};
+use mars_render_port::{Encoder, Renderer};
 use mars_source::RasterSource;
 use mars_store::{LocalCache, ObjectStore};
 pub use mars_text::Fonts;
@@ -21,6 +21,7 @@ use mars_types::{Bbox, CrsCode, ImageFormat, LayerId, SourceCollectionId};
 use tokio::sync::Semaphore;
 
 mod decode;
+mod exceptions;
 mod fetch;
 mod gfi;
 pub mod images;
@@ -346,73 +347,14 @@ impl Runtime {
     /// Used for WMS `EXCEPTIONS=BLANK`; bypasses state so it works even when
     /// no manifest is loaded yet.
     pub fn blank_image(&self, plan: &RenderPlan) -> Result<Vec<u8>, RuntimeError> {
-        let pixels = (plan.width as usize)
-            .checked_mul(plan.height as usize)
-            .and_then(|n| n.checked_mul(4))
-            .ok_or(RuntimeError::PixelBudgetExceeded {
-                requested: u64::from(plan.width).saturating_mul(u64::from(plan.height)),
-                budget: self.pixel_budget,
-            })?;
-        let pixmap = Pixmap {
-            width: plan.width,
-            height: plan.height,
-            premultiplied_rgba: vec![0u8; pixels],
-        };
-        Ok(self.deps.encoder.encode(&pixmap, plan.format)?)
+        exceptions::blank_image_bytes(&self.deps, self.pixel_budget, plan)
     }
 
     /// Render an error message as text centred on a transparent image of the
     /// plan's dimensions and format. Used for WMS `EXCEPTIONS=INIMAGE`;
     /// bypasses state so it works even when no manifest is loaded yet.
     pub fn inimage_error(&self, plan: &RenderPlan, message: &str) -> Result<Vec<u8>, RuntimeError> {
-        let pixels = u64::from(plan.width).saturating_mul(u64::from(plan.height));
-        if pixels > u64::from(self.pixel_budget) {
-            return Err(RuntimeError::PixelBudgetExceeded {
-                requested: pixels,
-                budget: self.pixel_budget,
-            });
-        }
-        // very small canvases cannot fit even one glyph at the chosen size;
-        // fall through to a blank image so the response stays well-formed.
-        if plan.width < 16 || plan.height < 16 {
-            return self.blank_image(plan);
-        }
-        let style = std::sync::Arc::new(
-            mars_style::LabelStyle {
-                font_family: "DejaVu Sans".to_owned(),
-                font_size: 14.0.into(),
-                fill: mars_style::Colour::rgba(180, 20, 20, 255),
-                halo: Some(mars_style::Halo {
-                    colour: mars_style::Colour::rgba(255, 255, 255, 230),
-                    width: 1.5,
-                }),
-                priority: 0,
-                min_distance: 0.0,
-                position: mars_style::AnchorPosition::default(),
-                offset_px: (0.0, 0.0),
-                angle: None,
-                partials: false,
-                force: false,
-            }
-            .resolve(0),
-        );
-        // single-line truncation; multi-line wrap belongs in the label
-        // renderer, not here.
-        let text = truncate_message(message, 80);
-        let anchor = (plan.width as f32 / 2.0, plan.height as f32 / 2.0);
-        let ops = [mars_render_port::DrawOp::Label {
-            anchor,
-            text,
-            style,
-            angle_rad: 0.0,
-        }];
-        let canvas = mars_render_port::Canvas {
-            width: plan.width,
-            height: plan.height,
-            background: None,
-        };
-        let pixmap = self.deps.renderer.render(canvas, &ops)?;
-        Ok(self.deps.encoder.encode(&pixmap, plan.format)?)
+        exceptions::inimage_error_bytes(&self.deps, self.pixel_budget, plan, message)
     }
 
     /// Execute one render plan and return encoded image bytes.
@@ -461,19 +403,5 @@ pub fn denom_from_plan(bbox_width: f64, width_px: u32, m_per_pixel: f64) -> u32 
     } else {
         denom as u32
     }
-}
-
-/// Trim `msg` to at most `max_chars` characters (not bytes), appending an
-/// ellipsis when truncated. Operates on `char` boundaries so the result is
-/// valid UTF-8 regardless of input. Used by [`Runtime::inimage_error`] so an
-/// unbounded server message can't overflow the label run.
-fn truncate_message(msg: &str, max_chars: usize) -> String {
-    let chars: Vec<char> = msg.chars().collect();
-    if chars.len() <= max_chars {
-        return chars.into_iter().collect();
-    }
-    let mut out: String = chars.into_iter().take(max_chars.saturating_sub(1)).collect();
-    out.push('…');
-    out
 }
 
