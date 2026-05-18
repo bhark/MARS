@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use super::build::build_raster_layer_entries;
 use super::*;
 use mars_config::{
     Artifacts, Band, Cells, ClassStyle, Config, DEFAULT_PAGE_SIZE_TARGET_BYTES, DecimationLevelConfig, Interfaces,

@@ -75,7 +75,7 @@ pub fn build_bootstrap_plan(cfg: &Config) -> Result<BootstrapPlan, PlanError> {
 /// every raster-kind layer carries a well-formed `raster:` block, so this
 /// function does not return an error type. Layers without a raster block
 /// are skipped.
-pub fn build_raster_layer_entries(cfg: &Config) -> Vec<RasterLayerEntry> {
+pub(crate) fn build_raster_layer_entries(cfg: &Config) -> Vec<RasterLayerEntry> {
     cfg.layers
         .iter()
         .filter_map(|layer| {

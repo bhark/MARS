@@ -27,7 +27,7 @@ mod error;
 mod layer;
 mod types;
 
-pub use build::{build_bootstrap_plan, build_raster_layer_entries};
+pub use build::build_bootstrap_plan;
 pub use error::PlanError;
 pub use types::{BindingPlan, BootstrapPlan, ClassPlan, LayerLabelPlan, LayerPlan, LevelPlan};
 
