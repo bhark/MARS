@@ -2,10 +2,10 @@
 
 use super::*;
 use mars_config::{
-    Artifacts, Band, Cells, ClassStyle, Config, DEFAULT_PAGE_SIZE_TARGET_BYTES, Interfaces, Scales, ServiceMeta,
-    Source, SourceBinding,
+    Artifacts, Band, Cells, ClassStyle, Config, DEFAULT_PAGE_SIZE_TARGET_BYTES, DecimationLevelConfig, Interfaces,
+    Scales, ServiceMeta, Source, SourceBinding,
 };
-use mars_types::{Bbox, CrsCode, LayerId};
+use mars_types::{Bbox, BindingId, CrsCode, DecimationLevel, LayerId};
 use std::collections::BTreeMap;
 
 fn config_with(layers: Vec<mars_config::Layer>) -> Config {
