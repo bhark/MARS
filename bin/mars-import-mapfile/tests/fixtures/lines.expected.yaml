@@ -79,9 +79,7 @@ styles:
     marker: null
     opacity: 0.75
     stroke_offset_px: 1.5
-    stroke_gap:
-      interval_px: 20.0
-      initial_px: 4.0
+    stroke_gap: null
     geom_transform: null
     min_feature_size_px: null
     blend_mode: null

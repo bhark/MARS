@@ -323,10 +323,20 @@ pub(crate) fn style_block_to_pass(s: &StyleBlock, symbols: &HashMap<String, Symb
     let dasharray = s.pattern.clone();
     let opacity = s.opacity;
     let stroke_offset_px = s.offset_px;
-    let stroke_gap = s.gap_px.map(|gap| EmitStrokeGap {
-        interval_px: gap,
-        initial_px: s.initial_gap_px.unwrap_or(0.0),
-    });
+    // mars `stroke_gap` stamps a marker along the line; without a resolved
+    // marker the directive has no draw target. mirrors the STYLE.ANGLE check
+    // above. mapserver treats GAP without SYMBOL as a no-op too.
+    let stroke_gap = if resolved_marker.is_some() {
+        s.gap_px.map(|gap| EmitStrokeGap {
+            interval_px: gap,
+            initial_px: s.initial_gap_px.unwrap_or(0.0),
+        })
+    } else {
+        if s.gap_px.is_some() || s.initial_gap_px.is_some() {
+            push_unique(&mut unimplemented, "STYLE.GAP/INITIALGAP (no marker)");
+        }
+        None
+    };
     let stroke_linejoin = s.linejoin;
     let stroke_linecap = s.linecap;
     let geom_transform = s.geom_transform;
