@@ -27,8 +27,9 @@ pub enum VectorFileFormat {
     GeoJson,
     /// ESRI Shapefile bundled as a single ZIP archive (`.shp.zip` / `.zip`).
     /// The archive must carry the mandatory `.shp` + `.shx` + `.dbf` triple
-    /// at a shared basename; an optional `.prj` is honoured when present.
-    /// One-file packaging keeps the adapter's single-URI fetch contract.
+    /// at a shared basename; a `.prj` sidecar, if bundled, is ignored -
+    /// `source_crs` is authoritative. One-file packaging keeps the adapter's
+    /// single-URI fetch contract.
     Shapefile,
     /// OGC GeoPackage (`.gpkg`). SQLite-backed feature container. The
     /// adapter writes the fetched bytes to a tempfile so SQLite can mmap
