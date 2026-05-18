@@ -4,10 +4,9 @@
 //! lifted to metadata-only [`RasterLayerEntry`] rows in one pass.
 
 use mars_config::{Config, SourceId};
-use mars_expr::parse;
 use mars_types::RasterLayerEntry;
 
-use super::binding::{level_plans, resolve_binding_source};
+use super::binding::build_binding_plan;
 use super::dedup::{ensure_consistent, ensure_layer_consistent};
 use super::error::PlanError;
 use super::layer::build_layer_plan;
@@ -36,7 +35,6 @@ pub fn build_bootstrap_plan(cfg: &Config) -> Result<BootstrapPlan, PlanError> {
             continue;
         }
         for binding in &layer.sources {
-            let (source_locator, id) = resolve_binding_source(binding)?;
             let source = sources_by_id
                 .get(&binding.source)
                 .copied()
@@ -44,31 +42,8 @@ pub fn build_bootstrap_plan(cfg: &Config) -> Result<BootstrapPlan, PlanError> {
                     from: binding.source_descriptor(),
                     source_id: binding.source.clone(),
                 })?;
-            let native_crs = source.native_crs.clone();
-            let sidecar_warn = binding
-                .resolved_sidecar_size_warn_bytes()
-                .map_err(|source| PlanError::BindingSidecarWarnParse { id: id.clone(), source })?;
-            let filter_parsed = match &binding.filter {
-                Some(s) => Some(parse(s).map_err(|source| PlanError::BindingFilterParse { id: id.clone(), source })?),
-                None => None,
-            };
-            let plan = BindingPlan {
-                binding_id: id.clone(),
-                source_id: binding.source.clone(),
-                source_table: source_locator,
-                geometry_field: binding.geometry_column.clone(),
-                id_field: binding.id_column.clone(),
-                attributes: binding.attributes.clone(),
-                filter: filter_parsed,
-                native_crs,
-                levels: level_plans(binding.levels.as_deref()),
-                page_size_target_bytes: binding.resolved_page_size_target(),
-                sidecar_size_warn_bytes: sidecar_warn,
-                reconcile_every_cycles: binding.resolved_reconcile_every_cycles(),
-                simplifier: binding.resolved_simplifier(),
-                missing_page_policy: binding.resolved_missing_page_policy(),
-                dsn: binding.dsn.clone(),
-            };
+            let plan = build_binding_plan(source, binding)?;
+            let id = plan.binding_id.clone();
 
             if let Some(existing) = bindings.iter().find(|b| b.binding_id == id) {
                 ensure_consistent(existing, &plan)?;

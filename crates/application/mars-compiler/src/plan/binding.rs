@@ -2,11 +2,12 @@
 //! shaping (postgis from:/sql: vs vectorfile uri:), and the default-level
 //! collapse used when a binding declares no `levels:` block.
 
-use mars_config::DecimationLevelConfig;
+use mars_config::{DecimationLevelConfig, Source, SourceBinding};
+use mars_expr::parse;
 use mars_types::{BindingId, DecimationLevel};
 
 use super::error::PlanError;
-use super::types::LevelPlan;
+use super::types::{BindingPlan, LevelPlan};
 
 /// Stable level plan list. an absent `levels:` config collapses to a single
 /// level-0 entry with zero decimation -- preserves the canonical raw set.
@@ -86,5 +87,44 @@ pub(super) fn resolve_binding_source(binding: &mars_config::SourceBinding) -> Re
     // uri:; surface a typed error in case a config bypasses validate.
     Err(PlanError::BindingSourceUnspecified {
         descriptor: binding.source_descriptor(),
+    })
+}
+
+/// Lift one `(source, binding)` pair into a fully-resolved [`BindingPlan`].
+/// Parses the binding's `filter:` expression and `sidecar_size_warn_bytes`
+/// literal once at plan-build time so the snapshot/rebuild paths never
+/// reparse per page.
+pub(super) fn build_binding_plan(source: &Source, binding: &SourceBinding) -> Result<BindingPlan, PlanError> {
+    let (source_table, binding_id) = resolve_binding_source(binding)?;
+    let sidecar_size_warn_bytes =
+        binding
+            .resolved_sidecar_size_warn_bytes()
+            .map_err(|source| PlanError::BindingSidecarWarnParse {
+                id: binding_id.clone(),
+                source,
+            })?;
+    let filter = match &binding.filter {
+        Some(s) => Some(parse(s).map_err(|source| PlanError::BindingFilterParse {
+            id: binding_id.clone(),
+            source,
+        })?),
+        None => None,
+    };
+    Ok(BindingPlan {
+        binding_id,
+        source_id: binding.source.clone(),
+        source_table,
+        geometry_field: binding.geometry_column.clone(),
+        id_field: binding.id_column.clone(),
+        attributes: binding.attributes.clone(),
+        filter,
+        native_crs: source.native_crs.clone(),
+        levels: level_plans(binding.levels.as_deref()),
+        page_size_target_bytes: binding.resolved_page_size_target(),
+        sidecar_size_warn_bytes,
+        reconcile_every_cycles: binding.resolved_reconcile_every_cycles(),
+        simplifier: binding.resolved_simplifier(),
+        missing_page_policy: binding.resolved_missing_page_policy(),
+        dsn: binding.dsn.clone(),
     })
 }
