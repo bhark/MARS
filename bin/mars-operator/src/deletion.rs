@@ -5,9 +5,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use k8s_openapi::api::apps::v1::Deployment;
 use k8s_openapi::api::batch::v1::Job;
 use k8s_openapi::api::core::v1::Secret;
-use kube::api::{Api, Patch, PatchParams};
+use kube::api::{Api, DeleteParams, Patch, PatchParams};
 use kube::runtime::controller::Action;
 use serde_json::json;
 
@@ -47,6 +48,14 @@ pub(crate) async fn reconcile_deletion(
     if nothing_to_drop || !has_admin {
         remove_finalizer(ctx, cr.as_ref(), svc_name, ns).await?;
         return Ok(Action::await_change());
+    }
+
+    // shut down compiler + runtime before running the teardown Job. the
+    // compiler holds the logical replication slot open; pg_drop_replication_slot
+    // fails with "slot is active for PID N" until the consumer disconnects.
+    // we drive the deletion, wait for the Deployments to be gone, then proceed.
+    if shutdown_workloads(ctx, ns, svc_name).await? {
+        return Ok(Action::requeue(Duration::from_secs(2)));
     }
 
     let owner = owner_reference(cr.as_ref())?;
@@ -90,6 +99,31 @@ pub(crate) async fn reconcile_deletion(
         return Ok(Action::await_change());
     }
     Ok(Action::requeue(Duration::from_secs(10)))
+}
+
+/// Delete the compiler + runtime Deployments. Returns `true` if either was
+/// still present (so the caller should requeue and re-check), `false` once
+/// both are confirmed gone. Idempotent: re-deleting a missing Deployment is a
+/// no-op. We can't rely on owner-reference GC here because the MarsService
+/// keeps a finalizer through teardown and `blockOwnerDeletion` would otherwise
+/// trap the children behind the parent.
+async fn shutdown_workloads(ctx: &Ctx, ns: &str, svc_name: &str) -> Result<bool> {
+    let api: Api<Deployment> = Api::namespaced(ctx.client.clone(), ns);
+    let mut still_present = false;
+    for name in [labels::compiler_deployment_name(svc_name), labels::runtime_deployment_name(svc_name)] {
+        match api.get_opt(&name).await? {
+            None => continue,
+            Some(_) => {
+                still_present = true;
+                match api.delete(&name, &DeleteParams::default()).await {
+                    Ok(_) => {}
+                    Err(kube::Error::Api(e)) if e.code == 404 => {}
+                    Err(e) => return Err(e.into()),
+                }
+            }
+        }
+    }
+    Ok(still_present)
 }
 
 pub(crate) async fn ensure_finalizer(ctx: &Ctx, cr: &MarsService, svc_name: &str, ns: &str) -> Result<()> {
