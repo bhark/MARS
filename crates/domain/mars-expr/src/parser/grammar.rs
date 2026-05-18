@@ -3,9 +3,21 @@ use crate::{CmpOp, Expr, ExprError, Literal, LogicOp};
 use super::lexer::{Spanned, Tok};
 use super::{MAX_DEPTH, parse_err};
 
+fn tok_to_cmp(t: &Tok) -> Option<CmpOp> {
+    match t {
+        Tok::Eq => Some(CmpOp::Eq),
+        Tok::Ne => Some(CmpOp::Ne),
+        Tok::Lt => Some(CmpOp::Lt),
+        Tok::Le => Some(CmpOp::Le),
+        Tok::Gt => Some(CmpOp::Gt),
+        Tok::Ge => Some(CmpOp::Ge),
+        _ => None,
+    }
+}
+
 /// `=`/`!=` against `NULL` is silently always-NULL in SQL - never matches.
 /// reject at parse time and steer authors to `IS NULL` / `IS NOT NULL`.
-fn reject_null_compare(lhs: &Expr, rhs: &Expr, op: &str) -> Result<(), ExprError> {
+fn reject_null_compare(lhs: &Expr, rhs: &Expr, op: CmpOp) -> Result<(), ExprError> {
     if matches!(lhs, Expr::Literal(Literal::Null)) || matches!(rhs, Expr::Literal(Literal::Null)) {
         return Err(ExprError::Parse(format!(
             "{op} NULL never matches in SQL; use IS NULL / IS NOT NULL"
@@ -138,64 +150,20 @@ impl Parser {
 
     fn parse_predicate(&mut self) -> Result<Expr, ExprError> {
         let lhs = self.parse_primary()?;
+        if let Some(op) = self.peek().and_then(tok_to_cmp) {
+            self.bump();
+            let rhs = self.parse_primary()?;
+            if matches!(op, CmpOp::Eq | CmpOp::Ne) {
+                reject_null_compare(&lhs, &rhs, op)?;
+            }
+            return Ok(Expr::Cmp {
+                op,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            });
+        }
         // postfix predicate operators
         match self.peek() {
-            Some(Tok::Eq) => {
-                self.bump();
-                let rhs = self.parse_primary()?;
-                reject_null_compare(&lhs, &rhs, "=")?;
-                Ok(Expr::Cmp {
-                    op: CmpOp::Eq,
-                    lhs: Box::new(lhs),
-                    rhs: Box::new(rhs),
-                })
-            }
-            Some(Tok::Ne) => {
-                self.bump();
-                let rhs = self.parse_primary()?;
-                reject_null_compare(&lhs, &rhs, "!=")?;
-                Ok(Expr::Cmp {
-                    op: CmpOp::Ne,
-                    lhs: Box::new(lhs),
-                    rhs: Box::new(rhs),
-                })
-            }
-            Some(Tok::Lt) => {
-                self.bump();
-                let rhs = self.parse_primary()?;
-                Ok(Expr::Cmp {
-                    op: CmpOp::Lt,
-                    lhs: Box::new(lhs),
-                    rhs: Box::new(rhs),
-                })
-            }
-            Some(Tok::Le) => {
-                self.bump();
-                let rhs = self.parse_primary()?;
-                Ok(Expr::Cmp {
-                    op: CmpOp::Le,
-                    lhs: Box::new(lhs),
-                    rhs: Box::new(rhs),
-                })
-            }
-            Some(Tok::Gt) => {
-                self.bump();
-                let rhs = self.parse_primary()?;
-                Ok(Expr::Cmp {
-                    op: CmpOp::Gt,
-                    lhs: Box::new(lhs),
-                    rhs: Box::new(rhs),
-                })
-            }
-            Some(Tok::Ge) => {
-                self.bump();
-                let rhs = self.parse_primary()?;
-                Ok(Expr::Cmp {
-                    op: CmpOp::Ge,
-                    lhs: Box::new(lhs),
-                    rhs: Box::new(rhs),
-                })
-            }
             Some(Tok::KwIs) => {
                 self.bump();
                 let negate = self.eat(&Tok::KwNot);
