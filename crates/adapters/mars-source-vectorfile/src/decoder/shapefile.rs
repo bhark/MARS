@@ -9,10 +9,11 @@
 //! standard way every public dataset ships shapefile (e.g. census tiger,
 //! eurostat, OS open data). It keeps the fetcher and cache untouched.
 //!
-//! `.prj` is informational only: the binding's `source_crs` (config) is the
-//! single source of truth for reprojection. When a `.prj` is present and
-//! disagrees with the configured CRS this decoder logs a warning but does
-//! not fail the decode - many real-world `.prj` files are imprecise.
+//! `.prj` sidecars are not parsed. The binding's `source_crs` (config) is
+//! the single source of truth for the archive's native CRS. WKT-1 in
+//! shipped `.prj` files is too inconsistent in practice to reconcile
+//! against an EPSG code reliably, so operators are responsible for
+//! ensuring `source_crs` matches the data.
 //!
 //! Raw `.shp` URIs (or `#format=shapefile` over a non-archive URI) are
 //! rejected at fragment-resolution time with `FragmentError::Unsupported-
@@ -45,6 +46,16 @@ impl Decoder for ShapefileDecoder {
     }
 
     fn decode(&self, bytes: &Bytes, sink: &mut dyn FnMut(DecodedFeature) -> bool) -> Result<(), DecoderError> {
+        // policy notice: once per process, debug-level. operators investigating
+        // crs questions see it; normal logs stay quiet.
+        static PRJ_POLICY_LOGGED: std::sync::Once = std::sync::Once::new();
+        PRJ_POLICY_LOGGED.call_once(|| {
+            tracing::debug!(
+                target: "mars_source_vectorfile::shapefile",
+                "shapefile decoder: .prj sidecars are not parsed; binding source_crs is authoritative"
+            );
+        });
+
         let bundle = ShapefileBundle::from_zip(bytes)?;
         let shp = Cursor::new(bundle.shp);
         let shx = Cursor::new(bundle.shx);
@@ -58,10 +69,6 @@ impl Decoder for ShapefileDecoder {
             source: Box::new(e),
         })?;
         let mut reader = shapefile::Reader::new(shape_reader, dbase_reader);
-
-        if let Some(prj_warn) = bundle.prj_warning {
-            tracing::debug!(target: "mars_source_vectorfile::shapefile", "{}", prj_warn);
-        }
 
         for rec in reader.iter_shapes_and_records() {
             let (shape, record) = rec.map_err(parse_err)?;
@@ -108,8 +115,6 @@ struct ShapefileBundle {
     shp: Vec<u8>,
     shx: Vec<u8>,
     dbf: Vec<u8>,
-    /// non-fatal note about `.prj` mismatch / absence; surfaced via tracing.
-    prj_warning: Option<String>,
 }
 
 impl ShapefileBundle {
@@ -140,7 +145,6 @@ impl ShapefileBundle {
                 "shp" => "shp",
                 "shx" => "shx",
                 "dbf" => "dbf",
-                "prj" => "prj",
                 _ => continue,
             };
             by_ext.entry(kind).or_default().push((base, idx));
@@ -150,34 +154,12 @@ impl ShapefileBundle {
         let shp_base = shp_pick.0.clone();
         let shx_pick = pick_matching(&by_ext, "shx", &shp_base)?;
         let dbf_pick = pick_matching(&by_ext, "dbf", &shp_base)?;
-        let prj_pick = by_ext
-            .get("prj")
-            .and_then(|cands| cands.iter().find(|(b, _)| b == &shp_base))
-            .map(|(_, idx)| *idx);
 
         let shp = read_zip_entry(&mut zip, shp_pick.1)?;
         let shx = read_zip_entry(&mut zip, shx_pick.1)?;
         let dbf = read_zip_entry(&mut zip, dbf_pick.1)?;
-        let prj_warning = match prj_pick {
-            Some(idx) => {
-                // a present .prj is honoured implicitly: parsing wkt CRS
-                // text and reconciling it against the binding's source_crs
-                // is a future enhancement. for now we just acknowledge it
-                // so operators see it was seen.
-                let _ = read_zip_entry(&mut zip, idx)?;
-                None
-            }
-            None => Some(format!(
-                "shapefile archive '{shp_base}.shp.zip': no .prj sidecar; relying on binding source_crs"
-            )),
-        };
 
-        Ok(Self {
-            shp,
-            shx,
-            dbf,
-            prj_warning,
-        })
+        Ok(Self { shp, shx, dbf })
     }
 }
 

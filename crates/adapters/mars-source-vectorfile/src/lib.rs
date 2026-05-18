@@ -5,14 +5,18 @@
 //! caches them on disk keyed by `(uri, etag)`, decodes them through a
 //! pluggable [`decoder`] registry, and reprojects every row's geometry
 //! from the per-binding `source_crs` to the configured `Source.native_crs`.
-//! A polled etag change feed emits `ChangeEvent::Rebind` when the
-//! upstream object identity moves.
+//!
+//! Snapshot-only: this adapter intentionally does not implement
+//! `ChangeFeed`. Vector-file bindings are refreshed by re-running the
+//! snapshot path; the disk cache's `(uri, etag)` key short-circuits the
+//! redundant fetches when the upstream object identity is unchanged.
 //!
 //! Shapefile note: the binding URI points at a single ZIP archive
 //! bundling the `.shp` + `.shx` + `.dbf` triple at a shared basename;
-//! a `.prj` is honoured when present. One archive keeps the adapter's
-//! single-URI fetch contract intact and matches the way public shapefile
-//! distributions ship in practice.
+//! a `.prj` sidecar, if bundled, is ignored - `source_crs` is
+//! authoritative. One archive keeps the adapter's single-URI fetch
+//! contract intact and matches the way public shapefile distributions
+//! ship in practice.
 //!
 //! Bindings reach this adapter through the port-level [`SourceBinding`].
 //! Because the port's `from: String` is an opaque locator, this adapter
@@ -35,9 +39,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_core::stream::BoxStream;
-use mars_source::{
-    BindingHealth, ChangeFeed, ChangeSubscription, RowBytes, Source, SourceBinding, SourceCollectionId, SourceError,
-};
+use mars_source::{BindingHealth, RowBytes, Source, SourceBinding, SourceCollectionId, SourceError};
 use mars_types::CrsCode;
 
 pub mod cache;
@@ -183,18 +185,6 @@ impl Source for VectorFileSource {
         // wiring the URI map at construct time and HEADing each here is the
         // upgrade path once the bin-shared factory threads bindings through.
         Ok(collections.iter().cloned().map(BindingHealth::Healthy).collect())
-    }
-}
-
-#[async_trait]
-impl ChangeFeed for VectorFileSource {
-    async fn subscribe(&self) -> Result<Box<dyn ChangeSubscription>, SourceError> {
-        // todo: a real polled-etag feed needs the planner to register
-        // (collection, uri) pairs at construct time. for now mark as
-        // not-implemented so callers can detect snapshot-only mode.
-        Err(SourceError::NotImplemented {
-            what: "mars-source-vectorfile::subscribe",
-        })
     }
 }
 
