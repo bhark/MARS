@@ -8,6 +8,8 @@
 #   3. adapter-specific methods called outside the adapter crate
 #   4. application integration tests must not depend on concrete adapters
 #   5. unsafe_code is allowed only in the designated FFI boundary crate
+#   6. (numbering note: section 6 below is the unsafe_code check)
+#   7. mars-test-support must not be a normal-kind dep on a bin crate
 #
 # dev-dependencies and build-dependencies are excluded from dep checks.
 
@@ -40,7 +42,7 @@ is_interface(){ [[ "$1" == "mars-ows-common" || "$1" == "mars-wms" || "$1" == "m
 is_support()  { [[ "$1" == "mars-config" || "$1" == "mars-observability" || "$1" == "mars-proj" || "$1" == "mars-text" ]]; }
 is_testing()  { [[ "$1" == "mars-test-support" ]]; }
 
-is_bin() { [[ "$1" == "mars" || "$1" == "mars-import-mapfile" || "$1" == "mars-compile" || "$1" == "mars-bin-shared" ]]; }
+is_bin() { [[ "$1" == "mars" || "$1" == "mars-import-mapfile" || "$1" == "mars-compile" || "$1" == "mars-bin-shared" || "$1" == "mars-operator" ]]; }
 
 is_workspace_crate() {
     is_domain "$1" || is_port "$1" || is_adapter "$1" || is_app "$1" || is_interface "$1" || is_support "$1" || is_testing "$1" || is_bin "$1"
@@ -255,6 +257,31 @@ if [[ -n "$other_per_item_filtered" ]]; then
     warn "per-item '#[allow(unsafe_code)]' found outside permitted boundaries:"
     echo "$other_per_item_filtered" | sed 's/^/    /'
 fi
+
+# -----------------------------------------------------------------------------
+# 7. mars-test-support must not appear as a normal-kind dep on a bin crate.
+#    bins are production composition roots; pulling test scaffolding in via a
+#    non-dev dep means stubs (NotImplemented*) and docker SDK code would ship
+#    in the release binary.
+# -----------------------------------------------------------------------------
+
+echo "--- 7. mars-test-support scope on bin crates ---"
+
+while IFS=$'\t' read -r crate manifest dep kind; do
+    is_bin "$crate" || continue
+    [[ "$dep" == "mars-test-support" ]] || continue
+    [[ "$kind" == "dev" || "$kind" == "build" ]] && continue
+    warn "bin crate '$crate' has non-dev dep on 'mars-test-support' (manifest: $manifest, kind: '${kind:-normal}')"
+done < <(
+    cargo metadata --format-version=1 --no-deps \
+        | jq -r '
+            .packages[]
+            | . as $p
+            | $p.dependencies[]
+            | [$p.name, $p.manifest_path, .name, (.kind // "")]
+            | @tsv
+        '
+)
 
 # -----------------------------------------------------------------------------
 # summary
