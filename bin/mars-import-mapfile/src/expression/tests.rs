@@ -1,5 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use mars_expr::{CmpOp, Expr, Literal, LogicOp};
+
 use super::*;
 
 #[test]
