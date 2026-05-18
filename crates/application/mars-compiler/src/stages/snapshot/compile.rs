@@ -1,17 +1,19 @@
 //! snapshot stage 2: run the unified compile pipeline and log governor
 //! observations.
 //!
-//! delegates to the free fn [`crate::run_snapshot_from_plan`] which stays
-//! at the crate root because external tests depend on its path.
+//! delegates to [`crate::snapshot_pipeline::run_snapshot_from_plan`]; the
+//! same fn is re-exported at the crate root because external tests pin
+//! `mars_compiler::run_snapshot_from_plan`.
 
 use mars_types::Manifest;
 
+use crate::snapshot_pipeline::run_snapshot_from_plan;
 use crate::stages::ctx::SnapshotCtx;
 use crate::stages::shared::governors;
 use crate::{CompilerError, Deps};
 
 pub(crate) async fn run(deps: &Deps, ctx: &SnapshotCtx) -> Result<Manifest, CompilerError> {
-    let manifest = crate::run_snapshot_from_plan(
+    let manifest = run_snapshot_from_plan(
         deps,
         &ctx.plan,
         ctx.service_name.clone(),
