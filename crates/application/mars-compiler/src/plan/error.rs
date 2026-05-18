@@ -3,6 +3,7 @@
 //! reasserts so callers that bypass `mars_config::validate` still surface
 //! typed failures instead of panicking downstream.
 
+use mars_config::SourceId;
 use mars_types::{BindingId, BindingIdError, LayerId};
 
 /// Errors emitted while building a [`super::BootstrapPlan`].
@@ -75,5 +76,54 @@ pub enum PlanError {
         layer: LayerId,
         /// referenced style name
         name: String,
+    },
+    /// A binding's `filter:` failed to parse as a `when:` expression.
+    #[error("binding {id} filter: parse error: {source}")]
+    BindingFilterParse {
+        /// binding id whose filter failed
+        id: BindingId,
+        /// underlying expr error
+        #[source]
+        source: mars_expr::ExprError,
+    },
+    /// A binding's `sidecar_size_warn_bytes:` literal failed to parse as a
+    /// byte size. Config validation usually catches this; surfaced here in
+    /// case a config bypasses validate.
+    #[error("binding {id} sidecar_size_warn_bytes: parse error: {source}")]
+    BindingSidecarWarnParse {
+        /// binding id whose sidecar_size_warn_bytes failed
+        id: BindingId,
+        /// underlying config error
+        #[source]
+        source: mars_config::ConfigError,
+    },
+    /// A binding references a source id that is not declared in `sources:`.
+    /// Config validation usually catches this; surfaced here in case a
+    /// config bypasses validate, or the registry was built without the
+    /// declared source.
+    #[error("binding from {from:?} references unknown source id {source_id}")]
+    UnknownSourceRef {
+        /// raw binding descriptor (the value an operator would recognise)
+        from: String,
+        /// the missing source id
+        source_id: SourceId,
+    },
+    /// A vector-file binding is missing a required field (`format:` or
+    /// `source_crs:`). Config validation usually catches this; surfaced here
+    /// in case a config bypasses validate.
+    #[error("vector-file binding {from:?} missing required field: {what}")]
+    IncompleteVectorFileBinding {
+        /// raw binding descriptor (the URI an operator would recognise)
+        from: String,
+        /// name of the missing field
+        what: &'static str,
+    },
+    /// A binding declared neither `from:` nor `sql:` nor `uri:`. Config
+    /// validation rejects this; surfaced here in case a config bypasses
+    /// validate.
+    #[error("binding {descriptor:?} declared neither from: nor sql: nor uri:")]
+    BindingSourceUnspecified {
+        /// the binding's source_descriptor() for diagnostics
+        descriptor: String,
     },
 }

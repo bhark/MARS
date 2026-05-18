@@ -5,7 +5,7 @@
 
 use mars_config::{Config, SourceId};
 use mars_expr::parse;
-use mars_types::{BindingIdError, RasterLayerEntry};
+use mars_types::RasterLayerEntry;
 
 use super::binding::{level_plans, resolve_binding_source};
 use super::dedup::{ensure_consistent, ensure_layer_consistent};
@@ -40,25 +40,16 @@ pub fn build_bootstrap_plan(cfg: &Config) -> Result<BootstrapPlan, PlanError> {
             let source = sources_by_id
                 .get(&binding.source)
                 .copied()
-                .ok_or_else(|| PlanError::InvalidBindingId {
+                .ok_or_else(|| PlanError::UnknownSourceRef {
                     from: binding.source_descriptor(),
-                    source: BindingIdError::Malformed {
-                        id: format!("unknown source id {}", binding.source.as_str()),
-                    },
+                    source_id: binding.source.clone(),
                 })?;
             let native_crs = source.native_crs.clone();
-            let sidecar_warn =
-                binding
-                    .resolved_sidecar_size_warn_bytes()
-                    .map_err(|_| PlanError::ConflictingBinding {
-                        id: id.clone(),
-                        detail: "sidecar_size_warn_bytes failed to parse",
-                    })?;
+            let sidecar_warn = binding
+                .resolved_sidecar_size_warn_bytes()
+                .map_err(|source| PlanError::BindingSidecarWarnParse { id: id.clone(), source })?;
             let filter_parsed = match &binding.filter {
-                Some(s) => Some(parse(s).map_err(|_| PlanError::ConflictingBinding {
-                    id: id.clone(),
-                    detail: "filter failed to parse",
-                })?),
+                Some(s) => Some(parse(s).map_err(|source| PlanError::BindingFilterParse { id: id.clone(), source })?),
                 None => None,
             };
             let plan = BindingPlan {

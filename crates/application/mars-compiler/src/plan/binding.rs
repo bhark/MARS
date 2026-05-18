@@ -3,7 +3,7 @@
 //! collapse used when a binding declares no `levels:` block.
 
 use mars_config::DecimationLevelConfig;
-use mars_types::{BindingId, BindingIdError, DecimationLevel};
+use mars_types::{BindingId, DecimationLevel};
 
 use super::error::PlanError;
 use super::types::LevelPlan;
@@ -57,18 +57,17 @@ pub(super) fn resolve_binding_source(binding: &mars_config::SourceBinding) -> Re
         return Ok((format!("({sql})"), id));
     }
     if let Some(uri) = binding.uri.as_deref() {
-        let fmt = binding.format.ok_or_else(|| PlanError::InvalidBindingId {
+        let fmt = binding.format.ok_or_else(|| PlanError::IncompleteVectorFileBinding {
             from: binding.source_descriptor(),
-            source: BindingIdError::Malformed {
-                id: "vectorfile binding missing format".into(),
-            },
+            what: "format",
         })?;
-        let source_crs = binding.source_crs.as_ref().ok_or_else(|| PlanError::InvalidBindingId {
-            from: binding.source_descriptor(),
-            source: BindingIdError::Malformed {
-                id: "vectorfile binding missing source_crs".into(),
-            },
-        })?;
+        let source_crs = binding
+            .source_crs
+            .as_ref()
+            .ok_or_else(|| PlanError::IncompleteVectorFileBinding {
+                from: binding.source_descriptor(),
+                what: "source_crs",
+            })?;
         let fmt_tok = match fmt {
             mars_config::VectorFileFormat::FlatGeobuf => "flat_geobuf",
             mars_config::VectorFileFormat::GeoJson => "geo_json",
@@ -83,12 +82,9 @@ pub(super) fn resolve_binding_source(binding: &mars_config::SourceBinding) -> Re
         let id = binding_id_for(&id_str)?;
         return Ok((locator, id));
     }
-    // config validation rejects bindings with neither from: nor sql:; surface
-    // a typed error in case a config bypasses validate.
-    Err(PlanError::InvalidBindingId {
-        from: binding.source_descriptor(),
-        source: BindingIdError::Malformed {
-            id: binding.source_descriptor(),
-        },
+    // config validation rejects bindings with neither from: nor sql: nor
+    // uri:; surface a typed error in case a config bypasses validate.
+    Err(PlanError::BindingSourceUnspecified {
+        descriptor: binding.source_descriptor(),
     })
 }
