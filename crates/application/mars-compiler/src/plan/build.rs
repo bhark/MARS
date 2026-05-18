@@ -12,10 +12,13 @@ use super::error::PlanError;
 use super::layer::build_layer_plan;
 use super::types::{BindingPlan, BootstrapPlan, LayerPlan};
 
-/// Build a [`BootstrapPlan`] from a validated config. dedup key is
-/// `(from, geometry_field, attributes)`; a binding with no `levels:`
-/// declared defaults to a single level-0 (raw) entry, since the snapshot
-/// always materialises at least the canonical level.
+/// Build a [`BootstrapPlan`] from a validated config. dedup key is the
+/// resolved [`mars_types::BindingId`] (the `from:` string for postgis
+/// table bindings, a content-hash for `sql:` or `uri:` bindings);
+/// divergent shape on the same id raises [`PlanError::ConflictingBinding`].
+/// a binding with no `levels:` declared defaults to a single level-0 (raw)
+/// entry, since the snapshot always materialises at least the canonical
+/// level.
 pub fn build_bootstrap_plan(cfg: &Config) -> Result<BootstrapPlan, PlanError> {
     // index sources by id so per-binding native_crs lookup is O(log n).
     let sources_by_id: std::collections::BTreeMap<&SourceId, &mars_config::Source> =

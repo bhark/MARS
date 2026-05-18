@@ -3,9 +3,11 @@
 //! a [`BootstrapPlan`] is the deduplicated set of bindings that the snapshot
 //! will materialise. derived from a validated [`mars_config::Config`]: every
 //! [`mars_config::SourceBinding`] across every layer collapses to a single
-//! [`BindingPlan`] keyed by `(from, geometry_field, attributes)`. layers
-//! that reference the same source see the same binding, and therefore share
-//! page artifacts.
+//! [`BindingPlan`] keyed by the resolved [`mars_types::BindingId`] (the
+//! `from:` string for postgis table bindings, a content-hash for `sql:` or
+//! `uri:` bindings). layers that reference the same source see the same
+//! binding, and therefore share page artifacts. divergent shape on the
+//! same id raises [`PlanError::ConflictingBinding`].
 //!
 //! the planner does NOT walk source rows or talk to postgres -- it only
 //! decides what set of (binding, level) slices the snapshot has to emit.
