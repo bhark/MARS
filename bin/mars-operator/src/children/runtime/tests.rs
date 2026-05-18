@@ -1,0 +1,167 @@
+#![allow(clippy::unwrap_used)]
+
+use super::*;
+use crate::children::test_support;
+
+#[test]
+fn build_sets_replicas_and_selector() {
+    let cr = test_support::cr("demo", "svc-ns");
+    let dep = build(
+        &cr,
+        "abc123",
+        None,
+        None,
+        test_support::TEST_IMAGE,
+        test_support::owner_ref(),
+    )
+    .unwrap();
+    let spec = dep.spec.unwrap();
+    assert_eq!(spec.replicas, Some(2));
+    let match_labels = spec.selector.match_labels.unwrap();
+    assert_eq!(
+        match_labels.get("app.kubernetes.io/component").map(String::as_str),
+        Some(COMPONENT_RUNTIME)
+    );
+    assert_eq!(
+        match_labels.get("app.kubernetes.io/instance").map(String::as_str),
+        Some("demo")
+    );
+    assert_eq!(dep.metadata.name.as_deref(), Some("demo-runtime"));
+    assert_eq!(dep.metadata.namespace.as_deref(), Some("svc-ns"));
+}
+
+#[test]
+fn build_projects_runtime_password_env_when_resolved_ref_is_set() {
+    let cr = test_support::cr("demo", "svc-ns");
+    let runtime_ref = SecretKeyRef {
+        name: "demo-runtime-credentials".into(),
+        key: "password".into(),
+    };
+    let dep = build(
+        &cr,
+        "deadbeef",
+        None,
+        Some(&runtime_ref),
+        test_support::TEST_IMAGE,
+        test_support::owner_ref(),
+    )
+    .unwrap();
+    let envs = dep.spec.unwrap().template.spec.unwrap().containers[0]
+        .env
+        .clone()
+        .unwrap();
+    let injected = envs.iter().find(|e| e.name == "MARS_RUNTIME_PASSWORD").unwrap();
+    let sref = injected.value_from.as_ref().unwrap().secret_key_ref.as_ref().unwrap();
+    assert_eq!(sref.name, "demo-runtime-credentials");
+    assert_eq!(sref.key, "password");
+}
+
+#[test]
+fn build_propagates_config_checksum_to_pod_template_annotation() {
+    let cr = test_support::cr("demo", "svc-ns");
+    let dep = build(
+        &cr,
+        "deadbeef",
+        None,
+        None,
+        test_support::TEST_IMAGE,
+        test_support::owner_ref(),
+    )
+    .unwrap();
+    let template = dep.spec.unwrap().template;
+    let annotations = template.metadata.unwrap().annotations.unwrap();
+    assert_eq!(
+        annotations.get(CONFIG_CHECKSUM_ANNOTATION).map(String::as_str),
+        Some("deadbeef")
+    );
+}
+
+#[test]
+fn build_appends_extra_volumes_and_mounts_after_managed_entries() {
+    let mut cr = test_support::cr("demo", "svc-ns");
+    cr.spec.runtime.extra_volumes.push(serde_json::json!({
+        "name": "fonts",
+        "configMap": { "name": "custom-fonts" }
+    }));
+    cr.spec.runtime.extra_volume_mounts.push(serde_json::json!({
+        "name": "fonts",
+        "mountPath": "/var/lib/mars/fonts",
+        "readOnly": true
+    }));
+    let dep = build(
+        &cr,
+        "deadbeef",
+        None,
+        None,
+        test_support::TEST_IMAGE,
+        test_support::owner_ref(),
+    )
+    .unwrap();
+    let pod = dep.spec.unwrap().template.spec.unwrap();
+    let volumes = pod.volumes.unwrap();
+    // user volume appears after the two managed entries (`config`, `cache`).
+    assert_eq!(volumes.len(), 3);
+    assert_eq!(volumes[0].name, "config");
+    assert_eq!(volumes[1].name, "cache");
+    assert_eq!(volumes[2].name, "fonts");
+    assert_eq!(volumes[2].config_map.as_ref().unwrap().name, "custom-fonts");
+
+    let mounts = pod.containers[0].volume_mounts.clone().unwrap();
+    assert_eq!(mounts.len(), 3);
+    assert_eq!(mounts[0].name, "config");
+    assert_eq!(mounts[1].name, "cache");
+    assert_eq!(mounts[2].name, "fonts");
+    assert_eq!(mounts[2].mount_path, "/var/lib/mars/fonts");
+    assert_eq!(mounts[2].read_only, Some(true));
+}
+
+#[test]
+fn build_propagates_scheduling_fields_into_pod_spec() {
+    use crate::crd::TolerationSpec;
+    let mut cr = test_support::cr("demo", "svc-ns");
+    cr.spec.runtime.node_selector.insert("zone".into(), "eu-west-1a".into());
+    cr.spec.runtime.tolerations.push(TolerationSpec {
+        key: Some("dedicated".into()),
+        operator: Some("Equal".into()),
+        value: Some("runtime".into()),
+        effect: Some("NoSchedule".into()),
+        toleration_seconds: None,
+    });
+    cr.spec.runtime.affinity = Some(serde_json::json!({
+        "podAntiAffinity": {
+            "preferredDuringSchedulingIgnoredDuringExecution": [{
+                "weight": 100,
+                "podAffinityTerm": {
+                    "labelSelector": {
+                        "matchLabels": { "app.kubernetes.io/component": "runtime" }
+                    },
+                    "topologyKey": "kubernetes.io/hostname"
+                }
+            }]
+        }
+    }));
+    let dep = build(
+        &cr,
+        "deadbeef",
+        None,
+        None,
+        test_support::TEST_IMAGE,
+        test_support::owner_ref(),
+    )
+    .unwrap();
+    let pod = dep.spec.unwrap().template.spec.unwrap();
+    assert_eq!(
+        pod.node_selector.unwrap().get("zone").map(String::as_str),
+        Some("eu-west-1a")
+    );
+    assert_eq!(pod.tolerations.unwrap()[0].key.as_deref(), Some("dedicated"));
+    let pref = pod
+        .affinity
+        .unwrap()
+        .pod_anti_affinity
+        .unwrap()
+        .preferred_during_scheduling_ignored_during_execution
+        .unwrap();
+    assert_eq!(pref.len(), 1);
+    assert_eq!(pref[0].weight, 100);
+}
