@@ -31,7 +31,8 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-fetch) NO_FETCH=1; shift ;;
     -h|--help) usage; exit 0 ;;
-    --) shift; CARGO_ARGS+=("$@"); break ;;
+    # keep the `--` so cargo test sees it as the test-binary arg separator.
+    --) CARGO_ARGS+=("$@"); break ;;
     *) CARGO_ARGS+=("$1"); shift ;;
   esac
 done
