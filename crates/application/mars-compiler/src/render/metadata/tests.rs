@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use super::*;
-use mars_types::{Bbox, PageKey};
+use mars_types::{Bbox, BindingId, DecimationLevel, HilbertKey, PageEntry, PageId, PageKey};
 
 fn page_entry(binding: &str, level: u8, page_id: u64, lo: u64, hi: u64) -> PageEntry {
     PageEntry {
