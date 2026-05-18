@@ -305,3 +305,56 @@ fn pick_binding_and_level_selects_tier_by_denom() {
     let r2 = pick_binding_and_level(&layer, 12_000, crate::OGC_STANDARDIZED_PIXEL_SIZE_M, &state).unwrap();
     assert_eq!(r2.0.as_str(), "t2");
 }
+
+mod denom_from_plan {
+    use super::denom_from_plan;
+
+    #[test]
+    fn ordinary_case() {
+        // 256 m / (256 px * 1 m/px) = 1
+        assert_eq!(denom_from_plan(256.0, 256, 1.0), 1);
+        // 1000 m / (100 px * 0.5 m/px) = 20
+        assert_eq!(denom_from_plan(1_000.0, 100, 0.5), 20);
+    }
+
+    #[test]
+    fn zero_width_bbox_returns_max() {
+        assert_eq!(denom_from_plan(0.0, 256, 1.0), u32::MAX);
+    }
+
+    #[test]
+    fn negative_width_bbox_returns_max() {
+        assert_eq!(denom_from_plan(-1.0, 256, 1.0), u32::MAX);
+    }
+
+    #[test]
+    fn zero_width_px_returns_max() {
+        assert_eq!(denom_from_plan(256.0, 0, 1.0), u32::MAX);
+    }
+
+    #[test]
+    fn nonpositive_m_per_pixel_returns_max() {
+        assert_eq!(denom_from_plan(256.0, 256, 0.0), u32::MAX);
+        assert_eq!(denom_from_plan(256.0, 256, -1.0), u32::MAX);
+    }
+
+    #[test]
+    fn infinite_inputs_return_max() {
+        assert_eq!(denom_from_plan(f64::INFINITY, 256, 1.0), u32::MAX);
+        assert_eq!(denom_from_plan(256.0, 256, f64::INFINITY), u32::MAX);
+        assert_eq!(denom_from_plan(f64::NAN, 256, 1.0), u32::MAX);
+    }
+
+    #[test]
+    fn denom_above_u32_max_clamps() {
+        // bbox so large that the quotient exceeds u32::MAX.
+        let huge = f64::from(u32::MAX) * 2.0;
+        assert_eq!(denom_from_plan(huge, 1, 1.0), u32::MAX);
+    }
+
+    #[test]
+    fn fractional_denom_truncates_toward_zero() {
+        // 3.5 → 3
+        assert_eq!(denom_from_plan(7.0, 2, 1.0), 3);
+    }
+}

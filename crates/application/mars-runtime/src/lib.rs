@@ -52,7 +52,7 @@ pub use fetch::{fetch_page, fetch_sidecar};
 pub use gfi::LayerFeatureInfo;
 pub use legend::{LegendPlan, render_legend};
 pub use mars_artifact::AttrValue;
-pub use plan::{pick_binding_and_level, reproject_viewport, resolve_pages};
+pub use plan::{denom_from_plan, pick_binding_and_level, reproject_viewport, resolve_pages};
 #[doc(hidden)]
 pub use reload::RELOAD_IDLE_HINT;
 pub use reload::run_manifest_reload_loop;
@@ -307,25 +307,3 @@ impl Runtime {
         self.last_reject_reason.store(Some(Arc::new(reason)));
     }
 }
-
-/// Compute the rendered image's denominator at the configured viewport.
-/// Pure helper; exposed so the WMS / WMTS interface code can resolve
-/// `<scaleHint>` style decisions without going through `Runtime`.
-///
-/// `m_per_pixel` is the standardised pixel size used to interpret the
-/// denominator. Use [`OGC_STANDARDIZED_PIXEL_SIZE_M`] for OGC-pure
-/// behaviour; pass the value derived from `service.scale_dpi` for parity
-/// with deployments that pin a different DPI (typically 96).
-#[must_use]
-pub fn denom_from_plan(bbox_width: f64, width_px: u32, m_per_pixel: f64) -> u32 {
-    if !bbox_width.is_finite() || bbox_width <= 0.0 || width_px == 0 || !m_per_pixel.is_finite() || m_per_pixel <= 0.0 {
-        return u32::MAX;
-    }
-    let denom = bbox_width / (f64::from(width_px) * m_per_pixel);
-    if !denom.is_finite() || denom < 0.0 || denom > f64::from(u32::MAX) {
-        u32::MAX
-    } else {
-        denom as u32
-    }
-}
-
