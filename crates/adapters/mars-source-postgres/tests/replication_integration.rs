@@ -16,46 +16,10 @@ use std::time::Duration;
 
 use mars_source::{BindingHealth, ChangeEvent, ChangeFeed, RebindReason, Source, SourceCollectionId};
 use mars_source_postgres::{CollectionTopology, PgConfig, PgSource, ReplicationTopology};
-use rand::distr::{Alphanumeric, SampleString};
-use testcontainers::{
-    ContainerAsync, GenericImage, ImageExt,
-    core::{IntoContainerPort, WaitFor},
-    runners::AsyncRunner,
-};
+use mars_test_support::postgis::boot_postgis;
 
 const SLOT: &str = "mars_e2e_slot";
 const PUB: &str = "mars_e2e_pub";
-
-/// Bring up postgis with wal_level=logical and create the publication, slot,
-/// and bound table(s). Returns the container (kept alive) and the DSN used by
-/// the adapter.
-async fn boot_postgis() -> (ContainerAsync<GenericImage>, String) {
-    let password = Alphanumeric.sample_string(&mut rand::rng(), 16);
-    let container = GenericImage::new("postgis/postgis", "16-3.4")
-        .with_exposed_port(5432.tcp())
-        .with_wait_for(WaitFor::message_on_stderr(
-            "database system is ready to accept connections",
-        ))
-        .with_env_var("POSTGRES_PASSWORD", &password)
-        .with_env_var("POSTGRES_USER", "mars")
-        .with_env_var("POSTGRES_DB", "mars")
-        // pgoutput needs wal_level=logical; the default is `replica`.
-        .with_cmd([
-            "postgres",
-            "-c",
-            "wal_level=logical",
-            "-c",
-            "max_wal_senders=8",
-            "-c",
-            "max_replication_slots=8",
-        ])
-        .start()
-        .await
-        .expect("docker available");
-    let port = container.get_host_port_ipv4(5432).await.unwrap();
-    let dsn = format!("host=127.0.0.1 port={port} user=mars password={password} dbname=mars");
-    (container, dsn)
-}
 
 /// Standard postgres baseline: each table gets `gid INT4 PRIMARY KEY`
 /// and the postgres default REPLICA IDENTITY (DEFAULT, PK-based). Tests
@@ -129,7 +93,8 @@ async fn next_batch_or_timeout(
 
 #[tokio::test]
 async fn insert_update_delete_round_trip_under_default_identity() {
-    let (_c, dsn) = boot_postgis().await;
+    let fx = boot_postgis().await;
+    let dsn = fx.dsn.clone();
     let src = PgSource::connect(pg_cfg(&dsn)).await.unwrap();
     // standard postgres baseline: PK + REPLICA IDENTITY DEFAULT. no
     // explicit ALTER TABLE ... REPLICA IDENTITY FULL anywhere.
@@ -197,7 +162,8 @@ async fn insert_update_delete_round_trip_under_default_identity() {
 
 #[tokio::test]
 async fn bind_without_id_in_identity_degrades_binding_instead_of_killing_feed() {
-    let (_c, dsn) = boot_postgis().await;
+    let fx = boot_postgis().await;
+    let dsn = fx.dsn.clone();
     let src = PgSource::connect(pg_cfg(&dsn)).await.unwrap();
     setup_schema(&src, &["roads"]).await;
     // add a sibling table whose id column isn't part of the replica
@@ -283,7 +249,8 @@ async fn bind_without_id_in_identity_degrades_binding_instead_of_killing_feed() 
 
 #[tokio::test]
 async fn rebind_after_table_swap_emits_oid_changed() {
-    let (_c, dsn) = boot_postgis().await;
+    let fx = boot_postgis().await;
+    let dsn = fx.dsn.clone();
     let src = PgSource::connect(pg_cfg(&dsn)).await.unwrap();
     setup_schema(&src, &["roads"]).await;
 
@@ -355,7 +322,8 @@ async fn rebind_after_table_swap_emits_oid_changed() {
 
 #[tokio::test]
 async fn rebind_to_table_without_id_in_identity_emits_preflight_failed() {
-    let (_c, dsn) = boot_postgis().await;
+    let fx = boot_postgis().await;
+    let dsn = fx.dsn.clone();
     let src = PgSource::connect(pg_cfg(&dsn)).await.unwrap();
     setup_schema(&src, &["roads"]).await;
 
@@ -419,7 +387,8 @@ async fn rebind_to_table_without_id_in_identity_emits_preflight_failed() {
 
 #[tokio::test]
 async fn probe_binding_health_reports_unpublished_when_table_dropped() {
-    let (_c, dsn) = boot_postgis().await;
+    let fx = boot_postgis().await;
+    let dsn = fx.dsn.clone();
     let src = PgSource::connect(pg_cfg(&dsn)).await.unwrap();
     setup_schema(&src, &["roads", "buildings"]).await;
 
@@ -465,7 +434,8 @@ async fn probe_binding_health_reports_unpublished_when_table_dropped() {
 
 #[tokio::test]
 async fn truncate_emits_one_event_per_bound_table() {
-    let (_c, dsn) = boot_postgis().await;
+    let fx = boot_postgis().await;
+    let dsn = fx.dsn.clone();
     let src = PgSource::connect(pg_cfg(&dsn)).await.unwrap();
     setup_schema(&src, &["roads", "buildings"]).await;
 
@@ -507,7 +477,8 @@ async fn truncate_emits_one_event_per_bound_table() {
 
 #[tokio::test]
 async fn unacked_batch_is_replayed_on_reconnect() {
-    let (_c, dsn) = boot_postgis().await;
+    let fx = boot_postgis().await;
+    let dsn = fx.dsn.clone();
     let src = PgSource::connect(pg_cfg(&dsn)).await.unwrap();
     setup_schema(&src, &["roads"]).await;
 
@@ -547,7 +518,8 @@ async fn unacked_batch_is_replayed_on_reconnect() {
 
 #[tokio::test]
 async fn acked_batch_is_not_replayed_on_reconnect() {
-    let (_c, dsn) = boot_postgis().await;
+    let fx = boot_postgis().await;
+    let dsn = fx.dsn.clone();
     let src = PgSource::connect(pg_cfg(&dsn)).await.unwrap();
     setup_schema(&src, &["roads"]).await;
 
