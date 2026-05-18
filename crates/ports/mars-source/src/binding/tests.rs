@@ -1,6 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use super::*;
+use mars_types::CrsCode;
+
+use crate::{SourceBinding, SourceCollectionId, SourceError};
 
 #[test]
 fn binding_constructor_accepts_valid() {
@@ -46,5 +48,3 @@ fn binding_rejects_empty_field() {
     );
     assert!(matches!(r, Err(SourceError::InvalidBinding(_))));
 }
-
-// phase-c will reintroduce page-keyed Source surface and its tests.
