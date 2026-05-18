@@ -1,17 +1,17 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ConfigError;
-use crate::model::{Config, Layer, ScaleWindow, SourceBinding};
+use crate::model::{Layer, ScaleWindow, Scales, SourceBinding};
 
-/// Walk `config.scales.bands` once, rejecting duplicates and building the
-/// derived half-open scale window for each band. The window map is consumed
-/// downstream by per-layer tier validation; the name set by per-source
-/// band-reference checks.
-pub(super) fn validate_bands(config: &Config) -> Result<BandIndex, ConfigError> {
+/// Walk `scales.bands` once, rejecting duplicates and building the derived
+/// half-open scale window for each band. The window map is consumed downstream
+/// by per-layer tier validation; the name set by per-source band-reference
+/// checks.
+pub(super) fn validate_bands(scales: &Scales) -> Result<BandIndex, ConfigError> {
     let mut names: BTreeSet<String> = BTreeSet::new();
     let mut windows: BTreeMap<String, ScaleWindow> = BTreeMap::new();
     let mut prev_max: Option<u64> = None;
-    for band in &config.scales.bands {
+    for band in &scales.bands {
         if !names.insert(band.name.clone()) {
             return Err(ConfigError::Invalid(format!(
                 "duplicate band name {:?} in scales.bands",
@@ -151,10 +151,10 @@ pub(super) fn validate_band_tiers(
 /// When multiple sources share a band, they form a tier-set: each tier's
 /// half-open window is `[prev_tier_max, this_tier_max)` intersected with the
 /// band window and any explicit `scale` bound.
-pub(super) fn resolve_band_routing(config: &mut Config) -> Result<(), ConfigError> {
+pub(super) fn resolve_band_routing(scales: &Scales, layers: &mut [Layer]) -> Result<(), ConfigError> {
     let mut band_windows: BTreeMap<String, ScaleWindow> = BTreeMap::new();
     let mut prev_max: Option<u64> = None;
-    for band in &config.scales.bands {
+    for band in &scales.bands {
         band_windows.insert(
             band.name.clone(),
             ScaleWindow {
@@ -165,7 +165,7 @@ pub(super) fn resolve_band_routing(config: &mut Config) -> Result<(), ConfigErro
         prev_max = Some(band.max_denom);
     }
 
-    for layer in &mut config.layers {
+    for layer in layers {
         // collect (band, idx) pairs for mutable indexing later.
         let mut by_band: BTreeMap<String, Vec<usize>> = BTreeMap::new();
         for (idx, source) in layer.sources.iter().enumerate() {

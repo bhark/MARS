@@ -1,5 +1,5 @@
 use crate::ConfigError;
-use crate::model::Config;
+use crate::model::Source;
 
 /// Validate that `code` is a projected (metric) CRS using PROJ introspection.
 /// PROJ failures (broken install, missing proj.db) surface as
@@ -18,8 +18,8 @@ pub(super) fn is_metric_crs(code: &str) -> Result<bool, ConfigError> {
 /// runtime materialises artifacts in that CRS and reprojects to request CRSes
 /// from there. Geographic CRSes (degrees) break the units-per-metre = 1
 /// invariant the renderer relies on.
-pub(super) fn validate_native_crs(config: &Config) -> Result<(), ConfigError> {
-    for src in &config.sources {
+pub(super) fn validate_native_crs(sources: &[Source]) -> Result<(), ConfigError> {
+    for src in sources {
         let crs = src.native_crs.as_str().trim();
         if crs.is_empty() {
             return Err(ConfigError::Invalid(format!(

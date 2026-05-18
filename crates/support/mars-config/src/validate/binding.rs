@@ -1,21 +1,20 @@
 use mars_types::LayerId;
 
 use crate::ConfigError;
-use crate::model::{BindingKind, Config, SourceBackend, SourceBinding};
+use crate::model::{BindingKind, Layer, Source, SourceBackend, SourceBinding};
 
 /// Resolve the `source:` field on `binding` against the service-level
 /// sources list. Returns the resolved kind so the binding-shape check can
 /// cross-verify (postgis source ↔ from/sql binding, vectorfile source ↔ uri
 /// binding).
-fn resolve_binding_source<'cfg>(
+fn resolve_binding_source<'s>(
     layer: &LayerId,
     idx: usize,
     binding: &SourceBinding,
-    config: &'cfg Config,
-) -> Result<&'cfg SourceBackend, ConfigError> {
+    sources: &'s [Source],
+) -> Result<&'s SourceBackend, ConfigError> {
     let source_id = &binding.source;
-    config
-        .sources
+    sources
         .iter()
         .find(|s| &s.id == source_id)
         .map(|s| &s.backend)
@@ -33,9 +32,9 @@ pub(super) fn validate_binding_source(
     layer: &LayerId,
     idx: usize,
     binding: &SourceBinding,
-    config: &Config,
+    sources: &[Source],
 ) -> Result<(), ConfigError> {
-    let backend = resolve_binding_source(layer, idx, binding, config)?;
+    let backend = resolve_binding_source(layer, idx, binding, sources)?;
     match (&binding.kind, backend) {
         (BindingKind::PostgisTable { from, .. }, SourceBackend::Postgis(_)) => validate_table_from(layer, idx, from),
         (BindingKind::PostgisSql { sql, .. }, SourceBackend::Postgis(_)) => validate_sql_binding(layer, idx, sql),
@@ -58,10 +57,10 @@ pub(super) fn validate_binding_source(
 /// Validate that every per-layer binding's `source:` resolves and the source
 /// kind matches the binding shape. Wraps [`validate_binding_source`] across
 /// the layer set.
-pub(super) fn validate_binding_source_refs(config: &Config) -> Result<(), ConfigError> {
-    for layer in &config.layers {
+pub(super) fn validate_binding_source_refs(layers: &[Layer], sources: &[Source]) -> Result<(), ConfigError> {
+    for layer in layers {
         for (idx, binding) in layer.sources.iter().enumerate() {
-            validate_binding_source(&layer.name, idx, binding, config)?;
+            validate_binding_source(&layer.name, idx, binding, sources)?;
         }
     }
     Ok(())

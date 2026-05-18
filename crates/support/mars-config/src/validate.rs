@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use crate::ConfigError;
-use crate::model::Config;
+use crate::model::{Config, Deployment, RenderDefinition};
 
 mod attributes;
 mod band;
@@ -11,6 +11,7 @@ mod compiler;
 mod crs;
 mod label;
 mod layer;
+mod reprojection;
 mod service;
 mod source;
 mod style;
@@ -24,8 +25,9 @@ pub(crate) mod fixtures;
 /// Cross-cutting checks beyond serde:
 /// - every layer's `style: { ref: ... }` resolves against `styles`;
 /// - every source binding's `band` (when set) exists in `scales.bands`;
-/// - every `cells.size_per_band` key matches a declared band;
-/// - every class `when:` parses via [`mars_expr::parse`].
+/// - every class `when:` parses via [`mars_expr::parse`];
+/// - every tile-matrix-set CRS is reachable from at least one source or via
+///   the `reprojection.allowlist`.
 ///
 /// Resolution step: every source binding with `band: Some(name)` has its
 /// `scale: ScaleWindow` intersected with the band's half-open denominator
@@ -39,16 +41,44 @@ pub(crate) mod fixtures;
 pub fn validate(config: &mut Config, config_dir: &Path) -> Result<(), ConfigError> {
     let _ = config_dir;
 
-    service::validate_service(config)?;
-    compiler::validate_compiler_and_render(config)?;
-    source::validate_sources(config)?;
-    crs::validate_native_crs(config)?;
+    // definition-side
+    service::validate_service(&config.service)?;
     style::validate_styles(&config.styles)?;
+    let bands = band::validate_bands(&config.scales)?;
+    layer::validate_layers(&config.layers, &config.styles, &bands)?;
 
-    let bands = band::validate_bands(config)?;
-    layer::validate_layers(config, &bands)?;
+    // deployment-side
+    source::validate_sources(&config.sources)?;
+    crs::validate_native_crs(&config.sources)?;
+    compiler::validate_compiler_and_render(&config.compiler, &config.render, &config.sources)?;
 
-    band::resolve_band_routing(config)?;
+    // cross-cutting: needs both halves
+    binding::validate_binding_source_refs(&config.layers, &config.sources)?;
+    reprojection::validate_reprojection_coherence(&config.reprojection, &config.tile_matrix_sets, &config.sources)?;
+
+    // resolution (mutates layers)
+    band::resolve_band_routing(&config.scales, &mut config.layers)?;
+    Ok(())
+}
+
+/// Definition-side validation: render-only fields. Excludes any check that
+/// depends on a `Source` catalog or other deployment-side data. Mutates the
+/// definition only to resolve band routing windows on the layers.
+pub(crate) fn validate_render_definition(def: &mut RenderDefinition) -> Result<(), ConfigError> {
+    service::validate_service(&def.service)?;
+    style::validate_styles(&def.styles)?;
+    let bands = band::validate_bands(&def.scales)?;
+    layer::validate_layers(&def.layers, &def.styles, &bands)?;
+    band::resolve_band_routing(&def.scales, &mut def.layers)?;
+    Ok(())
+}
+
+/// Deployment-side validation: env-shaped fields. Excludes any check that
+/// depends on the render definition (layers, styles, scales).
+pub(crate) fn validate_deployment(dep: &Deployment) -> Result<(), ConfigError> {
+    source::validate_sources(&dep.sources)?;
+    crs::validate_native_crs(&dep.sources)?;
+    compiler::validate_compiler_and_render(&dep.compiler, &dep.render, &dep.sources)?;
     Ok(())
 }
 

@@ -1,9 +1,14 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
-use mars_config::{ConfigError, load, validate};
+use mars_config::{
+    Band, BindingKind, ClassStyle, ConfigError, Deployment, Interfaces, LabelSurvival, Layer, RenderDefinition,
+    Reprojection, Scales, ServiceMeta, SourceBinding, SourceId, compose, load, validate,
+};
+use mars_types::{CrsCode, LayerId};
 
 fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures")
@@ -417,4 +422,252 @@ layers:
     let err = validate(&mut cfg, dir.path()).expect_err("empty passes must be rejected");
     let msg = err.to_string();
     assert!(msg.contains("empty"), "expected mention of empty: {msg}");
+}
+
+// ---- definition / deployment split (Phase A) -------------------------------
+
+/// hand-partition a loaded Config into the two halves. The reprojection
+/// allowlist is parked on the deployment side (the cluster-default carrier);
+/// the definition side carries an empty allowlist (the "narrow nothing" form
+/// that falls back to deployment at compose time).
+fn split(cfg: mars_config::Config) -> (RenderDefinition, Deployment) {
+    let def = RenderDefinition {
+        service: cfg.service,
+        scales: cfg.scales,
+        interfaces: cfg.interfaces,
+        tile_matrix_sets: cfg.tile_matrix_sets,
+        reprojection: Reprojection::default(),
+        styles: cfg.styles,
+        layers: cfg.layers,
+    };
+    let dep = Deployment {
+        sources: cfg.sources,
+        artifacts: cfg.artifacts,
+        observability: cfg.observability,
+        render: cfg.render,
+        compiler: cfg.compiler,
+        reprojection: cfg.reprojection,
+    };
+    (def, dep)
+}
+
+#[test]
+fn compose_round_trips_demo_minimal() {
+    let path = fixtures_dir().join("demo_minimal.yaml");
+    let cfg = load(&path).expect("load minimal");
+    let original_layer_count = cfg.layers.len();
+    let original_allowlist = cfg.reprojection.allowlist.clone();
+    let original_service_name = cfg.service.name.clone();
+
+    let (def, dep) = split(cfg);
+    let composed = compose(def, dep);
+
+    assert_eq!(composed.service.name, original_service_name);
+    assert_eq!(composed.layers.len(), original_layer_count);
+    assert_eq!(composed.reprojection.allowlist, original_allowlist);
+    assert_eq!(composed.sources.len(), 1);
+    assert!(!composed.tile_matrix_sets.is_empty(), "TMS must round-trip");
+    // cells is intentionally defaulted by compose
+    assert!(composed.cells.size_per_band.is_empty());
+}
+
+#[test]
+fn compose_reprojection_intersection_narrows_when_service_set() {
+    let path = fixtures_dir().join("demo_minimal.yaml");
+    let cfg = load(&path).unwrap();
+    let (mut def, mut dep) = split(cfg);
+    dep.reprojection.allowlist = vec![
+        CrsCode::new("EPSG:25832"),
+        CrsCode::new("EPSG:3857"),
+        CrsCode::new("EPSG:4326"),
+    ];
+    def.reprojection.allowlist = vec![CrsCode::new("EPSG:25832"), CrsCode::new("EPSG:3857")];
+    let composed = compose(def, dep);
+    assert_eq!(
+        composed.reprojection.allowlist,
+        vec![CrsCode::new("EPSG:25832"), CrsCode::new("EPSG:3857")]
+    );
+}
+
+#[test]
+fn compose_reprojection_falls_back_to_deployment_when_service_empty() {
+    let path = fixtures_dir().join("demo_minimal.yaml");
+    let cfg = load(&path).unwrap();
+    let (mut def, mut dep) = split(cfg);
+    dep.reprojection.allowlist = vec![CrsCode::new("EPSG:25832"), CrsCode::new("EPSG:3857")];
+    def.reprojection.allowlist = Vec::new();
+    let composed = compose(def, dep);
+    assert_eq!(
+        composed.reprojection.allowlist,
+        vec![CrsCode::new("EPSG:25832"), CrsCode::new("EPSG:3857")]
+    );
+}
+
+#[test]
+fn compose_reprojection_intersection_can_be_empty() {
+    let path = fixtures_dir().join("demo_minimal.yaml");
+    let cfg = load(&path).unwrap();
+    let (mut def, mut dep) = split(cfg);
+    dep.reprojection.allowlist = vec![CrsCode::new("EPSG:25832")];
+    def.reprojection.allowlist = vec![CrsCode::new("EPSG:3857")];
+    let composed = compose(def, dep);
+    // empty intersection is allowed at compose; cross-cutting validate only
+    // errors if a layer / TMS actually needs reprojection.
+    assert!(composed.reprojection.allowlist.is_empty());
+}
+
+#[test]
+fn render_definition_validate_rejects_unknown_style_ref() {
+    let path = fixtures_dir().join("demo_minimal.yaml");
+    let cfg = load(&path).unwrap();
+    let (mut def, _dep) = split(cfg);
+    if let ClassStyle::Ref { name } = &mut def.layers[0].classes[0].style {
+        *name = "no_such_style".into();
+    } else {
+        panic!("expected ref");
+    }
+    let err = def.validate().unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("no_such_style"), "error should name style: {msg}");
+}
+
+#[test]
+fn deployment_validate_rejects_non_metric_native_crs() {
+    let path = fixtures_dir().join("demo_minimal.yaml");
+    let cfg = load(&path).unwrap();
+    let (_def, mut dep) = split(cfg);
+    dep.sources[0].native_crs = CrsCode::new("EPSG:4326");
+    let err = dep.validate().unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("metric"), "error should mention metric: {msg}");
+    assert!(msg.contains("EPSG:4326"), "error should name the rejected crs: {msg}");
+}
+
+#[test]
+fn render_definition_validate_ignores_deployment_source_catalog() {
+    // The binding→source resolution is cross-cutting, not definition-side.
+    // A RenderDefinition with a binding naming a logical source id that does
+    // not exist in any Deployment must still validate on its own.
+    let mut def = RenderDefinition {
+        service: ServiceMeta {
+            name: "t".into(),
+            ..Default::default()
+        },
+        scales: Scales {
+            bands: vec![Band {
+                name: "hi".into(),
+                max_denom: 25_000,
+            }],
+        },
+        interfaces: Interfaces::default(),
+        tile_matrix_sets: BTreeMap::new(),
+        reprojection: Reprojection::default(),
+        styles: BTreeMap::new(),
+        layers: vec![Layer {
+            name: LayerId::new("l"),
+            title: String::new(),
+            abstract_: String::new(),
+            kind: "polygon".into(),
+            scale: None,
+            group: None,
+            bbox: None,
+            sources: vec![SourceBinding {
+                source: SourceId::new("does_not_exist_in_any_deployment"),
+                kind: BindingKind::PostgisTable {
+                    from: "x".into(),
+                    geometry_column: "g".into(),
+                    dsn: None,
+                },
+                scale: None,
+                band: Some("hi".into()),
+                max_denom: None,
+                filter: None,
+                id_column: None,
+                attributes: vec![],
+                levels: None,
+                page_size_target_bytes: None,
+                reconcile_every_cycles: None,
+                sidecar_size_warn_bytes: None,
+                simplifier: None,
+                on_missing_page: None,
+            }],
+            classes: vec![],
+            label: None,
+            label_survival: LabelSurvival::Independent,
+            raster: None,
+            wms: Default::default(),
+            ows: Default::default(),
+            template: None,
+        }],
+    };
+    def.validate().expect("definition validates without source catalog");
+}
+
+#[test]
+fn compose_empty_allowlist_rejected_when_tms_needs_reprojection() {
+    // source.native_crs = EPSG:25832, TMS crs = EPSG:3857, allowlist = [].
+    // The cross-cutting check on the composed Config must reject this.
+    let dir = tempfile::tempdir().unwrap();
+    let yaml = r#"
+service: { name: t }
+sources:
+  - id: pg
+    type: postgis
+    dsn: postgres://example/x
+    native_crs: EPSG:25832
+artifacts:
+  store: { type: fs, path: /tmp/s }
+  cache: { path: /tmp/c, max_size: 1MiB }
+scales:
+  bands: [{ name: hi, max_denom_exclusive: 25000 }]
+interfaces: {}
+tile_matrix_sets:
+  webm:
+    crs: EPSG:3857
+    top_left: [-20037508.34, 20037508.34]
+    tile_size: [256, 256]
+    levels:
+      - { id: 0, scale_denominator: 559082264.0 }
+layers: []
+"#;
+    let p = dir.path().join("c.yaml");
+    fs::write(&p, yaml).unwrap();
+    let mut cfg = load(&p).unwrap();
+    let err = validate(&mut cfg, dir.path()).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("EPSG:3857"), "error should name missing CRS: {msg}");
+    assert!(msg.contains("allowlist"), "error should mention allowlist: {msg}");
+}
+
+#[test]
+fn compose_empty_allowlist_accepted_when_tms_matches_source_crs() {
+    // Same shape, TMS crs == source.native_crs. No reprojection needed,
+    // empty allowlist is fine.
+    let dir = tempfile::tempdir().unwrap();
+    let yaml = r#"
+service: { name: t }
+sources:
+  - id: pg
+    type: postgis
+    dsn: postgres://example/x
+    native_crs: EPSG:25832
+artifacts:
+  store: { type: fs, path: /tmp/s }
+  cache: { path: /tmp/c, max_size: 1MiB }
+scales:
+  bands: [{ name: hi, max_denom_exclusive: 25000 }]
+interfaces: {}
+tile_matrix_sets:
+  dk:
+    crs: EPSG:25832
+    top_left: [120000, 6500000]
+    tile_size: [256, 256]
+    levels:
+      - { id: 0, scale_denominator: 25000000.0 }
+layers: []
+"#;
+    let p = dir.path().join("c.yaml");
+    fs::write(&p, yaml).unwrap();
+    let mut cfg = load(&p).unwrap();
+    validate(&mut cfg, dir.path()).expect("native TMS validates with empty allowlist");
 }

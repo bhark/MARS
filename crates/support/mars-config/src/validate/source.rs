@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use crate::ConfigError;
-use crate::model::{Bootstrap, ChangeFeed, Config, PostgisBackend, Source, SourceBackend, VectorFileBackend};
+use crate::model::{Bootstrap, ChangeFeed, PostgisBackend, Source, SourceBackend, VectorFileBackend};
 
 // keep identifiers safe to interpolate without escaping surprises. mirrors what
 // quote_ident in mars-source-postgres accepts; the validator rejects early.
@@ -19,12 +19,12 @@ fn is_valid_ident(s: &str) -> bool {
 /// Service-level source validation: non-empty list, unique ids,
 /// per-backend coherence (postgis bootstrap requires change_feed,
 /// vectorfile cache_dir non-empty, etc.).
-pub(super) fn validate_sources(config: &Config) -> Result<(), ConfigError> {
-    if config.sources.is_empty() {
+pub(super) fn validate_sources(sources: &[Source]) -> Result<(), ConfigError> {
+    if sources.is_empty() {
         return Err(ConfigError::Invalid("sources: must declare at least one source".into()));
     }
     let mut seen: HashSet<String> = HashSet::new();
-    for src in &config.sources {
+    for src in sources {
         let id = src.id.as_str();
         if id.trim().is_empty() {
             return Err(ConfigError::Invalid("sources[].id must not be empty".into()));

@@ -1,23 +1,26 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ConfigError;
-use crate::model::{Config, Layer, RasterLayerSpec};
+use crate::model::{Layer, RasterLayerSpec, StyleEntry};
 use crate::validate::band::{self, BandIndex};
 use crate::validate::{attributes, binding, class, label};
 
-pub(super) fn validate_layers(config: &Config, bands: &BandIndex) -> Result<(), ConfigError> {
+pub(super) fn validate_layers(
+    layers: &[Layer],
+    styles: &BTreeMap<String, StyleEntry>,
+    bands: &BandIndex,
+) -> Result<(), ConfigError> {
     let mut layer_names: BTreeSet<&str> = BTreeSet::new();
-    for layer in &config.layers {
+    for layer in layers {
         if !layer_names.insert(layer.name.as_str()) {
             return Err(ConfigError::Invalid(format!("duplicate layer name {:?}", layer.name)));
         }
-        validate_layer(layer, config, bands)?;
+        validate_layer(layer, styles, bands)?;
     }
-    binding::validate_binding_source_refs(config)?;
     Ok(())
 }
 
-fn validate_layer(layer: &Layer, config: &Config, bands: &BandIndex) -> Result<(), ConfigError> {
+fn validate_layer(layer: &Layer, styles: &BTreeMap<String, StyleEntry>, bands: &BandIndex) -> Result<(), ConfigError> {
     validate_kind_raster_coherence(layer)?;
     if layer.raster.is_some() {
         // raster layers skip vector validation paths entirely - they share no
@@ -25,11 +28,11 @@ fn validate_layer(layer: &Layer, config: &Config, bands: &BandIndex) -> Result<(
         // construction once kind/raster coherence has been verified).
         return Ok(());
     }
-    class::validate_classes(layer, &config.styles)?;
+    class::validate_classes(layer, styles)?;
     validate_sources(layer, bands)?;
     band::validate_band_tiers(layer, &bands.windows)?;
     attributes::validate_attribute_references(layer)?;
-    label::validate_label(layer, &config.styles)?;
+    label::validate_label(layer, styles)?;
     Ok(())
 }
 
