@@ -23,7 +23,7 @@ use crate::children::labels::{
     self, COMPONENT_BOOTSTRAP, COMPONENT_TEARDOWN, bootstrap_job_name, bootstrap_service_account_name, config_map_name,
     teardown_job_name,
 };
-use crate::crd::{MarsService, SecretKeyRef, TeardownPolicy};
+use crate::crd::{EnvVarSpec, MarsService, SecretKeyRef, TeardownPolicy};
 use crate::error::{OperatorError, Result};
 
 /// Finalizer added to MarsService when a successful bootstrap Job has run.
@@ -130,10 +130,14 @@ pub(crate) fn render_bootstrap_job(
         name: "bootstrap".into(),
         image: Some(image.to_string()),
         args: Some(vec!["setup".into(), "--config".into(), "/etc/mars/mars.yaml".into()]),
-        env: Some(vec![
-            secret_env("MARS_ADMIN_DSN", &inputs.admin_dsn_ref),
-            secret_env("MARS_RUNTIME_PASSWORD", &inputs.runtime_password_ref),
-        ]),
+        env: Some(job_env(
+            vec![
+                secret_env("MARS_ADMIN_DSN", &inputs.admin_dsn_ref),
+                secret_env("MARS_RUNTIME_PASSWORD", &inputs.runtime_password_ref),
+            ],
+            &cr.spec.compiler.env,
+        )),
+        env_from: Some(crate::children::compiler::env_from(&cr.spec.compiler.env_from)),
         volume_mounts: Some(vec![VolumeMount {
             name: "config".into(),
             mount_path: "/etc/mars/mars.yaml".into(),
@@ -182,7 +186,11 @@ pub(crate) fn render_teardown_job(
         name: "teardown".into(),
         image: Some(image.to_string()),
         args: Some(args),
-        env: Some(vec![secret_env("MARS_ADMIN_DSN", admin_dsn_ref)]),
+        env: Some(job_env(
+            vec![secret_env("MARS_ADMIN_DSN", admin_dsn_ref)],
+            &cr.spec.compiler.env,
+        )),
+        env_from: Some(crate::children::compiler::env_from(&cr.spec.compiler.env_from)),
         volume_mounts: Some(vec![VolumeMount {
             name: "config".into(),
             mount_path: "/etc/mars/mars.yaml".into(),
@@ -257,6 +265,21 @@ fn render_job(
         }),
         status: None,
     }
+}
+
+/// Merge the operator-projected secret env (admin DSN / runtime password)
+/// with the compiler's user-supplied `env`. The Job mounts the compiler's
+/// mars.yaml ConfigMap, so it needs the same environment to resolve every
+/// `${...}` placeholder at config-load time - notably the source `dsn`.
+/// The secret env wins on a name collision.
+fn job_env(secret_envs: Vec<EnvVar>, compiler_env: &[EnvVarSpec]) -> Vec<EnvVar> {
+    let mut out = secret_envs;
+    for e in crate::children::compiler::env_vars(compiler_env) {
+        if !out.iter().any(|x| x.name == e.name) {
+            out.push(e);
+        }
+    }
+    out
 }
 
 fn secret_env(name: &str, sref: &SecretKeyRef) -> EnvVar {
@@ -503,6 +526,55 @@ mod tests {
         assert!(envs.iter().any(|e| e.name == "MARS_RUNTIME_PASSWORD"));
         assert_eq!(pod.restart_policy.as_deref(), Some("Never"));
         assert_eq!(pod.service_account_name.as_deref(), Some("demo-bootstrap"));
+    }
+
+    #[test]
+    fn render_bootstrap_job_propagates_compiler_env_and_env_from() {
+        let mut cr = test_support::cr("demo", "svc-ns");
+        cr.spec.compiler.env = vec![
+            EnvVarSpec {
+                name: "PG_DSN".into(),
+                value: Some("postgres://example".into()),
+                value_from: None,
+            },
+            // a name collision must not shadow the projected secret env.
+            EnvVarSpec {
+                name: "MARS_ADMIN_DSN".into(),
+                value: Some("should-be-ignored".into()),
+                value_from: None,
+            },
+        ];
+        cr.spec.compiler.env_from = vec![crate::crd::EnvFromSourceSpec {
+            prefix: None,
+            secret_ref: Some(crate::crd::LocalObjectReferenceSpec {
+                name: "mars-s3-credentials".into(),
+                optional: None,
+            }),
+            config_map_ref: None,
+        }];
+        let bs = bs_spec();
+        let job = render_bootstrap_job(
+            &cr,
+            test_support::TEST_IMAGE,
+            &inputs(&bs),
+            "abcdef0123",
+            test_support::owner_ref(),
+        )
+        .unwrap();
+        let container = job.spec.unwrap().template.spec.unwrap().containers.remove(0);
+        let envs = container.env.unwrap();
+        // compiler PG_DSN is projected so the mounted mars.yaml resolves.
+        let pg = envs.iter().find(|e| e.name == "PG_DSN").unwrap();
+        assert_eq!(pg.value.as_deref(), Some("postgres://example"));
+        // the projected admin secret wins over a colliding compiler entry.
+        let admin: Vec<_> = envs.iter().filter(|e| e.name == "MARS_ADMIN_DSN").collect();
+        assert_eq!(admin.len(), 1);
+        assert!(admin[0].value.is_none());
+        assert!(admin[0].value_from.is_some());
+        // env_from is propagated from the compiler spec.
+        let env_from = container.env_from.unwrap();
+        assert_eq!(env_from.len(), 1);
+        assert_eq!(env_from[0].secret_ref.as_ref().unwrap().name, "mars-s3-credentials");
     }
 
     #[test]
