@@ -65,15 +65,25 @@ async fn teardown_drops_slot_on_delete() -> Result<()> {
         .await
         .context("delete mars-bs CR")?;
 
+    // accept either evidence path: the teardown Job is observed succeeded,
+    // OR the CR is gone (finalizer-removal is gated on Job success in the
+    // operator, so cr-gone is the stronger proof). the Job lifecycle is
+    // racy - it can complete and be cascade-deleted with the CR before the
+    // 2s poll catches it.
     wait::until(
-        "teardown Job succeeded",
+        "teardown completed (Job succeeded or CR gone)",
         Duration::from_secs(180),
         || {
             let client = client.clone();
             let ns = ns.clone();
             async move {
-                let api: Api<Job> = Api::namespaced(client.as_ref().clone(), &ns);
-                match api.get_opt("mars-bs-teardown").await? {
+                let svc_api: Api<DynamicObject> =
+                    Api::namespaced_with(client.as_ref().clone(), &ns, &mars_service_resource());
+                if svc_api.get_opt("mars-bs").await?.is_none() {
+                    return Ok(Some(()));
+                }
+                let job_api: Api<Job> = Api::namespaced(client.as_ref().clone(), &ns);
+                match job_api.get_opt("mars-bs-teardown").await? {
                     Some(j) if j.status.as_ref().and_then(|s| s.succeeded).unwrap_or(0) >= 1 => {
                         Ok(Some(()))
                     }
@@ -82,21 +92,6 @@ async fn teardown_drops_slot_on_delete() -> Result<()> {
             }
         },
     )
-    .await?;
-
-    // finalizer should clear and the CR should be gone within a beat.
-    wait::until("MarsService deleted after teardown", Duration::from_secs(60), || {
-        let client = client.clone();
-        let ns = ns.clone();
-        async move {
-            let api: Api<DynamicObject> =
-                Api::namespaced_with(client.as_ref().clone(), &ns, &mars_service_resource());
-            match api.get_opt("mars-bs").await? {
-                None => Ok(Some(())),
-                Some(_) => Ok(None),
-            }
-        }
-    })
     .await?;
 
     let _ = anyhow!("not used"); // silence anyhow import in narrow build configs
