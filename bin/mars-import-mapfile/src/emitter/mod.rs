@@ -10,7 +10,7 @@ mod render;
 mod skeleton;
 mod style_model;
 
-pub(crate) use render::render;
+pub(crate) use render::{SourceIds, render};
 
 pub(crate) use bands::default_bands;
 

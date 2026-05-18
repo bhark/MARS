@@ -184,6 +184,45 @@ fn multi_pass_does_not_emit_collapse_warning() {
 }
 
 #[test]
+fn source_id_overrides_replace_defaults_in_emitted_yaml() {
+    // ogr_local has both postgis and vectorfile layers, so the emitter takes
+    // the multi-source path that names each binding explicitly.
+    let out = Command::new(bin_path())
+        .arg(fixture_dir().join("ogr_local.map"))
+        .arg("--postgis-source-id")
+        .arg("postgres_primary")
+        .arg("--vectorfile-source-id")
+        .arg("files_primary")
+        .output()
+        .expect("run binary");
+    assert!(
+        out.status.success(),
+        "non-strict run should succeed; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stdout = String::from_utf8(out.stdout).expect("utf8");
+    assert!(
+        stdout.contains("source: files_primary"),
+        "expected vectorfile binding to use overridden id; stdout=\n{stdout}",
+    );
+    assert!(
+        !stdout.contains("source: ogr\n") && !stdout.contains("source: pg\n"),
+        "expected no default `pg`/`ogr` bindings after override; stdout=\n{stdout}",
+    );
+}
+
+#[test]
+fn empty_source_id_override_is_rejected() {
+    let out = Command::new(bin_path())
+        .arg(fixture_dir().join("minimal.map"))
+        .arg("--postgis-source-id")
+        .arg("   ")
+        .output()
+        .expect("run binary");
+    assert!(!out.status.success(), "empty id override must fail");
+}
+
+#[test]
 fn strict_exits_two_on_unsupported() {
     let out = Command::new(bin_path())
         .arg("--strict")

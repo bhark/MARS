@@ -739,7 +739,11 @@ END
 "#;
     let skel = translate(src);
     assert_eq!(skel.scale_dpi, Some(96.0));
-    let yaml = crate::emitter::render(&skel, &crate::emitter::default_bands());
+    let yaml = crate::emitter::render(
+        &skel,
+        &crate::emitter::default_bands(),
+        &crate::emitter::SourceIds::default(),
+    );
     assert!(
         yaml.contains("scale_dpi: 96"),
         "rendered yaml missing scale_dpi field; got:\n{yaml}"
@@ -760,7 +764,11 @@ END
 "#;
     let skel = translate(src);
     assert_eq!(skel.wms_max_image_dimension, Some(8192));
-    let yaml = crate::emitter::render(&skel, &crate::emitter::default_bands());
+    let yaml = crate::emitter::render(
+        &skel,
+        &crate::emitter::default_bands(),
+        &crate::emitter::SourceIds::default(),
+    );
     assert!(
         yaml.contains("max_image_dimension: 8192"),
         "rendered yaml missing max_image_dimension field; got:\n{yaml}"

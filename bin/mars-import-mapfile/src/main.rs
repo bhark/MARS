@@ -18,6 +18,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use mars_config::SourceId;
 use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::util::SubscriberInitExt as _;
 use tracing_subscriber::{EnvFilter, Layer};
@@ -49,6 +50,22 @@ struct Cli {
     /// `detail:2500,hi:12500,mid:50000,lo:250000,overview:max`.
     #[arg(long = "bands", value_parser = parse_bands_arg)]
     bands: Option<Vec<(String, u64)>>,
+    /// logical source id bound to PostGIS-backed layers. must match an entry
+    /// in the cluster's `sourcesCatalog`.
+    #[arg(long = "postgis-source-id", default_value = "pg", value_parser = parse_source_id)]
+    postgis_source_id: SourceId,
+    /// logical source id bound to vectorfile (OGR) layers. must match an
+    /// entry in the cluster's `sourcesCatalog`.
+    #[arg(long = "vectorfile-source-id", default_value = "ogr", value_parser = parse_source_id)]
+    vectorfile_source_id: SourceId,
+}
+
+fn parse_source_id(s: &str) -> Result<SourceId, String> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return Err("source id must not be empty".into());
+    }
+    Ok(SourceId::new(trimmed))
 }
 
 /// parse the `--bands` CLI value into an ordered ladder.
@@ -129,7 +146,11 @@ fn main() -> Result<()> {
     let base_dir = cli.input.parent();
     let skeleton = translate_tokens(&tokens, include_layers.as_ref(), base_dir, cli.strict);
     let bands = cli.bands.unwrap_or_else(emitter::default_bands);
-    let yaml = emitter::render(&skeleton, &bands);
+    let source_ids = emitter::SourceIds {
+        postgis: cli.postgis_source_id,
+        vectorfile: cli.vectorfile_source_id,
+    };
+    let yaml = emitter::render(&skeleton, &bands, &source_ids);
 
     match &cli.output {
         Some(p) => fs::write(p, &yaml).with_context(|| format!("writing {}", p.display()))?,
