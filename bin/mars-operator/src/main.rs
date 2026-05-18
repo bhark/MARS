@@ -9,13 +9,16 @@
 
 #![forbid(unsafe_code)]
 
+mod apply;
 mod bootstrap;
+mod bootstrap_flow;
 mod children;
 mod cli;
 mod clusterrole;
 mod config;
 mod controller;
 mod crd;
+mod deletion;
 mod dsn;
 mod error;
 mod metrics;
