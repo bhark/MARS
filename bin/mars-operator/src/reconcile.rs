@@ -85,9 +85,14 @@ async fn reconcile_inner(cr: Arc<MarsService>, ctx: Arc<Ctx>) -> Result<Action> 
         return deletion::reconcile_deletion(cr.clone(), &ctx, &svc_name, &ns).await;
     }
 
-    let (config_valid, config_message) = match crate::config::validate(&cr.spec.config) {
-        Ok(()) => (true, "spec.config validated".to_string()),
-        Err(e) => (false, e.to_string()),
+    let (config_valid, config_message) = match cr.spec.config.as_ref() {
+        Some(cfg) => match crate::config::validate(cfg) {
+            Ok(()) => (true, "spec.config validated".to_string()),
+            Err(e) => (false, e.to_string()),
+        },
+        // new-shape path lands in task 5; for now flag the absence so the
+        // legacy reconcile doesn't barrel into a None.
+        None => (false, "spec.config is required (new-shape path not yet wired)".into()),
     };
 
     if !config_valid {
@@ -253,6 +258,7 @@ fn detect_fs_store(cr: &MarsService) -> Option<ArtifactStoreSpec> {
     let store_type = cr
         .spec
         .config
+        .as_ref()?
         .get("artifacts")
         .and_then(|a| a.get("store"))
         .and_then(|s| s.get("type"))

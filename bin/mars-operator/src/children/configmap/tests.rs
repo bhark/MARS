@@ -17,7 +17,7 @@ fn build_produces_mars_yaml_with_stable_checksum() {
     assert_eq!(checksum, again);
     // and changes when config changes
     let mut cr2 = cr.clone();
-    cr2.spec.config = serde_json::json!({"service": {"name": "other"}});
+    cr2.spec.config = Some(serde_json::json!({"service": {"name": "other"}}));
     let (_, different) = build(&cr2, test_support::owner_ref()).unwrap();
     assert_ne!(checksum, different);
 }

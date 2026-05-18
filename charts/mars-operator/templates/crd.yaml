@@ -169,6 +169,18 @@ spec:
                         type: boolean
                     type: object
                 type: object
+              clusterRef:
+                description: |-
+                  Pointer to the cluster-scoped `MarsServiceCluster` catalog this
+                  service composes against. Required on the new path; rejected on the
+                  legacy path.
+                nullable: true
+                properties:
+                  name:
+                    type: string
+                required:
+                - name
+                type: object
               compiler:
                 properties:
                   affinity:
@@ -338,8 +350,116 @@ spec:
                 type: object
               config:
                 description: |-
-                  Full MARS service config (mars_config::Config). Opaque in the CRD
-                  schema; parsed and validated server-side at reconcile.
+                  Legacy single-document MARS service config (mars_config::Config).
+                  Opaque in the CRD schema; parsed and validated server-side at
+                  reconcile. Mutually exclusive with the
+                  `clusterRef + definition + sources` triple.
+                nullable: true
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+              definition:
+                description: |-
+                  `RenderDefinition` source: sibling-key oneOf (`inline`, `configMapRef`,
+                  `gitRef`, `s3Ref`). Required on the new path.
+                nullable: true
+                properties:
+                  configMapRef:
+                    description: In-cluster `ConfigMap` carrying the `RenderDefinition` under `key`.
+                    nullable: true
+                    properties:
+                      key:
+                        type: string
+                      name:
+                        type: string
+                    required:
+                    - key
+                    - name
+                    type: object
+                  gitRef:
+                    description: Git repository hosting the `RenderDefinition` file.
+                    nullable: true
+                    properties:
+                      gitRef:
+                        description: Exactly one of `branch`, `tag`, `commit`. Enforced at adapter-resolve time.
+                        properties:
+                          branch:
+                            nullable: true
+                            type: string
+                          commit:
+                            nullable: true
+                            type: string
+                          tag:
+                            nullable: true
+                            type: string
+                        type: object
+                      interval:
+                        description: Poll cadence. Defaults to `1m` at the adapter when unset.
+                        nullable: true
+                        type: string
+                      path:
+                        type: string
+                      secretRef:
+                        description: Credential bundle. Omit for public repos.
+                        nullable: true
+                        properties:
+                          name:
+                            type: string
+                        required:
+                        - name
+                        type: object
+                      url:
+                        type: string
+                    required:
+                    - gitRef
+                    - path
+                    - url
+                    type: object
+                  inline:
+                    description: Literal `RenderDefinition` YAML embedded on the CR.
+                    nullable: true
+                    type: string
+                  s3Ref:
+                    description: S3-compatible object store hosting the `RenderDefinition` file.
+                    nullable: true
+                    properties:
+                      bucket:
+                        type: string
+                      endpoint:
+                        description: Override for non-AWS endpoints. AWS S3 when unset.
+                        nullable: true
+                        type: string
+                      interval:
+                        description: Poll cadence. Defaults to `1m` at the adapter when unset.
+                        nullable: true
+                        type: string
+                      key:
+                        type: string
+                      region:
+                        type: string
+                      secretRef:
+                        description: |-
+                          Credential bundle. Falls back to the default `object_store` chain
+                          (env, IRSA, instance profile) when omitted.
+                        nullable: true
+                        properties:
+                          name:
+                            type: string
+                        required:
+                        - name
+                        type: object
+                    required:
+                    - bucket
+                    - key
+                    - region
+                    type: object
+                type: object
+              reprojection:
+                description: |-
+                  Service-side reprojection narrowing. Intersected against the cluster
+                  default at compose time. Parsed into `mars_config::Reprojection` at
+                  reconcile; kept opaque in the CRD schema for the same reason as
+                  `MarsServiceCluster.spec.reprojection`.
+                nullable: true
                 type: object
                 x-kubernetes-preserve-unknown-fields: true
               runtime:
@@ -563,9 +683,16 @@ spec:
                       type: object
                     type: array
                 type: object
+              sources:
+                description: |-
+                  Logical source ids to pull from the cluster catalog. Required on the
+                  new path; rejected on the legacy path.
+                items:
+                  type: string
+                nullable: true
+                type: array
             required:
             - compiler
-            - config
             - runtime
             type: object
           status:

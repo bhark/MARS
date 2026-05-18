@@ -22,7 +22,12 @@ pub(crate) fn build(cr: &MarsService, owner_ref: OwnerReference) -> Result<(Conf
         .ok_or_else(|| crate::error::OperatorError::MissingField("metadata.name".into()))?;
     let ns = cr.metadata.namespace.clone();
 
-    let yaml = crate::config::canonicalize_yaml(&cr.spec.config)?;
+    let config = cr
+        .spec
+        .config
+        .as_ref()
+        .ok_or_else(|| crate::error::OperatorError::MissingField("spec.config".into()))?;
+    let yaml = crate::config::canonicalize_yaml(config)?;
     let checksum = blake3::hash(yaml.as_bytes()).to_hex().to_string();
 
     let mut data: BTreeMap<String, String> = BTreeMap::new();

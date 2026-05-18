@@ -69,9 +69,13 @@ pub(crate) async fn reconcile_deletion(
     // <svc>-bootstrap-admin-credentials Secret so a teardown after the user
     // migrates between admin forms still authenticates with a valid DSN.
     let secret_api: Api<Secret> = Api::namespaced(ctx.client.clone(), ns);
+    let config = cr
+        .spec
+        .config
+        .as_ref()
+        .ok_or_else(|| OperatorError::MissingField("spec.config".into()))?;
     let resolved_admin =
-        bootstrap_flow::resolve_admin_dsn(ctx, &secret_api, svc_name, ns, bs_spec, &cr.spec.config, owner.clone())
-            .await?;
+        bootstrap_flow::resolve_admin_dsn(ctx, &secret_api, svc_name, ns, bs_spec, config, owner.clone()).await?;
 
     let job_name = labels::teardown_job_name(svc_name);
     let job_api: Api<Job> = Api::namespaced(ctx.client.clone(), ns);

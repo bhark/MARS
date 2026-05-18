@@ -77,11 +77,11 @@ pub(crate) fn cr(name: &str, namespace: &str) -> MarsService {
                 replicas: 2,
                 ..Default::default()
             },
-            config: serde_json::json!({
+            config: Some(serde_json::json!({
                 "service": { "name": "demo" },
                 "sources": [{ "id": "default", "kind": "stub" }],
                 "artifacts": { "store": { "type": "fs", "path": "/var/lib/mars/artifacts" } }
-            }),
+            })),
             ..Default::default()
         },
         status: None,
