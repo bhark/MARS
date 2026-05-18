@@ -2719,6 +2719,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "mars-definition-source-inline"
+version = "0.0.0-dev"
+dependencies = [
+ "async-trait",
+ "blake3",
+ "bytes",
+ "futures-core",
+ "futures-util",
+ "mars-definition-source",
+ "tokio",
+]
+
+[[package]]
 name = "mars-expr"
 version = "0.0.0-dev"
 dependencies = [
