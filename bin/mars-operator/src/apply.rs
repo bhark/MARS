@@ -101,6 +101,7 @@ pub(crate) async fn patch_status(
 ) -> Result<()> {
     let api: Api<MarsService> = Api::namespaced(ctx.client.clone(), ns);
     let body = json!({ "status": status_body });
-    api.patch_status(name, &PatchParams::default(), &Patch::Merge(&body)).await?;
+    api.patch_status(name, &PatchParams::default(), &Patch::Merge(&body))
+        .await?;
     Ok(())
 }

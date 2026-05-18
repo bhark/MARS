@@ -110,7 +110,10 @@ pub(crate) async fn reconcile_deletion(
 async fn shutdown_workloads(ctx: &Ctx, ns: &str, svc_name: &str) -> Result<bool> {
     let api: Api<Deployment> = Api::namespaced(ctx.client.clone(), ns);
     let mut still_present = false;
-    for name in [labels::compiler_deployment_name(svc_name), labels::runtime_deployment_name(svc_name)] {
+    for name in [
+        labels::compiler_deployment_name(svc_name),
+        labels::runtime_deployment_name(svc_name),
+    ] {
         match api.get_opt(&name).await? {
             None => continue,
             Some(_) => {
