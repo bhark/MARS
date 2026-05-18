@@ -15,7 +15,7 @@ mod reconcile_cadence;
 use mars_source::ChangeBatch;
 use tokio_util::sync::CancellationToken;
 
-use crate::stages::shared::noop_bump;
+use crate::stages::shared::{noop_bump, publish};
 use crate::{Compiler, CompilerError};
 
 pub(crate) async fn run(
@@ -68,10 +68,10 @@ pub(crate) async fn run(
         // left off.
         let mut next = noop_bump::build(ctx.prior, last_source_version);
         merge::stamp_reconcile_state(c, &mut next, &[], &cadence);
-        return crate::publish_with_retry(c.deps.manifest.as_ref(), &next, &c.deps.metrics, shutdown).await;
+        return publish::with_retry(c.deps.manifest.as_ref(), &next, &c.deps.metrics, shutdown).await;
     }
 
     let outcome = rebuild::run(&c.deps, &c.deps.metrics, &ctx, &sidecars, dirty).await?;
     let manifest = merge::run(c, &ctx.prior, &outcome, last_source_version, &cadence);
-    crate::publish_with_retry(c.deps.manifest.as_ref(), &manifest, &c.deps.metrics, shutdown).await
+    publish::with_retry(c.deps.manifest.as_ref(), &manifest, &c.deps.metrics, shutdown).await
 }

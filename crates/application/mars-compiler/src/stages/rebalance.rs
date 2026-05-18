@@ -11,8 +11,8 @@ mod plan;
 
 use tokio_util::sync::CancellationToken;
 
-use crate::stages::shared::noop_bump;
 use crate::stages::shared::sidecars::OwnedSidecars;
+use crate::stages::shared::{noop_bump, publish};
 use crate::{Compiler, CompilerError};
 
 pub(crate) async fn run(c: &Compiler) -> Result<u64, CompilerError> {
@@ -22,7 +22,7 @@ pub(crate) async fn run(c: &Compiler) -> Result<u64, CompilerError> {
         // already balanced; bump version so cursors advance.
         let sv = ctx.prior.source_version.clone();
         let next = noop_bump::build(ctx.prior, sv);
-        return crate::publish_with_retry(
+        return publish::with_retry(
             c.deps.manifest.as_ref(),
             &next,
             &c.deps.metrics,
@@ -38,7 +38,7 @@ pub(crate) async fn run(c: &Compiler) -> Result<u64, CompilerError> {
 
     let outcome = execute::run(&c.deps, &ctx, ops, &sidecars).await?;
     let manifest = merge::run(&ctx.prior, &outcome);
-    crate::publish_with_retry(
+    publish::with_retry(
         c.deps.manifest.as_ref(),
         &manifest,
         &c.deps.metrics,
