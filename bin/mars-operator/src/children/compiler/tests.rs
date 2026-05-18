@@ -40,8 +40,8 @@ fn build_propagates_config_checksum_to_pod_template_annotation() {
         test_support::owner_ref(),
     )
     .unwrap();
-    let template = kids.deployment.spec.unwrap().template;
-    let annotations = template.metadata.unwrap().annotations.unwrap();
+    let template = &kids.deployment.spec.as_ref().unwrap().template;
+    let annotations = template.metadata.as_ref().unwrap().annotations.as_ref().unwrap();
     assert_eq!(
         annotations.get(CONFIG_CHECKSUM_ANNOTATION).map(String::as_str),
         Some("abc123")
@@ -83,11 +83,8 @@ fn build_projects_runtime_password_env_when_resolved_ref_is_set() {
         test_support::owner_ref(),
     )
     .unwrap();
-    let envs = kids.deployment.spec.unwrap().template.spec.unwrap().containers[0]
-        .env
-        .clone()
-        .unwrap();
-    let injected = envs.iter().find(|e| e.name == RUNTIME_PASSWORD_ENV).unwrap();
+    let pod = test_support::pod_spec(&kids.deployment);
+    let injected = test_support::env_var(&pod.containers[0], RUNTIME_PASSWORD_ENV);
     let sref = injected.value_from.as_ref().unwrap().secret_key_ref.as_ref().unwrap();
     assert_eq!(sref.name, "demo-runtime-credentials");
     assert_eq!(sref.key, "password");
@@ -105,10 +102,8 @@ fn build_omits_runtime_password_env_when_resolved_ref_is_absent() {
         test_support::owner_ref(),
     )
     .unwrap();
-    let envs = kids.deployment.spec.unwrap().template.spec.unwrap().containers[0]
-        .env
-        .clone()
-        .unwrap();
+    let pod = test_support::pod_spec(&kids.deployment);
+    let envs = pod.containers[0].env.as_ref().unwrap();
     assert!(envs.iter().all(|e| e.name != RUNTIME_PASSWORD_ENV));
 }
 
@@ -124,8 +119,8 @@ fn build_without_images_config_map_omits_images_volume() {
         test_support::owner_ref(),
     )
     .unwrap();
-    let pod = kids.deployment.spec.unwrap().template.spec.unwrap();
-    assert!(pod.volumes.unwrap().iter().all(|v| v.name != "images"));
+    let pod = test_support::pod_spec(&kids.deployment);
+    assert!(pod.volumes.as_ref().unwrap().iter().all(|v| v.name != "images"));
     let mounts = pod.containers[0].volume_mounts.as_ref().unwrap();
     assert!(mounts.iter().all(|m| m.name != "images"));
 }
@@ -143,9 +138,15 @@ fn build_with_images_config_map_mounts_read_only() {
         test_support::owner_ref(),
     )
     .unwrap();
-    let pod = kids.deployment.spec.unwrap().template.spec.unwrap();
-    let vol = pod.volumes.unwrap().into_iter().find(|v| v.name == "images").unwrap();
-    let cm = vol.config_map.unwrap();
+    let pod = test_support::pod_spec(&kids.deployment);
+    let vol = pod
+        .volumes
+        .as_ref()
+        .unwrap()
+        .iter()
+        .find(|v| v.name == "images")
+        .unwrap();
+    let cm = vol.config_map.as_ref().unwrap();
     assert_eq!(cm.name, "mars-images");
     let mount = pod.containers[0]
         .volume_mounts
@@ -170,7 +171,7 @@ fn build_omits_scheduling_fields_when_unset() {
         test_support::owner_ref(),
     )
     .unwrap();
-    let pod = kids.deployment.spec.unwrap().template.spec.unwrap();
+    let pod = test_support::pod_spec(&kids.deployment);
     assert!(pod.node_selector.is_none());
     assert!(pod.tolerations.is_none());
     assert!(pod.affinity.is_none());
@@ -210,18 +211,20 @@ fn build_propagates_node_selector_tolerations_and_affinity() {
         test_support::owner_ref(),
     )
     .unwrap();
-    let pod = kids.deployment.spec.unwrap().template.spec.unwrap();
-    let ns = pod.node_selector.unwrap();
+    let pod = test_support::pod_spec(&kids.deployment);
+    let ns = pod.node_selector.as_ref().unwrap();
     assert_eq!(ns.get("disktype").map(String::as_str), Some("ssd"));
-    let tol = pod.tolerations.unwrap();
+    let tol = pod.tolerations.as_ref().unwrap();
     assert_eq!(tol.len(), 1);
     assert_eq!(tol[0].key.as_deref(), Some("dedicated"));
     assert_eq!(tol[0].effect.as_deref(), Some("NoSchedule"));
-    let aff = pod.affinity.unwrap();
+    let aff = pod.affinity.as_ref().unwrap();
     let terms = aff
         .node_affinity
+        .as_ref()
         .unwrap()
         .required_during_scheduling_ignored_during_execution
+        .as_ref()
         .unwrap();
     assert_eq!(terms.node_selector_terms.len(), 1);
 }

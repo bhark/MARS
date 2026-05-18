@@ -46,11 +46,8 @@ fn build_projects_runtime_password_env_when_resolved_ref_is_set() {
         test_support::owner_ref(),
     )
     .unwrap();
-    let envs = dep.spec.unwrap().template.spec.unwrap().containers[0]
-        .env
-        .clone()
-        .unwrap();
-    let injected = envs.iter().find(|e| e.name == "MARS_RUNTIME_PASSWORD").unwrap();
+    let pod = test_support::pod_spec(&dep);
+    let injected = test_support::env_var(&pod.containers[0], "MARS_RUNTIME_PASSWORD");
     let sref = injected.value_from.as_ref().unwrap().secret_key_ref.as_ref().unwrap();
     assert_eq!(sref.name, "demo-runtime-credentials");
     assert_eq!(sref.key, "password");
@@ -68,8 +65,8 @@ fn build_propagates_config_checksum_to_pod_template_annotation() {
         test_support::owner_ref(),
     )
     .unwrap();
-    let template = dep.spec.unwrap().template;
-    let annotations = template.metadata.unwrap().annotations.unwrap();
+    let template = &dep.spec.as_ref().unwrap().template;
+    let annotations = template.metadata.as_ref().unwrap().annotations.as_ref().unwrap();
     assert_eq!(
         annotations.get(CONFIG_CHECKSUM_ANNOTATION).map(String::as_str),
         Some("deadbeef")
@@ -97,8 +94,8 @@ fn build_appends_extra_volumes_and_mounts_after_managed_entries() {
         test_support::owner_ref(),
     )
     .unwrap();
-    let pod = dep.spec.unwrap().template.spec.unwrap();
-    let volumes = pod.volumes.unwrap();
+    let pod = test_support::pod_spec(&dep);
+    let volumes = pod.volumes.as_ref().unwrap();
     // user volume appears after the two managed entries (`config`, `cache`).
     assert_eq!(volumes.len(), 3);
     assert_eq!(volumes[0].name, "config");
@@ -106,7 +103,7 @@ fn build_appends_extra_volumes_and_mounts_after_managed_entries() {
     assert_eq!(volumes[2].name, "fonts");
     assert_eq!(volumes[2].config_map.as_ref().unwrap().name, "custom-fonts");
 
-    let mounts = pod.containers[0].volume_mounts.clone().unwrap();
+    let mounts = pod.containers[0].volume_mounts.as_ref().unwrap();
     assert_eq!(mounts.len(), 3);
     assert_eq!(mounts[0].name, "config");
     assert_eq!(mounts[1].name, "cache");
@@ -149,18 +146,21 @@ fn build_propagates_scheduling_fields_into_pod_spec() {
         test_support::owner_ref(),
     )
     .unwrap();
-    let pod = dep.spec.unwrap().template.spec.unwrap();
+    let pod = test_support::pod_spec(&dep);
     assert_eq!(
-        pod.node_selector.unwrap().get("zone").map(String::as_str),
+        pod.node_selector.as_ref().unwrap().get("zone").map(String::as_str),
         Some("eu-west-1a")
     );
-    assert_eq!(pod.tolerations.unwrap()[0].key.as_deref(), Some("dedicated"));
+    assert_eq!(pod.tolerations.as_ref().unwrap()[0].key.as_deref(), Some("dedicated"));
     let pref = pod
         .affinity
+        .as_ref()
         .unwrap()
         .pod_anti_affinity
+        .as_ref()
         .unwrap()
         .preferred_during_scheduling_ignored_during_execution
+        .as_ref()
         .unwrap();
     assert_eq!(pref.len(), 1);
     assert_eq!(pref[0].weight, 100);

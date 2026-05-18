@@ -115,11 +115,8 @@ fn render_bootstrap_job_uses_resolved_runtime_password_ref() {
         test_support::owner_ref(),
     )
     .unwrap();
-    let envs = job.spec.unwrap().template.spec.unwrap().containers[0]
-        .env
-        .clone()
-        .unwrap();
-    let runtime_env = envs.iter().find(|e| e.name == "MARS_RUNTIME_PASSWORD").unwrap();
+    let pod = test_support::job_pod_spec(&job);
+    let runtime_env = test_support::env_var(&pod.containers[0], "MARS_RUNTIME_PASSWORD");
     let sref = runtime_env
         .value_from
         .as_ref()
@@ -157,7 +154,7 @@ fn render_bootstrap_job_has_two_secret_env_vars() {
     )
     .unwrap();
     assert_eq!(job.metadata.name.as_deref(), Some("demo-bootstrap-abcdef0123"));
-    let pod = job.spec.unwrap().template.spec.unwrap();
+    let pod = test_support::job_pod_spec(&job);
     let envs = pod.containers[0].env.as_ref().unwrap();
     assert!(envs.iter().any(|e| e.name == "MARS_ADMIN_DSN"));
     assert!(envs.iter().any(|e| e.name == "MARS_RUNTIME_PASSWORD"));
@@ -231,10 +228,8 @@ fn render_teardown_job_omits_drop_flags_when_disabled() {
         test_support::owner_ref(),
     )
     .unwrap();
-    let args = job.spec.unwrap().template.spec.unwrap().containers[0]
-        .args
-        .clone()
-        .unwrap();
+    let pod = test_support::job_pod_spec(&job);
+    let args = pod.containers[0].args.as_ref().unwrap();
     assert!(args.iter().any(|a| a == "--drop-slot"));
     assert!(!args.iter().any(|a| a == "--drop-publication"));
     assert!(!args.iter().any(|a| a == "--drop-role"));
@@ -252,10 +247,8 @@ fn render_teardown_job_omits_runtime_password_env() {
         test_support::owner_ref(),
     )
     .unwrap();
-    let envs = job.spec.unwrap().template.spec.unwrap().containers[0]
-        .env
-        .clone()
-        .unwrap();
+    let pod = test_support::job_pod_spec(&job);
+    let envs = pod.containers[0].env.as_ref().unwrap();
     assert!(envs.iter().any(|e| e.name == "MARS_ADMIN_DSN"));
     assert!(!envs.iter().any(|e| e.name == "MARS_RUNTIME_PASSWORD"));
 }
@@ -279,11 +272,8 @@ fn render_bootstrap_job_with_managed_admin_credentials_uses_secret_key_ref() {
         test_support::owner_ref(),
     )
     .unwrap();
-    let envs = job.spec.unwrap().template.spec.unwrap().containers[0]
-        .env
-        .clone()
-        .unwrap();
-    let admin_env = envs.iter().find(|e| e.name == "MARS_ADMIN_DSN").unwrap();
+    let pod = test_support::job_pod_spec(&job);
+    let admin_env = test_support::env_var(&pod.containers[0], "MARS_ADMIN_DSN");
     assert!(admin_env.value.is_none());
     let sref = admin_env.value_from.as_ref().unwrap().secret_key_ref.as_ref().unwrap();
     assert_eq!(sref.name, "demo-bootstrap-admin-credentials");
