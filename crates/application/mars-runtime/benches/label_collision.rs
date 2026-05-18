@@ -60,7 +60,7 @@ fn label_style(priority: u16, force: bool) -> Arc<ResolvedLabelStyle> {
             min_distance: 0.0,
             position: AnchorPosition::default(),
             offset_px: (0.0, 0.0),
-            angle_deg: None,
+            angle: None,
             partials: true,
             force,
         }
