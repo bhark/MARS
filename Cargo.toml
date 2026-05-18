@@ -9,6 +9,7 @@ members = [
     "crates/ports/mars-source",
     "crates/ports/mars-store",
     "crates/ports/mars-render-port",
+    "crates/ports/mars-definition-source",
     "crates/adapters/mars-source-postgres",
     "crates/adapters/mars-source-vectorfile",
     "crates/adapters/mars-source-xyz",
@@ -68,6 +69,7 @@ mars-artifact       = { path = "crates/domain/mars-artifact" }
 mars-source         = { path = "crates/ports/mars-source" }
 mars-store          = { path = "crates/ports/mars-store" }
 mars-render-port    = { path = "crates/ports/mars-render-port" }
+mars-definition-source = { path = "crates/ports/mars-definition-source" }
 # adapters
 mars-source-postgres = { path = "crates/adapters/mars-source-postgres" }
 mars-source-vectorfile = { path = "crates/adapters/mars-source-vectorfile" }

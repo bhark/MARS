@@ -2709,6 +2709,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "mars-definition-source"
+version = "0.0.0-dev"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "futures-core",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "mars-expr"
 version = "0.0.0-dev"
 dependencies = [
