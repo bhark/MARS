@@ -1060,11 +1060,81 @@ dependencies = [
 ]
 
 [[package]]
+name = "mars-expr"
+version = "0.0.0-dev"
+dependencies = [
+ "regex",
+ "serde",
+ "thiserror",
+]
+
+[[package]]
+name = "mars-render-port"
+version = "0.0.0-dev"
+dependencies = [
+ "mars-style",
+ "mars-types",
+ "thiserror",
+]
+
+[[package]]
+name = "mars-source"
+version = "0.0.0-dev"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "futures-core",
+ "mars-expr",
+ "mars-types",
+ "thiserror",
+]
+
+[[package]]
+name = "mars-store"
+version = "0.0.0-dev"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "futures-core",
+ "futures-util",
+ "mars-types",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "mars-style"
+version = "0.0.0-dev"
+dependencies = [
+ "mars-expr",
+ "serde",
+ "thiserror",
+]
+
+[[package]]
 name = "mars-test-support"
 version = "0.0.0-dev"
 dependencies = [
+ "async-trait",
+ "bytes",
+ "futures-core",
+ "futures-util",
+ "mars-render-port",
+ "mars-source",
+ "mars-store",
+ "mars-style",
+ "mars-types",
  "png",
  "zune-jpeg",
+]
+
+[[package]]
+name = "mars-types"
+version = "0.0.0-dev"
+dependencies = [
+ "serde",
+ "thiserror",
 ]
 
 [[package]]
