@@ -1,0 +1,26 @@
+[package]
+name        = "mars-definition-source-configmap"
+version.workspace = true
+edition.workspace     = true
+license.workspace     = true
+repository.workspace  = true
+authors.workspace     = true
+publish.workspace     = true
+rust-version.workspace = true
+description = "In-cluster ConfigMap mars-definition-source adapter. Fetches a RenderDefinition payload from a named ConfigMap key and watches its resourceVersion."
+
+[lints]
+workspace = true
+
+[dependencies]
+mars-definition-source = { workspace = true }
+async-trait            = { workspace = true }
+bytes                  = { workspace = true }
+futures-core           = { workspace = true }
+futures-util           = { workspace = true }
+k8s-openapi            = { workspace = true }
+kube                   = { workspace = true }
+thiserror              = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }

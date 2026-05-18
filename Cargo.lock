@@ -2719,6 +2719,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "mars-definition-source-configmap"
+version = "0.0.0-dev"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "futures-core",
+ "futures-util",
+ "k8s-openapi",
+ "kube",
+ "mars-definition-source",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "mars-definition-source-inline"
 version = "0.0.0-dev"
 dependencies = [
