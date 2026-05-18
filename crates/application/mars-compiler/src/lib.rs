@@ -23,6 +23,7 @@ pub mod rebalance;
 pub mod reconcile;
 pub mod render;
 pub mod route_index;
+mod service;
 pub mod sidecar;
 pub mod sidecar_arena;
 mod sources;
@@ -35,29 +36,15 @@ pub use sources::SourceRegistry;
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
 
 use mars_config::Config;
 use mars_observability::{Metrics, rebalance_outcome};
-use mars_source::{ChangeBatch, ChangeFeed, ChangeSubscription, LeaderLock, LeaderLockGuard, Source};
+use mars_source::{ChangeBatch, ChangeFeed, LeaderLock, LeaderLockGuard, Source};
 use mars_store::{ManifestStore, ObjectStore};
 use mars_types::{BindingId, Manifest};
 use tokio_util::sync::CancellationToken;
 
-/// Deterministic 64-bit hash of the leader-lock key, reinterpreted as `i64`
-/// for `pg_try_advisory_lock`. FNV-1a is stable across releases and has no
-/// runtime dependency.
-#[must_use]
-pub fn leader_lock_key(name: &str) -> i64 {
-    const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
-    let mut h = FNV_OFFSET;
-    for &b in name.as_bytes() {
-        h ^= u64::from(b);
-        h = h.wrapping_mul(FNV_PRIME);
-    }
-    h as i64
-}
+use crate::service::{CollectOutcome, collect_batches, leader_lock_key};
 
 /// All ports the compiler depends on, bundled for easy composition by the bin.
 pub struct Deps {
@@ -444,35 +431,5 @@ pub async fn run_snapshot_from_plan(
         source_version: None,
         epoch: manifest_version,
     })
-}
-
-enum CollectOutcome {
-    Batches(Vec<ChangeBatch>),
-    FeedClosed,
-    Shutdown,
-}
-
-/// Drain the subscription until `window` elapses or shutdown fires. Returns
-/// every batch that arrived in the window. An empty batch list is a normal
-/// idle window.
-async fn collect_batches(
-    sub: &mut dyn ChangeSubscription,
-    window: Duration,
-    shutdown: &CancellationToken,
-) -> Result<CollectOutcome, CompilerError> {
-    let deadline = tokio::time::Instant::now() + window;
-    let mut batches: Vec<ChangeBatch> = Vec::new();
-    loop {
-        tokio::select! {
-            biased;
-            _ = shutdown.cancelled() => return Ok(CollectOutcome::Shutdown),
-            _ = tokio::time::sleep_until(deadline) => return Ok(CollectOutcome::Batches(batches)),
-            next = sub.next_batch() => match next {
-                None => return Ok(CollectOutcome::FeedClosed),
-                Some(Err(e)) => return Err(CompilerError::Source(e)),
-                Some(Ok(b)) => batches.push(b),
-            }
-        }
-    }
 }
 
