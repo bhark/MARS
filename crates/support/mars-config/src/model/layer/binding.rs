@@ -216,14 +216,6 @@ pub enum SimplifierKind {
 }
 
 impl SourceBinding {
-    /// Effective postgres DSN for this binding: the binding-level override
-    /// when set, falling back to the source-scope DSN. Non-postgis bindings
-    /// pass an empty `default` and the result is meaningless to them.
-    #[must_use]
-    pub fn effective_dsn<'a>(&'a self, default: &'a str) -> &'a str {
-        self.dsn.as_deref().unwrap_or(default)
-    }
-
     /// Split `from` into `(schema, table)`. Single-segment names route to
     /// `public` to match the postgres adapter convention. Returns `None`
     /// when the binding is a `sql:` view rather than a table binding.
@@ -234,24 +226,6 @@ impl SourceBinding {
             Some((s, t)) => (s, t),
             None => ("public", from),
         })
-    }
-
-    /// True when this binding is backed by an inline `sql:` SELECT.
-    #[must_use]
-    pub fn is_sql_binding(&self) -> bool {
-        self.sql.is_some()
-    }
-
-    /// True when this binding pulls from a vector file via `uri:`.
-    #[must_use]
-    pub fn is_vectorfile_binding(&self) -> bool {
-        self.uri.is_some()
-    }
-
-    /// True when this binding is a postgis (table or sql) binding.
-    #[must_use]
-    pub fn is_postgis_binding(&self) -> bool {
-        self.from.is_some() || self.sql.is_some()
     }
 
     /// Diagnostic descriptor for the binding source: the table reference, a
