@@ -23,7 +23,9 @@ use crate::children::labels::{
     self, COMPONENT_BOOTSTRAP, COMPONENT_TEARDOWN, bootstrap_job_name, bootstrap_service_account_name, config_map_name,
     teardown_job_name,
 };
-use crate::crd::{EnvVarSpec, MarsService, SecretKeyRef, TeardownPolicy};
+use crate::crd::bootstrap::{SecretKeyRef, TeardownPolicy};
+use crate::crd::k8s::EnvVarSpec;
+use crate::crd::spec::MarsService;
 use crate::error::{OperatorError, Result};
 
 /// Finalizer added to MarsService when a successful bootstrap Job has run.

@@ -114,7 +114,7 @@ fn build_appends_extra_volumes_and_mounts_after_managed_entries() {
 
 #[test]
 fn build_propagates_scheduling_fields_into_pod_spec() {
-    use crate::crd::TolerationSpec;
+    use crate::crd::k8s::TolerationSpec;
     let mut cr = test_support::cr("demo", "svc-ns");
     cr.spec.runtime.node_selector.insert("zone".into(), "eu-west-1a".into());
     cr.spec.runtime.tolerations.push(TolerationSpec {

@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::children::test_support;
-use crate::crd::PodDisruptionBudgetSpec;
+use crate::crd::runtime::PodDisruptionBudgetSpec;
 
 #[test]
 fn build_returns_none_when_spec_absent() {

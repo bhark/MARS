@@ -17,10 +17,10 @@ use crate::children::labels::{
     compiler_deployment_name, compiler_work_pvc_name, config_map_name,
 };
 use crate::children::pvc::{self, PvcSpec};
-use crate::crd::{
-    ArtifactStoreSpec, EnvFromSourceSpec, EnvVarSpec, MarsService, ResourceRequirementsSpec, SecretKeyRef,
-    TolerationSpec,
-};
+use crate::crd::bootstrap::SecretKeyRef;
+use crate::crd::k8s::{EnvFromSourceSpec, EnvVarSpec, ResourceRequirementsSpec, TolerationSpec};
+use crate::crd::spec::MarsService;
+use crate::crd::storage::ArtifactStoreSpec;
 use crate::error::Result;
 
 pub(crate) struct CompilerChildren {

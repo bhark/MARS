@@ -8,7 +8,7 @@ use k8s_openapi::api::core::v1::ConfigMap;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, OwnerReference};
 
 use crate::children::labels::{self, config_map_name};
-use crate::crd::MarsService;
+use crate::crd::spec::MarsService;
 use crate::error::Result;
 
 /// Build the ConfigMap for a MarsService. Returns the configmap and the

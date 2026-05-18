@@ -4,7 +4,7 @@
 
 use k8s_openapi::api::apps::v1::Deployment;
 
-use crate::crd::{Condition, MarsServiceStatus};
+use crate::crd::spec::{Condition, MarsServiceStatus};
 
 pub(crate) fn now_rfc3339() -> String {
     use std::time::SystemTime;

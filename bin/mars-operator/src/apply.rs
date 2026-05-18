@@ -9,7 +9,7 @@ use kube::api::{Api, Patch, PatchParams};
 use serde_json::json;
 
 use crate::children::labels;
-use crate::crd::MarsService;
+use crate::crd::spec::MarsService;
 use crate::error::Result;
 use crate::reconcile::Ctx;
 
@@ -97,7 +97,7 @@ pub(crate) async fn patch_status(
     ctx: &Ctx,
     name: &str,
     ns: &str,
-    status_body: crate::crd::MarsServiceStatus,
+    status_body: crate::crd::spec::MarsServiceStatus,
 ) -> Result<()> {
     let api: Api<MarsService> = Api::namespaced(ctx.client.clone(), ns);
     let body = json!({ "status": status_body });

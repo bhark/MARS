@@ -7,7 +7,7 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta, 
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
 
 use crate::children::labels::{self, COMPONENT_RUNTIME, runtime_pdb_name};
-use crate::crd::MarsService;
+use crate::crd::spec::MarsService;
 use crate::error::Result;
 
 pub(crate) fn build(cr: &MarsService, owner_ref: OwnerReference) -> Result<Option<PodDisruptionBudget>> {

@@ -14,7 +14,8 @@ use tracing::info;
 
 use crate::bootstrap::{self, PlanInputs};
 use crate::children::labels::{self, BOOTSTRAP_ADMIN_DSN_KEY};
-use crate::crd::{BootstrapSpec, MarsService, SecretKeyRef};
+use crate::crd::bootstrap::{BootstrapSpec, SecretKeyRef};
+use crate::crd::spec::MarsService;
 use crate::error::{OperatorError, Result};
 use crate::reconcile::Ctx;
 use crate::status::{BootstrapReason, BootstrapStatus};

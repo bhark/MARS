@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::children::test_support;
-use crate::crd::{BootstrapSpec, TeardownPolicy};
+use crate::crd::bootstrap::{BootstrapSpec, TeardownPolicy};
 
 fn admin() -> SecretKeyRef {
     SecretKeyRef {
@@ -178,9 +178,9 @@ fn render_bootstrap_job_propagates_compiler_env_and_env_from() {
             value_from: None,
         },
     ];
-    cr.spec.compiler.env_from = vec![crate::crd::EnvFromSourceSpec {
+    cr.spec.compiler.env_from = vec![crate::crd::k8s::EnvFromSourceSpec {
         prefix: None,
-        secret_ref: Some(crate::crd::LocalObjectReferenceSpec {
+        secret_ref: Some(crate::crd::k8s::LocalObjectReferenceSpec {
             name: "mars-s3-credentials".into(),
             optional: None,
         }),

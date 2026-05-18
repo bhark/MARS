@@ -9,7 +9,8 @@ use k8s_openapi::api::batch::v1::Job;
 use k8s_openapi::api::core::v1::{Container, EnvVar, PodSpec};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, OwnerReference};
 
-use crate::crd::{MarsService, MarsServiceSpec, RuntimeSpec};
+use crate::crd::runtime::RuntimeSpec;
+use crate::crd::spec::{MarsService, MarsServiceSpec};
 
 /// `repo:tag` passed to child builders in tests; production builds it once
 /// from CLI + CARGO_PKG_VERSION at startup, so tests just need a stable string.

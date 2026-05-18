@@ -179,7 +179,7 @@ fn build_omits_scheduling_fields_when_unset() {
 
 #[test]
 fn build_propagates_node_selector_tolerations_and_affinity() {
-    use crate::crd::TolerationSpec;
+    use crate::crd::k8s::TolerationSpec;
     let mut cr = test_support::cr("demo", "svc-ns");
     cr.spec.compiler.node_selector.insert("disktype".into(), "ssd".into());
     cr.spec.compiler.tolerations.push(TolerationSpec {

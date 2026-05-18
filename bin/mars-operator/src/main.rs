@@ -36,7 +36,7 @@ fn main() -> Result<()> {
     // print-* subcommands are pure and synchronous; run before touching tokio
     // so the CI drift checks work in minimal environments.
     match cli.command {
-        Some(Command::PrintCrd) => return crd::print_crd(),
+        Some(Command::PrintCrd) => return crd::spec::print_crd(),
         Some(Command::PrintClusterRole) => return clusterrole::print_clusterrole(),
         None => {}
     }

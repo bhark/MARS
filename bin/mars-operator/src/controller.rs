@@ -17,7 +17,7 @@ use tokio::sync::watch;
 use tracing::{error, info, warn};
 
 use crate::cli::Cli;
-use crate::crd::MarsService;
+use crate::crd::spec::MarsService;
 use crate::metrics::{self, Metrics};
 use crate::reconcile::{self, Ctx};
 

@@ -21,7 +21,9 @@ use crate::children::labels::{
     self, COMPONENT_RUNTIME, CONFIG_CHECKSUM_ANNOTATION, artifact_store_pvc_name, config_map_name,
     runtime_deployment_name,
 };
-use crate::crd::{ArtifactStoreSpec, MarsService, SecretKeyRef};
+use crate::crd::bootstrap::SecretKeyRef;
+use crate::crd::spec::MarsService;
+use crate::crd::storage::ArtifactStoreSpec;
 use crate::error::Result;
 
 pub(crate) fn build(

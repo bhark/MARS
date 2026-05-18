@@ -15,7 +15,7 @@ use crate::apply;
 use crate::bootstrap::{self, BOOTSTRAP_FINALIZER};
 use crate::bootstrap_flow;
 use crate::children::labels;
-use crate::crd::MarsService;
+use crate::crd::spec::MarsService;
 use crate::error::{OperatorError, Result};
 use crate::reconcile::{Ctx, owner_reference};
 
