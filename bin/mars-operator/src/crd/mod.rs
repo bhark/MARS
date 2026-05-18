@@ -11,6 +11,7 @@
 //! - `defaults` - defaults shared across more than one submodule.
 
 pub(crate) mod bootstrap;
+pub(crate) mod cluster;
 pub(crate) mod compiler;
 mod defaults;
 pub(crate) mod k8s;
