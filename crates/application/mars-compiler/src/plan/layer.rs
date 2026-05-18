@@ -33,7 +33,14 @@ pub(super) fn build_layer_plan(cfg: &Config, layer: &CfgLayer, binding_id: &Bind
         let label = class
             .label
             .as_ref()
-            .map(|l| build_class_label_plan(cfg, layer, &class.name, l))
+            .map(|l| {
+                let inline_ref = format!(
+                    "{layer}__{class_name}__label",
+                    layer = layer.name,
+                    class_name = class.name
+                );
+                build_label_plan(cfg, layer, l, &inline_ref)
+            })
             .transpose()?;
         classes.push(ClassPlan {
             name: class.name.clone(),
@@ -46,7 +53,10 @@ pub(super) fn build_layer_plan(cfg: &Config, layer: &CfgLayer, binding_id: &Bind
     let label = layer
         .label
         .as_ref()
-        .map(|l| build_label_plan(cfg, layer, l))
+        .map(|l| {
+            let inline_ref = format!("{layer}__label", layer = layer.name);
+            build_label_plan(cfg, layer, l, &inline_ref)
+        })
         .transpose()?;
 
     Ok(LayerPlan {
@@ -59,41 +69,20 @@ pub(super) fn build_layer_plan(cfg: &Config, layer: &CfgLayer, binding_id: &Bind
     })
 }
 
+// `inline_style_ref` is the synthesised style name to use when `label.style`
+// is `LabelStyleAttach::Inline`. callers supply `<layer>__label` for the
+// layer-level label and `<layer>__<class>__label` for a per-class override.
 fn build_label_plan(
     cfg: &Config,
     layer: &CfgLayer,
     label: &mars_config::LayerLabel,
+    inline_style_ref: &str,
 ) -> Result<LayerLabelPlan, PlanError> {
     let template = parse_template(&label.text).map_err(|source| PlanError::LabelTemplateParse {
         layer: layer.name.clone(),
         source,
     })?;
-    let inline_style_ref = format!("{layer}__label", layer = layer.name);
-    let (style_ref, style) = resolve_label_style(cfg, &layer.name, &inline_style_ref, &label.style)?;
-    let placement = label.placement.clone().unwrap_or_else(|| {
-        let kind = mars_style::LayerGeomKind::parse(layer.kind.as_str()).unwrap_or(mars_style::LayerGeomKind::Point);
-        default_placement(kind)
-    });
-    Ok(LayerLabelPlan {
-        style_ref,
-        style,
-        text: template,
-        placement,
-    })
-}
-
-fn build_class_label_plan(
-    cfg: &Config,
-    layer: &CfgLayer,
-    class_name: &str,
-    label: &mars_config::LayerLabel,
-) -> Result<LayerLabelPlan, PlanError> {
-    let template = parse_template(&label.text).map_err(|source| PlanError::LabelTemplateParse {
-        layer: layer.name.clone(),
-        source,
-    })?;
-    let inline_style_ref = format!("{layer}__{class_name}__label", layer = layer.name);
-    let (style_ref, style) = resolve_label_style(cfg, &layer.name, &inline_style_ref, &label.style)?;
+    let (style_ref, style) = resolve_label_style(cfg, &layer.name, inline_style_ref, &label.style)?;
     let placement = label.placement.clone().unwrap_or_else(|| {
         let kind = mars_style::LayerGeomKind::parse(layer.kind.as_str()).unwrap_or(mars_style::LayerGeomKind::Point);
         default_placement(kind)
