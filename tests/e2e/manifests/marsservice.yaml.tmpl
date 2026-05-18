@@ -143,28 +143,28 @@ spec:
         title: "Land"
         type: polygon
         sources:
-          - { band: lo, from: e2e_source.land, geometry_column: geom, id_column: id }
+          - { kind: postgis_table, band: lo, from: e2e_source.land, geometry_column: geom, id_column: id }
         classes:
           - { name: default, title: "Land", style: { type: ref, name: poly_land } }
       - name: water
         title: "Water"
         type: polygon
         sources:
-          - { band: mid, from: e2e_source.water, geometry_column: geom, id_column: id }
+          - { kind: postgis_table, band: mid, from: e2e_source.water, geometry_column: geom, id_column: id }
         classes:
           - { name: default, title: "Water", style: { type: ref, name: poly_water } }
       - name: settlements
         title: "Settlements"
         type: polygon
         sources:
-          - { band: mid, from: e2e_source.settlements, geometry_column: geom, id_column: id }
+          - { kind: postgis_table, band: mid, from: e2e_source.settlements, geometry_column: geom, id_column: id }
         classes:
           - { name: default, title: "Settlements", style: { type: ref, name: poly_settlement } }
       - name: roads
         title: "Roads"
         type: line
         sources:
-          - { band: hi, from: e2e_source.roads, geometry_column: geom, id_column: id, attributes: [kind] }
+          - { kind: postgis_table, band: hi, from: e2e_source.roads, geometry_column: geom, id_column: id, attributes: [kind] }
         classes:
           - { name: major, title: "Major roads", when: "kind = 'major'", style: { type: ref, name: line_road_major } }
           - { name: minor, title: "Minor roads", style: { type: ref, name: line_road_minor } }
@@ -172,7 +172,7 @@ spec:
         title: "Buildings"
         type: polygon
         sources:
-          - { band: detail, from: e2e_source.buildings, geometry_column: geom, id_column: id, attributes: [kind, status] }
+          - { kind: postgis_table, band: detail, from: e2e_source.buildings, geometry_column: geom, id_column: id, attributes: [kind, status] }
         classes:
           - { name: temporary, title: "Temporary buildings", when: "status = 'temporary'", style: { type: ref, name: poly_building_temp } }
           - { name: default, title: "Buildings", style: { type: ref, name: poly_building } }
@@ -180,7 +180,7 @@ spec:
         title: "Waterways"
         type: line
         sources:
-          - { band: hi, from: e2e_source.waterways, geometry_column: geom, id_column: id, attributes: [width_class] }
+          - { kind: postgis_table, band: hi, from: e2e_source.waterways, geometry_column: geom, id_column: id, attributes: [width_class] }
         classes:
           - { name: wide, title: "Wide waterways", when: "width_class = 'wide'", style: { type: ref, name: line_waterway_wide } }
           - { name: narrow, title: "Waterways", style: { type: ref, name: line_waterway_narrow } }
@@ -188,14 +188,14 @@ spec:
         title: "Pattern zone"
         type: polygon
         sources:
-          - { band: lo, from: e2e_source.pattern_zone, geometry_column: geom, id_column: id }
+          - { kind: postgis_table, band: lo, from: e2e_source.pattern_zone, geometry_column: geom, id_column: id }
         classes:
           - { name: default, title: "Pattern zone", style: { type: ref, name: poly_pattern } }
       - name: poi
         title: "Points of interest"
         type: point
         sources:
-          - { band: hi, from: e2e_source.poi, geometry_column: geom, id_column: id, attributes: [kind, name] }
+          - { kind: postgis_table, band: hi, from: e2e_source.poi, geometry_column: geom, id_column: id, attributes: [kind, name] }
         classes:
           - { name: default, title: "POI", style: { type: ref, name: marker_poi } }
         label:

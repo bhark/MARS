@@ -130,7 +130,7 @@ spec:
         title: "Land"
         type: polygon
         sources:
-          - { band: lo, from: e2e_source.land, geometry_column: geom, id_column: id }
+          - { kind: postgis_table, band: lo, from: e2e_source.land, geometry_column: geom, id_column: id }
         classes:
           - { name: default, title: "Land", style: { type: ref, name: poly_land } }
     observability:

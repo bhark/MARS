@@ -361,7 +361,8 @@ layers:
     title: "Points"
     type: point
     sources:
-      - band: hi
+      - kind: postgis_table
+        band: hi
         from: bootstrap.points
         geometry_column: geom
         id_column: gid

@@ -365,7 +365,8 @@ layers:
     title: "Points"
     type: point
     sources:
-      - band: hi
+      - kind: postgis_table
+        band: hi
         from: mars_timing.points
         geometry_column: geom
         id_column: gid
