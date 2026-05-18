@@ -265,6 +265,78 @@ pub struct GlyphMask {
     pub coverage: Vec<u8>,
 }
 
+impl GlyphMask {
+    /// zero-sized mask. used when nothing was rasterised (no glyphs, no bbox,
+    /// or no outline data).
+    fn empty() -> Self {
+        Self {
+            width: 0,
+            height: 0,
+            origin_x: 0,
+            origin_y: 0,
+            coverage: Vec::new(),
+        }
+    }
+}
+
+/// pad a pixel-space bbox by one pixel for AA tails and derive the integer
+/// mask dimensions. returns `(width, height, mask_x0, mask_y0)`.
+fn mask_dims(min_x: f32, min_y: f32, max_x: f32, max_y: f32) -> (u32, u32, i32, i32) {
+    let pad = 1.0f32;
+    let mask_x0 = (min_x - pad).floor() as i32;
+    let mask_y0 = (min_y - pad).floor() as i32;
+    let mask_x1 = (max_x + pad).ceil() as i32;
+    let mask_y1 = (max_y + pad).ceil() as i32;
+    let width = (mask_x1 - mask_x0).max(1) as u32;
+    let height = (mask_y1 - mask_y0).max(1) as u32;
+    (width, height, mask_x0, mask_y0)
+}
+
+/// opaque-white anti-aliased paint used for every glyph stamp; callers
+/// composite the user-facing fill / halo colours on top of the mask.
+fn white_aa_paint() -> Paint<'static> {
+    let mut paint = Paint::default();
+    paint.set_color_rgba8(255, 255, 255, 255);
+    paint.anti_alias = true;
+    paint
+}
+
+/// stamp one glyph outline onto `pm` at `(origin_x, origin_y)` in mask-local
+/// pixel space. returns `false` when the glyph has no outline or the path
+/// could not be built; the pixmap is left untouched in that case.
+fn stamp_glyph(
+    pm: &mut Pixmap,
+    paint: &Paint<'_>,
+    face: &ttf_parser::Face<'_>,
+    glyph_id: u16,
+    pixels_per_unit: f32,
+    origin_x: f32,
+    origin_y: f32,
+) -> bool {
+    let mut builder = PathBuilderAdapter {
+        inner: PathBuilder::new(),
+        scale: pixels_per_unit,
+        x: origin_x,
+        y: origin_y,
+    };
+    if face
+        .outline_glyph(ttf_parser::GlyphId(glyph_id), &mut builder)
+        .is_none()
+    {
+        return false;
+    }
+    let Some(path) = builder.inner.finish() else {
+        return false;
+    };
+    pm.fill_path(&path, paint, FillRule::Winding, Transform::identity(), None);
+    true
+}
+
+/// extract the alpha channel from an RGBA pixmap as a row-major u8 buffer.
+fn alpha_only(pm: &Pixmap) -> Vec<u8> {
+    pm.data().chunks_exact(4).map(|p| p[3]).collect()
+}
+
 /// rasterise a shaped run into a single coverage mask. caller composites the
 /// fill / halo colours and pastes into the target pixmap.
 ///
@@ -274,15 +346,14 @@ pub fn rasterise(run: &ShapedRun) -> Result<GlyphMask, FontError> {
     let face = ttf_parser::Face::parse(run.face.data.as_ref().as_ref(), run.face.index)
         .map_err(|e| FontError::FaceParse(format!("{e:?}")))?;
 
-    // first pass: union of glyph bounding boxes in pixel space.
+    // union of glyph bounding boxes in pixel space.
     let mut min_x = f32::INFINITY;
     let mut min_y = f32::INFINITY;
     let mut max_x = f32::NEG_INFINITY;
     let mut max_y = f32::NEG_INFINITY;
     let mut have_box = false;
     for g in &run.glyphs {
-        let gid = ttf_parser::GlyphId(g.glyph_id);
-        let Some(bbox) = face.glyph_bounding_box(gid) else {
+        let Some(bbox) = face.glyph_bounding_box(ttf_parser::GlyphId(g.glyph_id)) else {
             continue;
         };
         let x0 = g.x + f32::from(bbox.x_min) * run.pixels_per_unit;
@@ -290,69 +361,38 @@ pub fn rasterise(run: &ShapedRun) -> Result<GlyphMask, FontError> {
         // glyph y in font units grows up; pixel y grows down. invert here.
         let y0 = g.y - f32::from(bbox.y_max) * run.pixels_per_unit;
         let y1 = g.y - f32::from(bbox.y_min) * run.pixels_per_unit;
-        if x0 < min_x {
-            min_x = x0;
-        }
-        if y0 < min_y {
-            min_y = y0;
-        }
-        if x1 > max_x {
-            max_x = x1;
-        }
-        if y1 > max_y {
-            max_y = y1;
-        }
+        min_x = min_x.min(x0);
+        min_y = min_y.min(y0);
+        max_x = max_x.max(x1);
+        max_y = max_y.max(y1);
         have_box = true;
     }
     if !have_box {
-        return Ok(GlyphMask {
-            width: 0,
-            height: 0,
-            origin_x: 0,
-            origin_y: 0,
-            coverage: Vec::new(),
-        });
+        return Ok(GlyphMask::empty());
     }
 
-    // pad by 1 pixel on each side for AA tails.
-    let pad = 1.0f32;
-    let mask_x0 = (min_x - pad).floor() as i32;
-    let mask_y0 = (min_y - pad).floor() as i32;
-    let mask_x1 = (max_x + pad).ceil() as i32;
-    let mask_y1 = (max_y + pad).ceil() as i32;
-    let width = (mask_x1 - mask_x0).max(1) as u32;
-    let height = (mask_y1 - mask_y0).max(1) as u32;
-
+    let (width, height, mask_x0, mask_y0) = mask_dims(min_x, min_y, max_x, max_y);
     let mut pm = Pixmap::new(width, height).ok_or_else(|| FontError::FaceParse(format!("pixmap {width}x{height}")))?;
-
-    let mut paint = Paint::default();
-    paint.set_color_rgba8(255, 255, 255, 255);
-    paint.anti_alias = true;
+    let paint = white_aa_paint();
 
     for g in &run.glyphs {
-        let gid = ttf_parser::GlyphId(g.glyph_id);
-        let mut builder = PathBuilderAdapter {
-            inner: PathBuilder::new(),
-            scale: run.pixels_per_unit,
-            // glyph (0,0) in pixel space, before mask offset.
-            x: g.x - mask_x0 as f32,
-            y: g.y - mask_y0 as f32,
-        };
-        if face.outline_glyph(gid, &mut builder).is_none() {
-            continue;
-        }
-        let Some(path) = builder.inner.finish() else { continue };
-        pm.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
+        stamp_glyph(
+            &mut pm,
+            &paint,
+            &face,
+            g.glyph_id,
+            run.pixels_per_unit,
+            g.x - mask_x0 as f32,
+            g.y - mask_y0 as f32,
+        );
     }
 
-    // extract alpha channel only.
-    let coverage: Vec<u8> = pm.data().chunks_exact(4).map(|p| p[3]).collect();
     Ok(GlyphMask {
         width,
         height,
         origin_x: mask_x0,
         origin_y: mask_y0,
-        coverage,
+        coverage: alpha_only(&pm),
     })
 }
 
@@ -364,81 +404,43 @@ pub fn rasterise(run: &ShapedRun) -> Result<GlyphMask, FontError> {
 /// FOLLOW labels use this to stamp glyphs individually along a curve, each
 /// rotated to its own local tangent.
 pub fn rasterise_glyph(run: &ShapedRun, glyph_idx: usize) -> Result<GlyphMask, FontError> {
-    let g = match run.glyphs.get(glyph_idx) {
-        Some(g) => *g,
-        None => {
-            return Ok(GlyphMask {
-                width: 0,
-                height: 0,
-                origin_x: 0,
-                origin_y: 0,
-                coverage: Vec::new(),
-            });
-        }
+    let Some(g) = run.glyphs.get(glyph_idx).copied() else {
+        return Ok(GlyphMask::empty());
     };
     let face = ttf_parser::Face::parse(run.face.data.as_ref().as_ref(), run.face.index)
         .map_err(|e| FontError::FaceParse(format!("{e:?}")))?;
-    let gid = ttf_parser::GlyphId(g.glyph_id);
-    let Some(bbox) = face.glyph_bounding_box(gid) else {
-        return Ok(GlyphMask {
-            width: 0,
-            height: 0,
-            origin_x: 0,
-            origin_y: 0,
-            coverage: Vec::new(),
-        });
+    let Some(bbox) = face.glyph_bounding_box(ttf_parser::GlyphId(g.glyph_id)) else {
+        return Ok(GlyphMask::empty());
     };
 
-    // glyph-local pixel-space bbox; pad by 1 pixel for AA tails.
-    let pad = 1.0f32;
-    let x0_p = f32::from(bbox.x_min) * run.pixels_per_unit;
-    let x1_p = f32::from(bbox.x_max) * run.pixels_per_unit;
-    let y0_p = -f32::from(bbox.y_max) * run.pixels_per_unit;
-    let y1_p = -f32::from(bbox.y_min) * run.pixels_per_unit;
-    let mask_x0 = (x0_p - pad).floor() as i32;
-    let mask_y0 = (y0_p - pad).floor() as i32;
-    let mask_x1 = (x1_p + pad).ceil() as i32;
-    let mask_y1 = (y1_p + pad).ceil() as i32;
-    let width = (mask_x1 - mask_x0).max(1) as u32;
-    let height = (mask_y1 - mask_y0).max(1) as u32;
+    // glyph-local pixel-space bbox.
+    let x0 = f32::from(bbox.x_min) * run.pixels_per_unit;
+    let x1 = f32::from(bbox.x_max) * run.pixels_per_unit;
+    let y0 = -f32::from(bbox.y_max) * run.pixels_per_unit;
+    let y1 = -f32::from(bbox.y_min) * run.pixels_per_unit;
+    let (width, height, mask_x0, mask_y0) = mask_dims(x0, y0, x1, y1);
 
     let mut pm = Pixmap::new(width, height).ok_or_else(|| FontError::FaceParse(format!("pixmap {width}x{height}")))?;
-    let mut paint = Paint::default();
-    paint.set_color_rgba8(255, 255, 255, 255);
-    paint.anti_alias = true;
+    let paint = white_aa_paint();
 
-    let mut builder = PathBuilderAdapter {
-        inner: PathBuilder::new(),
-        scale: run.pixels_per_unit,
-        x: -mask_x0 as f32,
-        y: -mask_y0 as f32,
-    };
-    if face.outline_glyph(gid, &mut builder).is_none() {
-        return Ok(GlyphMask {
-            width: 0,
-            height: 0,
-            origin_x: 0,
-            origin_y: 0,
-            coverage: Vec::new(),
-        });
+    if !stamp_glyph(
+        &mut pm,
+        &paint,
+        &face,
+        g.glyph_id,
+        run.pixels_per_unit,
+        -mask_x0 as f32,
+        -mask_y0 as f32,
+    ) {
+        return Ok(GlyphMask::empty());
     }
-    let Some(path) = builder.inner.finish() else {
-        return Ok(GlyphMask {
-            width: 0,
-            height: 0,
-            origin_x: 0,
-            origin_y: 0,
-            coverage: Vec::new(),
-        });
-    };
-    pm.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
-    let coverage: Vec<u8> = pm.data().chunks_exact(4).map(|p| p[3]).collect();
+
     Ok(GlyphMask {
         width,
         height,
         origin_x: mask_x0,
         origin_y: mask_y0,
-        coverage,
+        coverage: alpha_only(&pm),
     })
 }
 
