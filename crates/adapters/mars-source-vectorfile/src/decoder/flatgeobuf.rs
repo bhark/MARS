@@ -87,18 +87,13 @@ fn parse_err(e: flatgeobuf::Error) -> DecoderError {
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 struct ColumnDesc {
-    name: String,
     ty: ColumnType,
 }
 
 impl ColumnDesc {
     fn from(c: flatgeobuf::Column<'_>) -> Self {
-        Self {
-            name: c.name().to_string(),
-            ty: c.type_(),
-        }
+        Self { ty: c.type_() }
     }
 }
 
