@@ -76,6 +76,19 @@ impl_string_newtype!(
     pub CrsCode
 );
 
+impl CrsCode {
+    /// engine's supported raster source/plan CRS set. single source of truth
+    /// for both `mars validate` (config-time) and the runtime raster path
+    /// (request-time defense in depth). grow this when a second adapter CRS
+    /// lands.
+    pub const SUPPORTED_RASTER: &'static [&'static str] = &["EPSG:3857"];
+
+    #[must_use]
+    pub fn is_supported_raster(&self) -> bool {
+        Self::SUPPORTED_RASTER.contains(&self.as_str())
+    }
+}
+
 impl_string_newtype!(
     /// stable layer identifier inside a service. dedup axis.
     pub LayerId

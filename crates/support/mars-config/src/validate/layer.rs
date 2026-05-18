@@ -72,11 +72,6 @@ fn validate_kind_raster_coherence(layer: &Layer) -> Result<(), ConfigError> {
     }
 }
 
-/// CRS codes the render path accepts for raster sources today. Kept here so
-/// the validator can reject misconfigurations at parse time instead of letting
-/// them surface as `NotImplemented` on the first render request.
-const SUPPORTED_RASTER_CRS: &[&str] = &["EPSG:3857"];
-
 /// Tile-edge pixel counts the render path accepts. Web Mercator slippy-map
 /// pyramids are universally 256 or 512; anything else is almost certainly a
 /// configuration mistake worth catching before runtime.
@@ -113,9 +108,10 @@ fn validate_raster_spec(layer_name: &mars_types::LayerId, spec: &RasterLayerSpec
             "raster layer {layer_name} source.source_crs is empty"
         )));
     }
-    if !SUPPORTED_RASTER_CRS.contains(&crs) {
+    if !spec.source.source_crs.is_supported_raster() {
+        let supported = mars_types::CrsCode::SUPPORTED_RASTER;
         return Err(ConfigError::Invalid(format!(
-            "raster layer {layer_name} source.source_crs {crs:?} is not supported (expected one of {SUPPORTED_RASTER_CRS:?})"
+            "raster layer {layer_name} source.source_crs {crs:?} is not supported (expected one of {supported:?})"
         )));
     }
     if !SUPPORTED_RASTER_TILE_SIZES.contains(&spec.source.tile_size) {

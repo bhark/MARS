@@ -3,8 +3,9 @@
 //! adapter, decodes each tile to `DecodedImage`, and emits one
 //! `DrawOp::Raster` per tile.
 //!
-//! Web-Mercator only for now. Plan CRS that disagrees with the source CRS,
-//! or a non-`EPSG:3857` source CRS, both surface as a typed `NotImplemented`.
+//! Plan and source CRS are checked against `CrsCode::SUPPORTED_RASTER`
+//! (the engine-wide list in `mars-types`); anything outside it surfaces as a
+//! typed `NotImplemented`.
 
 use std::sync::Arc;
 
@@ -21,10 +22,6 @@ use crate::{Deps, RenderPlan, RuntimeError};
 /// Half the Earth's circumference in metres at the equator (the canonical
 /// Web Mercator world half-extent).
 const WEB_MERCATOR_HALF_EXTENT_M: f64 = 20_037_508.342_789_244;
-
-/// CRS code the first cut accepts for both `plan.crs` and
-/// `binding.source_crs`. Anything else returns typed `NotImplemented`.
-const SUPPORTED_CRS: &str = "EPSG:3857";
 
 /// Build the list of `DrawOp::Raster` ops covering `plan` for one raster
 /// layer entry. Tile fetches run concurrently, bounded by
@@ -131,14 +128,14 @@ fn lookup_entry<'s>(state: &'s RuntimeState, layer_id: &LayerId) -> Result<&'s R
 }
 
 fn ensure_supported_crs(plan_crs: &mars_types::CrsCode, source_crs: &mars_types::CrsCode) -> Result<(), RuntimeError> {
-    if plan_crs.as_str() != SUPPORTED_CRS {
+    if !plan_crs.is_supported_raster() {
         return Err(RuntimeError::NotImplemented {
-            what: "raster rendering: plan CRS must be EPSG:3857",
+            what: "raster rendering: plan CRS is not in the supported set",
         });
     }
-    if source_crs.as_str() != SUPPORTED_CRS {
+    if !source_crs.is_supported_raster() {
         return Err(RuntimeError::NotImplemented {
-            what: "raster rendering: source CRS must be EPSG:3857",
+            what: "raster rendering: source CRS is not in the supported set",
         });
     }
     Ok(())
