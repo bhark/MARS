@@ -25,74 +25,24 @@ pub mod render;
 pub mod route_index;
 pub mod sidecar;
 pub mod sidecar_arena;
+mod sources;
 pub(crate) mod spill;
 mod stages;
 pub mod testing;
 
 pub use error::CompilerError;
+pub use sources::SourceRegistry;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use mars_config::{Config, SourceId};
+use mars_config::Config;
 use mars_observability::{Metrics, rebalance_outcome};
 use mars_source::{ChangeBatch, ChangeFeed, ChangeSubscription, LeaderLock, LeaderLockGuard, Source};
 use mars_store::{ManifestStore, ObjectStore, StoreError};
 use mars_types::{BindingId, Manifest};
 use tokio_util::sync::CancellationToken;
-
-/// Lookup table mapping a configured source id to its constructed adapter.
-/// Bins build one of these via composition and the compiler routes each
-/// binding through its declared source.
-#[derive(Clone, Default)]
-pub struct SourceRegistry {
-    by_id: BTreeMap<SourceId, Arc<dyn Source>>,
-}
-
-impl SourceRegistry {
-    /// Empty registry. Use [`Self::insert`] to populate.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Insert a source. Replaces any prior entry for the same id.
-    pub fn insert(&mut self, id: SourceId, source: Arc<dyn Source>) {
-        self.by_id.insert(id, source);
-    }
-
-    /// Borrow the source registered under `id`, if any.
-    #[must_use]
-    pub fn get(&self, id: &SourceId) -> Option<Arc<dyn Source>> {
-        self.by_id.get(id).cloned()
-    }
-
-    /// True when no sources are registered.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.by_id.is_empty()
-    }
-
-    /// Number of registered sources.
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.by_id.len()
-    }
-
-    /// Iterate over `(id, source)` pairs in id-ascending order.
-    pub fn iter(&self) -> impl Iterator<Item = (&SourceId, &Arc<dyn Source>)> {
-        self.by_id.iter()
-    }
-}
-
-impl std::fmt::Debug for SourceRegistry {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SourceRegistry")
-            .field("ids", &self.by_id.keys().collect::<Vec<_>>())
-            .finish()
-    }
-}
 
 /// Capped exponential backoff schedule for retrying a transient publish.
 const PUBLISH_RETRY_DELAYS: &[Duration] = &[
