@@ -5,14 +5,24 @@
 //! must not name them directly per the hexagonal-architecture rules.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::sync::Arc;
 
-use anyhow::{Result, anyhow};
-use mars_config::Config;
+use anyhow::{Context, Result, anyhow};
+use mars_config::{Config, config_dir};
 use mars_runtime::RasterSourceRegistry;
 use mars_source::RasterSource;
 use mars_source_postgres::{CollectionTopology, ReplicationTopology, SourceCollectionId};
 use mars_source_xyz::XyzRasterSource;
+
+/// Parse the YAML at `path` and run cross-cutting validation. Used by every
+/// entry point that needs a fully validated `Config` (service modes and the
+/// `setup` / `teardown` tooling).
+pub(crate) fn load_and_validate(path: &Path) -> Result<Config> {
+    let mut cfg = mars_config::load(path).with_context(|| format!("load {}", path.display()))?;
+    mars_config::validate(&mut cfg, &config_dir(path)).context("validate config")?;
+    Ok(cfg)
+}
 
 /// Build the replication topology from configuration. Deduplicates source
 /// bindings on `(schema, table)` so the same physical table appearing in
