@@ -10,25 +10,23 @@
 //!
 //! Format: per file, a 4-byte magic `b"MSPL"` and a u16 version, followed
 //! by length-implicit row records. Each record is a 1-byte kind tag
-//! (0 = kept, 1 = pruned) followed by a hand-rolled binary `KeyedRow`
-//! encoding. The format is process-local and ephemeral; no checksum, no
-//! cross-version stability.
+//! (0 = kept, 1 = pruned) followed by a `KeyedRow` body encoded via
+//! [`crate::scratch_codec`]. The format is process-local and ephemeral;
+//! no checksum, no cross-version stability.
 
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use hashlink::LinkedHashMap;
-use mars_artifact::{Coord, FeatureGeom, GeomKind};
-use mars_source::AttrValue;
-use mars_types::{HilbertKey, PageId};
+use mars_types::PageId;
 use tempfile::TempDir;
 
 use crate::CompilerError;
 use crate::disk_governor::{DiskGovernor, DiskReservation};
 use crate::render::KeyedRow;
+use crate::scratch_codec::{ScratchReader, decode_keyed_row_body, encode_keyed_row_body};
 
 const MAGIC: &[u8; 4] = b"MSPL";
 const FORMAT_VERSION: u16 = 1;
@@ -36,18 +34,9 @@ const FORMAT_VERSION: u16 = 1;
 const KIND_KEPT: u8 = 0;
 const KIND_PRUNED: u8 = 1;
 
-const GT_POINT: u8 = 1;
-const GT_LINESTRING: u8 = 2;
-const GT_POLYGON: u8 = 3;
-const GT_MULTIPOINT: u8 = 4;
-const GT_MULTILINESTRING: u8 = 5;
-const GT_MULTIPOLYGON: u8 = 6;
-
-const AT_NULL: u8 = 0;
-const AT_BOOL: u8 = 1;
-const AT_INT: u8 = 2;
-const AT_FLOAT: u8 = 3;
-const AT_STRING: u8 = 4;
+// per-file write-side BufWriter capacity. enough to amortise small-row
+// append syscalls without hoarding RAM per open page.
+const SPILL_WRITE_BUF_BYTES: usize = 64 * 1024;
 
 /// Tag for whether a spilled row was kept (passed `geometry_min_size_m`)
 /// or pruned (failed) during pass-2 routing.
@@ -280,16 +269,7 @@ impl SpillManager {
             })?;
             return Ok(());
         }
-        while self.open_files.len() >= self.file_limit {
-            if let Some((_, mut w)) = self.open_files.pop_front() {
-                w.flush().map_err(|source| CompilerError::Spill {
-                    what: "flush on lru evict",
-                    source,
-                })?;
-            } else {
-                break;
-            }
-        }
+        self.evict_oldest_until_under_limit()?;
         let path = self.path_for(lvl, page_id);
         let is_new = !self.spilled.contains(&key);
         let f = OpenOptions::new()
@@ -300,7 +280,7 @@ impl SpillManager {
                 what: "open spill file",
                 source,
             })?;
-        let mut w = BufWriter::with_capacity(64 * 1024, f);
+        let mut w = BufWriter::with_capacity(SPILL_WRITE_BUF_BYTES, f);
         if is_new {
             // admit header bytes before they hit disk. acquired here (no
             // row reservation held yet) so a tight budget can not deadlock
@@ -321,12 +301,25 @@ impl SpillManager {
         Ok(())
     }
 
+    fn evict_oldest_until_under_limit(&mut self) -> Result<(), CompilerError> {
+        while self.open_files.len() >= self.file_limit {
+            let Some((_, mut w)) = self.open_files.pop_front() else {
+                break;
+            };
+            w.flush().map_err(|source| CompilerError::Spill {
+                what: "flush on lru evict",
+                source,
+            })?;
+        }
+        Ok(())
+    }
+
     fn path_for(&self, lvl: usize, page_id: PageId) -> PathBuf {
         self.dir.path().join(format!("p-l{}-p{}.spill", lvl, page_id.get()))
     }
 }
 
-// codec ---------------------------------------------------------------
+// framing -------------------------------------------------------------
 
 fn header_len() -> u32 {
     (MAGIC.len() + std::mem::size_of::<u16>()) as u32
@@ -372,25 +365,12 @@ fn read_header(r: &mut BufReader<File>) -> Result<u32, CompilerError> {
 
 fn encode_row(buf: &mut Vec<u8>, kind: SpillKind, r: &KeyedRow) {
     buf.push(kind.tag());
-    buf.extend_from_slice(&r.key.get().to_le_bytes());
-    buf.extend_from_slice(&r.feature.user_id.to_le_bytes());
-    for c in r.feature.bbox {
-        buf.extend_from_slice(&c.to_le_bytes());
-    }
-    encode_geom(buf, &r.feature.geom);
-    let attrs = r.attrs.as_slice();
-    buf.extend_from_slice(&u32_try(attrs.len()).to_le_bytes());
-    for (name, value) in attrs {
-        let nb = name.as_bytes();
-        buf.extend_from_slice(&u32_try(nb.len()).to_le_bytes());
-        buf.extend_from_slice(nb);
-        encode_attr(buf, value);
-    }
-    buf.extend_from_slice(&r.geom_bytes_estimate.to_le_bytes());
-    buf.extend_from_slice(&r.row_fingerprint.to_le_bytes());
+    encode_keyed_row_body(buf, r);
 }
 
 fn read_row(r: &mut BufReader<File>) -> Result<Option<(SpillKind, KeyedRow, u64)>, CompilerError> {
+    // single-byte non-`read_exact` so a clean EOF on the row boundary
+    // yields Ok(None) instead of an error.
     let mut tag = [0u8; 1];
     match r.read(&mut tag).map_err(|source| CompilerError::Spill {
         what: "read kind tag",
@@ -409,274 +389,91 @@ fn read_row(r: &mut BufReader<File>) -> Result<Option<(SpillKind, KeyedRow, u64)
             });
         }
     };
-    let mut started = 1u64;
-    let key = HilbertKey::new(read_u64(r, &mut started)?);
-    let user_id = read_u64(r, &mut started)?;
-    let mut bbox = [0f32; 4];
-    for c in &mut bbox {
-        *c = read_f32(r, &mut started)?;
+    let mut reader = CountingReader::new(r);
+    let row = decode_keyed_row_body(&mut reader)?;
+    // 1 byte kind tag + everything the codec consumed.
+    let n = 1u64.saturating_add(reader.bytes_read);
+    Ok(Some((kind, row, n)))
+}
+
+// ScratchReader adapter for spill: BufReader<File> plus a running byte
+// counter so `drain` can report how much of the spill file it consumed.
+struct CountingReader<'a> {
+    inner: &'a mut BufReader<File>,
+    bytes_read: u64,
+    scratch: Vec<u8>,
+}
+
+impl<'a> CountingReader<'a> {
+    fn new(inner: &'a mut BufReader<File>) -> Self {
+        Self {
+            inner,
+            bytes_read: 0,
+            scratch: Vec::new(),
+        }
     }
-    let geom = read_geom(r, &mut started)?;
-    let attr_count = read_u32(r, &mut started)? as usize;
-    let mut attrs: Vec<(String, AttrValue)> = Vec::with_capacity(attr_count);
-    for _ in 0..attr_count {
-        let nlen = read_u32(r, &mut started)? as usize;
-        let mut nb = vec![0u8; nlen];
-        r.read_exact(&mut nb).map_err(|source| CompilerError::Spill {
-            what: "read attr name",
+}
+
+impl ScratchReader for CountingReader<'_> {
+    fn take(&mut self, n: usize) -> Result<&[u8], CompilerError> {
+        self.scratch.resize(n, 0);
+        self.inner
+            .read_exact(&mut self.scratch)
+            .map_err(|source| CompilerError::Spill {
+                what: "scratch_codec: take",
+                source,
+            })?;
+        self.bytes_read = self.bytes_read.saturating_add(n as u64);
+        Ok(&self.scratch)
+    }
+    fn u8(&mut self) -> Result<u8, CompilerError> {
+        let mut b = [0u8; 1];
+        self.inner.read_exact(&mut b).map_err(|source| CompilerError::Spill {
+            what: "scratch_codec: read u8",
             source,
         })?;
-        started = started.saturating_add(nlen as u64);
-        let name = String::from_utf8(nb).map_err(|_| CompilerError::InvariantViolation {
-            what: "spill: bad utf8 in attr name",
+        self.bytes_read = self.bytes_read.saturating_add(1);
+        Ok(b[0])
+    }
+    fn u32(&mut self) -> Result<u32, CompilerError> {
+        let mut b = [0u8; 4];
+        self.inner.read_exact(&mut b).map_err(|source| CompilerError::Spill {
+            what: "scratch_codec: read u32",
+            source,
         })?;
-        let value = read_attr(r, &mut started)?;
-        attrs.push((name, value));
+        self.bytes_read = self.bytes_read.saturating_add(4);
+        Ok(u32::from_le_bytes(b))
     }
-    let geom_bytes_estimate = read_u64(r, &mut started)?;
-    let row_fingerprint = read_u64(r, &mut started)?;
-
-    let row = KeyedRow {
-        feature: FeatureGeom { user_id, bbox, geom },
-        attrs: Arc::new(attrs),
-        geom_bytes_estimate,
-        key,
-        row_fingerprint,
-    };
-    Ok(Some((kind, row, started)))
-}
-
-fn encode_geom(buf: &mut Vec<u8>, g: &GeomKind) {
-    match g {
-        GeomKind::Point((x, y)) => {
-            buf.push(GT_POINT);
-            buf.extend_from_slice(&x.to_le_bytes());
-            buf.extend_from_slice(&y.to_le_bytes());
-        }
-        GeomKind::LineString(coords) => {
-            buf.push(GT_LINESTRING);
-            encode_coords(buf, coords);
-        }
-        GeomKind::Polygon(rings) => {
-            buf.push(GT_POLYGON);
-            buf.extend_from_slice(&u32_try(rings.len()).to_le_bytes());
-            for ring in rings {
-                encode_coords(buf, ring);
-            }
-        }
-        GeomKind::MultiPoint(points) => {
-            buf.push(GT_MULTIPOINT);
-            encode_coords(buf, points);
-        }
-        GeomKind::MultiLineString(parts) => {
-            buf.push(GT_MULTILINESTRING);
-            buf.extend_from_slice(&u32_try(parts.len()).to_le_bytes());
-            for p in parts {
-                encode_coords(buf, p);
-            }
-        }
-        GeomKind::MultiPolygon(parts) => {
-            buf.push(GT_MULTIPOLYGON);
-            buf.extend_from_slice(&u32_try(parts.len()).to_le_bytes());
-            for poly in parts {
-                buf.extend_from_slice(&u32_try(poly.len()).to_le_bytes());
-                for ring in poly {
-                    encode_coords(buf, ring);
-                }
-            }
-        }
+    fn u64(&mut self) -> Result<u64, CompilerError> {
+        let mut b = [0u8; 8];
+        self.inner.read_exact(&mut b).map_err(|source| CompilerError::Spill {
+            what: "scratch_codec: read u64",
+            source,
+        })?;
+        self.bytes_read = self.bytes_read.saturating_add(8);
+        Ok(u64::from_le_bytes(b))
     }
-}
-
-fn read_geom(r: &mut BufReader<File>, n: &mut u64) -> Result<GeomKind, CompilerError> {
-    let mut tag = [0u8; 1];
-    r.read_exact(&mut tag).map_err(|source| CompilerError::Spill {
-        what: "read geom tag",
-        source,
-    })?;
-    *n = n.saturating_add(1);
-    Ok(match tag[0] {
-        GT_POINT => {
-            let x = read_f64(r, n)?;
-            let y = read_f64(r, n)?;
-            GeomKind::Point((x, y))
-        }
-        GT_LINESTRING => GeomKind::LineString(read_coords(r, n)?),
-        GT_POLYGON => {
-            let rings = read_u32(r, n)? as usize;
-            let mut out = Vec::with_capacity(rings);
-            for _ in 0..rings {
-                out.push(read_coords(r, n)?);
-            }
-            GeomKind::Polygon(out)
-        }
-        GT_MULTIPOINT => GeomKind::MultiPoint(read_coords(r, n)?),
-        GT_MULTILINESTRING => {
-            let parts = read_u32(r, n)? as usize;
-            let mut out = Vec::with_capacity(parts);
-            for _ in 0..parts {
-                out.push(read_coords(r, n)?);
-            }
-            GeomKind::MultiLineString(out)
-        }
-        GT_MULTIPOLYGON => {
-            let parts = read_u32(r, n)? as usize;
-            let mut out = Vec::with_capacity(parts);
-            for _ in 0..parts {
-                let rings = read_u32(r, n)? as usize;
-                let mut poly = Vec::with_capacity(rings);
-                for _ in 0..rings {
-                    poly.push(read_coords(r, n)?);
-                }
-                out.push(poly);
-            }
-            GeomKind::MultiPolygon(out)
-        }
-        _ => {
-            return Err(CompilerError::InvariantViolation {
-                what: "spill: bad geom tag",
-            });
-        }
-    })
-}
-
-fn encode_coords(buf: &mut Vec<u8>, c: &[Coord]) {
-    buf.extend_from_slice(&u32_try(c.len()).to_le_bytes());
-    for (x, y) in c {
-        buf.extend_from_slice(&x.to_le_bytes());
-        buf.extend_from_slice(&y.to_le_bytes());
+    fn i64(&mut self) -> Result<i64, CompilerError> {
+        Ok(self.u64()? as i64)
     }
-}
-
-fn read_coords(r: &mut BufReader<File>, n: &mut u64) -> Result<Vec<Coord>, CompilerError> {
-    let count = read_u32(r, n)? as usize;
-    let mut out: Vec<Coord> = Vec::with_capacity(count);
-    for _ in 0..count {
-        let x = read_f64(r, n)?;
-        let y = read_f64(r, n)?;
-        out.push((x, y));
+    fn f32(&mut self) -> Result<f32, CompilerError> {
+        let mut b = [0u8; 4];
+        self.inner.read_exact(&mut b).map_err(|source| CompilerError::Spill {
+            what: "scratch_codec: read f32",
+            source,
+        })?;
+        self.bytes_read = self.bytes_read.saturating_add(4);
+        Ok(f32::from_le_bytes(b))
     }
-    Ok(out)
-}
-
-fn encode_attr(buf: &mut Vec<u8>, v: &AttrValue) {
-    match v {
-        AttrValue::Null => buf.push(AT_NULL),
-        AttrValue::Bool(b) => {
-            buf.push(AT_BOOL);
-            buf.push(u8::from(*b));
-        }
-        AttrValue::Int(i) => {
-            buf.push(AT_INT);
-            buf.extend_from_slice(&i.to_le_bytes());
-        }
-        AttrValue::Float(f) => {
-            buf.push(AT_FLOAT);
-            buf.extend_from_slice(&f.to_le_bytes());
-        }
-        AttrValue::String(s) => {
-            buf.push(AT_STRING);
-            let sb = s.as_bytes();
-            buf.extend_from_slice(&u32_try(sb.len()).to_le_bytes());
-            buf.extend_from_slice(sb);
-        }
+    fn f64(&mut self) -> Result<f64, CompilerError> {
+        let mut b = [0u8; 8];
+        self.inner.read_exact(&mut b).map_err(|source| CompilerError::Spill {
+            what: "scratch_codec: read f64",
+            source,
+        })?;
+        self.bytes_read = self.bytes_read.saturating_add(8);
+        Ok(f64::from_le_bytes(b))
     }
-}
-
-fn read_attr(r: &mut BufReader<File>, n: &mut u64) -> Result<AttrValue, CompilerError> {
-    let mut tag = [0u8; 1];
-    r.read_exact(&mut tag).map_err(|source| CompilerError::Spill {
-        what: "read attr tag",
-        source,
-    })?;
-    *n = n.saturating_add(1);
-    Ok(match tag[0] {
-        AT_NULL => AttrValue::Null,
-        AT_BOOL => {
-            let mut b = [0u8; 1];
-            r.read_exact(&mut b).map_err(|source| CompilerError::Spill {
-                what: "read bool",
-                source,
-            })?;
-            *n = n.saturating_add(1);
-            AttrValue::Bool(b[0] != 0)
-        }
-        AT_INT => AttrValue::Int(read_i64(r, n)?),
-        AT_FLOAT => AttrValue::Float(read_f64(r, n)?),
-        AT_STRING => {
-            let len = read_u32(r, n)? as usize;
-            let mut sb = vec![0u8; len];
-            r.read_exact(&mut sb).map_err(|source| CompilerError::Spill {
-                what: "read string body",
-                source,
-            })?;
-            *n = n.saturating_add(len as u64);
-            let s = String::from_utf8(sb).map_err(|_| CompilerError::InvariantViolation {
-                what: "spill: bad utf8 in attr string",
-            })?;
-            AttrValue::String(s)
-        }
-        _ => {
-            return Err(CompilerError::InvariantViolation {
-                what: "spill: bad attr tag",
-            });
-        }
-    })
-}
-
-#[inline]
-fn u32_try(n: usize) -> u32 {
-    u32::try_from(n).unwrap_or(u32::MAX)
-}
-
-fn read_u32(r: &mut BufReader<File>, n: &mut u64) -> Result<u32, CompilerError> {
-    let mut b = [0u8; 4];
-    r.read_exact(&mut b).map_err(|source| CompilerError::Spill {
-        what: "read u32",
-        source,
-    })?;
-    *n = n.saturating_add(4);
-    Ok(u32::from_le_bytes(b))
-}
-
-fn read_u64(r: &mut BufReader<File>, n: &mut u64) -> Result<u64, CompilerError> {
-    let mut b = [0u8; 8];
-    r.read_exact(&mut b).map_err(|source| CompilerError::Spill {
-        what: "read u64",
-        source,
-    })?;
-    *n = n.saturating_add(8);
-    Ok(u64::from_le_bytes(b))
-}
-
-fn read_i64(r: &mut BufReader<File>, n: &mut u64) -> Result<i64, CompilerError> {
-    let mut b = [0u8; 8];
-    r.read_exact(&mut b).map_err(|source| CompilerError::Spill {
-        what: "read i64",
-        source,
-    })?;
-    *n = n.saturating_add(8);
-    Ok(i64::from_le_bytes(b))
-}
-
-fn read_f32(r: &mut BufReader<File>, n: &mut u64) -> Result<f32, CompilerError> {
-    let mut b = [0u8; 4];
-    r.read_exact(&mut b).map_err(|source| CompilerError::Spill {
-        what: "read f32",
-        source,
-    })?;
-    *n = n.saturating_add(4);
-    Ok(f32::from_le_bytes(b))
-}
-
-fn read_f64(r: &mut BufReader<File>, n: &mut u64) -> Result<f64, CompilerError> {
-    let mut b = [0u8; 8];
-    r.read_exact(&mut b).map_err(|source| CompilerError::Spill {
-        what: "read f64",
-        source,
-    })?;
-    *n = n.saturating_add(8);
-    Ok(f64::from_le_bytes(b))
 }
 
 #[cfg(test)]

@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::panic)]
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use mars_artifact::{FeatureGeom, GeomKind};
 use mars_source::AttrValue;

@@ -9,9 +9,8 @@
 //! to a private spill file, then a k-way merge produces the sorted output.
 //!
 //! On-disk format: one spill run is a leading `u64` row count followed by
-//! length-prefixed encoded rows. Encoding is local to this module (no
-//! `SpillKind` tag); KeyedRow's geometry, attribute, hilbert key and
-//! fingerprint round-trip exactly.
+//! length-prefixed `KeyedRow` bodies encoded via [`crate::scratch_codec`].
+//! No `SpillKind` tag (this path keeps the kept-only stream).
 //!
 //! Format is process-local and ephemeral. Scratch dir is removed via
 //! `TempDir` `Drop` at the end of the function.
@@ -21,29 +20,22 @@ use std::collections::BinaryHeap;
 use std::fs::{File, OpenOptions};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
-use mars_artifact::{Coord, FeatureGeom, GeomKind};
-use mars_source::AttrValue;
 use mars_types::HilbertKey;
 use tempfile::TempDir;
 
 use crate::CompilerError;
 use crate::memory_governor::MemoryGovernor;
 use crate::render::KeyedRow;
+use crate::scratch_codec::{ScratchReader, decode_keyed_row_body, encode_keyed_row_body};
 
-const GT_POINT: u8 = 1;
-const GT_LINESTRING: u8 = 2;
-const GT_POLYGON: u8 = 3;
-const GT_MULTIPOINT: u8 = 4;
-const GT_MULTILINESTRING: u8 = 5;
-const GT_MULTIPOLYGON: u8 = 6;
+// floor on the per-chunk byte budget. anything below this would push merge
+// fan-in past sensible bounds for the page sizes we see in practice.
+const EXTERNAL_SORT_MIN_CHUNK_BYTES: u64 = 1024 * 1024;
 
-const AT_NULL: u8 = 0;
-const AT_BOOL: u8 = 1;
-const AT_INT: u8 = 2;
-const AT_FLOAT: u8 = 3;
-const AT_STRING: u8 = 4;
+// BufReader/BufWriter capacity for run files. small enough to keep RAM
+// flat under high merge fan-in, large enough to amortise syscalls.
+const EXTERNAL_SORT_BUF_BYTES: usize = 64 * 1024;
 
 /// Comparator shared between the in-memory sort and the k-way merge so
 /// the two paths agree byte-for-byte on tie ordering.
@@ -88,7 +80,7 @@ pub(crate) fn external_sort_page(
     }
 
     // slow path: chunk the input under the governor cap and spill sorted runs.
-    let chunk_cap = chunk_bytes.max(1024 * 1024); // never go below 1 MiB to keep merge fan-in sane.
+    let chunk_cap = chunk_bytes.max(EXTERNAL_SORT_MIN_CHUNK_BYTES);
     std::fs::create_dir_all(scratch_dir).map_err(|source| io_err("external_sort: create parent dir", source))?;
     let dir = tempfile::Builder::new()
         .prefix("external-sort-")
@@ -123,15 +115,15 @@ fn spill_run(dir: &TempDir, run_idx: usize, chunk: &mut Vec<KeyedRow>) -> Result
         .create_new(true)
         .open(&path)
         .map_err(|source| io_err("external_sort: create run", source))?;
-    let mut w = BufWriter::with_capacity(64 * 1024, file);
+    let mut w = BufWriter::with_capacity(EXTERNAL_SORT_BUF_BYTES, file);
     let count = chunk.len() as u64;
     w.write_all(&count.to_le_bytes())
         .map_err(|source| io_err("external_sort: write run count", source))?;
     let mut buf: Vec<u8> = Vec::with_capacity(256);
     for row in chunk.drain(..) {
         buf.clear();
-        encode_row(&mut buf, &row);
-        let len = buf.len() as u32;
+        encode_keyed_row_body(&mut buf, &row);
+        let len = u32::try_from(buf.len()).unwrap_or(u32::MAX);
         w.write_all(&len.to_le_bytes())
             .map_err(|source| io_err("external_sort: write row length", source))?;
         w.write_all(&buf)
@@ -152,7 +144,7 @@ struct RunCursor {
 impl RunCursor {
     fn open(path: &Path, run_id: usize) -> Result<Self, CompilerError> {
         let file = File::open(path).map_err(|source| io_err("external_sort: open run for merge", source))?;
-        let mut r = BufReader::with_capacity(64 * 1024, file);
+        let mut r = BufReader::with_capacity(EXTERNAL_SORT_BUF_BYTES, file);
         let mut buf8 = [0u8; 8];
         r.read_exact(&mut buf8)
             .map_err(|source| io_err("external_sort: read run count", source))?;
@@ -182,7 +174,8 @@ impl RunCursor {
             .read_exact(&mut body)
             .map_err(|source| io_err("external_sort: read row body", source))?;
         self.remaining -= 1;
-        self.head = Some(decode_row(&body)?);
+        let mut br = ByteReader::new(&body);
+        self.head = Some(decode_keyed_row_body(&mut br)?);
         Ok(())
     }
 }
@@ -255,27 +248,7 @@ fn kway_merge(runs: &[PathBuf], _dir: &TempDir) -> Result<Vec<KeyedRow>, Compile
     Ok(out)
 }
 
-// codec ---------------------------------------------------------------
-
-fn encode_row(buf: &mut Vec<u8>, r: &KeyedRow) {
-    buf.extend_from_slice(&r.key.get().to_le_bytes());
-    buf.extend_from_slice(&r.feature.user_id.to_le_bytes());
-    for c in r.feature.bbox {
-        buf.extend_from_slice(&c.to_le_bytes());
-    }
-    encode_geom(buf, &r.feature.geom);
-    let attrs = r.attrs.as_slice();
-    buf.extend_from_slice(&u32_try(attrs.len()).to_le_bytes());
-    for (name, value) in attrs {
-        let nb = name.as_bytes();
-        buf.extend_from_slice(&u32_try(nb.len()).to_le_bytes());
-        buf.extend_from_slice(nb);
-        encode_attr(buf, value);
-    }
-    buf.extend_from_slice(&r.geom_bytes_estimate.to_le_bytes());
-    buf.extend_from_slice(&r.row_fingerprint.to_le_bytes());
-}
-
+// ScratchReader adapter over a length-prefixed row body buffer.
 struct ByteReader<'a> {
     bytes: &'a [u8],
     pos: usize,
@@ -285,7 +258,10 @@ impl<'a> ByteReader<'a> {
     fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, pos: 0 }
     }
-    fn take(&mut self, n: usize) -> Result<&'a [u8], CompilerError> {
+}
+
+impl ScratchReader for ByteReader<'_> {
+    fn take(&mut self, n: usize) -> Result<&[u8], CompilerError> {
         if self.pos + n > self.bytes.len() {
             return Err(CompilerError::InvariantViolation {
                 what: "external_sort: short read",
@@ -317,195 +293,6 @@ impl<'a> ByteReader<'a> {
         let s = self.take(8)?;
         Ok(f64::from_le_bytes([s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7]]))
     }
-}
-
-fn decode_row(buf: &[u8]) -> Result<KeyedRow, CompilerError> {
-    let mut r = ByteReader::new(buf);
-    let key = HilbertKey::new(r.u64()?);
-    let user_id = r.u64()?;
-    let mut bbox = [0f32; 4];
-    for c in &mut bbox {
-        *c = r.f32()?;
-    }
-    let geom = decode_geom(&mut r)?;
-    let attr_count = r.u32()? as usize;
-    let mut attrs: Vec<(String, AttrValue)> = Vec::with_capacity(attr_count);
-    for _ in 0..attr_count {
-        let nlen = r.u32()? as usize;
-        let nb = r.take(nlen)?.to_vec();
-        let name = String::from_utf8(nb).map_err(|_| CompilerError::InvariantViolation {
-            what: "external_sort: bad utf8 in attr name",
-        })?;
-        let value = decode_attr(&mut r)?;
-        attrs.push((name, value));
-    }
-    let geom_bytes_estimate = r.u64()?;
-    let row_fingerprint = r.u64()?;
-    Ok(KeyedRow {
-        feature: FeatureGeom { user_id, bbox, geom },
-        attrs: Arc::new(attrs),
-        geom_bytes_estimate,
-        key,
-        row_fingerprint,
-    })
-}
-
-fn encode_geom(buf: &mut Vec<u8>, g: &GeomKind) {
-    match g {
-        GeomKind::Point((x, y)) => {
-            buf.push(GT_POINT);
-            buf.extend_from_slice(&x.to_le_bytes());
-            buf.extend_from_slice(&y.to_le_bytes());
-        }
-        GeomKind::LineString(coords) => {
-            buf.push(GT_LINESTRING);
-            encode_coords(buf, coords);
-        }
-        GeomKind::Polygon(rings) => {
-            buf.push(GT_POLYGON);
-            buf.extend_from_slice(&u32_try(rings.len()).to_le_bytes());
-            for ring in rings {
-                encode_coords(buf, ring);
-            }
-        }
-        GeomKind::MultiPoint(points) => {
-            buf.push(GT_MULTIPOINT);
-            encode_coords(buf, points);
-        }
-        GeomKind::MultiLineString(parts) => {
-            buf.push(GT_MULTILINESTRING);
-            buf.extend_from_slice(&u32_try(parts.len()).to_le_bytes());
-            for p in parts {
-                encode_coords(buf, p);
-            }
-        }
-        GeomKind::MultiPolygon(parts) => {
-            buf.push(GT_MULTIPOLYGON);
-            buf.extend_from_slice(&u32_try(parts.len()).to_le_bytes());
-            for poly in parts {
-                buf.extend_from_slice(&u32_try(poly.len()).to_le_bytes());
-                for ring in poly {
-                    encode_coords(buf, ring);
-                }
-            }
-        }
-    }
-}
-
-fn decode_geom(r: &mut ByteReader<'_>) -> Result<GeomKind, CompilerError> {
-    Ok(match r.u8()? {
-        GT_POINT => {
-            let x = r.f64()?;
-            let y = r.f64()?;
-            GeomKind::Point((x, y))
-        }
-        GT_LINESTRING => GeomKind::LineString(decode_coords(r)?),
-        GT_POLYGON => {
-            let rings = r.u32()? as usize;
-            let mut out = Vec::with_capacity(rings);
-            for _ in 0..rings {
-                out.push(decode_coords(r)?);
-            }
-            GeomKind::Polygon(out)
-        }
-        GT_MULTIPOINT => GeomKind::MultiPoint(decode_coords(r)?),
-        GT_MULTILINESTRING => {
-            let parts = r.u32()? as usize;
-            let mut out = Vec::with_capacity(parts);
-            for _ in 0..parts {
-                out.push(decode_coords(r)?);
-            }
-            GeomKind::MultiLineString(out)
-        }
-        GT_MULTIPOLYGON => {
-            let parts = r.u32()? as usize;
-            let mut out = Vec::with_capacity(parts);
-            for _ in 0..parts {
-                let rings = r.u32()? as usize;
-                let mut poly = Vec::with_capacity(rings);
-                for _ in 0..rings {
-                    poly.push(decode_coords(r)?);
-                }
-                out.push(poly);
-            }
-            GeomKind::MultiPolygon(out)
-        }
-        _ => {
-            return Err(CompilerError::InvariantViolation {
-                what: "external_sort: bad geom tag",
-            });
-        }
-    })
-}
-
-fn encode_coords(buf: &mut Vec<u8>, c: &[Coord]) {
-    buf.extend_from_slice(&u32_try(c.len()).to_le_bytes());
-    for (x, y) in c {
-        buf.extend_from_slice(&x.to_le_bytes());
-        buf.extend_from_slice(&y.to_le_bytes());
-    }
-}
-
-fn decode_coords(r: &mut ByteReader<'_>) -> Result<Vec<Coord>, CompilerError> {
-    let n = r.u32()? as usize;
-    let mut out = Vec::with_capacity(n);
-    for _ in 0..n {
-        let x = r.f64()?;
-        let y = r.f64()?;
-        out.push((x, y));
-    }
-    Ok(out)
-}
-
-fn encode_attr(buf: &mut Vec<u8>, v: &AttrValue) {
-    match v {
-        AttrValue::Null => buf.push(AT_NULL),
-        AttrValue::Bool(b) => {
-            buf.push(AT_BOOL);
-            buf.push(u8::from(*b));
-        }
-        AttrValue::Int(i) => {
-            buf.push(AT_INT);
-            buf.extend_from_slice(&i.to_le_bytes());
-        }
-        AttrValue::Float(f) => {
-            buf.push(AT_FLOAT);
-            buf.extend_from_slice(&f.to_le_bytes());
-        }
-        AttrValue::String(s) => {
-            buf.push(AT_STRING);
-            let sb = s.as_bytes();
-            buf.extend_from_slice(&u32_try(sb.len()).to_le_bytes());
-            buf.extend_from_slice(sb);
-        }
-    }
-}
-
-fn decode_attr(r: &mut ByteReader<'_>) -> Result<AttrValue, CompilerError> {
-    Ok(match r.u8()? {
-        AT_NULL => AttrValue::Null,
-        AT_BOOL => AttrValue::Bool(r.u8()? != 0),
-        AT_INT => AttrValue::Int(r.i64()?),
-        AT_FLOAT => AttrValue::Float(r.f64()?),
-        AT_STRING => {
-            let n = r.u32()? as usize;
-            let sb = r.take(n)?.to_vec();
-            let s = String::from_utf8(sb).map_err(|_| CompilerError::InvariantViolation {
-                what: "external_sort: bad utf8 in attr string",
-            })?;
-            AttrValue::String(s)
-        }
-        _ => {
-            return Err(CompilerError::InvariantViolation {
-                what: "external_sort: bad attr tag",
-            });
-        }
-    })
-}
-
-#[inline]
-fn u32_try(n: usize) -> u32 {
-    u32::try_from(n).unwrap_or(u32::MAX)
 }
 
 #[cfg(test)]

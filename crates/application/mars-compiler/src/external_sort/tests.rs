@@ -1,5 +1,10 @@
 #![allow(clippy::unwrap_used, clippy::panic)]
 
+use std::sync::Arc;
+
+use mars_artifact::{FeatureGeom, GeomKind};
+use mars_source::AttrValue;
+
 use super::*;
 
 fn sample(seed: u64) -> KeyedRow {

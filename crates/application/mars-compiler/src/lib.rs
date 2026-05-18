@@ -23,6 +23,7 @@ pub mod rebalance;
 pub mod reconcile;
 pub mod render;
 pub mod route_index;
+pub(crate) mod scratch_codec;
 mod service;
 pub mod sidecar;
 pub mod sidecar_arena;
