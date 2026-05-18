@@ -60,11 +60,11 @@ layers:
   - name: "remote_points"
     type: point
     sources:
-      - { source: ogr, band: detail, uri: "https://example.com/data.fgb", format: flat_geobuf, source_crs: "EPSG:4326" }
-      - { source: ogr, band: hi, uri: "https://example.com/data.fgb", format: flat_geobuf, source_crs: "EPSG:4326" }
-      - { source: ogr, band: mid, uri: "https://example.com/data.fgb", format: flat_geobuf, source_crs: "EPSG:4326" }
-      - { source: ogr, band: lo, uri: "https://example.com/data.fgb", format: flat_geobuf, source_crs: "EPSG:4326" }
-      - { source: ogr, band: overview, uri: "https://example.com/data.fgb", format: flat_geobuf, source_crs: "EPSG:4326" }
+      - { source: ogr, kind: vectorfile, band: detail, uri: "https://example.com/data.fgb", format: flat_geobuf, source_crs: "EPSG:4326" }
+      - { source: ogr, kind: vectorfile, band: hi, uri: "https://example.com/data.fgb", format: flat_geobuf, source_crs: "EPSG:4326" }
+      - { source: ogr, kind: vectorfile, band: mid, uri: "https://example.com/data.fgb", format: flat_geobuf, source_crs: "EPSG:4326" }
+      - { source: ogr, kind: vectorfile, band: lo, uri: "https://example.com/data.fgb", format: flat_geobuf, source_crs: "EPSG:4326" }
+      - { source: ogr, kind: vectorfile, band: overview, uri: "https://example.com/data.fgb", format: flat_geobuf, source_crs: "EPSG:4326" }
 
 observability:
   log_level: info

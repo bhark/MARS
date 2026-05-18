@@ -72,16 +72,15 @@ pub(crate) fn minimal_config() -> Config {
 pub(crate) fn binding(from: &str) -> SourceBinding {
     SourceBinding {
         source: SourceId::new(TEST_SOURCE_ID),
+        kind: BindingKind::PostgisTable {
+            from: from.into(),
+            geometry_column: "geom".into(),
+            dsn: None,
+        },
         scale: None,
         band: None,
         max_denom: None,
         filter: None,
-        from: Some(from.into()),
-        sql: None,
-        uri: None,
-        format: None,
-        source_crs: None,
-        geometry_column: "geom".into(),
         id_column: Some("id".into()),
         attributes: vec![],
         levels: None,
@@ -90,7 +89,6 @@ pub(crate) fn binding(from: &str) -> SourceBinding {
         sidecar_size_warn_bytes: None,
         simplifier: None,
         on_missing_page: None,
-        dsn: None,
     }
 }
 

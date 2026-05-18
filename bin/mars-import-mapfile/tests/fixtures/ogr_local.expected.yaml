@@ -60,11 +60,11 @@ layers:
   - name: "roads"
     type: line
     sources:
-      - { source: ogr, band: detail, uri: "file:///data/roads.geojson", format: geo_json, source_crs: "EPSG:25832" }
-      - { source: ogr, band: hi, uri: "file:///data/roads.geojson", format: geo_json, source_crs: "EPSG:25832" }
-      - { source: ogr, band: mid, uri: "file:///data/roads.geojson", format: geo_json, source_crs: "EPSG:25832" }
-      - { source: ogr, band: lo, uri: "file:///data/roads.geojson", format: geo_json, source_crs: "EPSG:25832" }
-      - { source: ogr, band: overview, uri: "file:///data/roads.geojson", format: geo_json, source_crs: "EPSG:25832" }
+      - { source: ogr, kind: vectorfile, band: detail, uri: "file:///data/roads.geojson", format: geo_json, source_crs: "EPSG:25832" }
+      - { source: ogr, kind: vectorfile, band: hi, uri: "file:///data/roads.geojson", format: geo_json, source_crs: "EPSG:25832" }
+      - { source: ogr, kind: vectorfile, band: mid, uri: "file:///data/roads.geojson", format: geo_json, source_crs: "EPSG:25832" }
+      - { source: ogr, kind: vectorfile, band: lo, uri: "file:///data/roads.geojson", format: geo_json, source_crs: "EPSG:25832" }
+      - { source: ogr, kind: vectorfile, band: overview, uri: "file:///data/roads.geojson", format: geo_json, source_crs: "EPSG:25832" }
 
 observability:
   log_level: info

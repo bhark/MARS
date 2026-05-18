@@ -64,11 +64,11 @@ layers:
   - name: "roads"
     type: line
     sources:
-      - { band: detail, from: "roads_table", geometry_column: "geom" }
-      - { band: hi, from: "roads_table", geometry_column: "geom" }
-      - { band: mid, from: "roads_table", geometry_column: "geom" }
-      - { band: lo, from: "roads_table", geometry_column: "geom" }
-      - { band: overview, from: "roads_table", geometry_column: "geom" }
+      - { kind: postgis_table, band: detail, from: "roads_table", geometry_column: "geom" }
+      - { kind: postgis_table, band: hi, from: "roads_table", geometry_column: "geom" }
+      - { kind: postgis_table, band: mid, from: "roads_table", geometry_column: "geom" }
+      - { kind: postgis_table, band: lo, from: "roads_table", geometry_column: "geom" }
+      - { kind: postgis_table, band: overview, from: "roads_table", geometry_column: "geom" }
     classes:
       - { name: "default", title: "default", style: { type: ref, name: "line_roads_default" } }
 

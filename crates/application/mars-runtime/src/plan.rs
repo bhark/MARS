@@ -40,9 +40,14 @@ pub fn pick_binding_and_level(
         if !scale_window_covers(source.scale.as_ref(), request_denom) {
             continue;
         }
-        let Some(from) = source.from.as_deref() else {
-            // sql: bindings have no fixed table-derived id at this layer; the
-            // compiler refuses to plan them, so skip routing here too.
+        let Some(from) = (match &source.kind {
+            mars_config::BindingKind::PostgisTable { from, .. } => Some(from.as_str()),
+            mars_config::BindingKind::PostgisSql { .. } | mars_config::BindingKind::Vectorfile { .. } => None,
+        }) else {
+            // sql: / vectorfile bindings carry hash-derived ids the runtime
+            // does not yet route at the manifest level. skip routing here so
+            // the layer can still appear in capabilities while the snapshot
+            // path catches up.
             continue;
         };
         let id = match BindingId::try_new(from) {

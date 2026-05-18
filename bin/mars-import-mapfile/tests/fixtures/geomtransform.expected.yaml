@@ -63,11 +63,11 @@ layers:
   - name: "rivers"
     type: line
     sources:
-      - { band: detail, from: "rivers", geometry_column: "geom", id_column: "OGC_FID" }
-      - { band: hi, from: "rivers", geometry_column: "geom", id_column: "OGC_FID" }
-      - { band: mid, from: "rivers", geometry_column: "geom", id_column: "OGC_FID" }
-      - { band: lo, from: "rivers", geometry_column: "geom", id_column: "OGC_FID" }
-      - { band: overview, from: "rivers", geometry_column: "geom", id_column: "OGC_FID" }
+      - { kind: postgis_table, band: detail, from: "rivers", geometry_column: "geom", id_column: "OGC_FID" }
+      - { kind: postgis_table, band: hi, from: "rivers", geometry_column: "geom", id_column: "OGC_FID" }
+      - { kind: postgis_table, band: mid, from: "rivers", geometry_column: "geom", id_column: "OGC_FID" }
+      - { kind: postgis_table, band: lo, from: "rivers", geometry_column: "geom", id_column: "OGC_FID" }
+      - { kind: postgis_table, band: overview, from: "rivers", geometry_column: "geom", id_column: "OGC_FID" }
     classes:
       - { name: "vertices", title: "vertices", style: { type: ref, name: "line_rivers_vertices" } }
 

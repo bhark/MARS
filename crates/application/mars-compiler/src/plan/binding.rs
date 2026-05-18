@@ -2,7 +2,7 @@
 //! shaping (postgis from:/sql: vs vectorfile uri:), and the default-level
 //! collapse used when a binding declares no `levels:` block.
 
-use mars_config::{DecimationLevelConfig, Source, SourceBinding};
+use mars_config::{BindingKind, DecimationLevelConfig, Source, SourceBinding};
 use mars_expr::parse;
 use mars_types::{BindingId, DecimationLevel};
 
@@ -42,52 +42,41 @@ pub(super) fn binding_id_for(from: &str) -> Result<BindingId, PlanError> {
 /// passes the `from:` string through unchanged; sql form wraps the inline
 /// SELECT in parens (so the postgres adapter can splice it into `FROM (...)
 /// AS s`) and derives a stable, hash-prefixed `BindingId` so equal SELECTs
-/// across layers dedupe. Vectorfile form (`uri:` + `format:` + `source_crs:`)
-/// embeds the format / source_crs as a `#format=...&source_crs=...` fragment
-/// on the URI so the adapter sees one opaque locator and ids dedupe per
-/// (uri, format, source_crs) triple.
-pub(super) fn resolve_binding_source(binding: &mars_config::SourceBinding) -> Result<(String, BindingId), PlanError> {
-    if let Some(from) = binding.from.as_deref() {
-        let id = binding_id_for(from)?;
-        return Ok((from.to_owned(), id));
+/// across layers dedupe. Vectorfile form embeds the format / source_crs as
+/// a `#format=...&source_crs=...` fragment on the URI so the adapter sees
+/// one opaque locator and ids dedupe per (uri, format, source_crs) triple.
+pub(super) fn resolve_binding_source(binding: &SourceBinding) -> Result<(String, BindingId), PlanError> {
+    match &binding.kind {
+        BindingKind::PostgisTable { from, .. } => {
+            let id = binding_id_for(from)?;
+            Ok((from.clone(), id))
+        }
+        BindingKind::PostgisSql { sql, .. } => {
+            let hash = blake3::hash(sql.as_bytes()).to_hex();
+            let id_str = format!("sql_{}", &hash.as_str()[..16]);
+            let id = binding_id_for(&id_str)?;
+            Ok((format!("({sql})"), id))
+        }
+        BindingKind::Vectorfile {
+            uri,
+            format,
+            source_crs,
+        } => {
+            let fmt_tok = match format {
+                mars_config::VectorFileFormat::FlatGeobuf => "flat_geobuf",
+                mars_config::VectorFileFormat::GeoJson => "geo_json",
+                mars_config::VectorFileFormat::Shapefile => "shapefile",
+                mars_config::VectorFileFormat::GeoPackage => "geo_package",
+            };
+            let locator = format!("{uri}#format={fmt_tok}&source_crs={}", source_crs.as_str());
+            // BindingId must be path-safe; hash the locator so URIs with colons /
+            // slashes still produce a valid id. dedup key matches (uri, format, source_crs).
+            let hash = blake3::hash(locator.as_bytes()).to_hex();
+            let id_str = format!("vf_{}", &hash.as_str()[..16]);
+            let id = binding_id_for(&id_str)?;
+            Ok((locator, id))
+        }
     }
-    if let Some(sql) = binding.sql.as_deref() {
-        let hash = blake3::hash(sql.as_bytes()).to_hex();
-        let id_str = format!("sql_{}", &hash.as_str()[..16]);
-        let id = binding_id_for(&id_str)?;
-        return Ok((format!("({sql})"), id));
-    }
-    if let Some(uri) = binding.uri.as_deref() {
-        let fmt = binding.format.ok_or_else(|| PlanError::IncompleteVectorFileBinding {
-            from: binding.source_descriptor(),
-            what: "format",
-        })?;
-        let source_crs = binding
-            .source_crs
-            .as_ref()
-            .ok_or_else(|| PlanError::IncompleteVectorFileBinding {
-                from: binding.source_descriptor(),
-                what: "source_crs",
-            })?;
-        let fmt_tok = match fmt {
-            mars_config::VectorFileFormat::FlatGeobuf => "flat_geobuf",
-            mars_config::VectorFileFormat::GeoJson => "geo_json",
-            mars_config::VectorFileFormat::Shapefile => "shapefile",
-            mars_config::VectorFileFormat::GeoPackage => "geo_package",
-        };
-        let locator = format!("{uri}#format={fmt_tok}&source_crs={}", source_crs.as_str());
-        // BindingId must be path-safe; hash the locator so URIs with colons /
-        // slashes still produce a valid id. dedup key matches (uri, format, source_crs).
-        let hash = blake3::hash(locator.as_bytes()).to_hex();
-        let id_str = format!("vf_{}", &hash.as_str()[..16]);
-        let id = binding_id_for(&id_str)?;
-        return Ok((locator, id));
-    }
-    // config validation rejects bindings with neither from: nor sql: nor
-    // uri:; surface a typed error in case a config bypasses validate.
-    Err(PlanError::BindingSourceUnspecified {
-        descriptor: binding.source_descriptor(),
-    })
 }
 
 /// Lift one `(source, binding)` pair into a fully-resolved [`BindingPlan`].
@@ -110,11 +99,20 @@ pub(super) fn build_binding_plan(source: &Source, binding: &SourceBinding) -> Re
         })?),
         None => None,
     };
+    let (geometry_field, dsn) = match &binding.kind {
+        BindingKind::PostgisTable {
+            geometry_column, dsn, ..
+        }
+        | BindingKind::PostgisSql {
+            geometry_column, dsn, ..
+        } => (geometry_column.clone(), dsn.clone()),
+        BindingKind::Vectorfile { .. } => (String::new(), None),
+    };
     Ok(BindingPlan {
         binding_id,
         source_id: binding.source.clone(),
         source_table,
-        geometry_field: binding.geometry_column.clone(),
+        geometry_field,
         id_field: binding.id_column.clone(),
         attributes: binding.attributes.clone(),
         filter,
@@ -125,6 +123,6 @@ pub(super) fn build_binding_plan(source: &Source, binding: &SourceBinding) -> Re
         reconcile_every_cycles: binding.resolved_reconcile_every_cycles(),
         simplifier: binding.resolved_simplifier(),
         missing_page_policy: binding.resolved_missing_page_policy(),
-        dsn: binding.dsn.clone(),
+        dsn,
     })
 }

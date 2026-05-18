@@ -62,11 +62,11 @@ layers:
   - name: "streams"
     type: line
     sources:
-      - { band: detail, from: "simplified.streams", geometry_column: "geom", id_column: "OGC_FID", filter: "(vandloebstype = 'Gennem sø') AND (midtebredde IN ('12-', '2.5-12'))", attributes: ["midtebredde", "vandloebstype"] }
-      - { band: hi, from: "simplified.streams", geometry_column: "geom", id_column: "OGC_FID", filter: "(vandloebstype = 'Gennem sø') AND (midtebredde IN ('12-', '2.5-12'))", attributes: ["midtebredde", "vandloebstype"] }
-      - { band: mid, from: "simplified.streams", geometry_column: "geom", id_column: "OGC_FID", filter: "(vandloebstype = 'Gennem sø') AND (midtebredde IN ('12-', '2.5-12'))", attributes: ["midtebredde", "vandloebstype"] }
-      - { band: lo, from: "simplified.streams", geometry_column: "geom", id_column: "OGC_FID", filter: "(vandloebstype = 'Gennem sø') AND (midtebredde IN ('12-', '2.5-12'))", attributes: ["midtebredde", "vandloebstype"] }
-      - { band: overview, from: "simplified.streams", geometry_column: "geom", id_column: "OGC_FID", filter: "(vandloebstype = 'Gennem sø') AND (midtebredde IN ('12-', '2.5-12'))", attributes: ["midtebredde", "vandloebstype"] }
+      - { kind: postgis_table, band: detail, from: "simplified.streams", geometry_column: "geom", id_column: "OGC_FID", filter: "(vandloebstype = 'Gennem sø') AND (midtebredde IN ('12-', '2.5-12'))", attributes: ["midtebredde", "vandloebstype"] }
+      - { kind: postgis_table, band: hi, from: "simplified.streams", geometry_column: "geom", id_column: "OGC_FID", filter: "(vandloebstype = 'Gennem sø') AND (midtebredde IN ('12-', '2.5-12'))", attributes: ["midtebredde", "vandloebstype"] }
+      - { kind: postgis_table, band: mid, from: "simplified.streams", geometry_column: "geom", id_column: "OGC_FID", filter: "(vandloebstype = 'Gennem sø') AND (midtebredde IN ('12-', '2.5-12'))", attributes: ["midtebredde", "vandloebstype"] }
+      - { kind: postgis_table, band: lo, from: "simplified.streams", geometry_column: "geom", id_column: "OGC_FID", filter: "(vandloebstype = 'Gennem sø') AND (midtebredde IN ('12-', '2.5-12'))", attributes: ["midtebredde", "vandloebstype"] }
+      - { kind: postgis_table, band: overview, from: "simplified.streams", geometry_column: "geom", id_column: "OGC_FID", filter: "(vandloebstype = 'Gennem sø') AND (midtebredde IN ('12-', '2.5-12'))", attributes: ["midtebredde", "vandloebstype"] }
     classes:
       - { name: "default", title: "default", style: { type: ref, name: "line_streams_default" } }
 

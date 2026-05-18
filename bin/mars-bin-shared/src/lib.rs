@@ -64,13 +64,17 @@ pub async fn build_pg_source(cfg: &Config, topology: Option<ReplicationTopology>
 /// build one pool per distinct DSN without re-deduping. Bindings without
 /// override (the common case) contribute nothing.
 fn collect_binding_dsns(cfg: &Config, source_id: &mars_config::SourceId) -> Vec<String> {
-    let mut dsns: Vec<String> = cfg
-        .layers
-        .iter()
-        .flat_map(|layer| layer.sources.iter())
-        .filter(|b| &b.source == source_id)
-        .filter_map(|b| b.dsn.clone())
-        .collect();
+    let mut dsns: Vec<String> =
+        cfg.layers
+            .iter()
+            .flat_map(|layer| layer.sources.iter())
+            .filter(|b| &b.source == source_id)
+            .filter_map(|b| match &b.kind {
+                mars_config::BindingKind::PostgisTable { dsn, .. }
+                | mars_config::BindingKind::PostgisSql { dsn, .. } => dsn.clone(),
+                mars_config::BindingKind::Vectorfile { .. } => None,
+            })
+            .collect();
     dsns.sort();
     dsns.dedup();
     dsns

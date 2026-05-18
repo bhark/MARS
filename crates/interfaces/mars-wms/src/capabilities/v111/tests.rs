@@ -26,7 +26,7 @@ layers:
     title: "A layer"
     type: polygon
     sources:
-      - { from: t, geometry_column: g }
+      - { kind: postgis_table, from: t, geometry_column: g }
 "#;
     serde_yaml_ng::from_str(yaml).unwrap()
 }
@@ -296,7 +296,7 @@ interfaces:
 reprojection:
   allowlist: [EPSG:25832]
 layers:
-  - { name: a, title: A, type: polygon, sources: [{ from: t, geometry_column: g }] }
+  - { name: a, title: A, type: polygon, sources: [{ kind: postgis_table, from: t, geometry_column: g }] }
 "#;
     let cfg: Config = serde_yaml_ng::from_str(yaml).unwrap();
     let m = Manifest::empty(1, cfg.service.name.clone());
@@ -331,7 +331,7 @@ layers:
   - name: roads
     title: "Roads"
     type: polygon
-    sources: [{ from: t, geometry_column: g }]
+    sources: [{ kind: postgis_table, from: t, geometry_column: g }]
     classes:
       - { name: main, title: "Main", style: { type: inline, fill: "#aabbcc" } }
       - { name: minor, title: "Minor", style: { type: inline, stroke: "#555555" } }

@@ -68,11 +68,11 @@ layers:
   - name: "wind"
     type: point
     sources:
-      - { band: detail, from: "wind", geometry_column: "geom", attributes: ["name"] }
-      - { band: hi, from: "wind", geometry_column: "geom", attributes: ["name"] }
-      - { band: mid, from: "wind", geometry_column: "geom", attributes: ["name"] }
-      - { band: lo, from: "wind", geometry_column: "geom", attributes: ["name"] }
-      - { band: overview, from: "wind", geometry_column: "geom", attributes: ["name"] }
+      - { kind: postgis_table, band: detail, from: "wind", geometry_column: "geom", attributes: ["name"] }
+      - { kind: postgis_table, band: hi, from: "wind", geometry_column: "geom", attributes: ["name"] }
+      - { kind: postgis_table, band: mid, from: "wind", geometry_column: "geom", attributes: ["name"] }
+      - { kind: postgis_table, band: lo, from: "wind", geometry_column: "geom", attributes: ["name"] }
+      - { kind: postgis_table, band: overview, from: "wind", geometry_column: "geom", attributes: ["name"] }
     classes:
       - name: "all"
         title: "all"

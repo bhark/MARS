@@ -105,13 +105,11 @@ fn two_tiers_in_band_resolve_to_non_overlapping_windows() {
         SourceBinding {
             band: Some("hi".into()),
             max_denom: Some(8_000),
-            from: Some("a".into()),
             ..binding("a")
         },
         SourceBinding {
             band: Some("hi".into()),
             max_denom: Some(25_000),
-            from: Some("b".into()),
             ..binding("b")
         },
     ])];
@@ -130,7 +128,6 @@ fn back_compat_single_source_no_max_denom_covers_whole_band() {
     cfg.layers = vec![tiered_layer(vec![SourceBinding {
         band: Some("mid".into()),
         max_denom: None,
-        from: Some("a".into()),
         ..binding("a")
     }])];
     validate(&mut cfg, Path::new(".")).expect("validate");
@@ -146,13 +143,11 @@ fn duplicate_max_denom_in_band_rejected() {
         SourceBinding {
             band: Some("hi".into()),
             max_denom: Some(10_000),
-            from: Some("a".into()),
             ..binding("a")
         },
         SourceBinding {
             band: Some("hi".into()),
             max_denom: Some(10_000),
-            from: Some("b".into()),
             ..binding("b")
         },
     ])];
@@ -166,7 +161,6 @@ fn tier_max_denom_exceeds_band_cap_rejected() {
     cfg.layers = vec![tiered_layer(vec![SourceBinding {
         band: Some("hi".into()),
         max_denom: Some(50_000),
-        from: Some("a".into()),
         ..binding("a")
     }])];
     let err = validate(&mut cfg, Path::new(".")).unwrap_err();
@@ -182,13 +176,11 @@ fn first_tier_max_at_or_below_band_lower_bound_rejected() {
         SourceBinding {
             band: Some("mid".into()),
             max_denom: Some(25_000),
-            from: Some("a".into()),
             ..binding("a")
         },
         SourceBinding {
             band: Some("mid".into()),
             max_denom: Some(250_000),
-            from: Some("b".into()),
             ..binding("b")
         },
     ])];
@@ -206,13 +198,11 @@ fn non_final_tier_equal_to_band_cap_rejected() {
         SourceBinding {
             band: Some("hi".into()),
             max_denom: Some(25_000),
-            from: Some("a".into()),
             ..binding("a")
         },
         SourceBinding {
             band: Some("hi".into()),
             max_denom: Some(25_000),
-            from: Some("b".into()),
             ..binding("b")
         },
     ])];

@@ -82,11 +82,11 @@ layers:
   - name: "roads"
     type: line
     sources:
-      - { band: detail, from: "roads", geometry_column: "geom", id_column: "OGC_FID", attributes: ["active", "name", "rank"] }
-      - { band: hi, from: "roads", geometry_column: "geom", id_column: "OGC_FID", attributes: ["active", "name", "rank"] }
-      - { band: mid, from: "roads", geometry_column: "geom", id_column: "OGC_FID", attributes: ["active", "name", "rank"] }
-      - { band: lo, from: "roads", geometry_column: "geom", id_column: "OGC_FID", attributes: ["active", "name", "rank"] }
-      - { band: overview, from: "roads", geometry_column: "geom", id_column: "OGC_FID", attributes: ["active", "name", "rank"] }
+      - { kind: postgis_table, band: detail, from: "roads", geometry_column: "geom", id_column: "OGC_FID", attributes: ["active", "name", "rank"] }
+      - { kind: postgis_table, band: hi, from: "roads", geometry_column: "geom", id_column: "OGC_FID", attributes: ["active", "name", "rank"] }
+      - { kind: postgis_table, band: mid, from: "roads", geometry_column: "geom", id_column: "OGC_FID", attributes: ["active", "name", "rank"] }
+      - { kind: postgis_table, band: lo, from: "roads", geometry_column: "geom", id_column: "OGC_FID", attributes: ["active", "name", "rank"] }
+      - { kind: postgis_table, band: overview, from: "roads", geometry_column: "geom", id_column: "OGC_FID", attributes: ["active", "name", "rank"] }
     classes:
       - { name: "lt", title: "lt", when: "rank < 5", style: { type: ref, name: "line_roads_lt" } }
       - { name: "ge_keyword", title: "ge_keyword", when: "rank >= 8", style: { type: ref, name: "line_roads_ge_keyword" } }

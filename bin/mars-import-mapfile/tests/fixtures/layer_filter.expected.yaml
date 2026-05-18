@@ -62,11 +62,11 @@ layers:
   - name: "streams"
     type: line
     sources:
-      - { band: detail, from: "streams", geometry_column: "geom", id_column: "OGC_FID", filter: "vandloebstype = 'Gennem sø'", attributes: ["vandloebstype"] }
-      - { band: hi, from: "streams", geometry_column: "geom", id_column: "OGC_FID", filter: "vandloebstype = 'Gennem sø'", attributes: ["vandloebstype"] }
-      - { band: mid, from: "streams", geometry_column: "geom", id_column: "OGC_FID", filter: "vandloebstype = 'Gennem sø'", attributes: ["vandloebstype"] }
-      - { band: lo, from: "streams", geometry_column: "geom", id_column: "OGC_FID", filter: "vandloebstype = 'Gennem sø'", attributes: ["vandloebstype"] }
-      - { band: overview, from: "streams", geometry_column: "geom", id_column: "OGC_FID", filter: "vandloebstype = 'Gennem sø'", attributes: ["vandloebstype"] }
+      - { kind: postgis_table, band: detail, from: "streams", geometry_column: "geom", id_column: "OGC_FID", filter: "vandloebstype = 'Gennem sø'", attributes: ["vandloebstype"] }
+      - { kind: postgis_table, band: hi, from: "streams", geometry_column: "geom", id_column: "OGC_FID", filter: "vandloebstype = 'Gennem sø'", attributes: ["vandloebstype"] }
+      - { kind: postgis_table, band: mid, from: "streams", geometry_column: "geom", id_column: "OGC_FID", filter: "vandloebstype = 'Gennem sø'", attributes: ["vandloebstype"] }
+      - { kind: postgis_table, band: lo, from: "streams", geometry_column: "geom", id_column: "OGC_FID", filter: "vandloebstype = 'Gennem sø'", attributes: ["vandloebstype"] }
+      - { kind: postgis_table, band: overview, from: "streams", geometry_column: "geom", id_column: "OGC_FID", filter: "vandloebstype = 'Gennem sø'", attributes: ["vandloebstype"] }
     classes:
       - { name: "default", title: "default", style: { type: ref, name: "line_streams_default" } }
 

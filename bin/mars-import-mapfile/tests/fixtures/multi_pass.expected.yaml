@@ -56,11 +56,11 @@ layers:
   - name: "boundaries"
     type: polygon
     sources:
-      - { band: detail, from: "boundaries", geometry_column: "geom" }
-      - { band: hi, from: "boundaries", geometry_column: "geom" }
-      - { band: mid, from: "boundaries", geometry_column: "geom" }
-      - { band: lo, from: "boundaries", geometry_column: "geom" }
-      - { band: overview, from: "boundaries", geometry_column: "geom" }
+      - { kind: postgis_table, band: detail, from: "boundaries", geometry_column: "geom" }
+      - { kind: postgis_table, band: hi, from: "boundaries", geometry_column: "geom" }
+      - { kind: postgis_table, band: mid, from: "boundaries", geometry_column: "geom" }
+      - { kind: postgis_table, band: lo, from: "boundaries", geometry_column: "geom" }
+      - { kind: postgis_table, band: overview, from: "boundaries", geometry_column: "geom" }
     classes:
       - name: "all"
         title: "all"

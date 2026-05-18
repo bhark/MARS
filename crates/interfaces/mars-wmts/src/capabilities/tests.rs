@@ -37,7 +37,7 @@ layers:
     title: "A layer"
     type: polygon
     sources:
-      - { from: t, geometry_column: g }
+      - { kind: postgis_table, from: t, geometry_column: g }
 "#;
     serde_yaml_ng::from_str(yaml).unwrap()
 }

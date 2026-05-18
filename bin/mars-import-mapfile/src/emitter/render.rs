@@ -222,6 +222,12 @@ pub(crate) fn render(skel: &Skeleton, bands: &[(String, u64)]) -> String {
                             };
                             parts.push(format!("source: {id}"));
                         }
+                        let kind_tok = match &src.source {
+                            BindingSource::Table(_) => "postgis_table",
+                            BindingSource::Sql(_) => "postgis_sql",
+                            BindingSource::VectorFile(_) => "vectorfile",
+                        };
+                        parts.push(format!("kind: {kind_tok}"));
                         parts.push(format!("band: {band_name}"));
                         match &src.source {
                             BindingSource::Table(t) => {

@@ -56,11 +56,11 @@ layers:
   - name: "buildings"
     type: polygon
     sources:
-      - { band: detail, from: "buildings", geometry_column: "geom" }
-      - { band: hi, from: "buildings", geometry_column: "geom" }
-      - { band: mid, from: "buildings", geometry_column: "geom" }
-      - { band: lo, from: "buildings", geometry_column: "geom" }
-      - { band: overview, from: "buildings", geometry_column: "geom" }
+      - { kind: postgis_table, band: detail, from: "buildings", geometry_column: "geom" }
+      - { kind: postgis_table, band: hi, from: "buildings", geometry_column: "geom" }
+      - { kind: postgis_table, band: mid, from: "buildings", geometry_column: "geom" }
+      - { kind: postgis_table, band: lo, from: "buildings", geometry_column: "geom" }
+      - { kind: postgis_table, band: overview, from: "buildings", geometry_column: "geom" }
     classes:
       - name: "all"
         title: "all"

@@ -306,9 +306,12 @@ fn validate_config_against_manifest(
         }
         let mut any_in_manifest = false;
         for source in &layer.sources {
-            let Some(from) = source.from.as_deref() else {
-                // sql: bindings have no fixed table-derived binding id and
-                // are not yet routable at the manifest level. skip the
+            let Some(from) = (match &source.kind {
+                mars_config::BindingKind::PostgisTable { from, .. } => Some(from.as_str()),
+                mars_config::BindingKind::PostgisSql { .. } | mars_config::BindingKind::Vectorfile { .. } => None,
+            }) else {
+                // sql: / vectorfile bindings carry hash-derived binding ids
+                // and are not yet routable at the manifest level. skip the
                 // manifest-membership probe so the layer can still appear in
                 // capabilities while the snapshot path catches up.
                 continue;

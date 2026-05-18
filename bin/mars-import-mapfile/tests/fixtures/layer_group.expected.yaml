@@ -73,28 +73,28 @@ layers:
     type: polygon
     group: "/Basis"
     sources:
-      - { band: detail, from: "basemap", geometry_column: "geom" }
-      - { band: hi, from: "basemap", geometry_column: "geom" }
-      - { band: mid, from: "basemap", geometry_column: "geom" }
-      - { band: lo, from: "basemap", geometry_column: "geom" }
-      - { band: overview, from: "basemap", geometry_column: "geom" }
+      - { kind: postgis_table, band: detail, from: "basemap", geometry_column: "geom" }
+      - { kind: postgis_table, band: hi, from: "basemap", geometry_column: "geom" }
+      - { kind: postgis_table, band: mid, from: "basemap", geometry_column: "geom" }
+      - { kind: postgis_table, band: lo, from: "basemap", geometry_column: "geom" }
+      - { kind: postgis_table, band: overview, from: "basemap", geometry_column: "geom" }
   - name: "bygning"
     type: polygon
     group: "/Adresse/Bygning"
     sources:
-      - { band: detail, from: "bygning", geometry_column: "geom" }
-      - { band: hi, from: "bygning", geometry_column: "geom" }
-      - { band: mid, from: "bygning", geometry_column: "geom" }
-      - { band: lo, from: "bygning", geometry_column: "geom" }
-      - { band: overview, from: "bygning", geometry_column: "geom" }
+      - { kind: postgis_table, band: detail, from: "bygning", geometry_column: "geom" }
+      - { kind: postgis_table, band: hi, from: "bygning", geometry_column: "geom" }
+      - { kind: postgis_table, band: mid, from: "bygning", geometry_column: "geom" }
+      - { kind: postgis_table, band: lo, from: "bygning", geometry_column: "geom" }
+      - { kind: postgis_table, band: overview, from: "bygning", geometry_column: "geom" }
   - name: "ungrouped"
     type: line
     sources:
-      - { band: detail, from: "lines", geometry_column: "geom" }
-      - { band: hi, from: "lines", geometry_column: "geom" }
-      - { band: mid, from: "lines", geometry_column: "geom" }
-      - { band: lo, from: "lines", geometry_column: "geom" }
-      - { band: overview, from: "lines", geometry_column: "geom" }
+      - { kind: postgis_table, band: detail, from: "lines", geometry_column: "geom" }
+      - { kind: postgis_table, band: hi, from: "lines", geometry_column: "geom" }
+      - { kind: postgis_table, band: mid, from: "lines", geometry_column: "geom" }
+      - { kind: postgis_table, band: lo, from: "lines", geometry_column: "geom" }
+      - { kind: postgis_table, band: overview, from: "lines", geometry_column: "geom" }
 
 observability:
   log_level: info

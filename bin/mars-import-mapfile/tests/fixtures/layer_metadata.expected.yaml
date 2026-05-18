@@ -101,11 +101,11 @@ layers:
         wmts_get_tile: true
         wmts_get_feature_info: false
     sources:
-      - { band: detail, from: "roads", geometry_column: "geom" }
-      - { band: hi, from: "roads", geometry_column: "geom" }
-      - { band: mid, from: "roads", geometry_column: "geom" }
-      - { band: lo, from: "roads", geometry_column: "geom" }
-      - { band: overview, from: "roads", geometry_column: "geom" }
+      - { kind: postgis_table, band: detail, from: "roads", geometry_column: "geom" }
+      - { kind: postgis_table, band: hi, from: "roads", geometry_column: "geom" }
+      - { kind: postgis_table, band: mid, from: "roads", geometry_column: "geom" }
+      - { kind: postgis_table, band: lo, from: "roads", geometry_column: "geom" }
+      - { kind: postgis_table, band: overview, from: "roads", geometry_column: "geom" }
 
 observability:
   log_level: info

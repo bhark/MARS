@@ -98,16 +98,15 @@ fn cfg_layer(name: &str, sources: Vec<SourceBinding>) -> Layer {
 fn cfg_source(from: &str, scale: Option<ScaleWindow>) -> SourceBinding {
     SourceBinding {
         source: mars_config::SourceId::new("default"),
+        kind: mars_config::BindingKind::PostgisTable {
+            from: from.into(),
+            geometry_column: "geom".into(),
+            dsn: None,
+        },
         scale,
         band: None,
         max_denom: None,
         filter: None,
-        from: Some(from.into()),
-        sql: None,
-        uri: None,
-        format: None,
-        source_crs: None,
-        geometry_column: "geom".into(),
         id_column: None,
         attributes: vec![],
         levels: None,
@@ -116,7 +115,6 @@ fn cfg_source(from: &str, scale: Option<ScaleWindow>) -> SourceBinding {
         sidecar_size_warn_bytes: None,
         simplifier: None,
         on_missing_page: None,
-        dsn: None,
     }
 }
 

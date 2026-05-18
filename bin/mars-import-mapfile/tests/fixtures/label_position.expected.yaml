@@ -70,11 +70,11 @@ layers:
   - name: "city"
     type: point
     sources:
-      - { band: detail, from: "city", geometry_column: "geom", id_column: "OGC_FID", attributes: ["name"] }
-      - { band: hi, from: "city", geometry_column: "geom", id_column: "OGC_FID", attributes: ["name"] }
-      - { band: mid, from: "city", geometry_column: "geom", id_column: "OGC_FID", attributes: ["name"] }
-      - { band: lo, from: "city", geometry_column: "geom", id_column: "OGC_FID", attributes: ["name"] }
-      - { band: overview, from: "city", geometry_column: "geom", id_column: "OGC_FID", attributes: ["name"] }
+      - { kind: postgis_table, band: detail, from: "city", geometry_column: "geom", id_column: "OGC_FID", attributes: ["name"] }
+      - { kind: postgis_table, band: hi, from: "city", geometry_column: "geom", id_column: "OGC_FID", attributes: ["name"] }
+      - { kind: postgis_table, band: mid, from: "city", geometry_column: "geom", id_column: "OGC_FID", attributes: ["name"] }
+      - { kind: postgis_table, band: lo, from: "city", geometry_column: "geom", id_column: "OGC_FID", attributes: ["name"] }
+      - { kind: postgis_table, band: overview, from: "city", geometry_column: "geom", id_column: "OGC_FID", attributes: ["name"] }
     label:
       text: "{name}"
       style: { type: ref, name: "label_city" }

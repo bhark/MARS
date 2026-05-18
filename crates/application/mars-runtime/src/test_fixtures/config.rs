@@ -154,16 +154,15 @@ pub(super) fn base_config(service_name: &str) -> Config {
 pub(super) fn default_source_binding(binding_id: &BindingId) -> SourceBinding {
     SourceBinding {
         source: mars_config::SourceId::new("default"),
+        kind: mars_config::BindingKind::PostgisTable {
+            from: binding_id.as_str().into(),
+            geometry_column: "geom".into(),
+            dsn: None,
+        },
         scale: None,
         band: None,
         max_denom: None,
         filter: None,
-        from: Some(binding_id.as_str().into()),
-        sql: None,
-        uri: None,
-        format: None,
-        source_crs: None,
-        geometry_column: "geom".into(),
         id_column: None,
         attributes: vec!["name".into()],
         levels: None,
@@ -172,7 +171,6 @@ pub(super) fn default_source_binding(binding_id: &BindingId) -> SourceBinding {
         sidecar_size_warn_bytes: None,
         simplifier: None,
         on_missing_page: None,
-        dsn: None,
     }
 }
 

@@ -192,7 +192,8 @@ layers: !include layers.yaml
 - name: foo
   type: polygon
   sources:
-    - band: hi
+    - kind: postgis_table
+      band: hi
       from: t.foo
       geometry_column: geom
   classes: []
@@ -292,16 +293,19 @@ layers:
     type: polygon
     sources:
       - source: pg
+        kind: postgis_table
         band: hi
         max_denom_exclusive: 8000
         from: geodanmark_latest.bygning
         geometry_column: geometri
       - source: pg
+        kind: postgis_table
         band: hi
         max_denom_exclusive: 10000
         from: simplified.bygning_1meter
         geometry_column: geometri
       - source: pg
+        kind: postgis_table
         band: hi
         max_denom_exclusive: 25000
         from: simplified.bygning_2meter
@@ -348,6 +352,7 @@ layers:
     type: line
     sources:
       - source: pg
+        kind: postgis_table
         band: hi
         from: t.roads
         geometry_column: g
@@ -396,6 +401,7 @@ layers:
     type: line
     sources:
       - source: pg
+        kind: postgis_table
         band: hi
         from: t.roads
         geometry_column: g

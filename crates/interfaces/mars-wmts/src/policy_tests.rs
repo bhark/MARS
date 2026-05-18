@@ -34,14 +34,14 @@ layers:
     title: "A layer"
     type: polygon
     sources:
-      - { from: t, geometry_column: g }
+      - { kind: postgis_table, from: t, geometry_column: g }
     ows:
       request_gating: { wmts_get_tile: false }
   - name: b
     title: "B layer"
     type: polygon
     sources:
-      - { from: t, geometry_column: g }
+      - { kind: postgis_table, from: t, geometry_column: g }
 "#;
     serde_yaml_ng::from_str(yaml).unwrap()
 }

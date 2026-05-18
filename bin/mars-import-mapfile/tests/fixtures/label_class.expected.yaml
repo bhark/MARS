@@ -83,11 +83,11 @@ layers:
   - name: "roads"
     type: line
     sources:
-      - { band: detail, from: "roads", geometry_column: "geom", id_column: "OGC_FID", attributes: ["kind", "name", "short_name"] }
-      - { band: hi, from: "roads", geometry_column: "geom", id_column: "OGC_FID", attributes: ["kind", "name", "short_name"] }
-      - { band: mid, from: "roads", geometry_column: "geom", id_column: "OGC_FID", attributes: ["kind", "name", "short_name"] }
-      - { band: lo, from: "roads", geometry_column: "geom", id_column: "OGC_FID", attributes: ["kind", "name", "short_name"] }
-      - { band: overview, from: "roads", geometry_column: "geom", id_column: "OGC_FID", attributes: ["kind", "name", "short_name"] }
+      - { kind: postgis_table, band: detail, from: "roads", geometry_column: "geom", id_column: "OGC_FID", attributes: ["kind", "name", "short_name"] }
+      - { kind: postgis_table, band: hi, from: "roads", geometry_column: "geom", id_column: "OGC_FID", attributes: ["kind", "name", "short_name"] }
+      - { kind: postgis_table, band: mid, from: "roads", geometry_column: "geom", id_column: "OGC_FID", attributes: ["kind", "name", "short_name"] }
+      - { kind: postgis_table, band: lo, from: "roads", geometry_column: "geom", id_column: "OGC_FID", attributes: ["kind", "name", "short_name"] }
+      - { kind: postgis_table, band: overview, from: "roads", geometry_column: "geom", id_column: "OGC_FID", attributes: ["kind", "name", "short_name"] }
     classes:
       - name: "major"
         title: "major"

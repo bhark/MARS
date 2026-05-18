@@ -2,9 +2,19 @@
 
 use std::path::Path;
 
-use crate::model::DecimationLevelConfig;
+use crate::model::{BindingKind, DecimationLevelConfig, SourceBinding};
 use crate::validate::fixtures::*;
 use crate::validate::validate;
+
+fn sql_binding(sql: &str) -> SourceBinding {
+    let mut b = binding("ignored");
+    b.kind = BindingKind::PostgisSql {
+        sql: sql.into(),
+        geometry_column: "geom".into(),
+        dsn: None,
+    };
+    b
+}
 
 #[test]
 fn accepts_simple_table_binding() {
@@ -34,48 +44,18 @@ fn rejects_multi_table_from() {
 }
 
 #[test]
-fn rejects_both_from_and_sql_set() {
-    let mut cfg = minimal_config();
-    let mut b = binding("table");
-    b.sql = Some("SELECT 1".into());
-    cfg.layers = vec![layer_with_binding(b)];
-    let err = validate(&mut cfg, Path::new(".")).unwrap_err();
-    assert!(
-        matches!(&err, crate::ConfigError::Invalid(s) if s.contains("mutually exclusive")),
-        "expected mutually-exclusive rejection, got {err:?}"
-    );
-}
-
-#[test]
-fn rejects_neither_from_nor_sql_set() {
-    let mut cfg = minimal_config();
-    let mut b = binding("table");
-    b.from = None;
-    cfg.layers = vec![layer_with_binding(b)];
-    let err = validate(&mut cfg, Path::new(".")).unwrap_err();
-    assert!(
-        matches!(&err, crate::ConfigError::Invalid(s) if s.contains("exactly one")),
-        "expected one-of rejection, got {err:?}"
-    );
-}
-
-#[test]
 fn accepts_sql_binding() {
     let mut cfg = minimal_config();
-    let mut b = binding("ignored");
-    b.from = None;
-    b.sql = Some("SELECT id, geom FROM a JOIN b USING (k)".into());
-    cfg.layers = vec![layer_with_binding(b)];
+    cfg.layers = vec![layer_with_binding(sql_binding(
+        "SELECT id, geom FROM a JOIN b USING (k)",
+    ))];
     validate(&mut cfg, Path::new(".")).expect("sql binding accepted");
 }
 
 #[test]
 fn rejects_sql_with_semicolon() {
     let mut cfg = minimal_config();
-    let mut b = binding("ignored");
-    b.from = None;
-    b.sql = Some("SELECT 1; DROP TABLE x".into());
-    cfg.layers = vec![layer_with_binding(b)];
+    cfg.layers = vec![layer_with_binding(sql_binding("SELECT 1; DROP TABLE x"))];
     let err = validate(&mut cfg, Path::new(".")).unwrap_err();
     assert!(
         matches!(&err, crate::ConfigError::Invalid(s) if s.contains("only a single SELECT")),
@@ -86,10 +66,7 @@ fn rejects_sql_with_semicolon() {
 #[test]
 fn rejects_sql_without_select_prefix() {
     let mut cfg = minimal_config();
-    let mut b = binding("ignored");
-    b.from = None;
-    b.sql = Some("UPDATE t SET x = 1".into());
-    cfg.layers = vec![layer_with_binding(b)];
+    cfg.layers = vec![layer_with_binding(sql_binding("UPDATE t SET x = 1"))];
     let err = validate(&mut cfg, Path::new(".")).unwrap_err();
     assert!(
         matches!(&err, crate::ConfigError::Invalid(s) if s.contains("must be a SELECT")),
@@ -293,7 +270,10 @@ fn rejects_unparsable_sidecar_size_warn_bytes() {
 fn accepts_postgis_binding_with_dsn_override() {
     let mut cfg = minimal_config();
     let mut b = binding("buildings");
-    b.dsn = Some("postgres://override@host/db".into());
+    let BindingKind::PostgisTable { dsn, .. } = &mut b.kind else {
+        unreachable!("fixture builds a postgis-table binding");
+    };
+    *dsn = Some("postgres://override@host/db".into());
     cfg.layers = vec![layer_with_binding(b)];
     assert!(
         validate(&mut cfg, Path::new(".")).is_ok(),

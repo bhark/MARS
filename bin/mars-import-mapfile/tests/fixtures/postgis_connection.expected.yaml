@@ -65,21 +65,21 @@ layers:
   - name: "roads"
     type: line
     sources:
-      - { band: detail, from: "roads", geometry_column: "geom" }
-      - { band: hi, from: "roads", geometry_column: "geom" }
-      - { band: mid, from: "roads", geometry_column: "geom" }
-      - { band: lo, from: "roads", geometry_column: "geom" }
-      - { band: overview, from: "roads", geometry_column: "geom" }
+      - { kind: postgis_table, band: detail, from: "roads", geometry_column: "geom" }
+      - { kind: postgis_table, band: hi, from: "roads", geometry_column: "geom" }
+      - { kind: postgis_table, band: mid, from: "roads", geometry_column: "geom" }
+      - { kind: postgis_table, band: lo, from: "roads", geometry_column: "geom" }
+      - { kind: postgis_table, band: overview, from: "roads", geometry_column: "geom" }
     classes:
       - { name: "class_l16", style: { type: ref, name: "line_roads_class_l16" } }
   - name: "buildings"
     type: polygon
     sources:
-      - { band: detail, from: "buildings", geometry_column: "geom" }
-      - { band: hi, from: "buildings", geometry_column: "geom" }
-      - { band: mid, from: "buildings", geometry_column: "geom" }
-      - { band: lo, from: "buildings", geometry_column: "geom" }
-      - { band: overview, from: "buildings", geometry_column: "geom" }
+      - { kind: postgis_table, band: detail, from: "buildings", geometry_column: "geom" }
+      - { kind: postgis_table, band: hi, from: "buildings", geometry_column: "geom" }
+      - { kind: postgis_table, band: mid, from: "buildings", geometry_column: "geom" }
+      - { kind: postgis_table, band: lo, from: "buildings", geometry_column: "geom" }
+      - { kind: postgis_table, band: overview, from: "buildings", geometry_column: "geom" }
     classes:
       - { name: "class_l31", style: { type: ref, name: "poly_buildings_class_l31" } }
 

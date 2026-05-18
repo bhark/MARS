@@ -63,11 +63,11 @@ layers:
   - name: "trails"
     type: line
     sources:
-      - { band: detail, from: "trails", geometry_column: "geom", id_column: "OGC_FID" }
-      - { band: hi, from: "trails", geometry_column: "geom", id_column: "OGC_FID" }
-      - { band: mid, from: "trails", geometry_column: "geom", id_column: "OGC_FID" }
-      - { band: lo, from: "trails", geometry_column: "geom", id_column: "OGC_FID" }
-      - { band: overview, from: "trails", geometry_column: "geom", id_column: "OGC_FID" }
+      - { kind: postgis_table, band: detail, from: "trails", geometry_column: "geom", id_column: "OGC_FID" }
+      - { kind: postgis_table, band: hi, from: "trails", geometry_column: "geom", id_column: "OGC_FID" }
+      - { kind: postgis_table, band: mid, from: "trails", geometry_column: "geom", id_column: "OGC_FID" }
+      - { kind: postgis_table, band: lo, from: "trails", geometry_column: "geom", id_column: "OGC_FID" }
+      - { kind: postgis_table, band: overview, from: "trails", geometry_column: "geom", id_column: "OGC_FID" }
     classes:
       - { name: "dashed", title: "dashed", style: { type: ref, name: "line_trails_dashed" } }
 

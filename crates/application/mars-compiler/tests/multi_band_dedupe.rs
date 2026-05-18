@@ -127,16 +127,15 @@ fn build_two_band_config() -> Config {
     size_per_band.insert("mid".into(), "4096m".into());
     let make_source = |band: &str| SourceBinding {
         source: SourceId::new("default"),
+        kind: mars_config::BindingKind::PostgisTable {
+            from: "vejmidte".into(),
+            geometry_column: "geom".into(),
+            dsn: None,
+        },
         scale: None,
         band: Some(band.into()),
         max_denom: None,
         filter: None,
-        from: Some("vejmidte".into()),
-        sql: None,
-        uri: None,
-        format: None,
-        source_crs: None,
-        geometry_column: "geom".into(),
         id_column: Some("id".into()),
         attributes: vec!["vejkategori".into()],
         levels: None,
@@ -145,7 +144,6 @@ fn build_two_band_config() -> Config {
         sidecar_size_warn_bytes: None,
         simplifier: None,
         on_missing_page: None,
-        dsn: None,
     };
     Config {
         service: ServiceMeta {

@@ -60,11 +60,11 @@ layers:
   - name: "airports"
     type: point
     sources:
-      - { source: ogr, band: detail, uri: "s3://bucket/airports.fgb", format: flat_geobuf, source_crs: "EPSG:4326" }
-      - { source: ogr, band: hi, uri: "s3://bucket/airports.fgb", format: flat_geobuf, source_crs: "EPSG:4326" }
-      - { source: ogr, band: mid, uri: "s3://bucket/airports.fgb", format: flat_geobuf, source_crs: "EPSG:4326" }
-      - { source: ogr, band: lo, uri: "s3://bucket/airports.fgb", format: flat_geobuf, source_crs: "EPSG:4326" }
-      - { source: ogr, band: overview, uri: "s3://bucket/airports.fgb", format: flat_geobuf, source_crs: "EPSG:4326" }
+      - { source: ogr, kind: vectorfile, band: detail, uri: "s3://bucket/airports.fgb", format: flat_geobuf, source_crs: "EPSG:4326" }
+      - { source: ogr, kind: vectorfile, band: hi, uri: "s3://bucket/airports.fgb", format: flat_geobuf, source_crs: "EPSG:4326" }
+      - { source: ogr, kind: vectorfile, band: mid, uri: "s3://bucket/airports.fgb", format: flat_geobuf, source_crs: "EPSG:4326" }
+      - { source: ogr, kind: vectorfile, band: lo, uri: "s3://bucket/airports.fgb", format: flat_geobuf, source_crs: "EPSG:4326" }
+      - { source: ogr, kind: vectorfile, band: overview, uri: "s3://bucket/airports.fgb", format: flat_geobuf, source_crs: "EPSG:4326" }
 
 observability:
   log_level: info

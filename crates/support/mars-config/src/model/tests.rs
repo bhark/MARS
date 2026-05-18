@@ -1,22 +1,21 @@
 use std::num::NonZeroUsize;
 
 use crate::SourceId;
-use crate::model::{Compiler, PngCompression, Render, SimplifierKind, SourceBinding};
+use crate::model::{BindingKind, Compiler, PngCompression, Render, SimplifierKind, SourceBinding};
 use crate::model::{DEFAULT_PAGE_SIZE_TARGET_BYTES, DEFAULT_RECONCILE_EVERY_CYCLES, DEFAULT_SIDECAR_SIZE_WARN_BYTES};
 
 fn minimal_binding() -> SourceBinding {
     SourceBinding {
         source: SourceId::new("default"),
+        kind: BindingKind::PostgisTable {
+            from: "x".into(),
+            geometry_column: "geom".into(),
+            dsn: None,
+        },
         scale: None,
         band: None,
         max_denom: None,
         filter: None,
-        from: Some("x".into()),
-        sql: None,
-        uri: None,
-        format: None,
-        source_crs: None,
-        geometry_column: "geom".into(),
         id_column: Some("id".into()),
         attributes: vec![],
         levels: None,
@@ -25,7 +24,6 @@ fn minimal_binding() -> SourceBinding {
         sidecar_size_warn_bytes: None,
         simplifier: None,
         on_missing_page: None,
-        dsn: None,
     }
 }
 

@@ -72,10 +72,10 @@ layers:
   - name: "roads"
     type: line
     sources:
-      - { band: detail, from: "roads_detailed", geometry_column: "geometri", id_column: "OGC_FID", attributes: ["vejkategori"] }
-      - { band: hi, from: "roads_detailed", geometry_column: "geometri", id_column: "OGC_FID", attributes: ["vejkategori"] }
-      - { band: mid, from: "roads_detailed", geometry_column: "geometri", id_column: "OGC_FID", max_denom_exclusive: 25000, attributes: ["vejkategori"] }
-      - { band: mid, from: "roads_simplified", geometry_column: "geometri", id_column: "OGC_FID", attributes: ["vejkategori"] }
+      - { kind: postgis_table, band: detail, from: "roads_detailed", geometry_column: "geometri", id_column: "OGC_FID", attributes: ["vejkategori"] }
+      - { kind: postgis_table, band: hi, from: "roads_detailed", geometry_column: "geometri", id_column: "OGC_FID", attributes: ["vejkategori"] }
+      - { kind: postgis_table, band: mid, from: "roads_detailed", geometry_column: "geometri", id_column: "OGC_FID", max_denom_exclusive: 25000, attributes: ["vejkategori"] }
+      - { kind: postgis_table, band: mid, from: "roads_simplified", geometry_column: "geometri", id_column: "OGC_FID", attributes: ["vejkategori"] }
     classes:
       - { name: "main", title: "main", when: "vejkategori = 'main'", style: { type: ref, name: "line_roads_main" } }
       - { name: "other", title: "other", when: "vejkategori IN ('other', 'local')", style: { type: ref, name: "line_roads_other" } }

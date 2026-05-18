@@ -88,11 +88,11 @@ layers:
   - name: "ranks"
     type: polygon
     sources:
-      - { band: detail, from: "ranks", geometry_column: "geom", id_column: "OGC_FID", attributes: ["other", "rtt"] }
-      - { band: hi, from: "ranks", geometry_column: "geom", id_column: "OGC_FID", attributes: ["other", "rtt"] }
-      - { band: mid, from: "ranks", geometry_column: "geom", id_column: "OGC_FID", attributes: ["other", "rtt"] }
-      - { band: lo, from: "ranks", geometry_column: "geom", id_column: "OGC_FID", attributes: ["other", "rtt"] }
-      - { band: overview, from: "ranks", geometry_column: "geom", id_column: "OGC_FID", attributes: ["other", "rtt"] }
+      - { kind: postgis_table, band: detail, from: "ranks", geometry_column: "geom", id_column: "OGC_FID", attributes: ["other", "rtt"] }
+      - { kind: postgis_table, band: hi, from: "ranks", geometry_column: "geom", id_column: "OGC_FID", attributes: ["other", "rtt"] }
+      - { kind: postgis_table, band: mid, from: "ranks", geometry_column: "geom", id_column: "OGC_FID", attributes: ["other", "rtt"] }
+      - { kind: postgis_table, band: lo, from: "ranks", geometry_column: "geom", id_column: "OGC_FID", attributes: ["other", "rtt"] }
+      - { kind: postgis_table, band: overview, from: "ranks", geometry_column: "geom", id_column: "OGC_FID", attributes: ["other", "rtt"] }
     classes:
       - { name: "hovedrute", title: "hovedrute", when: "rtt = 'Hovedrute'", style: { type: ref, name: "poly_ranks_hovedrute" } }
       - { name: "majors", title: "majors", when: "rtt IN (14, 15, 984)", style: { type: ref, name: "poly_ranks_majors" } }

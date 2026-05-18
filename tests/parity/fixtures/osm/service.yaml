@@ -80,7 +80,8 @@ layers:
     title: "Landuse"
     type: polygon
     sources:
-      - band: hi
+      - kind: postgis_table
+        band: hi
         scale: { max: 250000 }
         from: parity_landuse
         geometry_column: way
@@ -96,7 +97,8 @@ layers:
     title: "Water"
     type: polygon
     sources:
-      - band: hi
+      - kind: postgis_table
+        band: hi
         scale: { max: 250000 }
         from: parity_water
         geometry_column: way
@@ -108,7 +110,8 @@ layers:
     title: "Waterways"
     type: line
     sources:
-      - band: hi
+      - kind: postgis_table
+        band: hi
         scale: { max: 100000 }
         from: parity_waterways
         geometry_column: way
@@ -123,7 +126,8 @@ layers:
     title: "Minor roads"
     type: line
     sources:
-      - band: hi
+      - kind: postgis_table
+        band: hi
         scale: { max: 50000 }
         from: parity_roads_minor
         geometry_column: way
@@ -135,7 +139,8 @@ layers:
     title: "Major roads"
     type: line
     sources:
-      - band: hi
+      - kind: postgis_table
+        band: hi
         from: parity_roads_major
         geometry_column: way
         id_column: fid
@@ -150,7 +155,8 @@ layers:
     title: "Buildings"
     type: polygon
     sources:
-      - band: hi
+      - kind: postgis_table
+        band: hi
         scale: { max: 25000 }
         from: parity_buildings
         geometry_column: way
@@ -162,7 +168,8 @@ layers:
     title: "Country boundary"
     type: line
     sources:
-      - band: hi
+      - kind: postgis_table
+        band: hi
         from: parity_boundary
         geometry_column: way
         id_column: fid
@@ -173,7 +180,8 @@ layers:
     title: "Places"
     type: point
     sources:
-      - band: hi
+      - kind: postgis_table
+        band: hi
         scale: { max: 100000 }
         from: parity_places
         geometry_column: way

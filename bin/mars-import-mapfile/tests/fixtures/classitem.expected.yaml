@@ -69,11 +69,11 @@ layers:
   - name: "areas"
     type: polygon
     sources:
-      - { band: detail, from: "areas", geometry_column: "geom", id_column: "OGC_FID", attributes: ["kind", "name"] }
-      - { band: hi, from: "areas", geometry_column: "geom", id_column: "OGC_FID", attributes: ["kind", "name"] }
-      - { band: mid, from: "areas", geometry_column: "geom", id_column: "OGC_FID", attributes: ["kind", "name"] }
-      - { band: lo, from: "areas", geometry_column: "geom", id_column: "OGC_FID", attributes: ["kind", "name"] }
-      - { band: overview, from: "areas", geometry_column: "geom", id_column: "OGC_FID", attributes: ["kind", "name"] }
+      - { kind: postgis_table, band: detail, from: "areas", geometry_column: "geom", id_column: "OGC_FID", attributes: ["kind", "name"] }
+      - { kind: postgis_table, band: hi, from: "areas", geometry_column: "geom", id_column: "OGC_FID", attributes: ["kind", "name"] }
+      - { kind: postgis_table, band: mid, from: "areas", geometry_column: "geom", id_column: "OGC_FID", attributes: ["kind", "name"] }
+      - { kind: postgis_table, band: lo, from: "areas", geometry_column: "geom", id_column: "OGC_FID", attributes: ["kind", "name"] }
+      - { kind: postgis_table, band: overview, from: "areas", geometry_column: "geom", id_column: "OGC_FID", attributes: ["kind", "name"] }
     classes:
       - { name: "park", title: "park", when: "kind = 'park'", style: { type: ref, name: "poly_areas_park" } }
       - { name: "water", title: "water", when: "kind = 'water'", style: { type: ref, name: "poly_areas_water" } }

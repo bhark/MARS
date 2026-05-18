@@ -70,16 +70,15 @@ fn config_with(layers: Vec<mars_config::Layer>) -> Config {
 fn binding(from: &str) -> SourceBinding {
     SourceBinding {
         source: mars_config::SourceId::new("default"),
+        kind: mars_config::BindingKind::PostgisTable {
+            from: from.into(),
+            geometry_column: "geom".into(),
+            dsn: None,
+        },
         scale: None,
         band: None,
         max_denom: None,
         filter: None,
-        from: Some(from.into()),
-        sql: None,
-        uri: None,
-        format: None,
-        source_crs: None,
-        geometry_column: "geom".into(),
         id_column: Some("id".into()),
         attributes: vec!["name".into()],
         levels: None,
@@ -88,14 +87,16 @@ fn binding(from: &str) -> SourceBinding {
         sidecar_size_warn_bytes: None,
         simplifier: None,
         on_missing_page: None,
-        dsn: None,
     }
 }
 
 fn sql_binding(sql: &str) -> SourceBinding {
     let mut b = binding("ignored");
-    b.from = None;
-    b.sql = Some(sql.into());
+    b.kind = mars_config::BindingKind::PostgisSql {
+        sql: sql.into(),
+        geometry_column: "geom".into(),
+        dsn: None,
+    };
     b
 }
 
@@ -297,10 +298,12 @@ fn layers_for_filters_to_target_binding() {
 
 #[test]
 fn rejects_conflicting_geometry_field() {
-    let mut b1 = binding("parcels");
+    let b1 = binding("parcels");
     let mut b2 = binding("parcels");
-    b2.geometry_column = "shape".into();
-    b1.geometry_column = "geom".into();
+    let mars_config::BindingKind::PostgisTable { geometry_column, .. } = &mut b2.kind else {
+        unreachable!("binding fixture builds a postgis-table kind");
+    };
+    *geometry_column = "shape".into();
     let cfg = config_with(vec![layer("a", vec![b1]), layer("b", vec![b2])]);
     let err = build_bootstrap_plan(&cfg).unwrap_err();
     assert!(matches!(
@@ -348,7 +351,10 @@ fn rejects_conflicting_missing_page_policy() {
 fn rejects_conflicting_dsn() {
     let b1 = binding("parcels");
     let mut b2 = binding("parcels");
-    b2.dsn = Some("postgresql://other/db".into());
+    let mars_config::BindingKind::PostgisTable { dsn, .. } = &mut b2.kind else {
+        unreachable!("binding fixture builds a postgis-table kind");
+    };
+    *dsn = Some("postgresql://other/db".into());
     let cfg = config_with(vec![layer("a", vec![b1]), layer("b", vec![b2])]);
     let err = build_bootstrap_plan(&cfg).unwrap_err();
     assert!(matches!(err, PlanError::ConflictingBinding { detail: "dsn", .. }));

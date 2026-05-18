@@ -67,11 +67,11 @@ layers:
   - name: "rivers"
     type: line
     sources:
-      - { band: detail, from: "rivers", geometry_column: "geom", id_column: "OGC_FID", attributes: ["rank"] }
-      - { band: hi, from: "rivers", geometry_column: "geom", id_column: "OGC_FID", attributes: ["rank"] }
-      - { band: mid, from: "rivers", geometry_column: "geom", id_column: "OGC_FID", attributes: ["rank"] }
-      - { band: lo, from: "rivers", geometry_column: "geom", id_column: "OGC_FID", attributes: ["rank"] }
-      - { band: overview, from: "rivers", geometry_column: "geom", id_column: "OGC_FID", attributes: ["rank"] }
+      - { kind: postgis_table, band: detail, from: "rivers", geometry_column: "geom", id_column: "OGC_FID", attributes: ["rank"] }
+      - { kind: postgis_table, band: hi, from: "rivers", geometry_column: "geom", id_column: "OGC_FID", attributes: ["rank"] }
+      - { kind: postgis_table, band: mid, from: "rivers", geometry_column: "geom", id_column: "OGC_FID", attributes: ["rank"] }
+      - { kind: postgis_table, band: lo, from: "rivers", geometry_column: "geom", id_column: "OGC_FID", attributes: ["rank"] }
+      - { kind: postgis_table, band: overview, from: "rivers", geometry_column: "geom", id_column: "OGC_FID", attributes: ["rank"] }
     classes:
       - { name: "major", title: "major", when: "rank = 1", style: { type: ref, name: "line_rivers_major" } }
 

@@ -31,25 +31,26 @@ pub(crate) fn build_replication_topology(cfg: &Config) -> Result<ReplicationTopo
     let mut seen: BTreeMap<(String, String), CollectionTopology> = BTreeMap::new();
     for layer in &cfg.layers {
         for binding in &layer.sources {
-            // raw-SQL bindings are snapshot-only and don't participate in the
-            // logical-replication topology; the change-feed cannot route
-            // pgoutput events back to an inline view. config validation
-            // already accepts the binding; skip it here.
-            let Some((schema, table)) = binding.schema_table() else {
+            // only postgis-table bindings participate in logical replication:
+            // sql: is snapshot-only (pgoutput cannot route events back to an
+            // inline view); vectorfile bindings have no postgres backend at all.
+            let mars_config::BindingKind::PostgisTable {
+                from, geometry_column, ..
+            } = &binding.kind
+            else {
                 continue;
             };
-            let from = match binding.from.as_deref() {
-                Some(from) => from,
-                None => continue,
+            let Some((schema, table)) = binding.schema_table() else {
+                continue;
             };
             let id_column = binding.id_column.as_deref().unwrap_or("id");
             let key = (schema.to_string(), table.to_string());
             if let Some(existing) = seen.get(&key) {
-                if existing.geometry_column != binding.geometry_column {
+                if &existing.geometry_column != geometry_column {
                     return Err(anyhow!(
                         "source relation {schema}.{table} has conflicting geometry_column values: {:?} vs {:?}",
                         existing.geometry_column,
-                        binding.geometry_column
+                        geometry_column
                     ));
                 }
                 if existing.id_column != id_column {
@@ -59,7 +60,7 @@ pub(crate) fn build_replication_topology(cfg: &Config) -> Result<ReplicationTopo
                         id_column
                     ));
                 }
-                if existing.collection.as_str() != from {
+                if existing.collection.as_str() != from.as_str() {
                     return Err(anyhow!(
                         "source relation {schema}.{table} is declared with multiple source names: {:?} vs {:?}",
                         existing.collection.as_str(),
@@ -71,10 +72,10 @@ pub(crate) fn build_replication_topology(cfg: &Config) -> Result<ReplicationTopo
             seen.insert(
                 key,
                 CollectionTopology {
-                    collection: SourceCollectionId::new(from.to_owned()),
+                    collection: SourceCollectionId::new(from.clone()),
                     schema: schema.to_string(),
                     table: table.to_string(),
-                    geometry_column: binding.geometry_column.clone(),
+                    geometry_column: geometry_column.clone(),
                     id_column: id_column.to_string(),
                 },
             );

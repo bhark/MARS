@@ -67,11 +67,11 @@ layers:
   - name: "places"
     type: point
     sources:
-      - { band: detail, from: "places", geometry_column: "geom", id_column: "OGC_FID", attributes: ["name"] }
-      - { band: hi, from: "places", geometry_column: "geom", id_column: "OGC_FID", attributes: ["name"] }
-      - { band: mid, from: "places", geometry_column: "geom", id_column: "OGC_FID", attributes: ["name"] }
-      - { band: lo, from: "places", geometry_column: "geom", id_column: "OGC_FID", attributes: ["name"] }
-      - { band: overview, from: "places", geometry_column: "geom", id_column: "OGC_FID", attributes: ["name"] }
+      - { kind: postgis_table, band: detail, from: "places", geometry_column: "geom", id_column: "OGC_FID", attributes: ["name"] }
+      - { kind: postgis_table, band: hi, from: "places", geometry_column: "geom", id_column: "OGC_FID", attributes: ["name"] }
+      - { kind: postgis_table, band: mid, from: "places", geometry_column: "geom", id_column: "OGC_FID", attributes: ["name"] }
+      - { kind: postgis_table, band: lo, from: "places", geometry_column: "geom", id_column: "OGC_FID", attributes: ["name"] }
+      - { kind: postgis_table, band: overview, from: "places", geometry_column: "geom", id_column: "OGC_FID", attributes: ["name"] }
     classes:
       - { name: "default", title: "default", style: { type: ref, name: "point_places_default" } }
     label:

@@ -37,34 +37,24 @@ pub enum VectorFileFormat {
     GeoPackage,
 }
 
-/// Source binding for a layer. Always points at one of the configured
+/// Source binding for a layer. Points at one of the configured
 /// [`super::super::source::Source`] entries via [`Self::source`]; the
-/// remaining fields are mutually-exclusive variants describing how to
-/// pull rows from that source:
-///
-/// - `from:` / `sql:` — PostGIS binding (a table reference or an inline
-///   SELECT).
-/// - `uri:` + `format:` + `source_crs:` — vector-file binding (an object-store
-///   URI plus decoder hint and the file's native CRS).
-///
-/// Exactly one variant must be set; the cross-check is enforced at validate
-/// time.
+/// kind-specific payload (postgis-table, postgis-sql, vectorfile) lives
+/// under [`Self::kind`] and is selected by the `kind:` discriminator on the
+/// wire.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourceBinding {
     /// Identifier of the configured source that feeds this binding. Must
     /// resolve against the service-level `sources:` list. Defaults to
-    /// [`DEFAULT_SOURCE_ID`] so legacy single-source configs don't need to
-    /// name their one source.
+    /// [`DEFAULT_SOURCE_ID`] so single-source configs don't need to name
+    /// their one source.
     #[serde(default = "default_binding_source_id")]
     pub source: SourceId,
-    /// Per-binding database connection override. When set on a postgis
-    /// binding, snapshot queries route to this DSN instead of the
-    /// source-scope `dsn`. Logical-replication ownership stays on the
-    /// source-scope DSN, so override bindings are effectively snapshot-only
-    /// for change-feed purposes. Validation rejects this field on
-    /// non-postgis bindings.
-    #[serde(default)]
-    pub dsn: Option<String>,
+    /// Kind-specific payload (table reference, inline SELECT, or
+    /// vector-file URI). The wire-format discriminator is `kind:` with
+    /// values `postgis_table`, `postgis_sql`, `vectorfile`.
+    #[serde(flatten)]
+    pub kind: BindingKind,
     /// Scale window this binding is active in.
     #[serde(default)]
     pub scale: Option<ScaleWindow>,
@@ -85,29 +75,6 @@ pub struct SourceBinding {
     /// covers the whole band (back-compat shorthand).
     #[serde(default, rename = "max_denom_exclusive")]
     pub max_denom: Option<u64>,
-    /// Source table or relation. One of `from` (table) or `sql` (raw view
-    /// SELECT) must be set. `from` is the common path; `sql` covers the
-    /// inline-subquery bindings mapserver expresses in `DATA` blocks.
-    #[serde(default)]
-    pub from: Option<String>,
-    /// Inline `SELECT` driving this binding. Snapshot-only - logical
-    /// replication change-feed bindings remain table-only. The compiler
-    /// wraps this as `FROM (<sql>) AS src`. Mutually exclusive with `from`.
-    #[serde(default)]
-    pub sql: Option<String>,
-    /// Vector-file URI. One of `s3://...`, `gs://...`, `file://...`,
-    /// `https://...`. The object-store backend is inferred from the scheme.
-    /// Mutually exclusive with `from:` / `sql:`.
-    #[serde(default)]
-    pub uri: Option<String>,
-    /// Decoder hint for a vectorfile binding. Required when `uri:` is set.
-    #[serde(default)]
-    pub format: Option<VectorFileFormat>,
-    /// Source CRS of the vector file. Required when `uri:` is set; the
-    /// adapter reprojects to the configured source's `native_crs` before
-    /// emitting WKB.
-    #[serde(default)]
-    pub source_crs: Option<CrsCode>,
     /// Optional binding-level filter expression (mars-expr DSL). When set,
     /// the compiler ANDs this into the source SELECT so artifacts only
     /// materialise rows the filter accepts. Mirrors MapServer DATA inline
@@ -115,11 +82,6 @@ pub struct SourceBinding {
     /// declared in `attributes` (or be `id_column`).
     #[serde(default)]
     pub filter: Option<String>,
-    /// Geometry column. Required for postgis bindings; ignored (empty
-    /// permitted) for vectorfile bindings whose decoder owns geometry
-    /// extraction.
-    #[serde(default)]
-    pub geometry_column: String,
     /// Identifier column.
     #[serde(default)]
     pub id_column: Option<String>,
@@ -161,6 +123,55 @@ pub struct SourceBinding {
     /// trade-offs.
     #[serde(default)]
     pub on_missing_page: Option<MissingPagePolicy>,
+}
+
+/// Variant-specific binding payload. The wire form is internally tagged on
+/// `kind:` so each YAML binding states its shape up front and serde rejects
+/// malformed inputs at deserialize time rather than runtime validation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum BindingKind {
+    /// PostGIS table reference. Pulls from `<schema>.<table>` (single-segment
+    /// names route to `public`); change-feed compatible.
+    PostgisTable {
+        /// Table reference (`table` or `schema.table`).
+        from: String,
+        /// Geometry column on the table.
+        geometry_column: String,
+        /// Optional per-binding DSN override. Snapshot queries route to this
+        /// DSN; logical-replication ownership stays on the source-scope
+        /// `dsn`, so override bindings are snapshot-only for change-feed
+        /// purposes.
+        #[serde(default)]
+        dsn: Option<String>,
+    },
+    /// Inline SELECT statement. Snapshot-only; logical-replication
+    /// change-feed bindings remain table-only because pgoutput cannot route
+    /// events back to an inline view. The compiler wraps the SELECT as
+    /// `FROM (<sql>) AS src`.
+    PostgisSql {
+        /// SELECT statement driving the binding.
+        sql: String,
+        /// Geometry column on the SELECT projection.
+        geometry_column: String,
+        /// Optional per-binding DSN override. See
+        /// [`BindingKind::PostgisTable::dsn`] for semantics.
+        #[serde(default)]
+        dsn: Option<String>,
+    },
+    /// Vector file behind an object-store URI (`s3://`, `gs://`, `file://`,
+    /// `https://`). The decoder named in `format` reads the bytes and
+    /// reprojects from `source_crs` to the source's `native_crs` before
+    /// emitting WKB. Vector-file bindings own geometry extraction, so the
+    /// `geometry_column` field is absent on this variant.
+    Vectorfile {
+        /// Object-store URI of the vector file.
+        uri: String,
+        /// Decoder selecting how the bytes are parsed.
+        format: VectorFileFormat,
+        /// Source CRS of the vector file's coordinates.
+        source_crs: CrsCode,
+    },
 }
 
 /// Default byte-budget target per page artifact (~5 MiB).
@@ -216,15 +227,17 @@ pub enum SimplifierKind {
 }
 
 impl SourceBinding {
-    /// Split `from` into `(schema, table)`. Single-segment names route to
-    /// `public` to match the postgres adapter convention. Returns `None`
-    /// when the binding is a `sql:` view rather than a table binding.
+    /// Split `from` into `(schema, table)` for a postgis-table binding.
+    /// Single-segment names route to `public` to match the postgres adapter
+    /// convention. Returns `None` for postgis-sql and vectorfile bindings.
     #[must_use]
     pub fn schema_table(&self) -> Option<(&str, &str)> {
-        let from = self.from.as_deref()?;
+        let BindingKind::PostgisTable { from, .. } = &self.kind else {
+            return None;
+        };
         Some(match from.split_once('.') {
             Some((s, t)) => (s, t),
-            None => ("public", from),
+            None => ("public", from.as_str()),
         })
     }
 
@@ -234,21 +247,18 @@ impl SourceBinding {
     /// regardless of source kind.
     #[must_use]
     pub fn source_descriptor(&self) -> String {
-        if let Some(t) = &self.from {
-            return t.clone();
+        match &self.kind {
+            BindingKind::PostgisTable { from, .. } => from.clone(),
+            BindingKind::PostgisSql { sql, .. } => {
+                let trimmed = sql.split_whitespace().collect::<Vec<_>>().join(" ");
+                if trimmed.len() > 80 {
+                    format!("sql:{}…", &trimmed[..80])
+                } else {
+                    format!("sql:{trimmed}")
+                }
+            }
+            BindingKind::Vectorfile { uri, .. } => format!("uri:{uri}"),
         }
-        if let Some(s) = &self.sql {
-            let trimmed = s.split_whitespace().collect::<Vec<_>>().join(" ");
-            return if trimmed.len() > 80 {
-                format!("sql:{}…", &trimmed[..80])
-            } else {
-                format!("sql:{trimmed}")
-            };
-        }
-        if let Some(u) = &self.uri {
-            return format!("uri:{u}");
-        }
-        "<unset>".to_string()
     }
 
     /// Resolve `page_size_target_bytes` against the substrate default.

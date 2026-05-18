@@ -62,11 +62,11 @@ layers:
     type: polygon
     template: "areas_info.html"
     sources:
-      - { band: detail, from: "areas", geometry_column: "geom", id_column: "OGC_FID" }
-      - { band: hi, from: "areas", geometry_column: "geom", id_column: "OGC_FID" }
-      - { band: mid, from: "areas", geometry_column: "geom", id_column: "OGC_FID" }
-      - { band: lo, from: "areas", geometry_column: "geom", id_column: "OGC_FID" }
-      - { band: overview, from: "areas", geometry_column: "geom", id_column: "OGC_FID" }
+      - { kind: postgis_table, band: detail, from: "areas", geometry_column: "geom", id_column: "OGC_FID" }
+      - { kind: postgis_table, band: hi, from: "areas", geometry_column: "geom", id_column: "OGC_FID" }
+      - { kind: postgis_table, band: mid, from: "areas", geometry_column: "geom", id_column: "OGC_FID" }
+      - { kind: postgis_table, band: lo, from: "areas", geometry_column: "geom", id_column: "OGC_FID" }
+      - { kind: postgis_table, band: overview, from: "areas", geometry_column: "geom", id_column: "OGC_FID" }
     classes:
       - { name: "default", title: "default", style: { type: ref, name: "poly_areas_default" } }
 

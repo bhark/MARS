@@ -77,7 +77,7 @@ layers:
   - name: roads
     title: "Roads"
     type: polygon
-    sources: [{ from: t, geometry_column: g }]
+    sources: [{ kind: postgis_table, from: t, geometry_column: g }]
     classes:
       - { name: main, title: "Main", style: { type: inline, fill: "#aabbcc", stroke: "#000000" } }
       - { name: minor, title: "Minor", style: { type: inline, stroke: "#555555" } }

@@ -24,14 +24,14 @@ layers:
     title: "A layer"
     type: polygon
     sources:
-      - { from: t, geometry_column: g }
+      - { kind: postgis_table, from: t, geometry_column: g }
     ows:
       request_gating: { wms_get_map: false }
   - name: b
     title: "B layer"
     type: polygon
     sources:
-      - { from: t, geometry_column: g }
+      - { kind: postgis_table, from: t, geometry_column: g }
     wms:
       enable_get_feature_info: true
 "#;

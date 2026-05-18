@@ -62,11 +62,11 @@ layers:
   - name: "industrial"
     type: polygon
     sources:
-      - { band: detail, from: "industrial", geometry_column: "geom", id_column: "OGC_FID" }
-      - { band: hi, from: "industrial", geometry_column: "geom", id_column: "OGC_FID" }
-      - { band: mid, from: "industrial", geometry_column: "geom", id_column: "OGC_FID" }
-      - { band: lo, from: "industrial", geometry_column: "geom", id_column: "OGC_FID" }
-      - { band: overview, from: "industrial", geometry_column: "geom", id_column: "OGC_FID" }
+      - { kind: postgis_table, band: detail, from: "industrial", geometry_column: "geom", id_column: "OGC_FID" }
+      - { kind: postgis_table, band: hi, from: "industrial", geometry_column: "geom", id_column: "OGC_FID" }
+      - { kind: postgis_table, band: mid, from: "industrial", geometry_column: "geom", id_column: "OGC_FID" }
+      - { kind: postgis_table, band: lo, from: "industrial", geometry_column: "geom", id_column: "OGC_FID" }
+      - { kind: postgis_table, band: overview, from: "industrial", geometry_column: "geom", id_column: "OGC_FID" }
     classes:
       - { name: "factory", title: "factory", style: { type: ref, name: "poly_industrial_factory" } }
 
