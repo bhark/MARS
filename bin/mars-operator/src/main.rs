@@ -15,6 +15,7 @@ mod bootstrap_flow;
 mod children;
 mod cli;
 mod clusterrole;
+mod compose;
 mod config;
 mod controller;
 mod crd;
