@@ -327,6 +327,32 @@ fn rejects_conflicting_attributes() {
     ));
 }
 
+#[test]
+fn rejects_conflicting_missing_page_policy() {
+    let b1 = binding("parcels");
+    let mut b2 = binding("parcels");
+    b2.on_missing_page = Some(mars_config::MissingPagePolicy::Fail);
+    let cfg = config_with(vec![layer("a", vec![b1]), layer("b", vec![b2])]);
+    let err = build_bootstrap_plan(&cfg).unwrap_err();
+    assert!(matches!(
+        err,
+        PlanError::ConflictingBinding {
+            detail: "missing_page_policy",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn rejects_conflicting_dsn() {
+    let b1 = binding("parcels");
+    let mut b2 = binding("parcels");
+    b2.dsn = Some("postgresql://other/db".into());
+    let cfg = config_with(vec![layer("a", vec![b1]), layer("b", vec![b2])]);
+    let err = build_bootstrap_plan(&cfg).unwrap_err();
+    assert!(matches!(err, PlanError::ConflictingBinding { detail: "dsn", .. }));
+}
+
 /// load -> validate -> propagate. exercises that per-level decimation
 /// values declared on a binding survive the full pipeline into the
 /// compiler's BindingPlan in declaration order. closes the gap noted

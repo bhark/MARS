@@ -44,6 +44,10 @@ pub(super) fn ensure_consistent(existing: &BindingPlan, candidate: &BindingPlan)
         || conflict("reconcile_every_cycles"),
     )?;
     ensure_eq(&existing.simplifier, &candidate.simplifier, || conflict("simplifier"))?;
+    ensure_eq(&existing.missing_page_policy, &candidate.missing_page_policy, || {
+        conflict("missing_page_policy")
+    })?;
+    ensure_eq(&existing.dsn, &candidate.dsn, || conflict("dsn"))?;
     Ok(())
 }
 
