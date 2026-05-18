@@ -2268,6 +2268,15 @@ dependencies = [
 name = "mars-test-support"
 version = "0.0.0-dev"
 dependencies = [
+ "async-trait",
+ "bytes",
+ "futures-core",
+ "futures-util",
+ "mars-render-port",
+ "mars-source",
+ "mars-store",
+ "mars-style",
+ "mars-types",
  "png",
  "zune-jpeg",
 ]
