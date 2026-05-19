@@ -51,6 +51,18 @@ fn render_png_compression_yaml_roundtrip() {
 }
 
 #[test]
+fn render_pixel_budget_optional() {
+    // unset → None, deferring to runtime cgroup auto-sizing
+    let r: Render = serde_yaml_ng::from_str("jpeg_quality: 85\n").unwrap();
+    assert_eq!(r.pixel_budget, None);
+    assert_eq!(r.pixel_budget_permits().unwrap(), None);
+
+    // explicit → Some, resolved to a permit count (bytes / 4)
+    let r: Render = serde_yaml_ng::from_str("jpeg_quality: 85\npixel_budget: 256MiB\n").unwrap();
+    assert_eq!(r.pixel_budget_permits().unwrap(), Some((256 * 1024 * 1024) / 4));
+}
+
+#[test]
 fn page_size_target_resolves_to_default() {
     let b = minimal_binding();
     assert_eq!(b.resolved_page_size_target(), DEFAULT_PAGE_SIZE_TARGET_BYTES);

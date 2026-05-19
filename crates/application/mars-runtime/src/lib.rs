@@ -20,6 +20,7 @@ pub use mars_text::Fonts;
 use mars_types::{Bbox, CrsCode, ImageFormat, LayerId, SourceCollectionId};
 use tokio::sync::Semaphore;
 
+mod budget;
 mod decode;
 mod error;
 mod exceptions;
@@ -47,6 +48,7 @@ pub mod bench_internals {
     };
 }
 
+pub use budget::resolve_pixel_budget;
 pub use error::RuntimeError;
 pub use fetch::{fetch_page, fetch_sidecar};
 pub use gfi::LayerFeatureInfo;

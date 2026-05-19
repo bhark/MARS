@@ -33,9 +33,11 @@ pub struct Render {
     /// Total in-flight raw-pixmap memory budget across all concurrent renders,
     /// expressed as a unit-suffixed byte literal (`512MiB`). The runtime
     /// converts to a permit count of pixels (bytes / 4) and a render reserves
-    /// `width * height` permits for its lifetime.
-    #[serde(default = "default_pixel_budget")]
-    pub pixel_budget: String,
+    /// `width * height` permits for its lifetime. When unset, the runtime
+    /// self-sizes against the active cgroup memory limit: 40% of the limit
+    /// minus a 256 MiB reservation. Outside a cgroup the fallback is 512 MiB.
+    #[serde(default)]
+    pub pixel_budget: Option<String>,
     /// PNG deflate level. Defaults to `fast`; `balanced` matches the upstream
     /// `png` crate default if exact byte parity with older renders is needed.
     #[serde(default)]
@@ -97,7 +99,7 @@ impl Default for Render {
     fn default() -> Self {
         Self {
             jpeg_quality: default_jpeg_quality(),
-            pixel_budget: default_pixel_budget(),
+            pixel_budget: None,
             png_compression: PngCompression::default(),
             page_fetch_concurrency: default_page_fetch_concurrency(),
             xyz_client: XyzClient::default(),
@@ -106,20 +108,21 @@ impl Default for Render {
 }
 
 impl Render {
-    /// Resolve `pixel_budget` to permit count (raw pixels). Saturates at u32::MAX.
-    pub fn pixel_budget_permits(&self) -> Result<u32, ConfigError> {
-        let bytes = units::parse_bytes(&self.pixel_budget)?;
-        let pixels = bytes / 4;
-        Ok(u32::try_from(pixels).unwrap_or(u32::MAX))
+    /// Resolve `pixel_budget` to a permit count (raw pixels) when explicitly
+    /// set. Saturates at `u32::MAX`. `None` means defer to cgroup auto-sizing.
+    pub fn pixel_budget_permits(&self) -> Result<Option<u32>, ConfigError> {
+        self.pixel_budget
+            .as_deref()
+            .map(|s| {
+                let pixels = units::parse_bytes(s)? / 4;
+                Ok(u32::try_from(pixels).unwrap_or(u32::MAX))
+            })
+            .transpose()
     }
 }
 
 fn default_jpeg_quality() -> u8 {
     85
-}
-
-fn default_pixel_budget() -> String {
-    "512MiB".to_owned()
 }
 
 fn default_page_fetch_concurrency() -> usize {
