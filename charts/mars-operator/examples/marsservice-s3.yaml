@@ -42,6 +42,8 @@ spec:
     log_format: json
   defaults:
     compiler:
+      # optional - omit to auto-size to min(cpu count, smallest postgis pool
+      # max_size). set explicitly only to throttle compile-time DB load.
       compile_binding_parallelism: 4
       compile_in_flight_pages_budget_bytes: 512MiB
       compile_spill_dir: /work/spill

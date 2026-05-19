@@ -71,7 +71,8 @@ spec:
     log_format: json
   defaults:
     compiler:
-      compile_binding_parallelism: 4
+      # compile_binding_parallelism omitted - auto-sizes against cpu count
+      # and the smallest postgis pool max_size.
       compile_in_flight_pages_budget_bytes: 512MiB
       compile_spill_dir: /work/spill
 ---
