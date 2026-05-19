@@ -25,7 +25,6 @@ artifacts:
   cache:
     path: /cache
     max_size: 512MiB
-    eviction: lru
 
 compiler:
   compile_binding_parallelism: 2

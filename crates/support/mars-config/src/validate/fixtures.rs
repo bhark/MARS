@@ -39,7 +39,6 @@ pub(crate) fn minimal_config() -> Config {
             cache: ArtifactCache {
                 path: "/tmp".into(),
                 max_size: "1GiB".into(),
-                eviction: "lru".into(),
                 trust_path_hash: false,
             },
         },

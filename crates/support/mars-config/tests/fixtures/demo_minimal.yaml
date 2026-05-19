@@ -21,7 +21,6 @@ artifacts:
   cache:
     path: /var/cache/mars
     max_size: 50GiB
-    eviction: lru
 
 scales:
   bands:

@@ -52,7 +52,7 @@ spec:
         schemas: [public, geo]
   artifactStore:
     store: { type: s3, bucket: mars-artifacts, region: eu-west-1 }
-    cache: { path: /cache, max_size: 1GiB, eviction: lru }
+    cache: { path: /cache, max_size: 1GiB }
 ```
 
 What `mars setup` does (run inside one transaction except for the slot, which postgres requires outside):

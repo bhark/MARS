@@ -118,7 +118,6 @@ pub(super) fn base_config(service_name: &str) -> Config {
             cache: ArtifactCache {
                 path: "/tmp".into(),
                 max_size: "1GiB".into(),
-                eviction: "lru".into(),
                 trust_path_hash: false,
             },
         },

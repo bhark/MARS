@@ -54,9 +54,6 @@ pub struct ArtifactCache {
     pub path: String,
     /// Max disk size as a unit-suffixed literal (`50GiB`).
     pub max_size: String,
-    /// Eviction policy.
-    #[serde(default = "default_eviction")]
-    pub eviction: String,
     /// When true, the cache treats the content-hashed key path as authority
     /// and verifies each artifact only once per process via BLAKE3. Cuts
     /// hot-path cost on hits at the price of skipping bit-rot detection
@@ -67,10 +64,6 @@ pub struct ArtifactCache {
     /// about silent disk corruption can flip this off.
     #[serde(default = "default_trust_path_hash")]
     pub trust_path_hash: bool,
-}
-
-fn default_eviction() -> String {
-    "lru".to_string()
 }
 
 fn default_trust_path_hash() -> bool {

@@ -42,7 +42,6 @@ fn cfg_with_layers(layers: Vec<Layer>) -> Config {
             cache: ArtifactCache {
                 path: "/tmp".into(),
                 max_size: "1MiB".into(),
-                eviction: "lru".into(),
                 trust_path_hash: false,
             },
         },

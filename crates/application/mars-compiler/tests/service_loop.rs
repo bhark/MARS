@@ -52,7 +52,6 @@ artifacts:
   cache:
     path: /tmp/mars-cache
     max_size: 1GiB
-    eviction: lru
 
 scales:
   bands:

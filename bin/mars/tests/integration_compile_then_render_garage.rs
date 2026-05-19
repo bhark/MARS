@@ -250,7 +250,6 @@ artifacts:
   cache:
     path: {cache_path}
     max_size: 64MiB
-    eviction: lru
 
 scales:
   bands:

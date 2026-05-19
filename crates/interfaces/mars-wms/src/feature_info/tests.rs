@@ -170,7 +170,7 @@ sources:
     native_crs: EPSG:25832
 artifacts:
   store: { type: fs, path: /tmp }
-  cache: { path: /tmp, max_size: 1GiB, eviction: lru }
+  cache: { path: /tmp, max_size: 1GiB }
 scales:
   bands: []
 interfaces:

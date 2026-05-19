@@ -37,7 +37,6 @@ fn config_with(layers: Vec<mars_config::Layer>) -> Config {
             cache: mars_config::ArtifactCache {
                 path: "/tmp".into(),
                 max_size: "1GiB".into(),
-                eviction: "lru".into(),
                 trust_path_hash: false,
             },
         },

@@ -25,7 +25,6 @@ artifacts:
   cache:
     path: {{CACHE}}
     max_size: 256MiB
-    eviction: lru
 
 # single broad band; per-layer `scale:` windows reproduce the MAXSCALEDENOM
 # gates of the reference renderer.

@@ -29,7 +29,6 @@ spec:
     cache:
       path: /cache
       max_size: 1GiB
-      eviction: lru
   reprojection:
     allowlist: ["EPSG:25832"]
   observability:
