@@ -18,6 +18,7 @@ members = [
     "crates/adapters/mars-render",
     "crates/adapters/mars-definition-source-inline",
     "crates/adapters/mars-definition-source-configmap",
+    "crates/adapters/mars-definition-source-git",
     "crates/application/mars-compiler",
     "crates/application/mars-runtime",
     "crates/interfaces/mars-ows-common",
@@ -81,6 +82,7 @@ mars-store-fs        = { path = "crates/adapters/mars-store-fs" }
 mars-render          = { path = "crates/adapters/mars-render" }
 mars-definition-source-inline = { path = "crates/adapters/mars-definition-source-inline" }
 mars-definition-source-configmap = { path = "crates/adapters/mars-definition-source-configmap" }
+mars-definition-source-git = { path = "crates/adapters/mars-definition-source-git" }
 # application
 mars-compiler       = { path = "crates/application/mars-compiler" }
 mars-runtime        = { path = "crates/application/mars-runtime" }
@@ -127,6 +129,9 @@ fontdb              = { version = "0.23.0", default-features = false }
 geo-types           = { version = "0.7.19", default-features = false }
 futures-core        = "0.3.32"
 futures-util        = "0.3.32"
+# vendored libgit2 + openssl keep the build self-contained (matches the
+# existing proj-sys / rusqlite-bundled posture; no system git/ssl runtime dep).
+git2                = { version = "0.21.0", default-features = false, features = ["https", "ssh", "vendored-libgit2", "vendored-openssl"] }
 geozero             = { version = "0.15.1", default-features = false, features = ["with-wkb", "with-geojson", "with-geo"] }
 hashbrown           = "0.17.1"
 hashlink            = "0.11.0"
@@ -173,6 +178,7 @@ testcontainers      = "0.27.3"
 thiserror           = "2.0.18"
 tiny-skia           = "0.12.0"
 tokio               = { version = "1.52.3", features = ["rt-multi-thread", "macros", "signal", "sync", "time", "fs", "net"] }
+tokio-stream        = "0.1.18"
 tokio-postgres      = "0.7.17"
 tokio-postgres-rustls = "0.13.0"
 tokio-util          = { version = "0.7.18", features = ["rt"] }
