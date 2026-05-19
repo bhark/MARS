@@ -42,8 +42,10 @@ multiple-versions    = "warn"
 wildcards            = "warn"
 allow-wildcard-paths = true
 deny = [
-    # rustls is preferred over openssl across the workspace.
-    { name = "openssl-sys" },
+    # rustls is preferred over openssl across the workspace. the libgit2/libssh2
+    # transitive chain (git2 dep, vendored) is the one unavoidable exception:
+    # libgit2 calls libssl directly for https/ssh and exposes no rustls option.
+    { name = "openssl-sys", wrappers = ["git2", "libgit2-sys", "libssh2-sys"] },
     { name = "openssl"     },
     { name = "native-tls"  },
 ]

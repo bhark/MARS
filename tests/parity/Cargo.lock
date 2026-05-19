@@ -137,9 +137,9 @@ dependencies = [
 
 [[package]]
 name = "astral-tokio-tar"
-version = "0.6.1"
+version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ce73b17c62717c4b6a9af10b43e87c578b0cac27e00666d48304d3b7d2c0693"
+checksum = "cb50a7aae84a03bf55b067832bc376f4961b790c97e64d3eacee97d389b90277"
 dependencies = [
  "filetime",
  "futures-core",
@@ -1863,9 +1863,9 @@ dependencies = [
 
 [[package]]
 name = "libsqlite3-sys"
-version = "0.34.0"
+version = "0.35.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91632f3b4fb6bd1d72aa3d78f41ffecfcf2b1a6648d8c241dbe7dbfaf4875e15"
+checksum = "133c182a6a2c87864fe97778797e46c7e999672690dc9fa3ee8e241aa4a9c13f"
 dependencies = [
  "cc",
  "pkg-config",
@@ -2017,6 +2017,16 @@ dependencies = [
  "regex",
  "serde",
  "serde_yaml_ng",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "mars-definition-source"
+version = "0.0.0-dev"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "futures-core",
  "thiserror 2.0.18",
 ]
 
@@ -2274,12 +2284,15 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-util",
+ "mars-definition-source",
  "mars-render-port",
  "mars-source",
  "mars-store",
  "mars-style",
  "mars-types",
  "png",
+ "tokio",
+ "tokio-stream",
  "zune-jpeg",
 ]
 
@@ -3244,9 +3257,9 @@ dependencies = [
 
 [[package]]
 name = "rusqlite"
-version = "0.36.0"
+version = "0.37.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3de23c3319433716cf134eed225fe9986bc24f63bed9be9f20c329029e672dc7"
+checksum = "165ca6e57b20e1351573e3729b958bc62f0e48025386970b6e4d29e7a7e71f3f"
 dependencies = [
  "bitflags 2.11.1",
  "fallible-iterator 0.3.0",
