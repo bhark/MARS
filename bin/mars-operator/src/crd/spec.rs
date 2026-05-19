@@ -135,6 +135,10 @@ pub(crate) enum SpecValidationError {
     NewShapeMissing(&'static str),
     #[error("spec.definition must set exactly one of `inline`, `configMapRef`, `gitRef`, `s3Ref`; found {0}")]
     DefinitionVariantCount(usize),
+    #[error(
+        "spec.bootstrap is rejected on the new path; bootstrap moved to MarsServiceCluster.spec.sourcesCatalog[].bootstrap"
+    )]
+    BootstrapOnNewPath,
 }
 
 /// Enforce the dual-shape admission rule: exactly one of (`config`) or
@@ -164,6 +168,10 @@ pub(crate) fn validate_spec(spec: &MarsServiceSpec) -> Result<(), SpecValidation
         let count = def.variants_set();
         if count != 1 {
             return Err(SpecValidationError::DefinitionVariantCount(count));
+        }
+        // bootstrap is a cluster-side concern on the new path
+        if spec.bootstrap.is_some() {
+            return Err(SpecValidationError::BootstrapOnNewPath);
         }
     }
 

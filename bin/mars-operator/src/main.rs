@@ -14,6 +14,7 @@ mod bootstrap;
 mod bootstrap_flow;
 mod children;
 mod cli;
+mod cluster_reconcile;
 mod clusterrole;
 mod compose;
 mod config;

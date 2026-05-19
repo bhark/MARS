@@ -19,6 +19,8 @@ use tokio_stream::wrappers::ReceiverStream;
 use tracing::{error, info, warn};
 
 use crate::cli::Cli;
+use crate::cluster_reconcile::{self, ClusterCtx};
+use crate::crd::cluster::MarsServiceCluster;
 use crate::crd::spec::MarsService;
 use crate::metrics::{self, Metrics};
 use crate::poller::PollerManager;
@@ -69,9 +71,16 @@ pub(crate) async fn run(cli: Cli) -> Result<()> {
     let ctx = Arc::new(Ctx {
         client: client.clone(),
         field_manager: cli.field_manager.clone(),
+        metrics: metrics_svc.clone(),
+        runtime_image: runtime_image.clone(),
+        poller,
+    });
+    let cluster_ctx = Arc::new(ClusterCtx {
+        client: client.clone(),
+        field_manager: cli.field_manager.clone(),
         metrics: metrics_svc,
         runtime_image,
-        poller,
+        operator_namespace: cli.namespace.clone(),
     });
 
     let crs: Api<MarsService> = Api::all(client.clone());
@@ -97,14 +106,39 @@ pub(crate) async fn run(cli: Cli) -> Result<()> {
         .run(reconcile::reconcile, reconcile::error_policy, ctx)
         .for_each(|res| async move {
             match res {
-                Ok((obj, _)) => info!(name = %obj.name, "reconciled"),
-                Err(e) => error!(error = %e, "reconcile loop error"),
+                Ok((obj, _)) => info!(name = %obj.name, "reconciled MarsService"),
+                Err(e) => error!(error = %e, "MarsService reconcile loop error"),
+            }
+        });
+
+    // cluster-scoped reconciler: owns one bootstrap Job per
+    // sourcesCatalog[].bootstrap entry. shares the kube client with the
+    // MarsService controller; runs concurrently.
+    let cluster_crs: Api<MarsServiceCluster> = Api::all(client.clone());
+    let cluster_cms: Api<ConfigMap> = Api::namespaced(client.clone(), &cli.namespace);
+    let cluster_jobs: Api<Job> = Api::namespaced(client.clone(), &cli.namespace);
+    let cluster_controller = Controller::new(cluster_crs, WatcherConfig::default())
+        .owns(cluster_cms, WatcherConfig::default())
+        .owns(cluster_jobs, WatcherConfig::default())
+        .shutdown_on_signal()
+        .run(
+            cluster_reconcile::reconcile,
+            cluster_reconcile::error_policy,
+            cluster_ctx,
+        )
+        .for_each(|res| async move {
+            match res {
+                Ok((obj, _)) => info!(name = %obj.name, "reconciled MarsServiceCluster"),
+                Err(e) => error!(error = %e, "MarsServiceCluster reconcile loop error"),
             }
         });
 
     tokio::select! {
         _ = controller => {
-            info!("controller exited");
+            info!("MarsService controller exited");
+        }
+        _ = cluster_controller => {
+            info!("MarsServiceCluster controller exited");
         }
         _ = metrics_serve => {
             info!("metrics server exited");

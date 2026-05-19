@@ -214,6 +214,25 @@ fn validate_spec_rejects_definition_with_zero_variants() {
 }
 
 #[test]
+fn validate_spec_rejects_bootstrap_on_new_path() {
+    let spec = MarsServiceSpec {
+        bootstrap: Some(crate::crd::bootstrap::BootstrapSpec {
+            enabled: true,
+            admin_secret_ref: Some(crate::crd::bootstrap::SecretKeyRef {
+                name: "admin".into(),
+                key: "dsn".into(),
+            }),
+            admin_credentials_ref: None,
+            runtime_password_secret_ref: None,
+            teardown_on_delete: crate::crd::bootstrap::TeardownPolicy::default(),
+        }),
+        ..new_shape_spec()
+    };
+    let err = validate_spec(&spec).expect_err("bootstrap on new path");
+    assert!(matches!(err, SpecValidationError::BootstrapOnNewPath), "{err:?}");
+}
+
+#[test]
 fn validate_spec_rejects_definition_with_multiple_variants() {
     let spec = MarsServiceSpec {
         definition: Some(DefinitionSpec {
