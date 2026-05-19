@@ -1,9 +1,12 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use kube::core::ObjectMeta;
+use mars_config::SourceBackend;
 use serde_json::json;
 
-use super::*;
+use super::jobs::synthesise_config;
+use super::plan::{CatalogBootstrapPlan, cluster_bootstrap_job_name, plan_hash, plan_jobs};
+use super::{SecretKeyRef, owner_reference};
 use crate::crd::cluster::{ClusterDefaults, MarsServiceCluster, MarsServiceClusterSpec};
 
 fn cluster(name: &str, catalog: Vec<serde_json::Value>) -> MarsServiceCluster {
