@@ -91,6 +91,34 @@ async fn happy_path_composes_round_trippable_config() {
     let _: mars_config::Config = serde_yaml_ng::from_str(&yaml).expect("re-parse composed config");
 }
 
+// reconcile dry-run: the configmap data the operator writes must equal the
+// canonical serialisation of the composed Config byte-for-byte. proves the
+// new-path wiring end-to-end without a live apiserver.
+#[tokio::test]
+async fn configmap_dry_run_matches_composed_config_byte_for_byte() {
+    use crate::children::{configmap, test_support};
+
+    let mut cr = svc();
+    cr.metadata.name = Some("demo".into());
+    cr.metadata.namespace = Some("gis".into());
+    let cluster = cluster();
+    let spec = cr.spec.definition.clone().unwrap();
+    let fake = FakeDefinitionSource::new(Bytes::from(DEFINITION_YAML), "rev-1");
+
+    let out = compose_from_source(&cr, &cluster, &spec, &fake)
+        .await
+        .expect("compose ok");
+    let expected_yaml = crate::config::canonicalize_yaml(&out.config).expect("canonicalise");
+
+    let (cm, _) = configmap::build(&cr, &out.config, test_support::owner_ref()).expect("build cm");
+    let data = cm.data.expect("cm has data");
+    let actual_yaml = data.get("mars.yaml").expect("mars.yaml key present");
+    assert_eq!(actual_yaml, &expected_yaml);
+
+    // and the bytes the pod will load round-trip back into mars_config::Config
+    let _: mars_config::Config = serde_yaml_ng::from_str(actual_yaml).expect("configmap payload parses as Config");
+}
+
 #[tokio::test]
 async fn fetch_error_surfaces_as_typed_error() {
     let cr = svc();

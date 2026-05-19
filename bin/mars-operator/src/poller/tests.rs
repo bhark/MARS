@@ -206,6 +206,28 @@ async fn different_spec_swaps_poller() {
 }
 
 #[tokio::test]
+async fn adapter_swap_git_to_s3_cancels_old_and_spawns_new() {
+    let (mgr, _rx) = manager();
+    let src1 = InstrumentedSource::new("r1");
+    let drops1 = src1.drop_count();
+    mgr.register_with_source("uid-1", "ns", "svc", spec_git("main"), Box::new(src1));
+    assert!(mgr.is_registered("uid-1"));
+
+    let src2 = InstrumentedSource::new("r2");
+    mgr.register_with_source("uid-1", "ns", "svc", spec_s3(), Box::new(src2));
+
+    timeout(Duration::from_secs(1), async {
+        while drops1.load(Ordering::SeqCst) == 0 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("git poller cancelled on swap to s3");
+    assert!(mgr.is_registered("uid-1"));
+    assert_eq!(mgr.len(), 1);
+}
+
+#[tokio::test]
 async fn adapter_swap_git_to_inline_cancels() {
     let (mgr, _rx) = manager();
     let src1 = InstrumentedSource::new("r1");
