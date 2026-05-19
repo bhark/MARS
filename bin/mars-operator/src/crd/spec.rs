@@ -57,12 +57,18 @@ pub(crate) struct MarsServiceSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) bootstrap: Option<BootstrapSpec>,
 
+    /// DEPRECATED: legacy in-CR config. Prefer clusterRef + definition +
+    /// sources on the new path. Will be removed in v1alpha2.
+    ///
     /// Legacy single-document MARS service config (mars_config::Config).
     /// Opaque in the CRD schema; parsed and validated server-side at
     /// reconcile. Mutually exclusive with the
     /// `clusterRef + definition + sources` triple.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(schema_with = "super::schema::preserve_unknown_fields_optional")]
+    #[schemars(
+        schema_with = "super::schema::preserve_unknown_fields_optional",
+        description = "DEPRECATED: legacy in-CR config. Prefer clusterRef + definition + sources on the new path. Will be removed in v1alpha2."
+    )]
     pub(crate) config: Option<serde_json::Value>,
 
     /// Pointer to the cluster-scoped `MarsServiceCluster` catalog this

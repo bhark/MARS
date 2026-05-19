@@ -259,6 +259,26 @@ fn print_crd_emits_multi_doc_with_cluster_first() {
 }
 
 #[test]
+fn crd_marks_spec_config_deprecated_in_schema_description() {
+    let crd = MarsService::crd();
+    let description = crd
+        .spec
+        .versions
+        .iter()
+        .find(|v| v.name == "v1alpha1")
+        .and_then(|v| v.schema.as_ref())
+        .and_then(|s| s.open_api_v3_schema.as_ref())
+        .and_then(|root| root.properties.as_ref()?.get("spec"))
+        .and_then(|spec| spec.properties.as_ref()?.get("config"))
+        .and_then(|cfg| cfg.description.clone())
+        .expect("config field description present");
+    assert!(
+        description.contains("DEPRECATED"),
+        "expected DEPRECATED in spec.config description, got: {description}"
+    );
+}
+
+#[test]
 fn validate_spec_rejects_definition_with_multiple_variants() {
     let spec = MarsServiceSpec {
         definition: Some(DefinitionSpec {

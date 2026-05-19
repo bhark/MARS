@@ -432,11 +432,7 @@ spec:
                     type: array
                 type: object
               config:
-                description: |-
-                  Legacy single-document MARS service config (mars_config::Config).
-                  Opaque in the CRD schema; parsed and validated server-side at
-                  reconcile. Mutually exclusive with the
-                  `clusterRef + definition + sources` triple.
+                description: 'DEPRECATED: legacy in-CR config. Prefer clusterRef + definition + sources on the new path. Will be removed in v1alpha2.'
                 nullable: true
                 type: object
                 x-kubernetes-preserve-unknown-fields: true

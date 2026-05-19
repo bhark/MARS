@@ -114,6 +114,15 @@ async fn reconcile_inner(cr: Arc<MarsService>, ctx: Arc<Ctx>) -> Result<Action> 
     // resolve the effective config: legacy returns spec.config verbatim, the
     // new path composes cluster + render-definition into a Config.
     let is_legacy = cr.spec.config.is_some();
+    if is_legacy {
+        warn!(
+            deprecated_field = "spec.config",
+            target_version = "v1alpha2",
+            service = %svc_name,
+            namespace = %ns,
+            "MarsService uses deprecated spec.config; migrate to clusterRef + definition + sources before v1alpha2"
+        );
+    }
     let (effective_cfg, resolved_def) = match resolve_effective_config(&cr, &ctx, &ns, uid.as_deref()).await {
         Ok(out) => out,
         Err(e) => {
