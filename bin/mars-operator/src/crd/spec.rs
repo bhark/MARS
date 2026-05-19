@@ -19,6 +19,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::bootstrap::BootstrapSpec;
+use super::cluster::MarsServiceCluster;
 use super::compiler::CompilerSpec;
 use super::definition::{ClusterRef, DefinitionSpec};
 use super::runtime::RuntimeSpec;
@@ -178,12 +179,14 @@ pub(crate) fn validate_spec(spec: &MarsServiceSpec) -> Result<(), SpecValidation
     Ok(())
 }
 
-/// Emit the CRD as YAML on stdout. Used by `mars-operator print-crd` and by
-/// the chart drift check.
+/// Emit both CRDs as a multi-doc YAML stream on stdout. Used by
+/// `mars-operator print-crd` and by the chart drift check. `MarsServiceCluster`
+/// is emitted first because `MarsService.spec.clusterRef` references it, and
+/// Helm installs CRDs in file order.
 pub(crate) fn print_crd() -> Result<()> {
-    let crd = MarsService::crd();
-    let yaml = serde_yaml_ng::to_string(&crd).context("serialise CRD as YAML")?;
-    print!("{yaml}");
+    let cluster = serde_yaml_ng::to_string(&MarsServiceCluster::crd()).context("serialise MarsServiceCluster CRD")?;
+    let service = serde_yaml_ng::to_string(&MarsService::crd()).context("serialise MarsService CRD")?;
+    print!("{cluster}---\n{service}");
     Ok(())
 }
 

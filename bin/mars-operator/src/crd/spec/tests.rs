@@ -1,6 +1,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use kube::CustomResourceExt;
+
 use super::*;
+use crate::crd::cluster::MarsServiceCluster;
 use crate::crd::definition::{ConfigMapKeyRef, DefinitionSpec, GitRef, GitRevision, S3Ref, SecretRef};
 
 const NEW_SHAPE_YAML: &str = r#"
@@ -230,6 +233,29 @@ fn validate_spec_rejects_bootstrap_on_new_path() {
     };
     let err = validate_spec(&spec).expect_err("bootstrap on new path");
     assert!(matches!(err, SpecValidationError::BootstrapOnNewPath), "{err:?}");
+}
+
+#[test]
+fn print_crd_emits_multi_doc_with_cluster_first() {
+    let cluster = serde_yaml_ng::to_string(&MarsServiceCluster::crd()).expect("cluster yaml");
+    let service = serde_yaml_ng::to_string(&MarsService::crd()).expect("service yaml");
+    let combined = format!("{cluster}---\n{service}");
+
+    let docs: Vec<serde_yaml_ng::Value> = serde_yaml_ng::Deserializer::from_str(&combined)
+        .map(serde_yaml_ng::Value::deserialize)
+        .collect::<Result<_, _>>()
+        .expect("parse multi-doc yaml");
+    assert_eq!(docs.len(), 2, "expected two docs");
+
+    let kind_of = |d: &serde_yaml_ng::Value| {
+        d.get("spec")
+            .and_then(|s| s.get("names"))
+            .and_then(|n| n.get("kind"))
+            .and_then(|k| k.as_str())
+            .map(str::to_owned)
+    };
+    assert_eq!(kind_of(&docs[0]).as_deref(), Some("MarsServiceCluster"));
+    assert_eq!(kind_of(&docs[1]).as_deref(), Some("MarsService"));
 }
 
 #[test]
