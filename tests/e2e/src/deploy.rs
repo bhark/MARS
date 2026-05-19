@@ -20,7 +20,8 @@ const FIELD_MANAGER: &str = "mars-e2e-kind";
 
 /// substitute `{{KEY}}` placeholders in `template` and parse one-or-many yaml
 /// documents. uses double braces to avoid colliding with mars-config's
-/// `${VAR}` env-substitution syntax which appears in MarsService.spec.config.
+/// `${VAR}` env-substitution syntax which appears in MarsServiceCluster
+/// source DSNs and the inline RenderDefinition payload.
 pub fn render(template: &str, vars: &HashMap<&str, &str>) -> Result<Vec<yaml::Value>> {
     let mut rendered = template.to_string();
     for (k, v) in vars {

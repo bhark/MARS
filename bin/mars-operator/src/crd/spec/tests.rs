@@ -294,3 +294,100 @@ fn validate_spec_rejects_definition_with_multiple_variants() {
     let err = validate_spec(&spec).expect_err("two variants");
     assert!(matches!(err, SpecValidationError::DefinitionVariantCount(2)));
 }
+
+mod fixtures {
+    //! Round-trip the in-repo new-shape YAML fixtures through the CR types and
+    //! `validate_spec`. Catches both wire-format drift (camelCase / snake_case
+    //! mistakes) and shape errors (legacy `spec.config` sneaking back in).
+
+    use std::path::PathBuf;
+
+    use mars_config::RenderDefinition;
+    use serde::Deserialize;
+
+    use super::*;
+    use crate::crd::cluster::MarsServiceClusterSpec;
+
+    /// Path to the workspace root, derived from this crate's manifest dir.
+    fn workspace_root() -> PathBuf {
+        let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        // bin/mars-operator -> repo root
+        crate_dir
+            .parent()
+            .and_then(|p| p.parent())
+            .expect("workspace root")
+            .to_path_buf()
+    }
+
+    /// Parse a 2-doc YAML (MarsServiceCluster + MarsService), validate the
+    /// service spec, and ensure the inline RenderDefinition (if any) parses.
+    fn check_new_shape_fixture(rel: &str) {
+        let path = workspace_root().join(rel);
+        let body = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {rel}: {e}"));
+        // accommodate the kind-e2e template's `{{RUNTIME_REPLICAS}}` placeholder
+        let body = body.replace("{{RUNTIME_REPLICAS}}", "1");
+
+        let docs: Vec<serde_yaml_ng::Value> = serde_yaml_ng::Deserializer::from_str(&body)
+            .filter_map(|d| serde_yaml_ng::Value::deserialize(d).ok())
+            .filter(|v| !v.is_null())
+            .collect();
+        assert_eq!(docs.len(), 2, "{rel}: expected 2 docs (cluster + service)");
+
+        let (cluster_doc, service_doc) = match (docs[0].get("kind"), docs[1].get("kind")) {
+            (Some(k0), _) if k0.as_str() == Some("MarsServiceCluster") => (&docs[0], &docs[1]),
+            (_, Some(k1)) if k1.as_str() == Some("MarsServiceCluster") => (&docs[1], &docs[0]),
+            _ => panic!("{rel}: no MarsServiceCluster doc"),
+        };
+        assert_eq!(
+            service_doc.get("kind").and_then(|k| k.as_str()),
+            Some("MarsService"),
+            "{rel}: second doc is not MarsService"
+        );
+
+        // cluster spec must deserialise
+        let cluster_spec_v = cluster_doc
+            .get("spec")
+            .unwrap_or_else(|| panic!("{rel}: cluster missing spec"));
+        let _cluster_spec: MarsServiceClusterSpec = serde_yaml_ng::from_value(cluster_spec_v.clone())
+            .unwrap_or_else(|e| panic!("{rel}: cluster spec deserialise: {e}"));
+
+        // service spec must deserialise and pass validate_spec
+        let service_spec_v = service_doc
+            .get("spec")
+            .unwrap_or_else(|| panic!("{rel}: service missing spec"));
+        let service_spec: MarsServiceSpec = serde_yaml_ng::from_value(service_spec_v.clone())
+            .unwrap_or_else(|e| panic!("{rel}: service spec deserialise: {e}"));
+        validate_spec(&service_spec).unwrap_or_else(|e| panic!("{rel}: validate_spec: {e}"));
+
+        // inline RenderDefinition must parse if present
+        if let Some(inline) = service_spec.definition.as_ref().and_then(|d| d.inline.as_ref()) {
+            let _def =
+                RenderDefinition::from_yaml(inline).unwrap_or_else(|e| panic!("{rel}: inline RenderDefinition: {e}"));
+        }
+    }
+
+    #[test]
+    fn chart_example_fs_round_trips() {
+        check_new_shape_fixture("charts/mars-operator/examples/marsservice-fs.yaml");
+    }
+
+    #[test]
+    fn chart_example_s3_round_trips() {
+        check_new_shape_fixture("charts/mars-operator/examples/marsservice-s3.yaml");
+    }
+
+    #[test]
+    fn chart_example_cnpg_round_trips() {
+        check_new_shape_fixture("charts/mars-operator/examples/marsservice-cnpg.yaml");
+    }
+
+    #[test]
+    fn kind_e2e_marsservice_template_round_trips() {
+        check_new_shape_fixture("tests/e2e/manifests/marsservice.yaml.tmpl");
+    }
+
+    #[test]
+    fn integration_e2e_osm_service_round_trips() {
+        check_new_shape_fixture("tests/integration/fixtures/e2e-osm/service.yaml");
+    }
+}

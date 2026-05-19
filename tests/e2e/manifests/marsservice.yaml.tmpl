@@ -1,11 +1,177 @@
-# MarsService CR pointing at the in-namespace seaweedfs + postgis. the
-# operator (cluster-scoped, single install) reconciles this into ConfigMap +
-# PVCs + compiler/runtime Deployments + Service.
+# MarsServiceCluster + MarsService for the kind e2e. The cluster CR carries the
+# in-cluster catalog (seaweedfs + postgis); the service CR carries the slim
+# rendering definition inline. The operator (cluster-scoped, single install)
+# reconciles MarsService into ConfigMap + PVCs + compiler/runtime Deployments
+# + Service.
+---
+apiVersion: mars.forn.dk/v1alpha1
+kind: MarsServiceCluster
+metadata:
+  name: mars-e2e-cluster
+spec:
+  sourcesCatalog:
+    - id: default
+      type: postgis
+      native_crs: EPSG:25832
+      dsn: "postgres://mars:mars@postgis:5432/mars"
+      change_feed:
+        type: pgoutput
+        publication: mars_e2e_pub
+        slot: mars_e2e_slot
+      pool:
+        max_size: 4
+        statement_timeout_ms: 300000
+        batch_send_timeout_secs: 30
+  artifactStore:
+    store:
+      type: s3
+      endpoint: "http://seaweedfs:8333"
+      region: us-east-1
+      bucket: mars-artifacts
+      prefix: e2e
+      allow_http: true
+      conditional_put: disabled
+      allow_non_atomic_publish: true
+    cache:
+      path: /cache
+      max_size: 256MiB
+      eviction: lru
+  reprojection:
+    allowlist: [EPSG:25832]
+  observability:
+    log_level: info
+    log_format: json
+  defaults:
+    compiler:
+      compile_binding_parallelism: 2
+      compile_in_flight_pages_budget_bytes: 256MiB
+      compile_spill_dir: /work/spill
+      images_dir: /var/lib/mars/images
+---
 apiVersion: mars.forn.dk/v1alpha1
 kind: MarsService
 metadata:
   name: mars-e2e
 spec:
+  clusterRef:
+    name: mars-e2e-cluster
+  sources: [default]
+  definition:
+    inline: |
+      service:
+        name: mars-e2e
+        title: "MARS kind e2e"
+        abstract: "Kind end-to-end test service."
+        contact_email: ops@example.org
+      scales:
+        bands:
+          - { name: detail, max_denom_exclusive: 12500 }
+          - { name: hi,     max_denom_exclusive: 25000 }
+          - { name: mid,    max_denom_exclusive: 250000 }
+          - { name: lo,     max_denom_exclusive: 10000000 }
+      interfaces:
+        wms:  { enabled: true }
+        wmts:
+          enabled: true
+          versions: ["1.0.0"]
+          formats: ["image/png"]
+          tile_matrix_sets: [e2e_25832]
+      tile_matrix_sets:
+        e2e_25832:
+          crs: EPSG:25832
+          top_left: [535000, 5264000]
+          tile_size: [256, 256]
+          levels:
+            - { id: 0, scale_denominator: 25000000 }
+            - { id: 1, scale_denominator: 12500000 }
+      styles:
+        poly_land:           { type: polygon, fill: "#ffffff" }
+        poly_pattern:        { type: polygon, fill: { kind: image, name: stripe } }
+        poly_water:          { type: polygon, fill: "#dcf0ff", stroke: "#2896e6", stroke_width: 0.15 }
+        poly_settlement:     { type: polygon, fill: "#f2f2f2" }
+        poly_building:       { type: polygon, fill: "#d2d2d2", stroke: "#a0a0a0", stroke_width: 0.6 }
+        poly_building_temp:  { type: polygon, fill: "#ebebeb", stroke: "#a0a0a0", stroke_width: 0.6, stroke_dasharray: [5, 3], stroke_linecap: butt }
+        line_road_major:     { type: line, stroke: "#bebebe", stroke_width: 1.6 }
+        line_road_minor:     { type: line, stroke: "#c8c8c8", stroke_width: 0.8 }
+        line_waterway_wide:  { type: line, stroke: "#dcf0ff", stroke_width: 1.2 }
+        line_waterway_narrow: { type: line, stroke: "#dcf0ff", stroke_width: 0.5 }
+        marker_poi:
+          type: point
+          fill: "#222222"
+          stroke: "#ffffff"
+          stroke_width: 1.0
+          marker: { kind: triangle, size: 10 }
+        label_poi:
+          type: label
+          font_family: "DejaVu Sans"
+          font_size: 12
+          fill: "#000000"
+          halo: { colour: "#ffffff", width: 1.5 }
+          priority: 100
+      layers:
+        - name: land
+          title: "Land"
+          type: polygon
+          sources:
+            - { kind: postgis_table, band: lo, from: e2e_source.land, geometry_column: geom, id_column: id }
+          classes:
+            - { name: default, title: "Land", style: { type: ref, name: poly_land } }
+        - name: water
+          title: "Water"
+          type: polygon
+          sources:
+            - { kind: postgis_table, band: mid, from: e2e_source.water, geometry_column: geom, id_column: id }
+          classes:
+            - { name: default, title: "Water", style: { type: ref, name: poly_water } }
+        - name: settlements
+          title: "Settlements"
+          type: polygon
+          sources:
+            - { kind: postgis_table, band: mid, from: e2e_source.settlements, geometry_column: geom, id_column: id }
+          classes:
+            - { name: default, title: "Settlements", style: { type: ref, name: poly_settlement } }
+        - name: roads
+          title: "Roads"
+          type: line
+          sources:
+            - { kind: postgis_table, band: hi, from: e2e_source.roads, geometry_column: geom, id_column: id, attributes: [kind] }
+          classes:
+            - { name: major, title: "Major roads", when: "kind = 'major'", style: { type: ref, name: line_road_major } }
+            - { name: minor, title: "Minor roads", style: { type: ref, name: line_road_minor } }
+        - name: buildings
+          title: "Buildings"
+          type: polygon
+          sources:
+            - { kind: postgis_table, band: detail, from: e2e_source.buildings, geometry_column: geom, id_column: id, attributes: [kind, status] }
+          classes:
+            - { name: temporary, title: "Temporary buildings", when: "status = 'temporary'", style: { type: ref, name: poly_building_temp } }
+            - { name: default, title: "Buildings", style: { type: ref, name: poly_building } }
+        - name: waterways
+          title: "Waterways"
+          type: line
+          sources:
+            - { kind: postgis_table, band: hi, from: e2e_source.waterways, geometry_column: geom, id_column: id, attributes: [width_class] }
+          classes:
+            - { name: wide, title: "Wide waterways", when: "width_class = 'wide'", style: { type: ref, name: line_waterway_wide } }
+            - { name: narrow, title: "Waterways", style: { type: ref, name: line_waterway_narrow } }
+        - name: pattern_zone
+          title: "Pattern zone"
+          type: polygon
+          sources:
+            - { kind: postgis_table, band: lo, from: e2e_source.pattern_zone, geometry_column: geom, id_column: id }
+          classes:
+            - { name: default, title: "Pattern zone", style: { type: ref, name: poly_pattern } }
+        - name: poi
+          title: "Points of interest"
+          type: point
+          sources:
+            - { kind: postgis_table, band: hi, from: e2e_source.poi, geometry_column: geom, id_column: id, attributes: [kind, name] }
+          classes:
+            - { name: default, title: "POI", style: { type: ref, name: marker_poi } }
+          label:
+            style: { type: ref, name: label_poi }
+            text: "{name}"
+
   compiler:
     resources:
       requests: { cpu: "100m", memory: "256Mi" }
@@ -15,7 +181,7 @@ spec:
       workSize: 1Gi
       storageClass: ""
     # bitmap fixtures live in this configmap; the operator mounts it read-only
-    # at /var/lib/mars/images. config.compiler.images_dir below points at the
+    # at /var/lib/mars/images. defaults.compiler.images_dir above points at the
     # same path so the compiler resolves FillPaint::Image names during pack.
     imagesConfigMap: mars-images
     env:
@@ -23,7 +189,6 @@ spec:
       # the s3 sdk otherwise stalls on http://169.254.169.254/latest/api/token
       # for ~14s per request looking for ec2 instance metadata
       - { name: AWS_EC2_METADATA_DISABLED, value: "true" }
-      - { name: PG_DSN, value: "postgres://mars:mars@postgis:5432/mars" }
     envFrom:
       - secretRef:
           name: mars-s3-credentials
@@ -41,166 +206,6 @@ spec:
     env:
       - { name: AWS_REGION, value: us-east-1 }
       - { name: AWS_EC2_METADATA_DISABLED, value: "true" }
-      - { name: PG_DSN, value: "postgres://mars:mars@postgis:5432/mars" }
     envFrom:
       - secretRef:
           name: mars-s3-credentials
-  config:
-    service:
-      name: mars-e2e
-      title: "MARS kind e2e"
-      abstract: "Kind end-to-end test service."
-      contact_email: ops@example.org
-    sources:
-      - id: default
-        type: postgis
-        dsn: "${PG_DSN}"
-        native_crs: EPSG:25832
-        change_feed:
-          type: pgoutput
-          publication: mars_e2e_pub
-          slot: mars_e2e_slot
-        pool:
-          max_size: 4
-          statement_timeout_ms: 300000
-          batch_send_timeout_secs: 30
-    artifacts:
-      store:
-        type: s3
-        endpoint: "http://seaweedfs:8333"
-        region: us-east-1
-        bucket: mars-artifacts
-        prefix: e2e
-        allow_http: true
-        conditional_put: disabled
-        allow_non_atomic_publish: true
-      cache:
-        path: /cache
-        max_size: 256MiB
-        eviction: lru
-    compiler:
-      compile_binding_parallelism: 2
-      compile_in_flight_pages_budget_bytes: 256MiB
-      compile_spill_dir: /work/spill
-      images_dir: /var/lib/mars/images
-    scales:
-      bands:
-        - { name: detail, max_denom_exclusive: 12500 }
-        - { name: hi,     max_denom_exclusive: 25000 }
-        - { name: mid,    max_denom_exclusive: 250000 }
-        - { name: lo,     max_denom_exclusive: 10000000 }
-    cells:
-      grid: regular
-      origin: [0, 0]
-      size_per_band:
-        detail: 512m
-        hi: 1024m
-        mid: 4096m
-        lo: 32768m
-    interfaces:
-      wms:  { enabled: true }
-      wmts:
-        enabled: true
-        versions: ["1.0.0"]
-        formats: ["image/png"]
-        tile_matrix_sets: [e2e_25832]
-    tile_matrix_sets:
-      e2e_25832:
-        crs: EPSG:25832
-        top_left: [535000, 5264000]
-        tile_size: [256, 256]
-        levels:
-          - { id: 0, scale_denominator: 25000000 }
-          - { id: 1, scale_denominator: 12500000 }
-    reprojection:
-      allowlist: [EPSG:25832]
-    styles:
-      poly_land:           { type: polygon, fill: "#ffffff" }
-      poly_pattern:        { type: polygon, fill: { kind: image, name: stripe } }
-      poly_water:          { type: polygon, fill: "#dcf0ff", stroke: "#2896e6", stroke_width: 0.15 }
-      poly_settlement:     { type: polygon, fill: "#f2f2f2" }
-      poly_building:       { type: polygon, fill: "#d2d2d2", stroke: "#a0a0a0", stroke_width: 0.6 }
-      poly_building_temp:  { type: polygon, fill: "#ebebeb", stroke: "#a0a0a0", stroke_width: 0.6, stroke_dasharray: [5, 3], stroke_linecap: butt }
-      line_road_major:     { type: line, stroke: "#bebebe", stroke_width: 1.6 }
-      line_road_minor:     { type: line, stroke: "#c8c8c8", stroke_width: 0.8 }
-      line_waterway_wide:  { type: line, stroke: "#dcf0ff", stroke_width: 1.2 }
-      line_waterway_narrow: { type: line, stroke: "#dcf0ff", stroke_width: 0.5 }
-      marker_poi:
-        type: point
-        fill: "#222222"
-        stroke: "#ffffff"
-        stroke_width: 1.0
-        marker: { kind: triangle, size: 10 }
-      label_poi:
-        type: label
-        font_family: "DejaVu Sans"
-        font_size: 12
-        fill: "#000000"
-        halo: { colour: "#ffffff", width: 1.5 }
-        priority: 100
-    layers:
-      - name: land
-        title: "Land"
-        type: polygon
-        sources:
-          - { kind: postgis_table, band: lo, from: e2e_source.land, geometry_column: geom, id_column: id }
-        classes:
-          - { name: default, title: "Land", style: { type: ref, name: poly_land } }
-      - name: water
-        title: "Water"
-        type: polygon
-        sources:
-          - { kind: postgis_table, band: mid, from: e2e_source.water, geometry_column: geom, id_column: id }
-        classes:
-          - { name: default, title: "Water", style: { type: ref, name: poly_water } }
-      - name: settlements
-        title: "Settlements"
-        type: polygon
-        sources:
-          - { kind: postgis_table, band: mid, from: e2e_source.settlements, geometry_column: geom, id_column: id }
-        classes:
-          - { name: default, title: "Settlements", style: { type: ref, name: poly_settlement } }
-      - name: roads
-        title: "Roads"
-        type: line
-        sources:
-          - { kind: postgis_table, band: hi, from: e2e_source.roads, geometry_column: geom, id_column: id, attributes: [kind] }
-        classes:
-          - { name: major, title: "Major roads", when: "kind = 'major'", style: { type: ref, name: line_road_major } }
-          - { name: minor, title: "Minor roads", style: { type: ref, name: line_road_minor } }
-      - name: buildings
-        title: "Buildings"
-        type: polygon
-        sources:
-          - { kind: postgis_table, band: detail, from: e2e_source.buildings, geometry_column: geom, id_column: id, attributes: [kind, status] }
-        classes:
-          - { name: temporary, title: "Temporary buildings", when: "status = 'temporary'", style: { type: ref, name: poly_building_temp } }
-          - { name: default, title: "Buildings", style: { type: ref, name: poly_building } }
-      - name: waterways
-        title: "Waterways"
-        type: line
-        sources:
-          - { kind: postgis_table, band: hi, from: e2e_source.waterways, geometry_column: geom, id_column: id, attributes: [width_class] }
-        classes:
-          - { name: wide, title: "Wide waterways", when: "width_class = 'wide'", style: { type: ref, name: line_waterway_wide } }
-          - { name: narrow, title: "Waterways", style: { type: ref, name: line_waterway_narrow } }
-      - name: pattern_zone
-        title: "Pattern zone"
-        type: polygon
-        sources:
-          - { kind: postgis_table, band: lo, from: e2e_source.pattern_zone, geometry_column: geom, id_column: id }
-        classes:
-          - { name: default, title: "Pattern zone", style: { type: ref, name: poly_pattern } }
-      - name: poi
-        title: "Points of interest"
-        type: point
-        sources:
-          - { kind: postgis_table, band: hi, from: e2e_source.poi, geometry_column: geom, id_column: id, attributes: [kind, name] }
-        classes:
-          - { name: default, title: "POI", style: { type: ref, name: marker_poi } }
-        label:
-          style: { type: ref, name: label_poi }
-          text: "{name}"
-    observability:
-      log_level: info
-      log_format: json

@@ -1,14 +1,76 @@
-# Example MarsService backed by a shared PVC (fs store).
+# Example MarsServiceCluster (cluster-scoped catalog) + MarsService (slim,
+# namespaced) backed by a shared PVC (fs store).
 #
 # Single runtime replica - that is intentional. fs-store + multi-replica
 # requires accessModes: [ReadWriteMany], which most clusters do not provide
 # out of the box. For multi-replica deployments prefer the s3 backend.
+apiVersion: mars.forn.dk/v1alpha1
+kind: MarsServiceCluster
+metadata:
+  name: example-fs-cluster
+spec:
+  sourcesCatalog:
+    - id: default
+      type: postgis
+      native_crs: "EPSG:25832"
+      dsn: "${PG_DSN}"
+      change_feed:
+        type: pgoutput
+        publication: mars_pub
+        slot: mars_slot
+      pool:
+        max_size: 8
+        statement_timeout_ms: 300000
+        batch_send_timeout_secs: 30
+  artifactStore:
+    store:
+      type: fs
+      path: /var/lib/mars/store
+    cache:
+      path: /cache
+      max_size: 1GiB
+      eviction: lru
+  reprojection:
+    allowlist: ["EPSG:25832"]
+  observability:
+    log_level: info
+    log_format: json
+  defaults:
+    compiler:
+      compile_binding_parallelism: 4
+      compile_in_flight_pages_budget_bytes: 512MiB
+      compile_spill_dir: /work/spill
+---
 apiVersion: mars.forn.dk/v1alpha1
 kind: MarsService
 metadata:
   name: example-fs
   namespace: maps
 spec:
+  clusterRef:
+    name: example-fs-cluster
+  sources: [default]
+  definition:
+    inline: |
+      service:
+        name: example-fs
+        title: Example MARS service (fs store)
+        contact_email: ops@example.org
+      scales:
+        bands:
+          - { name: detail, max_denom_exclusive: 12500 }
+          - { name: mid, max_denom_exclusive: 250000 }
+          - { name: lo, max_denom_exclusive: 10000000 }
+      interfaces:
+        wms:
+          enabled: true
+          versions: ["1.3.0"]
+          formats: ["image/png"]
+          max_image_dimension: 2048
+          max_pixels: 4194304
+      styles: {}
+      layers: []
+
   compiler:
     storage:
       cacheSize: 2Gi
@@ -34,65 +96,3 @@ spec:
   artifactStore:
     size: 20Gi
     accessModes: ["ReadWriteOnce"]
-
-  config:
-    service:
-      name: example-fs
-      title: Example MARS service (fs store)
-      contact_email: ops@example.org
-    sources:
-      - id: default
-        type: postgis
-        dsn: "${PG_DSN}"
-        native_crs: "EPSG:25832"
-        change_feed:
-          type: pgoutput
-          publication: mars_pub
-          slot: mars_slot
-        pool:
-          max_size: 8
-          statement_timeout_ms: 300000
-          batch_send_timeout_secs: 30
-    artifacts:
-      store:
-        type: fs
-        path: /var/lib/mars/store
-      cache:
-        path: /cache
-        max_size: 1GiB
-        eviction: lru
-    compiler:
-      compile_binding_parallelism: 4
-      compile_in_flight_pages_budget_bytes: 512MiB
-      compile_spill_dir: /work/spill
-    scales:
-      bands:
-        - { name: detail, max_denom_exclusive: 12500 }
-        - { name: mid, max_denom_exclusive: 250000 }
-        - { name: lo, max_denom_exclusive: 10000000 }
-    cells:
-      grid: regular
-      origin: [0, 0]
-      size_per_band:
-        detail: 512m
-        mid: 4096m
-        lo: 16384m
-      extent:
-        min_x: 850000
-        min_y: 6090000
-        max_x: 895000
-        max_y: 6145000
-    interfaces:
-      wms:
-        enabled: true
-        versions: ["1.3.0"]
-        formats: ["image/png"]
-        max_image_dimension: 2048
-        max_pixels: 4194304
-    reprojection:
-      allowlist: ["EPSG:25832"]
-    styles: {}
-    layers: []
-    observability:
-      log_level: info
-      log_format: json

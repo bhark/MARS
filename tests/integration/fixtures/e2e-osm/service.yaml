@@ -1,167 +1,176 @@
-service:
+# Reference MarsServiceCluster + MarsService used to describe the local e2e
+# shape against the derived `e2e_source.*` schema (see derive-e2e.sql + the
+# directory README). No Rust harness loads this file directly; it's a hand-
+# spinnable companion to the kind e2e fixtures.
+---
+apiVersion: mars.forn.dk/v1alpha1
+kind: MarsServiceCluster
+metadata:
+  name: mars-k3d-e2e-cluster
+spec:
+  sourcesCatalog:
+    - id: default
+      type: postgis
+      native_crs: EPSG:25832
+      dsn: "${PG_DSN}"
+      change_feed:
+        type: pgoutput
+        publication: mars_e2e_pub
+        slot: mars_e2e_slot
+      pool:
+        max_size: 8
+        statement_timeout_ms: 300000
+        batch_send_timeout_secs: 30
+  artifactStore:
+    store:
+      type: s3
+      endpoint: "http://mars-e2e-garage.mars-e2e.svc.cluster.local:3900"
+      bucket: mars-e2e-artifacts
+      prefix: local-e2e
+      allow_http: true
+      conditional_put: disabled
+      allow_non_atomic_publish: true
+    cache:
+      path: /cache
+      max_size: 512MiB
+      eviction: lru
+  reprojection:
+    allowlist: [EPSG:25832]
+  observability:
+    log_level: info
+    log_format: text
+  defaults:
+    compiler:
+      compile_binding_parallelism: 2
+      compile_in_flight_pages_budget_bytes: 512MiB
+      compile_spill_dir: /work/spill
+---
+apiVersion: mars.forn.dk/v1alpha1
+kind: MarsService
+metadata:
   name: mars-k3d-e2e
-  title: "MARS local e2e"
-  abstract: "Local Kubernetes e2e service."
-  contact_email: ops@example.org
+  namespace: mars-e2e
+spec:
+  clusterRef:
+    name: mars-k3d-e2e-cluster
+  sources: [default]
+  definition:
+    inline: |
+      service:
+        name: mars-k3d-e2e
+        title: "MARS local e2e"
+        abstract: "Local Kubernetes e2e service."
+        contact_email: ops@example.org
+      scales:
+        bands:
+          - { name: detail, max_denom_exclusive: 12500 }
+          - { name: hi, max_denom_exclusive: 25000 }
+          - { name: mid, max_denom_exclusive: 250000 }
+          - { name: lo, max_denom_exclusive: 10000000 }
+      interfaces:
+        wms:
+          enabled: true
+          versions: ["1.3.0"]
+          formats: ["image/png"]
+          max_image_dimension: 2048
+          max_pixels: 4194304
+      styles:
+        poly_land:
+          type: polygon
+          fill: "#ffffff"
+        poly_water:
+          type: polygon
+          fill: "#dcf0ff"
+          stroke: "#2896e6"
+          stroke_width: 0.15
+        poly_settlement:
+          type: polygon
+          fill: "#f2f2f2"
+        poly_building_default:
+          type: polygon
+          fill: "#d2d2d2"
+          stroke: "#a0a0a0"
+          stroke_width: 0.6
+        poly_building_temporary:
+          type: polygon
+          fill: "#ebebeb"
+          stroke: "#a0a0a0"
+          stroke_width: 0.6
+          stroke_dasharray: [5, 3]
+          stroke_linecap: butt
+        line_road_major:
+          type: line
+          stroke: "#bebebe"
+          stroke_width: 1.6
+        line_road_minor:
+          type: line
+          stroke: "#c8c8c8"
+          stroke_width: 0.8
+        line_waterway_wide:
+          type: line
+          stroke: "#dcf0ff"
+          stroke_width: 1.2
+        line_waterway_narrow:
+          type: line
+          stroke: "#dcf0ff"
+          stroke_width: 0.5
+      layers:
+        - name: land
+          title: "Land"
+          type: polygon
+          sources:
+            - { kind: postgis_table, band: lo, from: e2e_source.land, geometry_column: geom, id_column: id }
+          classes:
+            - { name: default, title: "Land", style: { type: ref, name: poly_land } }
 
-sources:
-  - id: default
-    type: postgis
-    dsn: "${PG_DSN}"
-    native_crs: EPSG:25832
-    change_feed:
-      type: pgoutput
-      publication: mars_e2e_pub
-      slot: mars_e2e_slot
-    pool:
-      max_size: 8
-      statement_timeout_ms: 300000
-      batch_send_timeout_secs: 30
+        - name: water
+          title: "Water"
+          type: polygon
+          sources:
+            - { kind: postgis_table, band: mid, from: e2e_source.water, geometry_column: geom, id_column: id }
+          classes:
+            - { name: default, title: "Water", style: { type: ref, name: poly_water } }
 
-artifacts:
-  store:
-    type: s3
-    endpoint: "http://mars-e2e-garage.mars-e2e.svc.cluster.local:3900"
-    bucket: mars-e2e-artifacts
-    prefix: local-e2e
-    allow_http: true
-    conditional_put: disabled
-    allow_non_atomic_publish: true
-  cache:
-    path: /cache
-    max_size: 512MiB
-    eviction: lru
+        - name: settlements
+          title: "Settlements"
+          type: polygon
+          sources:
+            - { kind: postgis_table, band: mid, from: e2e_source.settlements, geometry_column: geom, id_column: id }
+          classes:
+            - { name: default, title: "Settlements", style: { type: ref, name: poly_settlement } }
 
-compiler:
-  compile_binding_parallelism: 2
-  compile_in_flight_pages_budget_bytes: 512MiB
-  compile_spill_dir: /work/spill
+        - name: roads
+          title: "Roads"
+          type: line
+          sources:
+            - { kind: postgis_table, band: hi, from: e2e_source.roads, geometry_column: geom, id_column: id, attributes: [kind] }
+          classes:
+            - { name: major, title: "Major roads", when: "kind = 'major'", style: { type: ref, name: line_road_major } }
+            - { name: minor, title: "Minor roads", style: { type: ref, name: line_road_minor } }
 
-scales:
-  bands:
-    - { name: detail, max_denom_exclusive: 12500 }
-    - { name: hi, max_denom_exclusive: 25000 }
-    - { name: mid, max_denom_exclusive: 250000 }
-    - { name: lo, max_denom_exclusive: 10000000 }
+        - name: buildings
+          title: "Buildings"
+          type: polygon
+          sources:
+            - { kind: postgis_table, band: detail, from: e2e_source.buildings, geometry_column: geom, id_column: id, attributes: [kind, status] }
+          classes:
+            - { name: temporary, title: "Temporary buildings", when: "status = 'temporary'", style: { type: ref, name: poly_building_temporary } }
+            - { name: default, title: "Buildings", style: { type: ref, name: poly_building_default } }
 
-cells:
-  grid: regular
-  origin: [0, 0]
-  size_per_band:
-    detail: 512m
-    hi: 1024m
-    mid: 4096m
-    lo: 16384m
-  extent:
-    min_x: 535000
-    min_y: 5201000
-    max_x: 551000
-    max_y: 5264000
+        - name: waterways
+          title: "Waterways"
+          type: line
+          sources:
+            - { kind: postgis_table, band: hi, from: e2e_source.waterways, geometry_column: geom, id_column: id, attributes: [width_class] }
+          classes:
+            - { name: wide, title: "Wide waterways", when: "width_class = 'wide'", style: { type: ref, name: line_waterway_wide } }
+            - { name: narrow, title: "Waterways", style: { type: ref, name: line_waterway_narrow } }
 
-interfaces:
-  wms:
-    enabled: true
-    versions: ["1.3.0"]
-    formats: ["image/png"]
-    max_image_dimension: 2048
-    max_pixels: 4194304
-
-reprojection:
-  allowlist: [EPSG:25832]
-
-styles:
-  poly_land:
-    type: polygon
-    fill: "#ffffff"
-  poly_water:
-    type: polygon
-    fill: "#dcf0ff"
-    stroke: "#2896e6"
-    stroke_width: 0.15
-  poly_settlement:
-    type: polygon
-    fill: "#f2f2f2"
-  poly_building_default:
-    type: polygon
-    fill: "#d2d2d2"
-    stroke: "#a0a0a0"
-    stroke_width: 0.6
-  poly_building_temporary:
-    type: polygon
-    fill: "#ebebeb"
-    stroke: "#a0a0a0"
-    stroke_width: 0.6
-    stroke_dasharray: [5, 3]
-    stroke_linecap: butt
-  line_road_major:
-    type: line
-    stroke: "#bebebe"
-    stroke_width: 1.6
-  line_road_minor:
-    type: line
-    stroke: "#c8c8c8"
-    stroke_width: 0.8
-  line_waterway_wide:
-    type: line
-    stroke: "#dcf0ff"
-    stroke_width: 1.2
-  line_waterway_narrow:
-    type: line
-    stroke: "#dcf0ff"
-    stroke_width: 0.5
-
-layers:
-  - name: land
-    title: "Land"
-    type: polygon
-    sources:
-      - { kind: postgis_table, band: lo, from: e2e_source.land, geometry_column: geom, id_column: id }
-    classes:
-      - { name: default, title: "Land", style: { type: ref, name: poly_land } }
-
-  - name: water
-    title: "Water"
-    type: polygon
-    sources:
-      - { kind: postgis_table, band: mid, from: e2e_source.water, geometry_column: geom, id_column: id }
-    classes:
-      - { name: default, title: "Water", style: { type: ref, name: poly_water } }
-
-  - name: settlements
-    title: "Settlements"
-    type: polygon
-    sources:
-      - { kind: postgis_table, band: mid, from: e2e_source.settlements, geometry_column: geom, id_column: id }
-    classes:
-      - { name: default, title: "Settlements", style: { type: ref, name: poly_settlement } }
-
-  - name: roads
-    title: "Roads"
-    type: line
-    sources:
-      - { kind: postgis_table, band: hi, from: e2e_source.roads, geometry_column: geom, id_column: id, attributes: [kind] }
-    classes:
-      - { name: major, title: "Major roads", when: "kind = 'major'", style: { type: ref, name: line_road_major } }
-      - { name: minor, title: "Minor roads", style: { type: ref, name: line_road_minor } }
-
-  - name: buildings
-    title: "Buildings"
-    type: polygon
-    sources:
-      - { kind: postgis_table, band: detail, from: e2e_source.buildings, geometry_column: geom, id_column: id, attributes: [kind, status] }
-    classes:
-      - { name: temporary, title: "Temporary buildings", when: "status = 'temporary'", style: { type: ref, name: poly_building_temporary } }
-      - { name: default, title: "Buildings", style: { type: ref, name: poly_building_default } }
-
-  - name: waterways
-    title: "Waterways"
-    type: line
-    sources:
-      - { kind: postgis_table, band: hi, from: e2e_source.waterways, geometry_column: geom, id_column: id, attributes: [width_class] }
-    classes:
-      - { name: wide, title: "Wide waterways", when: "width_class = 'wide'", style: { type: ref, name: line_waterway_wide } }
-      - { name: narrow, title: "Waterways", style: { type: ref, name: line_waterway_narrow } }
-
-observability:
-  log_level: info
-  log_format: text
+  compiler:
+    storage:
+      cacheSize: 1Gi
+      workSize: 2Gi
+  runtime:
+    replicas: 1
+    cache:
+      sizeLimit: 1Gi
