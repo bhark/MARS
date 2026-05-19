@@ -4,10 +4,11 @@ use kube::core::ObjectMeta;
 use mars_config::SourceBackend;
 use serde_json::json;
 
+use super::SecretKeyRef;
 use super::jobs::synthesise_config;
 use super::plan::{CatalogBootstrapPlan, cluster_bootstrap_job_name, plan_hash, plan_jobs};
-use super::{SecretKeyRef, owner_reference};
 use crate::crd::cluster::{ClusterDefaults, MarsServiceCluster, MarsServiceClusterSpec};
+use crate::owner::owner_reference;
 
 fn cluster(name: &str, catalog: Vec<serde_json::Value>) -> MarsServiceCluster {
     MarsServiceCluster {

@@ -23,6 +23,7 @@ mod dsn;
 mod effective_config;
 mod error;
 mod metrics;
+mod owner;
 mod poller;
 mod reconcile;
 mod status;

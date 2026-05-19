@@ -6,8 +6,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use k8s_openapi::api::apps::v1::Deployment;
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::OwnerReference;
-use kube::Resource;
 use kube::api::Api;
 use kube::runtime::controller::Action;
 use serde_json::Value as JsonValue;
@@ -22,6 +20,7 @@ use crate::crd::spec::{MarsService, SpecValidationError, validate_spec};
 use crate::effective_config::{self, ResolvedDefinition};
 use crate::error::{OperatorError, Result};
 use crate::metrics::Metrics;
+use crate::owner::owner_reference;
 use crate::poller::PollerManager;
 use crate::status::{self, ObservedDefinition, Resolution, ResolutionReason, StatusInputs};
 
@@ -70,7 +69,7 @@ async fn reconcile_inner(cr: Arc<MarsService>, ctx: Arc<Ctx>) -> Result<Action> 
 
     info!(svc = %svc_name, ns = %ns, gen = generation, "reconciling MarsService");
 
-    let owner_ref = owner_reference(&cr)?;
+    let owner_ref = owner_reference(cr.as_ref())?;
 
     // on delete, the cluster bootstrap reconciler owns lifecycle of any
     // postgres-side state; per-service teardown is handled by cascade GC on
@@ -206,27 +205,6 @@ async fn reconcile_inner(cr: Arc<MarsService>, ctx: Arc<Ctx>) -> Result<Action> 
 /// surfaces a Degraded condition for multi-replica + RWO.
 const ARTIFACT_STORE_PVC_SIZE: &str = "5Gi";
 const ARTIFACT_STORE_PVC_ACCESS_MODE: &str = "ReadWriteOnce";
-
-pub(crate) fn owner_reference(cr: &MarsService) -> Result<OwnerReference> {
-    let uid = cr
-        .metadata
-        .uid
-        .clone()
-        .ok_or_else(|| OperatorError::MissingField("metadata.uid".into()))?;
-    let name = cr
-        .metadata
-        .name
-        .clone()
-        .ok_or_else(|| OperatorError::MissingField("metadata.name".into()))?;
-    Ok(OwnerReference {
-        api_version: MarsService::api_version(&()).into_owned(),
-        kind: MarsService::kind(&()).into_owned(),
-        name,
-        uid,
-        controller: Some(true),
-        block_owner_deletion: Some(true),
-    })
-}
 
 fn detect_fs_store(effective_cfg: &JsonValue) -> bool {
     effective_cfg

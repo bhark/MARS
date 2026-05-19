@@ -11,14 +11,13 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::OwnerReference;
-use kube::Resource;
 use kube::runtime::controller::Action;
 use tracing::{error, info, warn};
 
 use crate::crd::cluster::{MarsServiceCluster, SecretKeyRef};
 use crate::error::{OperatorError, Result};
 use crate::metrics::Metrics;
+use crate::owner::owner_reference;
 
 mod jobs;
 mod plan;
@@ -77,7 +76,7 @@ async fn reconcile_inner(cr: Arc<MarsServiceCluster>, ctx: Arc<ClusterCtx>) -> R
     // cluster CR is cluster-scoped: it can only own namespaced objects in the
     // operator's own namespace (cross-namespace owner refs are rejected by
     // the apiserver). delete-cascade handles GC for those Jobs / ConfigMaps.
-    let owner = owner_reference(&cr)?;
+    let owner = owner_reference(cr.as_ref())?;
     let ns = ctx.operator_namespace.as_str();
 
     let plans = match plan_jobs(&cr) {
@@ -102,27 +101,6 @@ async fn reconcile_inner(cr: Arc<MarsServiceCluster>, ctx: Arc<ClusterCtx>) -> R
     }
 
     Ok(Action::requeue(Duration::from_secs(30)))
-}
-
-pub(crate) fn owner_reference(cr: &MarsServiceCluster) -> Result<OwnerReference> {
-    let uid = cr
-        .metadata
-        .uid
-        .clone()
-        .ok_or_else(|| OperatorError::MissingField("metadata.uid".into()))?;
-    let name = cr
-        .metadata
-        .name
-        .clone()
-        .ok_or_else(|| OperatorError::MissingField("metadata.name".into()))?;
-    Ok(OwnerReference {
-        api_version: MarsServiceCluster::api_version(&()).into_owned(),
-        kind: MarsServiceCluster::kind(&()).into_owned(),
-        name,
-        uid,
-        controller: Some(true),
-        block_owner_deletion: Some(true),
-    })
 }
 
 #[cfg(test)]
