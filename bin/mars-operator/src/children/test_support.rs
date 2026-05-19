@@ -5,10 +5,10 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use k8s_openapi::api::apps::v1::Deployment;
-use k8s_openapi::api::batch::v1::Job;
-use k8s_openapi::api::core::v1::{Container, EnvVar, PodSpec};
+use k8s_openapi::api::core::v1::PodSpec;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, OwnerReference};
 
+use crate::crd::definition::{ClusterRef, DefinitionSpec};
 use crate::crd::runtime::RuntimeSpec;
 use crate::crd::spec::{MarsService, MarsServiceSpec};
 
@@ -40,31 +40,6 @@ pub(crate) fn pod_spec(dep: &Deployment) -> &PodSpec {
         .expect("pod template has spec")
 }
 
-/// borrow the `PodSpec` out of a job. mirror of `pod_spec` for the
-/// bootstrap/teardown job builders.
-pub(crate) fn job_pod_spec(job: &Job) -> &PodSpec {
-    job.spec
-        .as_ref()
-        .expect("job has spec")
-        .template
-        .spec
-        .as_ref()
-        .expect("pod template has spec")
-}
-
-/// look up an env var on a container by name, panicking with a helpful
-/// message if absent. callers chase the `value` / `value_from` shape
-/// themselves; the helper just trims the find + unwrap noise.
-pub(crate) fn env_var<'a>(container: &'a Container, name: &str) -> &'a EnvVar {
-    container
-        .env
-        .as_ref()
-        .expect("container has env vars")
-        .iter()
-        .find(|e| e.name == name)
-        .unwrap_or_else(|| panic!("env var {name} not found"))
-}
-
 pub(crate) fn cr(name: &str, namespace: &str) -> MarsService {
     MarsService {
         metadata: ObjectMeta {
@@ -77,11 +52,14 @@ pub(crate) fn cr(name: &str, namespace: &str) -> MarsService {
                 replicas: 2,
                 ..Default::default()
             },
-            config: Some(serde_json::json!({
-                "service": { "name": "demo" },
-                "sources": [{ "id": "default", "kind": "stub" }],
-                "artifacts": { "store": { "type": "fs", "path": "/var/lib/mars/artifacts" } }
-            })),
+            cluster_ref: ClusterRef {
+                name: "demo-cluster".into(),
+            },
+            definition: DefinitionSpec {
+                inline: Some("service: { name: demo }\n".into()),
+                ..DefinitionSpec::default()
+            },
+            sources: vec!["default".into()],
             ..Default::default()
         },
         status: None,

@@ -10,8 +10,6 @@
 #![forbid(unsafe_code)]
 
 mod apply;
-mod bootstrap;
-mod bootstrap_flow;
 mod children;
 mod cli;
 mod cluster_reconcile;
@@ -21,7 +19,6 @@ mod config;
 mod controller;
 mod crd;
 mod definition;
-mod deletion;
 mod dsn;
 mod effective_config;
 mod error;

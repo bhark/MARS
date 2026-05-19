@@ -26,9 +26,6 @@ use crate::crd::spec::MarsService;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ComposeError {
-    #[error("MarsService.spec is missing required new-shape field: {0}")]
-    MissingSpecField(&'static str),
-
     #[error("MarsService references source id '{id}' which is not in the cluster catalog (known ids: [{known}])")]
     UnknownSourceId { id: String, known: String },
 
@@ -64,11 +61,7 @@ pub(crate) fn compose_config(
     cluster: &MarsServiceCluster,
     mut def: RenderDefinition,
 ) -> Result<Config> {
-    let spec_sources = svc
-        .spec
-        .sources
-        .as_ref()
-        .ok_or(ComposeError::MissingSpecField("sources"))?;
+    let spec_sources = &svc.spec.sources;
 
     // empty spec.sources is only valid when no layer references any source
     if spec_sources.is_empty() {

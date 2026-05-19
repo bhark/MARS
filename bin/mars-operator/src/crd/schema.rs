@@ -1,7 +1,7 @@
 //! schemars `schema_with` helpers for opaque CR fields that the apiserver
 //! must accept verbatim and the operator validates at reconcile.
 
-/// Schema function for `spec.config`: emits `{type: object,
+/// Schema function for opaque object payloads: emits `{type: object,
 /// x-kubernetes-preserve-unknown-fields: true}` so the apiserver accepts any
 /// shape under that key. The operator does real validation at reconcile.
 pub(super) fn preserve_unknown_fields(_: &mut schemars::SchemaGenerator) -> schemars::Schema {

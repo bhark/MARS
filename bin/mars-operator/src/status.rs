@@ -114,14 +114,12 @@ pub(crate) fn deployment_ready(d: &Deployment) -> bool {
 
 pub(crate) struct StatusInputs<'a> {
     pub(crate) observed_generation: i64,
-    /// Outcome of resolving the cluster catalog + spec.sources for the new
-    /// path; on the legacy path use [`Resolution::Legacy`].
+    /// Outcome of resolving the cluster catalog + spec.sources.
     pub(crate) catalog: Resolution<'a>,
-    /// Outcome of resolving + fetching + parsing the RenderDefinition for the
-    /// new path; on the legacy path use [`Resolution::Legacy`].
+    /// Outcome of resolving + fetching + parsing the RenderDefinition.
     pub(crate) definition: Resolution<'a>,
     /// Identity of the most recently fetched RenderDefinition. `Some` only
-    /// when DefinitionResolved=True on the new path.
+    /// when `DefinitionResolved=True`.
     pub(crate) definition_observed: Option<ObservedDefinition<'a>>,
     pub(crate) config_valid: bool,
     pub(crate) config_message: &'a str,
@@ -130,34 +128,22 @@ pub(crate) struct StatusInputs<'a> {
     pub(crate) compiler_ready: bool,
     pub(crate) runtime_ready: bool,
     pub(crate) degraded: Option<&'a str>,
-    /// Postgres bootstrap state. `None` means the CR does not declare a
-    /// `spec.bootstrap` block, in which case no `BootstrapReady` condition is
-    /// emitted at all so cluster operators see exactly the conditions that
-    /// apply to their setup.
-    pub(crate) bootstrap: Option<BootstrapStatus<'a>>,
-    /// Name of the resolved runtime-password Secret (BYO or operator-managed).
-    /// Surfaced on status so consumers can locate it without recomputing the
-    /// naming convention.
-    pub(crate) runtime_credentials_secret: Option<&'a str>,
-    /// Name of the operator-managed admin-credentials Secret holding the
-    /// composed admin DSN. Populated only when the component-style
-    /// `bootstrap.adminCredentialsRef` branch is in use; absent for BYO
-    /// `adminSecretRef` and for disabled/missing bootstrap.
-    pub(crate) bootstrap_admin_credentials_secret: Option<&'a str>,
 }
 
 /// Tri-state outcome of an upstream resolution step.
 #[derive(Clone, Copy)]
 pub(crate) enum Resolution<'a> {
-    /// Legacy `spec.config` path - resolution does not apply.
-    Legacy,
-    /// New path, succeeded.
     Resolved,
-    /// New path, blocked by a prior step (e.g. CatalogResolved=False).
-    /// Surfaces as `Unknown` with reason `Skipped`.
-    Skipped { blocked_by: &'a str },
-    /// New path, failed with a typed reason. Surfaces as `False`.
-    Failed { reason: ResolutionReason, message: &'a str },
+    /// Blocked by a prior step (e.g. CatalogResolved=False). Surfaces as
+    /// `Unknown` with reason `Skipped`.
+    Skipped {
+        blocked_by: &'a str,
+    },
+    /// Failed with a typed reason. Surfaces as `False`.
+    Failed {
+        reason: ResolutionReason,
+        message: &'a str,
+    },
 }
 
 /// Reason vocabulary for failed resolution conditions. Mirrors the typed
@@ -175,7 +161,6 @@ pub(crate) enum ResolutionReason {
     DefinitionFetchError,
     DefinitionDecodeError,
     // shared
-    SpecInvalid,
     Internal,
 }
 
@@ -189,7 +174,6 @@ impl ResolutionReason {
             Self::DefinitionResolveError => "DefinitionResolveError",
             Self::DefinitionFetchError => "DefinitionFetchError",
             Self::DefinitionDecodeError => "DefinitionDecodeError",
-            Self::SpecInvalid => "SpecInvalid",
             Self::Internal => "Internal",
         }
     }
@@ -199,34 +183,6 @@ impl ResolutionReason {
 pub(crate) struct ObservedDefinition<'a> {
     pub(crate) adapter: &'a str,
     pub(crate) revision: &'a str,
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct BootstrapStatus<'a> {
-    pub(crate) ready: bool,
-    pub(crate) reason: BootstrapReason,
-    pub(crate) message: &'a str,
-}
-
-#[derive(Clone, Copy)]
-pub(crate) enum BootstrapReason {
-    Ready,
-    ManualVerified,
-    InProgress,
-    Failed,
-    ManualSetupIncomplete,
-}
-
-impl BootstrapReason {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Ready => "Ready",
-            Self::ManualVerified => "ManualVerified",
-            Self::InProgress => "InProgress",
-            Self::Failed => "Failed",
-            Self::ManualSetupIncomplete => "ManualSetupIncomplete",
-        }
-    }
 }
 
 pub(crate) fn compute(inputs: StatusInputs<'_>) -> MarsServiceStatus {
@@ -239,9 +195,6 @@ pub(crate) fn compute(inputs: StatusInputs<'_>) -> MarsServiceStatus {
         if inputs.config_valid { "Validated" } else { "Invalid" },
         inputs.config_message,
     ));
-    if let Some(bs) = inputs.bootstrap {
-        conditions.push(condition("BootstrapReady", bs.ready, bs.reason.as_str(), bs.message));
-    }
     conditions.push(condition(
         "ChildrenApplied",
         inputs.children_applied,
@@ -292,13 +245,11 @@ pub(crate) fn compute(inputs: StatusInputs<'_>) -> MarsServiceStatus {
         degraded_msg,
     ));
 
-    let bootstrap_blocking = matches!(inputs.bootstrap, Some(bs) if !bs.ready);
-    let bootstrap_failed = matches!(inputs.bootstrap, Some(bs) if matches!(bs.reason, BootstrapReason::Failed));
-    let phase = if !inputs.config_valid || bootstrap_failed {
+    let phase = if !inputs.config_valid {
         "Failed"
     } else if inputs.degraded.is_some() {
         "Degraded"
-    } else if bootstrap_blocking || !inputs.children_applied {
+    } else if !inputs.children_applied {
         "Reconciling"
     } else if inputs.compiler_ready && inputs.runtime_ready {
         "Ready"
@@ -310,8 +261,6 @@ pub(crate) fn compute(inputs: StatusInputs<'_>) -> MarsServiceStatus {
         phase: Some(phase.into()),
         observed_generation: Some(inputs.observed_generation),
         conditions,
-        runtime_credentials_secret: inputs.runtime_credentials_secret.map(str::to_string),
-        bootstrap_admin_credentials_secret: inputs.bootstrap_admin_credentials_secret.map(str::to_string),
         definition: inputs.definition_observed.map(|o| DefinitionStatus {
             observed: DefinitionObserved {
                 adapter: o.adapter.into(),
@@ -323,7 +272,6 @@ pub(crate) fn compute(inputs: StatusInputs<'_>) -> MarsServiceStatus {
 
 fn resolution_condition(type_: &str, resolution: Resolution<'_>) -> Condition {
     match resolution {
-        Resolution::Legacy => raw_condition(type_, "True", "LegacyPath", "legacy spec.config path"),
         Resolution::Resolved => raw_condition(type_, "True", "Resolved", "resolved"),
         Resolution::Skipped { blocked_by } => raw_condition(
             type_,

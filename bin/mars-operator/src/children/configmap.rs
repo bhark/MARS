@@ -14,9 +14,8 @@ use crate::error::Result;
 
 /// Build the ConfigMap for a MarsService. Returns the configmap and the
 /// content checksum (the operator surfaces this on pod-template annotations
-/// so config edits roll the deployments). `config` is the effective config
-/// payload — on the legacy path it is `cr.spec.config`; on the new path it is
-/// the operator-composed `mars_config::Config` serialised back to a `Value`.
+/// so config edits roll the deployments). `config` is the operator-composed
+/// `mars_config::Config` serialised to a `Value`.
 pub(crate) fn build(cr: &MarsService, config: &JsonValue, owner_ref: OwnerReference) -> Result<(ConfigMap, String)> {
     let svc = cr
         .metadata

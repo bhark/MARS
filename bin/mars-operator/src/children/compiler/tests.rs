@@ -9,8 +9,7 @@ fn build_yields_three_children_named_per_instance() {
     let kids = build(
         &cr,
         "deadbeef",
-        None,
-        None,
+        false,
         test_support::TEST_IMAGE,
         test_support::owner_ref(),
     )
@@ -18,7 +17,6 @@ fn build_yields_three_children_named_per_instance() {
     assert_eq!(kids.deployment.metadata.name.as_deref(), Some("demo-compiler"));
     assert_eq!(kids.cache_pvc.metadata.name.as_deref(), Some("demo-compiler-cache"));
     assert_eq!(kids.work_pvc.metadata.name.as_deref(), Some("demo-compiler-work"));
-    // every child is in the CR's namespace
     for ns in [
         kids.deployment.metadata.namespace.as_deref(),
         kids.cache_pvc.metadata.namespace.as_deref(),
@@ -34,8 +32,7 @@ fn build_propagates_config_checksum_to_pod_template_annotation() {
     let kids = build(
         &cr,
         "abc123",
-        None,
-        None,
+        false,
         test_support::TEST_IMAGE,
         test_support::owner_ref(),
     )
@@ -52,12 +49,10 @@ fn build_propagates_config_checksum_to_pod_template_annotation() {
 fn build_missing_metadata_name_errors() {
     let mut cr = test_support::cr("demo", "svc-ns");
     cr.metadata.name = None;
-    // CompilerChildren is intentionally not Debug; use match to extract the err.
     match build(
         &cr,
         "abc123",
-        None,
-        None,
+        false,
         test_support::TEST_IMAGE,
         test_support::owner_ref(),
     ) {
@@ -68,53 +63,12 @@ fn build_missing_metadata_name_errors() {
 }
 
 #[test]
-fn build_projects_runtime_password_env_when_resolved_ref_is_set() {
-    let cr = test_support::cr("demo", "svc-ns");
-    let runtime_ref = SecretKeyRef {
-        name: "demo-runtime-credentials".into(),
-        key: "password".into(),
-    };
-    let kids = build(
-        &cr,
-        "deadbeef",
-        None,
-        Some(&runtime_ref),
-        test_support::TEST_IMAGE,
-        test_support::owner_ref(),
-    )
-    .unwrap();
-    let pod = test_support::pod_spec(&kids.deployment);
-    let injected = test_support::env_var(&pod.containers[0], RUNTIME_PASSWORD_ENV);
-    let sref = injected.value_from.as_ref().unwrap().secret_key_ref.as_ref().unwrap();
-    assert_eq!(sref.name, "demo-runtime-credentials");
-    assert_eq!(sref.key, "password");
-}
-
-#[test]
-fn build_omits_runtime_password_env_when_resolved_ref_is_absent() {
-    let cr = test_support::cr("demo", "svc-ns");
-    let kids = build(
-        &cr,
-        "deadbeef",
-        None,
-        None,
-        test_support::TEST_IMAGE,
-        test_support::owner_ref(),
-    )
-    .unwrap();
-    let pod = test_support::pod_spec(&kids.deployment);
-    let envs = pod.containers[0].env.as_ref().unwrap();
-    assert!(envs.iter().all(|e| e.name != RUNTIME_PASSWORD_ENV));
-}
-
-#[test]
 fn build_without_images_config_map_omits_images_volume() {
     let cr = test_support::cr("demo", "svc-ns");
     let kids = build(
         &cr,
         "deadbeef",
-        None,
-        None,
+        false,
         test_support::TEST_IMAGE,
         test_support::owner_ref(),
     )
@@ -132,8 +86,7 @@ fn build_with_images_config_map_mounts_read_only() {
     let kids = build(
         &cr,
         "deadbeef",
-        None,
-        None,
+        false,
         test_support::TEST_IMAGE,
         test_support::owner_ref(),
     )
@@ -165,8 +118,7 @@ fn build_omits_scheduling_fields_when_unset() {
     let kids = build(
         &cr,
         "deadbeef",
-        None,
-        None,
+        false,
         test_support::TEST_IMAGE,
         test_support::owner_ref(),
     )
@@ -205,8 +157,7 @@ fn build_propagates_node_selector_tolerations_and_affinity() {
     let kids = build(
         &cr,
         "deadbeef",
-        None,
-        None,
+        false,
         test_support::TEST_IMAGE,
         test_support::owner_ref(),
     )
@@ -232,13 +183,11 @@ fn build_propagates_node_selector_tolerations_and_affinity() {
 #[test]
 fn build_surfaces_malformed_affinity_as_json_error() {
     let mut cr = test_support::cr("demo", "svc-ns");
-    // numeric where an object is expected fails serde_json::from_value.
     cr.spec.compiler.affinity = Some(serde_json::json!({ "nodeAffinity": 42 }));
     match build(
         &cr,
         "deadbeef",
-        None,
-        None,
+        false,
         test_support::TEST_IMAGE,
         test_support::owner_ref(),
     ) {

@@ -1,6 +1,6 @@
 //! Compose an admin DSN from a component-style Secret (CNPG / Zalando / Crunchy
 //! shape) plus optional host/port/database fallbacks parsed out of the
-//! service's `spec.config.sources[].dsn`.
+//! source DSN declared on the cluster catalog entry.
 //!
 //! The composed string is persisted by the reconciler into a managed
 //! `<svc>-bootstrap-admin-credentials` Secret (owner-ref to the MarsService),
@@ -19,14 +19,10 @@ pub(crate) enum DsnError {
     #[error("admin credentials Secret '{name}' key '{key}' is not valid UTF-8")]
     NotUtf8 { name: String, key: String },
 
-    #[error(
-        "host could not be resolved: not in adminCredentialsRef.hostKey and not parseable from spec.config.source.dsn"
-    )]
+    #[error("host could not be resolved: not in adminCredentialsRef.hostKey and not parseable from source DSN")]
     HostUnresolved,
 
-    #[error(
-        "database could not be resolved: not in adminCredentialsRef.databaseKey and not parseable from spec.config.source.dsn"
-    )]
+    #[error("database could not be resolved: not in adminCredentialsRef.databaseKey and not parseable from source DSN")]
     DatabaseUnresolved,
 }
 

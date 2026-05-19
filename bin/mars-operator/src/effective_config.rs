@@ -1,12 +1,8 @@
 //! Produce the effective `mars_config::Config` payload for one reconcile.
 //!
-//! Two admission shapes feed downstream rendering:
-//! * legacy: `spec.config` carries the whole Config tree; return it verbatim.
-//! * new: resolve the `MarsServiceCluster` catalog + the `RenderDefinition`
-//!   source, compose them into a `Config`, and return the result.
-//!
-//! Both return a `serde_json::Value` so `configmap::build` and
-//! `bootstrap_flow::reconcile_bootstrap` consume one shape.
+//! Resolves the `MarsServiceCluster` catalog + the `RenderDefinition` source,
+//! composes them into a `Config`, and returns a `serde_json::Value` so the
+//! ConfigMap builder and downstream validators consume one shape.
 
 use kube::api::Api;
 use mars_config::RenderDefinition;
@@ -21,53 +17,33 @@ use crate::crd::spec::MarsService;
 use crate::definition;
 use crate::error::{OperatorError, Result};
 
-/// Identity of the resolved render definition; surfaced via status conditions
-/// once task 8 lands the full vocabulary. The variant label keeps the message
-/// human-readable; revision is the adapter-stable identity (sha, etag, ...).
+/// Identity of the resolved render definition; surfaced via status conditions.
+/// The variant label keeps the message human-readable; revision is the
+/// adapter-stable identity (sha, etag, ...).
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedDefinition {
     pub(crate) adapter: &'static str,
     pub(crate) revision: String,
 }
 
-/// Outcome of effective-config resolution on the new path.
+/// Outcome of effective-config resolution.
 #[derive(Debug)]
-pub(crate) struct NewPath {
+pub(crate) struct EffectiveConfig {
     pub(crate) config: JsonValue,
     pub(crate) definition: ResolvedDefinition,
 }
 
-/// Legacy path: return `spec.config` (already a Value).
-pub(crate) fn legacy(cr: &MarsService) -> Result<JsonValue> {
-    cr.spec
-        .config
-        .clone()
-        .ok_or_else(|| OperatorError::MissingField("spec.config".into()))
-}
-
-/// New path: fetch cluster CR, resolve the definition source, fetch the
-/// payload, parse, and compose into a `Config`. Returns the composed Config
-/// as a Value plus the resolved-definition identity for status.
-pub(crate) async fn new(cr: &MarsService, kube: &kube::Client, ns: &str) -> Result<NewPath> {
-    let cluster_ref = cr
-        .spec
-        .cluster_ref
-        .as_ref()
-        .ok_or_else(|| OperatorError::MissingField("spec.clusterRef".into()))?;
-    let definition_spec = cr
-        .spec
-        .definition
-        .as_ref()
-        .ok_or_else(|| OperatorError::MissingField("spec.definition".into()))?;
-
+/// Fetch cluster CR, resolve the definition source, fetch the payload, parse,
+/// and compose into a `Config`.
+pub(crate) async fn resolve(cr: &MarsService, kube: &kube::Client, ns: &str) -> Result<EffectiveConfig> {
     let clusters: Api<MarsServiceCluster> = Api::all(kube.clone());
     let cluster = clusters
-        .get_opt(&cluster_ref.name)
+        .get_opt(&cr.spec.cluster_ref.name)
         .await?
-        .ok_or_else(|| OperatorError::ClusterNotFound(cluster_ref.name.clone()))?;
+        .ok_or_else(|| OperatorError::ClusterNotFound(cr.spec.cluster_ref.name.clone()))?;
 
-    let source = definition::resolve(definition_spec, ns, kube).await?;
-    compose_from_source(cr, &cluster, definition_spec, source.as_ref()).await
+    let source = definition::resolve(&cr.spec.definition, ns, kube).await?;
+    compose_from_source(cr, &cluster, &cr.spec.definition, source.as_ref()).await
 }
 
 /// Fetch, parse, and compose given pre-resolved cluster and definition source.
@@ -79,7 +55,7 @@ pub(crate) async fn compose_from_source(
     cluster: &MarsServiceCluster,
     definition_spec: &DefinitionSpec,
     source: &dyn DefinitionSource,
-) -> Result<NewPath> {
+) -> Result<EffectiveConfig> {
     let DefinitionBytes { data, revision } = source.fetch().await?;
     let yaml = std::str::from_utf8(&data)
         .map_err(|e| OperatorError::DefinitionDecode(format!("definition payload not utf-8: {e}")))?;
@@ -92,7 +68,7 @@ pub(crate) async fn compose_from_source(
     let config = compose_config(cr, cluster, def)?;
     let value = serde_json::to_value(&config)?;
 
-    Ok(NewPath {
+    Ok(EffectiveConfig {
         config: value,
         definition: ResolvedDefinition { adapter, revision },
     })

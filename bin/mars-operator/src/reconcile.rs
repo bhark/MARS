@@ -14,14 +14,11 @@ use serde_json::Value as JsonValue;
 use tracing::{error, info, warn};
 
 use crate::apply;
-use crate::bootstrap_flow;
 use crate::children::labels::{self, artifact_store_pvc_name};
 use crate::children::pvc::{self, PvcSpec};
 use crate::children::{compiler, configmap, pdb, runtime, service};
 use crate::compose::ComposeError;
 use crate::crd::spec::{MarsService, SpecValidationError, validate_spec};
-use crate::crd::storage::ArtifactStoreSpec;
-use crate::deletion;
 use crate::effective_config::{self, ResolvedDefinition};
 use crate::error::{OperatorError, Result};
 use crate::metrics::Metrics;
@@ -92,18 +89,18 @@ async fn reconcile_inner(cr: Arc<MarsService>, ctx: Arc<Ctx>) -> Result<Action> 
 
     let owner_ref = owner_reference(&cr)?;
 
-    // deletion handling runs before anything else: we must run a teardown
-    // Job (if needed) and remove the finalizer before kube cascade-deletes
-    // the children. nothing else can succeed once deletionTimestamp is set.
+    // on delete, the cluster bootstrap reconciler owns lifecycle of any
+    // postgres-side state; per-service teardown is handled by cascade GC on
+    // the owned children. unregister the poller so it does not leak.
     if cr.metadata.deletion_timestamp.is_some() {
         if let Some(u) = uid.as_deref() {
             ctx.poller.unregister(u);
         }
-        return deletion::reconcile_deletion(cr.clone(), &ctx, &svc_name, &ns).await;
+        return Ok(Action::await_change());
     }
 
-    // admission: legacy XOR new-shape. typed errors map onto the catalog +
-    // definition resolution conditions so the user sees which prereq failed.
+    // admission: exactly-one definition variant. typed error maps onto the
+    // DefinitionResolved condition.
     if let Err(e) = validate_spec(&cr.spec) {
         let msg = e.to_string();
         warn!(svc = %svc_name, "spec admission failed: {msg}");
@@ -111,71 +108,44 @@ async fn reconcile_inner(cr: Arc<MarsService>, ctx: Arc<Ctx>) -> Result<Action> 
         return surface_resolution_failure(&ctx, &svc_name, &ns, generation, catalog, definition, &msg).await;
     }
 
-    // resolve the effective config: legacy returns spec.config verbatim, the
-    // new path composes cluster + render-definition into a Config.
-    let is_legacy = cr.spec.config.is_some();
-    if is_legacy {
-        warn!(
-            deprecated_field = "spec.config",
-            target_version = "v1alpha2",
-            service = %svc_name,
-            namespace = %ns,
-            "MarsService uses deprecated spec.config; migrate to clusterRef + definition + sources before v1alpha2"
-        );
+    // register the per-CR poller for credentialed definition sources. inline /
+    // configMapRef variants are handled inline by the kube watch fan-in.
+    if let Some(u) = uid.as_deref() {
+        ctx.poller
+            .register(u, &ns, &svc_name, &cr.spec.definition, &ctx.client)
+            .await?;
     }
-    let (effective_cfg, resolved_def) = match resolve_effective_config(&cr, &ctx, &ns, uid.as_deref()).await {
+
+    let resolved = match effective_config::resolve(&cr, &ctx.client, &ns).await {
         Ok(out) => out,
         Err(e) => {
             let msg = e.to_string();
             warn!(svc = %svc_name, "effective config: {msg}");
-            let (catalog, definition) = classify_resolve_error(&e, is_legacy, &msg);
+            let (catalog, definition) = classify_resolve_error(&e, &msg);
             return surface_resolution_failure(&ctx, &svc_name, &ns, generation, catalog, definition, &msg).await;
         }
     };
 
-    let config_message = match resolved_def.as_ref() {
-        Some(rd) => format!(
-            "composed from cluster + {} definition (revision {})",
-            rd.adapter, rd.revision
-        ),
-        None => "spec.config validated".to_string(),
-    };
+    let config_message = format!(
+        "composed from cluster + {} definition (revision {})",
+        resolved.definition.adapter, resolved.definition.revision
+    );
 
-    if let Err(e) = crate::config::validate(&effective_cfg) {
+    if let Err(e) = crate::config::validate(&resolved.config) {
         let msg = e.to_string();
         warn!(svc = %svc_name, "effective config invalid: {msg}");
-        // catalog + definition both resolved fine; the composed config is what
-        // failed downstream. emit them as True so the user sees the blocker
-        // sits in ConfigValid, not in the upstream prereqs.
-        let (catalog, definition) = if is_legacy {
-            (Resolution::Legacy, Resolution::Legacy)
-        } else {
-            (Resolution::Resolved, Resolution::Resolved)
-        };
-        return surface_config_invalid(
-            &ctx,
-            &svc_name,
-            &ns,
-            generation,
-            catalog,
-            definition,
-            resolved_def.as_ref(),
-            &msg,
-        )
-        .await;
+        return surface_config_invalid(&ctx, &svc_name, &ns, generation, &resolved.definition, &msg).await;
     }
 
-    let (catalog_res, def_res) = resolution_pair(is_legacy);
-    let observed = resolved_def.as_ref().map(observed_from);
+    let observed = Some(observed_from(&resolved.definition));
+    let fs_store = detect_fs_store(&resolved.config);
 
-    let fs_store = detect_fs_store(&effective_cfg, &cr);
-
-    if let Some(reason) = artifact_store_guard(&cr, fs_store.as_ref()) {
+    if let Some(reason) = artifact_store_guard(&cr, fs_store) {
         warn!(svc = %svc_name, "degraded: {reason}");
         let status_body = status::compute(StatusInputs {
             observed_generation: generation,
-            catalog: catalog_res,
-            definition: def_res,
+            catalog: Resolution::Resolved,
+            definition: Resolution::Resolved,
             definition_observed: observed,
             config_valid: true,
             config_message: &config_message,
@@ -184,91 +154,44 @@ async fn reconcile_inner(cr: Arc<MarsService>, ctx: Arc<Ctx>) -> Result<Action> 
             compiler_ready: false,
             runtime_ready: false,
             degraded: Some(&reason),
-            bootstrap: None,
-            runtime_credentials_secret: None,
-            bootstrap_admin_credentials_secret: None,
         });
         apply::patch_status(&ctx, &svc_name, &ns, status_body).await?;
         return Ok(Action::requeue(Duration::from_secs(30)));
     }
 
-    // configmap must exist before the bootstrap Job pod can mount it. PVCs
-    // come later because the bootstrap Job does not need them.
-    let (cm, checksum) = configmap::build(&cr, &effective_cfg, owner_ref.clone())?;
+    let (cm, checksum) = configmap::build(&cr, &resolved.config, owner_ref.clone())?;
     apply::configmap(&ctx, &ns, &cm).await?;
 
-    let bootstrap_outcome =
-        bootstrap_flow::reconcile_bootstrap(&ctx, &cr, &svc_name, &ns, &effective_cfg, owner_ref.clone()).await?;
-    let runtime_credentials_secret = bootstrap_outcome.runtime_password_ref.as_ref().map(|r| r.name.as_str());
-    let bootstrap_admin_credentials_secret = bootstrap_outcome.bootstrap_admin_credentials_secret.as_deref();
-    if !bootstrap_outcome.proceed {
-        let status_body = status::compute(StatusInputs {
-            observed_generation: generation,
-            catalog: catalog_res,
-            definition: def_res,
-            definition_observed: observed,
-            config_valid: true,
-            config_message: &config_message,
-            children_applied: false,
-            children_message: "skipped: bootstrap not ready",
-            compiler_ready: false,
-            runtime_ready: false,
-            degraded: None,
-            bootstrap: Some(bootstrap_outcome.status),
-            runtime_credentials_secret,
-            bootstrap_admin_credentials_secret,
-        });
-        apply::patch_status(&ctx, &svc_name, &ns, status_body).await?;
-        return Ok(Action::requeue(bootstrap_outcome.requeue));
-    }
-
-    if let Some(art) = &fs_store {
+    if fs_store {
+        let access_modes = [ARTIFACT_STORE_PVC_ACCESS_MODE.to_string()];
         let art_pvc = pvc::build(
             PvcSpec {
                 name: &artifact_store_pvc_name(&svc_name),
                 namespace: Some(&ns),
                 labels: labels::labels(&svc_name, "artifact-store"),
-                size: &art.size,
-                storage_class: &art.storage_class,
-                access_modes: &art.access_modes,
+                size: ARTIFACT_STORE_PVC_SIZE,
+                storage_class: "",
+                access_modes: &access_modes,
             },
             owner_ref.clone(),
         );
         apply::pvc(&ctx, &ns, &art_pvc).await?;
     }
 
-    let runtime_password_ref = bootstrap_outcome.runtime_password_ref.as_ref();
-    let compiler_children = compiler::build(
-        &cr,
-        &checksum,
-        fs_store.as_ref(),
-        runtime_password_ref,
-        &ctx.runtime_image,
-        owner_ref.clone(),
-    )?;
+    let compiler_children = compiler::build(&cr, &checksum, fs_store, &ctx.runtime_image, owner_ref.clone())?;
     apply::pvc(&ctx, &ns, &compiler_children.cache_pvc).await?;
     apply::pvc(&ctx, &ns, &compiler_children.work_pvc).await?;
     apply::deployment(&ctx, &ns, &compiler_children.deployment).await?;
 
-    let runtime_deployment = runtime::build(
-        &cr,
-        &checksum,
-        fs_store.as_ref(),
-        runtime_password_ref,
-        &ctx.runtime_image,
-        owner_ref.clone(),
-    )?;
+    let runtime_deployment = runtime::build(&cr, &checksum, fs_store, &ctx.runtime_image, owner_ref.clone())?;
     apply::deployment(&ctx, &ns, &runtime_deployment).await?;
 
     let runtime_service = service::build(&cr, owner_ref.clone())?;
     apply::service(&ctx, &ns, &runtime_service).await?;
 
-    // sibling PDB: present when spec.runtime.podDisruptionBudget is set,
-    // removed otherwise so clearing the field garbage-collects the prior one.
     let runtime_pdb = pdb::build(&cr, owner_ref)?;
     apply::runtime_pdb(&ctx, &ns, &svc_name, runtime_pdb.as_ref()).await?;
 
-    // re-read deployments for readiness
     let dep_api: Api<Deployment> = Api::namespaced(ctx.client.clone(), &ns);
     let compiler_dep = dep_api.get_opt(&labels::compiler_deployment_name(&svc_name)).await?;
     let runtime_dep = dep_api.get_opt(&labels::runtime_deployment_name(&svc_name)).await?;
@@ -278,8 +201,8 @@ async fn reconcile_inner(cr: Arc<MarsService>, ctx: Arc<Ctx>) -> Result<Action> 
 
     let status_body = status::compute(StatusInputs {
         observed_generation: generation,
-        catalog: catalog_res,
-        definition: def_res,
+        catalog: Resolution::Resolved,
+        definition: Resolution::Resolved,
         definition_observed: observed,
         config_valid: true,
         config_message: &config_message,
@@ -288,14 +211,18 @@ async fn reconcile_inner(cr: Arc<MarsService>, ctx: Arc<Ctx>) -> Result<Action> 
         compiler_ready,
         runtime_ready,
         degraded: None,
-        bootstrap: Some(bootstrap_outcome.status),
-        runtime_credentials_secret,
-        bootstrap_admin_credentials_secret,
     });
     apply::patch_status(&ctx, &svc_name, &ns, status_body).await?;
 
     Ok(Action::requeue(Duration::from_secs(30)))
 }
+
+/// PVC defaults for the fs-store artifact volume. Per-service overrides
+/// belong on the cluster catalog when the need surfaces; until then the
+/// operator picks one shape that works for single-replica deployments and
+/// surfaces a Degraded condition for multi-replica + RWO.
+const ARTIFACT_STORE_PVC_SIZE: &str = "5Gi";
+const ARTIFACT_STORE_PVC_ACCESS_MODE: &str = "ReadWriteOnce";
 
 pub(crate) fn owner_reference(cr: &MarsService) -> Result<OwnerReference> {
     let uid = cr
@@ -318,28 +245,24 @@ pub(crate) fn owner_reference(cr: &MarsService) -> Result<OwnerReference> {
     })
 }
 
-fn detect_fs_store(effective_cfg: &JsonValue, cr: &MarsService) -> Option<ArtifactStoreSpec> {
-    let store_type = effective_cfg
+fn detect_fs_store(effective_cfg: &JsonValue) -> bool {
+    effective_cfg
         .get("artifacts")
         .and_then(|a| a.get("store"))
         .and_then(|s| s.get("type"))
-        .and_then(|v| v.as_str());
-    if store_type == Some("fs") {
-        Some(cr.spec.artifact_store.clone().unwrap_or_default())
-    } else {
-        None
-    }
+        .and_then(|v| v.as_str())
+        == Some("fs")
 }
 
-/// fs store + multi-replica runtime requires RWX access. Returning Some()
-/// means the operator refuses to roll children and surfaces a Degraded
-/// condition instead - that is a hard constraint, not a warning.
-fn artifact_store_guard(cr: &MarsService, fs_store: Option<&ArtifactStoreSpec>) -> Option<String> {
-    let art = fs_store?;
-    if cr.spec.runtime.replicas > 1 && !art.access_modes.iter().any(|m| m == "ReadWriteMany") {
+/// fs store + multi-replica runtime requires RWX access. The operator owns
+/// PVC sizing now (no service-side override), and the default access modes
+/// are RWO; multi-replica with the default lands in a Degraded condition.
+fn artifact_store_guard(cr: &MarsService, fs_store: bool) -> Option<String> {
+    if fs_store && cr.spec.runtime.replicas > 1 {
         Some(format!(
-            "artifacts.store.type=fs with runtime.replicas={} requires accessModes to include ReadWriteMany (got {:?})",
-            cr.spec.runtime.replicas, art.access_modes
+            "artifacts.store.type=fs with runtime.replicas={} requires a ReadWriteMany volume; \
+             current operator-managed PVC is ReadWriteOnce",
+            cr.spec.runtime.replicas
         ))
     } else {
         None
@@ -351,11 +274,6 @@ pub(crate) fn error_policy(_cr: Arc<MarsService>, error: &OperatorError, _ctx: A
     Action::requeue(Duration::from_secs(15))
 }
 
-/// Upstream resolution failed (admission, catalog lookup, definition
-/// fetch/parse). Emits the matching `CatalogResolved` / `DefinitionResolved`
-/// state plus a `ConfigValid=False` blocker so downstream conditions stay
-/// skipped. `definition_observed` is intentionally cleared - resolution
-/// failed, so the last fetched identity (if any) is not load-bearing here.
 async fn surface_resolution_failure(
     ctx: &Ctx,
     svc_name: &str,
@@ -377,34 +295,24 @@ async fn surface_resolution_failure(
         compiler_ready: false,
         runtime_ready: false,
         degraded: None,
-        bootstrap: None,
-        runtime_credentials_secret: None,
-        bootstrap_admin_credentials_secret: None,
     });
     apply::patch_status(ctx, svc_name, ns, status_body).await?;
     Ok(Action::requeue(Duration::from_secs(30)))
 }
 
-/// Composed-config validation failed; catalog + definition resolved fine.
-/// Keeps the prior observed identity so consumers see what bytes the
-/// operator parsed before the composed Config tripped validation.
-#[allow(clippy::too_many_arguments)]
 async fn surface_config_invalid(
     ctx: &Ctx,
     svc_name: &str,
     ns: &str,
     generation: i64,
-    catalog: Resolution<'_>,
-    definition: Resolution<'_>,
-    resolved_def: Option<&ResolvedDefinition>,
+    resolved_def: &ResolvedDefinition,
     message: &str,
 ) -> Result<Action> {
-    let observed = resolved_def.map(observed_from);
     let status_body = status::compute(StatusInputs {
         observed_generation: generation,
-        catalog,
-        definition,
-        definition_observed: observed,
+        catalog: Resolution::Resolved,
+        definition: Resolution::Resolved,
+        definition_observed: Some(observed_from(resolved_def)),
         config_valid: false,
         config_message: message,
         children_applied: false,
@@ -412,22 +320,9 @@ async fn surface_config_invalid(
         compiler_ready: false,
         runtime_ready: false,
         degraded: None,
-        bootstrap: None,
-        runtime_credentials_secret: None,
-        bootstrap_admin_credentials_secret: None,
     });
     apply::patch_status(ctx, svc_name, ns, status_body).await?;
     Ok(Action::requeue(Duration::from_secs(30)))
-}
-
-/// Both resolution conditions report True (legacy variant on the legacy path,
-/// resolved on the new path).
-fn resolution_pair<'a>(is_legacy: bool) -> (Resolution<'a>, Resolution<'a>) {
-    if is_legacy {
-        (Resolution::Legacy, Resolution::Legacy)
-    } else {
-        (Resolution::Resolved, Resolution::Resolved)
-    }
 }
 
 fn observed_from(rd: &ResolvedDefinition) -> ObservedDefinition<'_> {
@@ -437,41 +332,9 @@ fn observed_from(rd: &ResolvedDefinition) -> ObservedDefinition<'_> {
     }
 }
 
-/// Map admission failures onto the two resolution conditions. `BothShapes` /
-/// `NeitherShape` are ambiguous prereqs - they block both. The new-shape
-/// "missing field" errors map to whichever condition the missing field belongs
-/// to. The exactly-one definition-variant violation maps to
-/// DefinitionResolved=False with the dedicated reason.
 fn classify_spec_validation<'a>(e: &SpecValidationError, msg: &'a str) -> (Resolution<'a>, Resolution<'a>) {
-    use SpecValidationError as E;
     match e {
-        E::BothShapes | E::NeitherShape | E::BootstrapOnNewPath => (
-            Resolution::Failed {
-                reason: ResolutionReason::SpecInvalid,
-                message: msg,
-            },
-            Resolution::Failed {
-                reason: ResolutionReason::SpecInvalid,
-                message: msg,
-            },
-        ),
-        E::NewShapeMissing("definition") => (
-            Resolution::Resolved,
-            Resolution::Failed {
-                reason: ResolutionReason::SpecInvalid,
-                message: msg,
-            },
-        ),
-        E::NewShapeMissing(_) => (
-            Resolution::Failed {
-                reason: ResolutionReason::SpecInvalid,
-                message: msg,
-            },
-            Resolution::Skipped {
-                blocked_by: "CatalogResolved",
-            },
-        ),
-        E::DefinitionVariantCount(_) => (
+        SpecValidationError::DefinitionVariantCount(_) => (
             Resolution::Resolved,
             Resolution::Failed {
                 reason: ResolutionReason::ExactlyOneViolated,
@@ -481,23 +344,7 @@ fn classify_spec_validation<'a>(e: &SpecValidationError, msg: &'a str) -> (Resol
     }
 }
 
-/// Map a runtime resolution `OperatorError` onto the two conditions. The
-/// classification mirrors the failure point inside `resolve_effective_config`:
-/// cluster lookup feeds CatalogResolved, definition resolve/fetch/decode feed
-/// DefinitionResolved, and `ComposeError::UnknownSourceId` lands on
-/// CatalogResolved because the catalog cannot satisfy the spec.
-fn classify_resolve_error<'a>(e: &OperatorError, is_legacy: bool, msg: &'a str) -> (Resolution<'a>, Resolution<'a>) {
-    if is_legacy {
-        // legacy path: resolution doesn't apply. surface failure on definition
-        // to keep one consistent slot ("legacy + something broke").
-        return (
-            Resolution::Legacy,
-            Resolution::Failed {
-                reason: ResolutionReason::Internal,
-                message: msg,
-            },
-        );
-    }
+fn classify_resolve_error<'a>(e: &OperatorError, msg: &'a str) -> (Resolution<'a>, Resolution<'a>) {
     match e {
         OperatorError::ClusterNotFound(_) => (
             Resolution::Failed {
@@ -556,40 +403,6 @@ fn classify_resolve_error<'a>(e: &OperatorError, is_legacy: bool, msg: &'a str) 
             },
         ),
     }
-}
-
-/// Resolve the effective Config for `cr`. The legacy path returns
-/// `spec.config` verbatim and skips poller registration. The new path fetches
-/// the cluster CR, registers a poller for credentialed definition sources, and
-/// composes the resolved RenderDefinition with the cluster catalog into a
-/// `Config`. Returns the value plus, on the new path, the resolved-definition
-/// identity for status reporting.
-async fn resolve_effective_config(
-    cr: &MarsService,
-    ctx: &Ctx,
-    ns: &str,
-    uid: Option<&str>,
-) -> Result<(JsonValue, Option<effective_config::ResolvedDefinition>)> {
-    if cr.spec.config.is_some() {
-        // legacy path: no poller, no cluster lookup.
-        if let Some(u) = uid {
-            ctx.poller.unregister(u);
-        }
-        return Ok((effective_config::legacy(cr)?, None));
-    }
-    // new path. validate_spec has already enforced clusterRef + definition presence.
-    if let (Some(u), Some(def_spec)) = (uid, cr.spec.definition.as_ref()) {
-        ctx.poller.register(u, ns, &cr_name(cr)?, def_spec, &ctx.client).await?;
-    }
-    let out = effective_config::new(cr, &ctx.client, ns).await?;
-    Ok((out.config, Some(out.definition)))
-}
-
-fn cr_name(cr: &MarsService) -> Result<String> {
-    cr.metadata
-        .name
-        .clone()
-        .ok_or_else(|| OperatorError::MissingField("metadata.name".into()))
 }
 
 #[cfg(test)]

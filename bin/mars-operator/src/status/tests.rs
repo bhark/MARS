@@ -22,22 +22,7 @@ fn baseline_inputs<'a>(catalog: Resolution<'a>, definition: Resolution<'a>) -> S
         compiler_ready: false,
         runtime_ready: false,
         degraded: None,
-        bootstrap: None,
-        runtime_credentials_secret: None,
-        bootstrap_admin_credentials_secret: None,
     }
-}
-
-#[test]
-fn legacy_path_marks_both_resolution_conditions_true_with_legacy_reason() {
-    let s = compute(baseline_inputs(Resolution::Legacy, Resolution::Legacy));
-    let cat = cond(&s, "CatalogResolved");
-    let def = cond(&s, "DefinitionResolved");
-    assert_eq!(cat.status, "True");
-    assert_eq!(cat.reason, "LegacyPath");
-    assert_eq!(def.status, "True");
-    assert_eq!(def.reason, "LegacyPath");
-    assert!(s.definition.is_none());
 }
 
 #[test]

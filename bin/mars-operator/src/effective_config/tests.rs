@@ -43,12 +43,12 @@ fn svc() -> MarsService {
             ..ObjectMeta::default()
         },
         spec: MarsServiceSpec {
-            cluster_ref: Some(ClusterRef { name: "prod-eu".into() }),
-            definition: Some(DefinitionSpec {
+            cluster_ref: ClusterRef { name: "prod-eu".into() },
+            definition: DefinitionSpec {
                 inline: Some("ignored: used via FakeDefinitionSource".into()),
                 ..DefinitionSpec::default()
-            }),
-            sources: Some(vec!["kf_postgis".into()]),
+            },
+            sources: vec!["kf_postgis".into()],
             ..MarsServiceSpec::default()
         },
         status: None,
@@ -76,7 +76,7 @@ layers:
 async fn happy_path_composes_round_trippable_config() {
     let cr = svc();
     let cluster = cluster();
-    let spec = cr.spec.definition.clone().unwrap();
+    let spec = cr.spec.definition.clone();
     let fake = FakeDefinitionSource::new(Bytes::from(DEFINITION_YAML), "rev-1");
 
     let out = compose_from_source(&cr, &cluster, &spec, &fake)
@@ -85,15 +85,10 @@ async fn happy_path_composes_round_trippable_config() {
 
     assert_eq!(out.definition.adapter, "inline");
     assert_eq!(out.definition.revision, "rev-1");
-    // composed Config round-trips through the canonical YAML pipeline configmap
-    // uses; this is what the runtime / compiler pods will actually load.
     let yaml = crate::config::canonicalize_yaml(&out.config).expect("canonicalise");
     let _: mars_config::Config = serde_yaml_ng::from_str(&yaml).expect("re-parse composed config");
 }
 
-// reconcile dry-run: the configmap data the operator writes must equal the
-// canonical serialisation of the composed Config byte-for-byte. proves the
-// new-path wiring end-to-end without a live apiserver.
 #[tokio::test]
 async fn configmap_dry_run_matches_composed_config_byte_for_byte() {
     use crate::children::{configmap, test_support};
@@ -102,7 +97,7 @@ async fn configmap_dry_run_matches_composed_config_byte_for_byte() {
     cr.metadata.name = Some("demo".into());
     cr.metadata.namespace = Some("gis".into());
     let cluster = cluster();
-    let spec = cr.spec.definition.clone().unwrap();
+    let spec = cr.spec.definition.clone();
     let fake = FakeDefinitionSource::new(Bytes::from(DEFINITION_YAML), "rev-1");
 
     let out = compose_from_source(&cr, &cluster, &spec, &fake)
@@ -115,7 +110,6 @@ async fn configmap_dry_run_matches_composed_config_byte_for_byte() {
     let actual_yaml = data.get("mars.yaml").expect("mars.yaml key present");
     assert_eq!(actual_yaml, &expected_yaml);
 
-    // and the bytes the pod will load round-trip back into mars_config::Config
     let _: mars_config::Config = serde_yaml_ng::from_str(actual_yaml).expect("configmap payload parses as Config");
 }
 
@@ -123,7 +117,7 @@ async fn configmap_dry_run_matches_composed_config_byte_for_byte() {
 async fn fetch_error_surfaces_as_typed_error() {
     let cr = svc();
     let cluster = cluster();
-    let spec = cr.spec.definition.clone().unwrap();
+    let spec = cr.spec.definition.clone();
     let fake = FakeDefinitionSource::new(Bytes::from(DEFINITION_YAML), "rev-1");
     fake.fail_next_fetch(DefinitionSourceError::NotFound { what: "missing".into() });
 
@@ -137,7 +131,7 @@ async fn fetch_error_surfaces_as_typed_error() {
 async fn non_utf8_payload_surfaces_decode_error() {
     let cr = svc();
     let cluster = cluster();
-    let spec = cr.spec.definition.clone().unwrap();
+    let spec = cr.spec.definition.clone();
     let fake = FakeDefinitionSource::new(Bytes::from_static(&[0xff, 0xfe, 0xfd]), "rev-1");
 
     let err = compose_from_source(&cr, &cluster, &spec, &fake)
@@ -150,7 +144,7 @@ async fn non_utf8_payload_surfaces_decode_error() {
 async fn malformed_yaml_surfaces_decode_error() {
     let cr = svc();
     let cluster = cluster();
-    let spec = cr.spec.definition.clone().unwrap();
+    let spec = cr.spec.definition.clone();
     let fake = FakeDefinitionSource::new(Bytes::from_static(b"@@@ not yaml"), "rev-1");
 
     let err = compose_from_source(&cr, &cluster, &spec, &fake)
@@ -162,32 +156,13 @@ async fn malformed_yaml_surfaces_decode_error() {
 #[tokio::test]
 async fn unknown_source_id_surfaces_compose_error() {
     let mut cr = svc();
-    cr.spec.sources = Some(vec!["does_not_exist".into()]);
+    cr.spec.sources = vec!["does_not_exist".into()];
     let cluster = cluster();
-    let spec = cr.spec.definition.clone().unwrap();
+    let spec = cr.spec.definition.clone();
     let fake = FakeDefinitionSource::new(Bytes::from(DEFINITION_YAML), "rev-1");
 
     let err = compose_from_source(&cr, &cluster, &spec, &fake)
         .await
         .expect_err("must fail");
     assert!(matches!(err, OperatorError::Compose(_)), "{err:?}");
-}
-
-#[test]
-fn legacy_returns_spec_config_verbatim() {
-    let mut cr = svc();
-    cr.spec.cluster_ref = None;
-    cr.spec.definition = None;
-    cr.spec.sources = None;
-    cr.spec.config = Some(json!({"service": {"name": "demo"}}));
-
-    let value = legacy(&cr).expect("legacy ok");
-    assert_eq!(value, json!({"service": {"name": "demo"}}));
-}
-
-#[test]
-fn legacy_missing_field_when_spec_config_absent() {
-    let cr = svc();
-    let err = legacy(&cr).expect_err("missing");
-    assert!(matches!(err, OperatorError::MissingField(_)), "{err:?}");
 }

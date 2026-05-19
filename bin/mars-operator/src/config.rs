@@ -1,4 +1,5 @@
-//! Validate and canonicalise the `spec.config` blob.
+//! Validate and canonicalise the composed `Config` blob the operator writes
+//! to the runtime ConfigMap.
 //!
 //! The operator writes the YAML to a ConfigMap verbatim (placeholders
 //! preserved) so the pod's `mars_config::load` performs env substitution at
@@ -28,15 +29,16 @@ pub(crate) fn canonicalize_yaml(value: &JsonValue) -> Result<String> {
     Ok(out)
 }
 
-/// Validate that `spec.config` parses into `mars_config::Config`. Placeholders
-/// are substituted with sentinels so unset env vars do not fail validation.
+/// Validate that the composed config parses into `mars_config::Config`.
+/// Placeholders are substituted with sentinels so unset env vars do not fail
+/// validation.
 pub(crate) fn validate(value: &JsonValue) -> Result<()> {
     let yaml = canonicalize_yaml(value)?;
     let sanitised = strip_placeholders(&yaml);
 
     let mut parsed: mars_config::Config = serde_yaml_ng::from_str(&sanitised).map_err(|e| {
         OperatorError::ConfigInvalid(format!(
-            "spec.config does not deserialise into mars_config::Config: {e}"
+            "composed Config does not deserialise into mars_config::Config: {e}"
         ))
     })?;
 

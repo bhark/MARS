@@ -3,7 +3,7 @@
 //! garbage-collects its sibling when the spec field is absent.
 
 use k8s_openapi::api::apps::v1::Deployment;
-use k8s_openapi::api::core::v1::{ConfigMap, PersistentVolumeClaim, Service, ServiceAccount};
+use k8s_openapi::api::core::v1::{ConfigMap, PersistentVolumeClaim, Service};
 use k8s_openapi::api::policy::v1::PodDisruptionBudget;
 use kube::api::{Api, Patch, PatchParams};
 use serde_json::json;
@@ -59,14 +59,6 @@ pub(crate) async fn service(ctx: &Ctx, ns: &str, svc: &Service) -> Result<()> {
         &Patch::Apply(svc),
     )
     .await?;
-    Ok(())
-}
-
-pub(crate) async fn service_account(ctx: &Ctx, ns: &str, sa: &ServiceAccount) -> Result<()> {
-    let api: Api<ServiceAccount> = Api::namespaced(ctx.client.clone(), ns);
-    let name = sa.metadata.name.as_deref().unwrap_or("");
-    api.patch(name, &PatchParams::apply(&ctx.field_manager).force(), &Patch::Apply(sa))
-        .await?;
     Ok(())
 }
 

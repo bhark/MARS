@@ -1,16 +1,12 @@
 //! Cluster-scoped reconciler for `MarsServiceCluster`. Owns one bootstrap Job
 //! per (cluster, source) pair whose catalog entry declares a `bootstrap` block.
-//!
-//! The per-`MarsService` bootstrap orchestration in `bootstrap_flow.rs` stays
-//! intact for the legacy path. On the new path, services no longer carry
-//! `spec.bootstrap`; the cluster owns the postgres catalog provisioning
-//! entirely, so Jobs run here and the per-service delete leaves the catalog
-//! (and its schemas) untouched.
+//! Services no longer carry `spec.bootstrap`; the cluster owns the postgres
+//! catalog provisioning entirely, so Jobs run here and per-service delete
+//! leaves the catalog (and its schemas) untouched.
 //!
 //! TODO: cluster-CR delete cascade. Owner references on the Jobs cover
 //! garbage-collection, but rolling a proper teardown Job that drops the
-//! provisioned slot/publication/role is out of scope for this MVP and lands
-//! with the cluster-side teardown task.
+//! provisioned slot/publication/role is a follow-up task.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -147,8 +143,7 @@ pub(crate) struct CatalogBootstrapPlan {
 
 /// Cluster-side bootstrap orchestration knobs sitting alongside the
 /// `mars_config::Bootstrap` payload (role + schemas) inside a catalog entry's
-/// `bootstrap:` block. Mirrors the per-service `BootstrapSpec` shape; the
-/// `enabled` toggle gates Job creation the same way.
+/// `bootstrap:` block. The `enabled` toggle gates Job creation.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CatalogSourceBootstrap {
@@ -186,7 +181,7 @@ pub(crate) fn plan_jobs(cr: &MarsServiceCluster) -> Result<Vec<CatalogBootstrapP
     let mut out = Vec::new();
     for (i, entry) in cr.spec.sources_catalog.iter().enumerate() {
         // catalog entries without a bootstrap block are unconfigured for
-        // provisioning; the per-MarsService legacy path may still touch them.
+        // provisioning; skip silently.
         let bootstrap_val = match entry.get("bootstrap") {
             Some(v) if !v.is_null() => v,
             _ => continue,

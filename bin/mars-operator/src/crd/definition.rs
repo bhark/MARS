@@ -6,8 +6,8 @@
 //! `RenderDefinition` source: inline literal, in-cluster `ConfigMap`,
 //! git repository, or S3-compatible object store.
 //!
-//! Mutual exclusivity inside `DefinitionSpec` and the legacy-vs-new admission
-//! rule on `MarsServiceSpec` are enforced by `super::spec::validate_spec`.
+//! Mutual exclusivity inside `DefinitionSpec` is enforced by
+//! `super::spec::validate_spec`.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -51,7 +51,7 @@ pub(crate) struct ConfigMapKeyRef {
 
 /// Opaque pointer to a same-namespace `Secret`. Documented key bundle per
 /// adapter (see Phase C.4 of the split plan); resolved by the adapter at
-/// fetch time. Mirrors `BootstrapSpec.admin_credentials_ref` posture.
+/// fetch time.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SecretRef {

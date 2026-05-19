@@ -45,15 +45,15 @@ fn svc_with(sources: Vec<String>, reprojection: Option<serde_json::Value>) -> Ma
             ..ObjectMeta::default()
         },
         spec: MarsServiceSpec {
-            cluster_ref: Some(crate::crd::definition::ClusterRef { name: "prod-eu".into() }),
-            definition: Some(DefinitionSpec {
+            cluster_ref: crate::crd::definition::ClusterRef { name: "prod-eu".into() },
+            definition: DefinitionSpec {
                 config_map_ref: Some(ConfigMapKeyRef {
                     name: "dagi-definition".into(),
                     key: "definition.yaml".into(),
                 }),
                 ..DefinitionSpec::default()
-            }),
-            sources: Some(sources),
+            },
+            sources,
             reprojection,
             ..MarsServiceSpec::default()
         },
@@ -185,18 +185,6 @@ fn empty_service_reprojection_falls_back_to_cluster() {
     let cfg = compose_config(&svc, &cluster, minimal_def()).expect("ok");
     let codes: Vec<&str> = cfg.reprojection.allowlist.iter().map(|c| c.as_str()).collect();
     assert_eq!(codes, vec!["EPSG:25832", "EPSG:3857"]);
-}
-
-#[test]
-fn missing_sources_field_is_typed_error() {
-    let mut svc = svc_with(vec![], None);
-    svc.spec.sources = None;
-    let cluster = minimal_cluster();
-    let err = compose_config(&svc, &cluster, minimal_def()).expect_err("missing");
-    assert!(
-        matches!(err, ComposeError::MissingSpecField(f) if f == "sources"),
-        "{err:?}"
-    );
 }
 
 #[test]

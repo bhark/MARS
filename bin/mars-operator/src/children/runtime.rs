@@ -14,23 +14,20 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta, 
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
 
 use crate::children::compiler::{
-    container_security_context, env_from, env_vars_with_runtime_password, extra_volume_mounts, extra_volumes,
-    optional_affinity, optional_btree_map, optional_tolerations, pod_security_context, resource_requirements,
+    container_security_context, env_from, env_vars, extra_volume_mounts, extra_volumes, optional_affinity,
+    optional_btree_map, optional_tolerations, pod_security_context, resource_requirements,
 };
 use crate::children::labels::{
     self, COMPONENT_RUNTIME, CONFIG_CHECKSUM_ANNOTATION, artifact_store_pvc_name, config_map_name,
     runtime_deployment_name,
 };
-use crate::crd::bootstrap::SecretKeyRef;
 use crate::crd::spec::MarsService;
-use crate::crd::storage::ArtifactStoreSpec;
 use crate::error::Result;
 
 pub(crate) fn build(
     cr: &MarsService,
     config_checksum: &str,
-    fs_store: Option<&ArtifactStoreSpec>,
-    runtime_password_ref: Option<&SecretKeyRef>,
+    fs_store: bool,
     image: &str,
     owner_ref: OwnerReference,
 ) -> Result<Deployment> {
@@ -97,7 +94,7 @@ pub(crate) fn build(
         },
     ];
 
-    if fs_store.is_some() {
+    if fs_store {
         volumes.push(Volume {
             name: "artifact-store".into(),
             persistent_volume_claim: Some(PersistentVolumeClaimVolumeSource {
@@ -149,10 +146,7 @@ pub(crate) fn build(
             "--config".into(),
             "/etc/mars/mars.yaml".into(),
         ]),
-        env: Some(env_vars_with_runtime_password(
-            &cr.spec.runtime.env,
-            runtime_password_ref,
-        )),
+        env: Some(env_vars(&cr.spec.runtime.env)),
         env_from: Some(env_from(&cr.spec.runtime.env_from)),
         ports: Some(vec![ContainerPort {
             name: Some("http".into()),

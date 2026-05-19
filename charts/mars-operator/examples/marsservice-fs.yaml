@@ -92,7 +92,3 @@ spec:
           secretKeyRef:
             name: mars-postgis
             key: PG_DSN
-
-  artifactStore:
-    size: 20Gi
-    accessModes: ["ReadWriteOnce"]

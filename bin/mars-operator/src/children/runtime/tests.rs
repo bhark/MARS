@@ -9,8 +9,7 @@ fn build_sets_replicas_and_selector() {
     let dep = build(
         &cr,
         "abc123",
-        None,
-        None,
+        false,
         test_support::TEST_IMAGE,
         test_support::owner_ref(),
     )
@@ -31,36 +30,12 @@ fn build_sets_replicas_and_selector() {
 }
 
 #[test]
-fn build_projects_runtime_password_env_when_resolved_ref_is_set() {
-    let cr = test_support::cr("demo", "svc-ns");
-    let runtime_ref = SecretKeyRef {
-        name: "demo-runtime-credentials".into(),
-        key: "password".into(),
-    };
-    let dep = build(
-        &cr,
-        "deadbeef",
-        None,
-        Some(&runtime_ref),
-        test_support::TEST_IMAGE,
-        test_support::owner_ref(),
-    )
-    .unwrap();
-    let pod = test_support::pod_spec(&dep);
-    let injected = test_support::env_var(&pod.containers[0], "MARS_RUNTIME_PASSWORD");
-    let sref = injected.value_from.as_ref().unwrap().secret_key_ref.as_ref().unwrap();
-    assert_eq!(sref.name, "demo-runtime-credentials");
-    assert_eq!(sref.key, "password");
-}
-
-#[test]
 fn build_propagates_config_checksum_to_pod_template_annotation() {
     let cr = test_support::cr("demo", "svc-ns");
     let dep = build(
         &cr,
         "deadbeef",
-        None,
-        None,
+        false,
         test_support::TEST_IMAGE,
         test_support::owner_ref(),
     )
@@ -88,15 +63,13 @@ fn build_appends_extra_volumes_and_mounts_after_managed_entries() {
     let dep = build(
         &cr,
         "deadbeef",
-        None,
-        None,
+        false,
         test_support::TEST_IMAGE,
         test_support::owner_ref(),
     )
     .unwrap();
     let pod = test_support::pod_spec(&dep);
     let volumes = pod.volumes.as_ref().unwrap();
-    // user volume appears after the two managed entries (`config`, `cache`).
     assert_eq!(volumes.len(), 3);
     assert_eq!(volumes[0].name, "config");
     assert_eq!(volumes[1].name, "cache");
@@ -140,8 +113,7 @@ fn build_propagates_scheduling_fields_into_pod_spec() {
     let dep = build(
         &cr,
         "deadbeef",
-        None,
-        None,
+        false,
         test_support::TEST_IMAGE,
         test_support::owner_ref(),
     )

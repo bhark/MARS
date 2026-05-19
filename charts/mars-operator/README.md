@@ -67,10 +67,10 @@ The CRD is regenerated from `bin/mars-operator/src/crd.rs` via
 
 ## Constraints worth knowing
 
-- `spec.config.artifacts.store.type: fs` with `runtime.replicas > 1` requires
-  `spec.artifactStore.accessModes` to include `ReadWriteMany`. The operator
-  refuses to reconcile children and surfaces a `Degraded=True` condition
-  otherwise.
+- A `MarsServiceCluster` whose `artifactStore.store.type: fs` paired with a
+  `MarsService.spec.runtime.replicas > 1` requires the artifact-store PVC to
+  be ReadWriteMany. The operator currently provisions a ReadWriteOnce PVC and
+  surfaces a `Degraded=True` condition until single-replica or s3 is used.
 - PVCs are create-only in v1. The operator will not patch existing PVCs;
   changing `spec.compiler.storage.cacheSize` post-creation is a no-op.
 - Compiler `replicas` is fixed at 1 in v1. Multi-compiler HA requires lease

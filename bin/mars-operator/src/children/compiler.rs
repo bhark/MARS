@@ -13,14 +13,12 @@ use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta, OwnerReference};
 
 use crate::children::labels::{
-    self, COMPONENT_COMPILER, CONFIG_CHECKSUM_ANNOTATION, RUNTIME_PASSWORD_ENV, compiler_cache_pvc_name,
-    compiler_deployment_name, compiler_work_pvc_name, config_map_name,
+    self, COMPONENT_COMPILER, CONFIG_CHECKSUM_ANNOTATION, compiler_cache_pvc_name, compiler_deployment_name,
+    compiler_work_pvc_name, config_map_name,
 };
 use crate::children::pvc::{self, PvcSpec};
-use crate::crd::bootstrap::SecretKeyRef;
 use crate::crd::k8s::{EnvFromSourceSpec, EnvVarSpec, ResourceRequirementsSpec, TolerationSpec};
 use crate::crd::spec::MarsService;
-use crate::crd::storage::ArtifactStoreSpec;
 use crate::error::Result;
 
 pub(crate) struct CompilerChildren {
@@ -32,8 +30,7 @@ pub(crate) struct CompilerChildren {
 pub(crate) fn build(
     cr: &MarsService,
     config_checksum: &str,
-    fs_store: Option<&ArtifactStoreSpec>,
-    runtime_password_ref: Option<&SecretKeyRef>,
+    fs_store: bool,
     image: &str,
     owner_ref: OwnerReference,
 ) -> Result<CompilerChildren> {
@@ -117,7 +114,7 @@ pub(crate) fn build(
         },
     ];
 
-    if fs_store.is_some() {
+    if fs_store {
         volumes.push(Volume {
             name: "artifact-store".into(),
             persistent_volume_claim: Some(PersistentVolumeClaimVolumeSource {
@@ -159,10 +156,7 @@ pub(crate) fn build(
             "--config".into(),
             "/etc/mars/mars.yaml".into(),
         ]),
-        env: Some(env_vars_with_runtime_password(
-            &cr.spec.compiler.env,
-            runtime_password_ref,
-        )),
+        env: Some(env_vars(&cr.spec.compiler.env)),
         env_from: Some(env_from(&cr.spec.compiler.env_from)),
         resources: cr.spec.compiler.resources.as_ref().map(resource_requirements),
         security_context: Some(container_security_context()),
@@ -310,35 +304,6 @@ pub(crate) fn extra_volume_mounts(values: &[serde_json::Value]) -> Result<Vec<Vo
         .iter()
         .map(|v| serde_json::from_value(v.clone()).map_err(Into::into))
         .collect()
-}
-
-/// Append the operator-projected `MARS_RUNTIME_PASSWORD` env to the
-/// user-supplied env list. The projection is the resolved runtime password
-/// Secret (BYO or operator-managed). Users template it into their DSN via
-/// `${MARS_RUNTIME_PASSWORD}` so the always-on pods can authenticate as the
-/// runtime role without the user staging a password Secret themselves.
-pub(crate) fn env_vars_with_runtime_password(
-    specs: &[EnvVarSpec],
-    runtime_password_ref: Option<&SecretKeyRef>,
-) -> Vec<EnvVar> {
-    let mut out = env_vars(specs);
-    if let Some(r) = runtime_password_ref
-        && !out.iter().any(|e| e.name == RUNTIME_PASSWORD_ENV)
-    {
-        out.push(EnvVar {
-            name: RUNTIME_PASSWORD_ENV.into(),
-            value_from: Some(EnvVarSource {
-                secret_key_ref: Some(SecretKeySelector {
-                    name: r.name.clone(),
-                    key: r.key.clone(),
-                    optional: Some(false),
-                }),
-                ..Default::default()
-            }),
-            ..Default::default()
-        });
-    }
-    out
 }
 
 pub(crate) fn env_vars(specs: &[EnvVarSpec]) -> Vec<EnvVar> {

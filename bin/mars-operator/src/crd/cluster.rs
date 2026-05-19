@@ -4,8 +4,8 @@
 //! via `spec.clusterRef` to compose their runtime `Config`.
 //!
 //! Each catalog field is held as an opaque preserve-unknown-fields payload
-//! on the wire, mirroring `MarsService.spec.config`: the apiserver accepts
-//! arbitrary YAML and the operator deserialises into the matching
+//! on the wire: the apiserver accepts arbitrary YAML and the operator
+//! deserialises into the matching
 //! `mars_config` typed struct at reconcile. This keeps the CRD stable across
 //! mars-config evolutions and avoids forcing `JsonSchema` derives across the
 //! whole config model.

@@ -32,102 +32,6 @@ impl Scenario {
         Self::up_with(prefix, ScenarioOptions::default()).await
     }
 
-    /// Variant of [`Scenario::up`] that exercises the operator's bootstrap
-    /// Job: skips manual create-replication, applies a MarsService with
-    /// `spec.bootstrap` set, and waits for the bootstrap Job + runtime to
-    /// come up. Returns once `BootstrapReady=True` is observed.
-    pub(crate) async fn up_with_bootstrap(prefix: &str) -> Result<Self> {
-        let client = cluster::client().await?;
-        let ns = NamespaceGuard::create(client.clone(), prefix).await?;
-        let disc = deploy::discovery(client.clone()).await?;
-        let mtmpl = manifests_dir();
-
-        deploy::apply_template(
-            client.clone(),
-            &disc,
-            &ns.name,
-            mtmpl.join("seaweedfs.yaml.tmpl"),
-            &HashMap::new(),
-        )
-        .await
-        .context("apply seaweedfs manifest")?;
-        wait::deployment_ready(client.clone(), &ns.name, "seaweedfs", Duration::from_secs(120)).await?;
-        wait::job_succeeded(
-            client.clone(),
-            &ns.name,
-            "seaweedfs-bucket-init",
-            Duration::from_secs(120),
-        )
-        .await?;
-
-        deploy::apply_template(
-            client.clone(),
-            &disc,
-            &ns.name,
-            mtmpl.join("postgis.yaml.tmpl"),
-            &HashMap::new(),
-        )
-        .await
-        .context("apply postgis manifest")?;
-        wait::deployment_ready(client.clone(), &ns.name, "postgis", Duration::from_secs(120)).await?;
-
-        let dump = fixtures::host_fixture_path()?;
-        let dump_filename = fixtures::fixture_filename(&dump)?;
-        fixtures::apply_sql_configmap(client.clone(), &ns.name).await?;
-        fixtures::apply_images_configmap(client.clone(), &ns.name).await?;
-        let mut loader_vars = HashMap::new();
-        loader_vars.insert("FIXTURE_FILENAME", dump_filename.as_str());
-        deploy::apply_template(
-            client.clone(),
-            &disc,
-            &ns.name,
-            mtmpl.join("fixture-loader-no-replication.yaml.tmpl"),
-            &loader_vars,
-        )
-        .await
-        .context("apply fixture-loader-no-replication manifest")?;
-        wait::job_succeeded(
-            client.clone(),
-            &ns.name,
-            "fixture-loader-bootstrap",
-            Duration::from_secs(600),
-        )
-        .await?;
-
-        deploy::apply_template(
-            client.clone(),
-            &disc,
-            &ns.name,
-            mtmpl.join("marsservice-bootstrap.yaml.tmpl"),
-            &HashMap::new(),
-        )
-        .await
-        .context("apply marsservice-bootstrap manifest")?;
-
-        // wait for the operator-rendered bootstrap Job to succeed before the
-        // runtime Deployment exists.
-        wait::until(
-            "bootstrap Job succeeded",
-            Duration::from_secs(180),
-            || {
-                let client = client.clone();
-                let ns = ns.name.clone();
-                async move { bootstrap_job_succeeded(client, &ns).await }
-            },
-        )
-        .await?;
-
-        wait::deployment_ready(
-            client.clone(),
-            &ns.name,
-            "mars-bs-runtime",
-            Duration::from_secs(300),
-        )
-        .await?;
-
-        Ok(Self { client, ns })
-    }
-
     pub(crate) async fn up_with(prefix: &str, opts: ScenarioOptions) -> Result<Self> {
         let client = cluster::client().await?;
         let ns = NamespaceGuard::create(client.clone(), prefix).await?;
@@ -191,7 +95,7 @@ impl Scenario {
         .context("apply fixture-loader manifest")?;
         wait::job_succeeded(client.clone(), &ns.name, "fixture-loader", Duration::from_secs(600)).await?;
 
-        // MarsService — the operator (already running cluster-wide) reconciles
+        // MarsService - the operator (already running cluster-wide) reconciles
         // this into ConfigMap + PVCs + compiler/runtime Deployments + Service.
         // The operator owns image construction now; only runtime replicas
         // remain template-substituted.
@@ -214,13 +118,7 @@ impl Scenario {
         // endpoints, producing a 503 ERROR log per poll. names follow the
         // child-builder convention `{svc}-{role}` (bin/mars-operator/src/
         // children/labels.rs).
-        wait::deployment_ready(
-            client.clone(),
-            &ns.name,
-            "mars-e2e-runtime",
-            Duration::from_secs(300),
-        )
-        .await?;
+        wait::deployment_ready(client.clone(), &ns.name, "mars-e2e-runtime", Duration::from_secs(300)).await?;
 
         Ok(Self { client, ns })
     }
@@ -238,25 +136,4 @@ fn manifests_dir() -> PathBuf {
 #[allow(dead_code)]
 fn _unused() -> Result<()> {
     Err(anyhow!("not used"))
-}
-
-/// Look up Job objects in `ns` matching the operator's bootstrap label
-/// (`app.kubernetes.io/component=bootstrap`) and return Some(()) once at
-/// least one has succeeded. Used by `up_with_bootstrap` to gate the rest
-/// of the scenario on bootstrap completion.
-async fn bootstrap_job_succeeded(
-    client: std::sync::Arc<kube::Client>,
-    ns: &str,
-) -> Result<Option<()>> {
-    use k8s_openapi::api::batch::v1::Job;
-    use kube::api::{Api, ListParams};
-    let api: Api<Job> = Api::namespaced(client.as_ref().clone(), ns);
-    let lp = ListParams::default().labels("app.kubernetes.io/component=bootstrap");
-    let jobs = api.list(&lp).await.context("list bootstrap jobs")?;
-    for j in jobs.items {
-        if j.status.as_ref().and_then(|s| s.succeeded).unwrap_or(0) >= 1 {
-            return Ok(Some(()));
-        }
-    }
-    Ok(None)
 }
