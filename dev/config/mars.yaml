@@ -39,20 +39,6 @@ scales:
     - { name: mid, max_denom_exclusive: 250000 }
     - { name: lo, max_denom_exclusive: 10000000 }
 
-cells:
-  grid: regular
-  origin: [0, 0]
-  size_per_band:
-    detail: 512m
-    hi: 1024m
-    mid: 4096m
-    lo: 16384m
-  extent:
-    min_x: 850000
-    min_y: 6090000
-    max_x: 895000
-    max_y: 6145000
-
 interfaces:
   wms:
     enabled: true

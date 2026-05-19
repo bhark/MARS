@@ -173,10 +173,6 @@ artifacts:
   cache: { path: /tmp, max_size: 1GiB, eviction: lru }
 scales:
   bands: []
-cells:
-  grid: regular
-  origin: [0, 0]
-  size_per_band: {}
 interfaces:
   wms: { enabled: true, versions: ["1.3.0"], formats: ["image/png"] }
 layers:

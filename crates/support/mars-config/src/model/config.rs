@@ -8,9 +8,6 @@ use crate::model::{
     StyleEntry, TileMatrixSet,
 };
 
-// support types imported so the struct fields compile
-use crate::model::Cells;
-
 /// Top-level service configuration. Wire-format target for `Config::load`
 /// and the runtime-facing struct consumed by `bin/mars`. Also the composition
 /// target of `compose(RenderDefinition, Deployment)`.
@@ -29,11 +26,6 @@ pub struct Config {
     pub artifacts: Artifacts,
     /// Scale-band definitions used by the compiler.
     pub scales: Scales,
-    /// Per-band cell grid configuration. **Deprecated:** the page-keyed
-    /// substrate does not consume cell-grid metadata; the field is accepted
-    /// for backwards compatibility with existing fixtures and ignored.
-    #[serde(default)]
-    pub cells: Cells,
     /// External interface toggles (WMS / WMTS / final tile cache).
     pub interfaces: Interfaces,
     /// Named tile-matrix-set definitions for WMTS.
@@ -120,8 +112,7 @@ pub struct Deployment {
 ///
 /// Total partition: every [`Config`] field is sourced from exactly one of
 /// `def` or `dep`, with one cross-side merge - the reprojection allowlist
-/// is intersected ([`intersect_reprojection`]). The deprecated `cells` field
-/// is defaulted; it is ignored by the runtime.
+/// is intersected ([`intersect_reprojection`]).
 #[must_use]
 pub fn compose(def: RenderDefinition, dep: Deployment) -> Config {
     Config {
@@ -129,7 +120,6 @@ pub fn compose(def: RenderDefinition, dep: Deployment) -> Config {
         sources: dep.sources,
         artifacts: dep.artifacts,
         scales: def.scales,
-        cells: Cells::default(),
         interfaces: def.interfaces,
         tile_matrix_sets: def.tile_matrix_sets,
         reprojection: intersect_reprojection(&dep.reprojection, &def.reprojection),

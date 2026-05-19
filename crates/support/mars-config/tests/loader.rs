@@ -26,9 +26,6 @@ fn loads_minimal_fixture() {
     let cache_bytes = cfg.artifacts.cache.max_size_bytes().unwrap();
     assert_eq!(cache_bytes, 50u64 * 1024 * 1024 * 1024);
 
-    let sizes = cfg.cells.size_per_band_m().unwrap();
-    assert!((sizes["hi"] - 4096.0).abs() < f64::EPSILON);
-
     // unset scale_dpi defaults to 96 (mapserver-parity).
     assert!((cfg.service.scale_dpi - 96.0).abs() < f64::EPSILON);
     assert!((cfg.service.scale_pixel_size_m() - 0.0254 / 96.0).abs() < 1e-12);
@@ -52,7 +49,6 @@ artifacts:
 scales:
   bands:
     - { name: hi, max_denom_exclusive: 25000 }
-cells: { grid: regular, origin: [0, 0], size_per_band: { hi: 1024m } }
 interfaces: {}
 layers: []
 "#;
@@ -114,7 +110,6 @@ artifacts:
   store: { type: fs, path: /tmp/s }
   cache: { path: /tmp/c, max_size: 1MiB }
 scales: { bands: [{ name: hi, max_denom_exclusive: 1 }] }
-cells: { grid: regular, origin: [0, 0], size_per_band: { hi: 1m } }
 interfaces: {}
 "#;
         let p = dir.path().join("c.yaml");
@@ -139,7 +134,6 @@ artifacts:
   store: { type: fs, path: /tmp/s }
   cache: { path: /tmp/c, max_size: 1MiB }
 scales: { bands: [{ name: hi, max_denom_exclusive: 1 }] }
-cells: { grid: regular, origin: [0, 0], size_per_band: { hi: 1m } }
 interfaces: {}
 "#;
         let p = dir.path().join("c.yaml");
@@ -165,7 +159,6 @@ artifacts:
   store: { type: fs, path: /tmp/s }
   cache: { path: /tmp/c, max_size: 1MiB }
 scales: { bands: [{ name: hi, max_denom_exclusive: 1 }] }
-cells: { grid: regular, origin: [0, 0], size_per_band: { hi: 1m } }
 interfaces: {}
 "#;
         let p = dir.path().join("c.yaml");
@@ -189,7 +182,6 @@ artifacts:
   store: { type: fs, path: /tmp/s }
   cache: { path: /tmp/c, max_size: 1MiB }
 scales: { bands: [{ name: hi, max_denom_exclusive: 1 }] }
-cells: { grid: regular, origin: [0, 0], size_per_band: { hi: 1m } }
 interfaces: {}
 layers: !include layers.yaml
 "#;
@@ -221,7 +213,6 @@ artifacts:
   store: { type: fs, path: /tmp/s }
   cache: { path: /tmp/c, max_size: 1MiB }
 scales: { bands: [{ name: hi, max_denom_exclusive: 1 }] }
-cells: { grid: regular, origin: [0, 0], size_per_band: { hi: 1m } }
 interfaces: {}
 layers: !include /etc/passwd
 "#;
@@ -245,7 +236,6 @@ artifacts:
   store: { type: fs, path: /tmp/s }
   cache: { path: /tmp/c, max_size: 1MiB }
 scales: { bands: [{ name: hi, max_denom_exclusive: 1 }] }
-cells: { grid: regular, origin: [0, 0], size_per_band: { hi: 1m } }
 interfaces: {}
 layers: !include b.yaml
 "#,
@@ -291,7 +281,6 @@ scales:
   bands:
     - { name: hi, max_denom_exclusive: 25000 }
     - { name: mid, max_denom_exclusive: 250000 }
-cells: { grid: regular, origin: [0, 0], size_per_band: { hi: 1024m, mid: 4096m } }
 interfaces: {}
 layers:
   - name: bygning
@@ -350,7 +339,6 @@ artifacts:
   cache: { path: /tmp/c, max_size: 1MiB }
 scales:
   bands: [{ name: hi, max_denom_exclusive: 25000 }]
-cells: { grid: regular, origin: [0, 0], size_per_band: { hi: 1024m } }
 interfaces: {}
 layers:
   - name: roads
@@ -399,7 +387,6 @@ artifacts:
   cache: { path: /tmp/c, max_size: 1MiB }
 scales:
   bands: [{ name: hi, max_denom_exclusive: 25000 }]
-cells: { grid: regular, origin: [0, 0], size_per_band: { hi: 1024m } }
 interfaces: {}
 layers:
   - name: roads
@@ -467,8 +454,6 @@ fn compose_round_trips_demo_minimal() {
     assert_eq!(composed.reprojection.allowlist, original_allowlist);
     assert_eq!(composed.sources.len(), 1);
     assert!(!composed.tile_matrix_sets.is_empty(), "TMS must round-trip");
-    // cells is intentionally defaulted by compose
-    assert!(composed.cells.size_per_band.is_empty());
 }
 
 #[test]

@@ -20,8 +20,8 @@ use mars_compiler::plan::build_bootstrap_plan;
 use mars_compiler::testing::FullScanCompileSession;
 use mars_compiler::{Deps, run_snapshot_from_plan};
 use mars_config::{
-    Artifacts, Band, Cells, Class, ClassStyle, Compiler, Config, Interfaces, Layer, Observability, PostgisBackend,
-    Render, Scales, ServiceMeta, Source, SourceBackend, SourceBinding, SourceId,
+    Artifacts, Band, Class, ClassStyle, Compiler, Config, Interfaces, Layer, Observability, PostgisBackend, Render,
+    Scales, ServiceMeta, Source, SourceBackend, SourceBinding, SourceId,
 };
 use mars_observability::Metrics;
 use mars_source::{
@@ -29,7 +29,7 @@ use mars_source::{
     Source as PortSource, SourceBinding as PortBinding, SourceError, SourceRowKey,
 };
 use mars_store::mem::{InMemoryPublisher, InMemoryStore};
-use mars_types::{Bbox, CrsCode, LayerId};
+use mars_types::{CrsCode, LayerId};
 
 const WORKING_SET: u64 = 4 * 1024 * 1024 * 1024;
 const PLAN_BUDGET: u64 = 8 * 1024 * 1024 * 1024;
@@ -122,9 +122,6 @@ impl LeaderLock for NopLock {
 }
 
 fn build_two_band_config() -> Config {
-    let mut size_per_band = std::collections::BTreeMap::new();
-    size_per_band.insert("hi".into(), "1024m".into());
-    size_per_band.insert("mid".into(), "4096m".into());
     let make_source = |band: &str| SourceBinding {
         source: SourceId::new("default"),
         kind: mars_config::BindingKind::PostgisTable {
@@ -188,12 +185,6 @@ fn build_two_band_config() -> Config {
                     max_denom: 250_000,
                 },
             ],
-        },
-        cells: Cells {
-            grid: "regular".into(),
-            origin: [0.0, 0.0],
-            size_per_band,
-            extent: Some(Bbox::new(0.0, 0.0, 1_000.0, 1_000.0)),
         },
         interfaces: Interfaces::default(),
         tile_matrix_sets: Default::default(),

@@ -3,7 +3,7 @@ use crate::SourceId;
 #[cfg(test)]
 use crate::model::*;
 #[cfg(test)]
-use mars_types::{Bbox, CrsCode};
+use mars_types::CrsCode;
 
 #[cfg(test)]
 pub(crate) const TEST_SOURCE_ID: &str = "pg";
@@ -11,8 +11,6 @@ pub(crate) const TEST_SOURCE_ID: &str = "pg";
 #[cfg(test)]
 pub(crate) fn minimal_config() -> Config {
     use crate::model::{ArtifactCache, ArtifactStore, Compiler, Interfaces, Observability, Render};
-    let mut size_per_band = std::collections::BTreeMap::new();
-    size_per_band.insert("hi".into(), "1024m".into());
     Config {
         service: ServiceMeta {
             name: "test".into(),
@@ -50,12 +48,6 @@ pub(crate) fn minimal_config() -> Config {
                 name: "hi".into(),
                 max_denom: 25000,
             }],
-        },
-        cells: Cells {
-            grid: "regular".into(),
-            origin: [0.0, 0.0],
-            size_per_band,
-            extent: Some(Bbox::new(0.0, 0.0, 1_000.0, 1_000.0)),
         },
         interfaces: Interfaces::default(),
         tile_matrix_sets: Default::default(),
@@ -166,7 +158,6 @@ pub(crate) fn two_band_config() -> Config {
             max_denom: 250_000,
         },
     ];
-    cfg.cells.size_per_band.insert("mid".into(), "4096m".into());
     cfg
 }
 

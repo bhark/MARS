@@ -3,15 +3,12 @@
 use super::build::build_raster_layer_entries;
 use super::*;
 use mars_config::{
-    Artifacts, Band, Cells, ClassStyle, Config, DEFAULT_PAGE_SIZE_TARGET_BYTES, DecimationLevelConfig, Interfaces,
-    Scales, ServiceMeta, Source, SourceBinding,
+    Artifacts, Band, ClassStyle, Config, DEFAULT_PAGE_SIZE_TARGET_BYTES, DecimationLevelConfig, Interfaces, Scales,
+    ServiceMeta, Source, SourceBinding,
 };
-use mars_types::{Bbox, BindingId, CrsCode, DecimationLevel, LayerId};
-use std::collections::BTreeMap;
+use mars_types::{BindingId, CrsCode, DecimationLevel, LayerId};
 
 fn config_with(layers: Vec<mars_config::Layer>) -> Config {
-    let mut size_per_band = BTreeMap::new();
-    size_per_band.insert("hi".into(), "1024m".into());
     Config {
         service: ServiceMeta {
             name: "test".into(),
@@ -49,12 +46,6 @@ fn config_with(layers: Vec<mars_config::Layer>) -> Config {
                 name: "hi".into(),
                 max_denom: 25_000,
             }],
-        },
-        cells: Cells {
-            grid: "regular".into(),
-            origin: [0.0, 0.0],
-            size_per_band,
-            extent: Some(Bbox::new(0.0, 0.0, 1_000.0, 1_000.0)),
         },
         interfaces: Interfaces::default(),
         tile_matrix_sets: Default::default(),

@@ -2,18 +2,13 @@
 
 use super::*;
 use mars_config::{
-    ArtifactCache, ArtifactStore, Artifacts, Cells, ChangeFeed as CfgChangeFeed, Class, ClassStyle, Compiler, Config,
+    ArtifactCache, ArtifactStore, Artifacts, ChangeFeed as CfgChangeFeed, Class, ClassStyle, Compiler, Config,
     Interfaces, Layer, PostgisBackend, Scales, ServiceMeta, Source as CfgSource, SourceBackend as CfgBackend,
     SourceBinding as CfgBinding, SourceId, model::Band,
 };
-use mars_types::{Bbox, CrsCode, LayerId};
-use std::collections::BTreeMap;
+use mars_types::{CrsCode, LayerId};
 
 fn cfg_with_layers(layers: Vec<Layer>) -> Config {
-    let mut size_per_band = BTreeMap::new();
-    size_per_band.insert("hi".to_string(), "4096m".to_string());
-    size_per_band.insert("lo".to_string(), "16384m".to_string());
-
     Config {
         service: ServiceMeta {
             name: "svc".into(),
@@ -62,12 +57,6 @@ fn cfg_with_layers(layers: Vec<Layer>) -> Config {
                     max_denom: 100_000,
                 },
             ],
-        },
-        cells: Cells {
-            grid: "regular".into(),
-            origin: [0.0, 0.0],
-            size_per_band,
-            extent: Some(Bbox::new(0.0, 0.0, 1.0, 1.0)),
         },
         interfaces: Interfaces::default(),
         tile_matrix_sets: Default::default(),

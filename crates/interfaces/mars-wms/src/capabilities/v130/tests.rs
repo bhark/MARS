@@ -14,10 +14,6 @@ artifacts:
   cache: { path: /tmp/c, max_size: 1GiB }
 scales:
   bands: [{ name: hi, max_denom_exclusive: 25000 }]
-cells:
-  grid: regular
-  origin: [0, 0]
-  size_per_band: { hi: 1024m }
 interfaces: {}
 reprojection:
   allowlist: [EPSG:25832, EPSG:4326]
@@ -187,10 +183,6 @@ artifacts:
   cache: { path: /tmp/c, max_size: 1GiB }
 scales:
   bands: [{ name: hi, max_denom_exclusive: 25000 }]
-cells:
-  grid: regular
-  origin: [0, 0]
-  size_per_band: { hi: 1024m }
 interfaces: {}
 reprojection:
   allowlist: [EPSG:25832]
@@ -538,10 +530,6 @@ artifacts:
   cache: { path: /tmp/c, max_size: 1GiB }
 scales:
   bands: [{ name: hi, max_denom_exclusive: 25000 }]
-cells:
-  grid: regular
-  origin: [0, 0]
-  size_per_band: { hi: 1024m }
 interfaces:
   wms:
     enabled: true
@@ -569,10 +557,6 @@ artifacts:
   cache: { path: /tmp/c, max_size: 1GiB }
 scales:
   bands: [{ name: hi, max_denom_exclusive: 25000 }]
-cells:
-  grid: regular
-  origin: [0, 0]
-  size_per_band: { hi: 1024m }
 interfaces: {}
 reprojection:
   allowlist: [EPSG:25832]

@@ -256,11 +256,6 @@ scales:
   bands:
     - {{ name: hi, max_denom_exclusive: 50000000 }}
 
-cells:
-  grid: regular
-  origin: [0, 0]
-  size_per_band:
-    hi: 1024m
   extent:
     min_x: 0
     min_y: 0

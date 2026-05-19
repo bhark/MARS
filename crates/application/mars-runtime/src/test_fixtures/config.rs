@@ -3,15 +3,14 @@
 //! (`base_config`, `default_source_binding`, `default_main_class`) that
 //! factor out the parts both builders emit identically.
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use mars_config::model::{
-    ArtifactCache, ArtifactStore, Artifacts, Band, Cells, Class, ClassStyle, Compiler, Config, Interfaces, Layer,
+    ArtifactCache, ArtifactStore, Artifacts, Band, Class, ClassStyle, Compiler, Config, Interfaces, Layer,
     Observability, Render, Scales, ServiceMeta, Source, SourceBinding,
 };
 use mars_style::{Colour, FillPaint, LabelStyle, LabelSurvival, Style, Stylesheet};
-use mars_types::{Bbox, BindingId, CrsCode, LayerId};
+use mars_types::{BindingId, CrsCode, LayerId};
 
 use super::REQUEST_CRS;
 
@@ -88,12 +87,9 @@ pub fn default_style() -> Style {
 }
 
 /// scaffolding shared by `build_minimal_config` and `build_multi_layer_config`:
-/// service / sources / artifacts / scales / cells / defaults filled in,
+/// service / sources / artifacts / scales / defaults filled in,
 /// `layers` left empty for the caller to populate.
 pub(super) fn base_config(service_name: &str) -> Config {
-    let mut size_per_band = BTreeMap::new();
-    size_per_band.insert("hi".into(), "1024m".into());
-
     Config {
         service: ServiceMeta {
             name: service_name.into(),
@@ -131,12 +127,6 @@ pub(super) fn base_config(service_name: &str) -> Config {
                 name: "hi".into(),
                 max_denom: 25_000,
             }],
-        },
-        cells: Cells {
-            grid: "regular".into(),
-            origin: [0.0, 0.0],
-            size_per_band,
-            extent: Some(Bbox::new(0.0, 0.0, 1000.0, 1000.0)),
         },
         interfaces: Interfaces::default(),
         tile_matrix_sets: Default::default(),

@@ -58,12 +58,6 @@ scales:
   bands:
     - { name: hi, max_denom_exclusive: 25000 }
 
-cells:
-  grid: regular
-  origin: [0, 0]
-  size_per_band:
-    hi: 4096m
-
 interfaces: {}
 
 compiler:
