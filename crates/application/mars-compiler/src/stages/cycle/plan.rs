@@ -3,8 +3,8 @@
 //! knobs, and the per-call memory + disk governors.
 
 use crate::stages::ctx::{CompileKnobs, CycleCtx};
-use crate::stages::shared::governors;
 use crate::stages::shared::sidecars::OwnedSidecars;
+use crate::stages::shared::{governors, parallelism};
 use crate::{Compiler, CompilerError};
 
 pub(crate) async fn build(c: &Compiler) -> Result<CycleCtx, CompilerError> {
@@ -17,7 +17,7 @@ pub(crate) async fn build(c: &Compiler) -> Result<CycleCtx, CompilerError> {
         working_set_bytes: c.config.compiler.compile_page_working_set()?,
         plan_budget_bytes: c.config.compiler.compile_plan_budget()?,
         in_flight_budget_bytes: c.config.compiler.compile_in_flight_pages_budget()?,
-        binding_parallelism: c.config.compiler.compile_binding_parallelism,
+        binding_parallelism: parallelism::resolve_binding_parallelism(&c.config.compiler, &c.config.sources),
         spill_dir: c.config.compiler.compile_spill_dir_path(),
     };
     Ok(CycleCtx {

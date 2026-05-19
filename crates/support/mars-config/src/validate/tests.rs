@@ -334,6 +334,32 @@ fn rejects_unparsable_rebalance_window() {
     assert!(err.is_err());
 }
 
+#[test]
+fn rejects_explicit_zero_compile_binding_parallelism() {
+    let mut cfg = minimal_config();
+    cfg.compiler.compile_binding_parallelism = Some(0);
+    let err = validate(&mut cfg, Path::new("."));
+    assert!(matches!(&err, Err(ConfigError::Invalid(s)) if s.contains("compile_binding_parallelism")));
+}
+
+#[test]
+fn accepts_unset_compile_binding_parallelism() {
+    let mut cfg = minimal_config();
+    cfg.compiler.compile_binding_parallelism = None;
+    assert!(validate(&mut cfg, Path::new(".")).is_ok());
+}
+
+#[test]
+fn accepts_compile_binding_parallelism_above_pool_max_size() {
+    // previously a hard error; now clamped at compile time, not rejected.
+    let mut cfg = minimal_config();
+    if let crate::model::SourceBackend::Postgis(pg) = &mut cfg.sources[0].backend {
+        pg.pool.max_size = Some(4);
+    }
+    cfg.compiler.compile_binding_parallelism = Some(64);
+    assert!(validate(&mut cfg, Path::new(".")).is_ok());
+}
+
 // raster layer coherence ------------------------------------------------
 
 fn raster_layer(name: &str) -> crate::model::Layer {

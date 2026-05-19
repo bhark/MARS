@@ -39,8 +39,16 @@ pub struct Compiler {
     /// object-store I/O. Snapshot and cycle never co-execute, so one
     /// budget covers both. Also sizes the pass-2 spill open-file budget,
     /// which scales with this value.
-    #[serde(default = "default_compile_binding_parallelism")]
-    pub compile_binding_parallelism: usize,
+    ///
+    /// When unset, the compiler self-sizes it to
+    /// `min(available_parallelism(), smallest postgis source pool max_size)`.
+    /// An explicit value below that optimum is honored verbatim (operators
+    /// deliberately throttling DB load); an explicit value *above* the
+    /// smallest pool ceiling is clamped down to that ceiling with a warning
+    /// rather than failing the config. Setting it explicitly to `0` is a
+    /// config error (use `None` to auto-size instead).
+    #[serde(default)]
+    pub compile_binding_parallelism: Option<usize>,
     /// Hard ceiling on pass-2 RAM allocation, summed across the whole
     /// compile pipeline (all in-flight bindings). When unset, the compiler
     /// self-sizes against the active cgroup memory limit: 70% of the limit
@@ -145,7 +153,7 @@ impl Default for Compiler {
             window: default_compiler_window(),
             compile_page_working_set_bytes: default_compile_page_working_set(),
             compile_plan_budget_bytes: default_compile_plan_budget(),
-            compile_binding_parallelism: default_compile_binding_parallelism(),
+            compile_binding_parallelism: None,
             compile_memory_budget_bytes: None,
             compile_disk_budget_bytes: None,
             compile_in_flight_pages_budget_bytes: default_compile_in_flight_pages_budget(),
@@ -223,10 +231,6 @@ fn default_compile_page_working_set() -> String {
 
 fn default_compile_plan_budget() -> String {
     "8GiB".to_owned()
-}
-
-fn default_compile_binding_parallelism() -> usize {
-    2
 }
 
 fn default_compile_in_flight_pages_budget() -> String {

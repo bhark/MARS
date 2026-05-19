@@ -1,11 +1,7 @@
 use crate::ConfigError;
-use crate::model::{Compiler, Render, Source};
+use crate::model::{Compiler, Render};
 
-pub(super) fn validate_compiler_and_render(
-    compiler: &Compiler,
-    render: &Render,
-    sources: &[Source],
-) -> Result<(), ConfigError> {
+pub(super) fn validate_compiler_and_render(compiler: &Compiler, render: &Render) -> Result<(), ConfigError> {
     let _ = compiler.window_dur()?;
 
     let working_set = compiler.compile_page_working_set()?;
@@ -22,27 +18,14 @@ pub(super) fn validate_compiler_and_render(
         ));
     }
 
-    let parallelism = compiler.compile_binding_parallelism;
-    if parallelism == 0 {
+    // an unset `compile_binding_parallelism` self-sizes at compile time; an
+    // explicit value above the smallest postgis pool ceiling is clamped there
+    // with a warning, not rejected. only an explicit `0` is a config error -
+    // it would halt the compiler outright rather than throttle it.
+    if compiler.compile_binding_parallelism == Some(0) {
         return Err(ConfigError::Invalid(
-            "compiler.compile_binding_parallelism must be > 0".into(),
+            "compiler.compile_binding_parallelism must be > 0 when set (omit it to auto-size)".into(),
         ));
-    }
-    // compare against the tightest pool ceiling across postgis sources -
-    // parallelism is service-wide, so the smallest configured ceiling caps
-    // it. vectorfile sources have no pool concept and are skipped.
-    let pool_ceiling = sources
-        .iter()
-        .filter_map(|s| s.postgis())
-        .filter_map(|pg| pg.pool.max_size)
-        .min();
-    if let Some(pool_max) = pool_ceiling
-        && parallelism > pool_max
-    {
-        return Err(ConfigError::Invalid(format!(
-            "compiler.compile_binding_parallelism ({parallelism}) exceeds the smallest postgis source pool max_size \
-             ({pool_max}); raise the pool size or lower the parallelism"
-        )));
     }
 
     let _ = compiler.rebalance.window_dur()?;

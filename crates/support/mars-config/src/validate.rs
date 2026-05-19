@@ -50,7 +50,7 @@ pub fn validate(config: &mut Config, config_dir: &Path) -> Result<(), ConfigErro
     // deployment-side
     source::validate_sources(&config.sources)?;
     crs::validate_native_crs(&config.sources)?;
-    compiler::validate_compiler_and_render(&config.compiler, &config.render, &config.sources)?;
+    compiler::validate_compiler_and_render(&config.compiler, &config.render)?;
 
     // cross-cutting: needs both halves
     binding::validate_binding_source_refs(&config.layers, &config.sources)?;
@@ -78,7 +78,7 @@ pub(crate) fn validate_render_definition(def: &mut RenderDefinition) -> Result<(
 pub(crate) fn validate_deployment(dep: &Deployment) -> Result<(), ConfigError> {
     source::validate_sources(&dep.sources)?;
     crs::validate_native_crs(&dep.sources)?;
-    compiler::validate_compiler_and_render(&dep.compiler, &dep.render, &dep.sources)?;
+    compiler::validate_compiler_and_render(&dep.compiler, &dep.render)?;
     Ok(())
 }
 
