@@ -33,6 +33,7 @@ serde_json         = { workspace = true }
 serde_yaml_ng      = { workspace = true }
 thiserror          = { workspace = true }
 tokio              = { workspace = true }
+tokio-util         = { workspace = true }
 tracing            = { workspace = true }
 mars-config        = { workspace = true }
 mars-definition-source             = { workspace = true }
@@ -43,4 +44,8 @@ mars-definition-source-s3          = { workspace = true }
 mars-observability = { workspace = true }
 
 [dev-dependencies]
-tempfile = { workspace = true }
+async-trait  = { workspace = true }
+bytes        = { workspace = true }
+futures-core = { workspace = true }
+tempfile     = { workspace = true }
+tokio-stream = { workspace = true }

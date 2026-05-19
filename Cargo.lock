@@ -2916,7 +2916,9 @@ dependencies = [
  "async-trait",
  "axum",
  "blake3",
+ "bytes",
  "clap",
+ "futures-core",
  "futures-util",
  "k8s-openapi",
  "kube",
@@ -2937,6 +2939,8 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-stream",
+ "tokio-util",
  "tracing",
 ]
 

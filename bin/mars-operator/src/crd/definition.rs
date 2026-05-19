@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 /// Pointer to the cluster-scoped `MarsServiceCluster` catalog this
 /// `MarsService` composes against.
-#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ClusterRef {
     pub(crate) name: String,
@@ -22,7 +22,7 @@ pub(crate) struct ClusterRef {
 
 /// `RenderDefinition` source. Exactly one variant must be set; admission
 /// enforced by `super::spec::validate_spec`.
-#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DefinitionSpec {
     /// Literal `RenderDefinition` YAML embedded on the CR.
@@ -42,7 +42,7 @@ pub(crate) struct DefinitionSpec {
     pub(crate) s3_ref: Option<S3Ref>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ConfigMapKeyRef {
     pub(crate) name: String,
@@ -52,13 +52,13 @@ pub(crate) struct ConfigMapKeyRef {
 /// Opaque pointer to a same-namespace `Secret`. Documented key bundle per
 /// adapter (see Phase C.4 of the split plan); resolved by the adapter at
 /// fetch time. Mirrors `BootstrapSpec.admin_credentials_ref` posture.
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SecretRef {
     pub(crate) name: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct GitRef {
     pub(crate) url: String,
@@ -73,7 +73,7 @@ pub(crate) struct GitRef {
 }
 
 /// Exactly one of `branch`, `tag`, `commit`. Enforced at adapter-resolve time.
-#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct GitRevision {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -84,7 +84,7 @@ pub(crate) struct GitRevision {
     pub(crate) commit: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct S3Ref {
     /// Override for non-AWS endpoints. AWS S3 when unset.

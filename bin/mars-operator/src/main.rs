@@ -26,6 +26,9 @@ mod deletion;
 mod dsn;
 mod error;
 mod metrics;
+// task 4g: per-CR poller manager, wired by task 5.
+#[allow(dead_code)]
+mod poller;
 mod reconcile;
 mod status;
 
