@@ -1,4 +1,3 @@
-use std::num::NonZeroUsize;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -13,10 +12,6 @@ pub struct Compiler {
     /// publishing a manifest. Unit-suffixed duration (`5min`, `30s`).
     #[serde(default = "default_compiler_window")]
     pub window: String,
-    /// **Deprecated.** Cell-substrate concurrency knob. Ignored under the
-    /// page-keyed substrate; accepted for backward compatibility.
-    #[serde(default)]
-    pub parallel_cells: Option<NonZeroUsize>,
     /// Per-page hydrated-row working-set ceiling enforced during pass-2
     /// page assembly (rebuild and bootstrap-from-plan). Crossing this
     /// ceiling trips [`CompilerError::ScratchBudgetExceeded`].
@@ -154,7 +149,6 @@ impl Default for Compiler {
     fn default() -> Self {
         Self {
             window: default_compiler_window(),
-            parallel_cells: None,
             compile_page_working_set_bytes: default_compile_page_working_set(),
             compile_plan_budget_bytes: default_compile_plan_budget(),
             compile_binding_parallelism: default_compile_binding_parallelism(),

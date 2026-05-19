@@ -1,5 +1,3 @@
-use std::num::NonZeroUsize;
-
 use crate::SourceId;
 use crate::model::{BindingKind, Compiler, PngCompression, Render, SimplifierKind, SourceBinding};
 use crate::model::{DEFAULT_PAGE_SIZE_TARGET_BYTES, DEFAULT_RECONCILE_EVERY_CYCLES, DEFAULT_SIDECAR_SIZE_WARN_BYTES};
@@ -25,23 +23,6 @@ fn minimal_binding() -> SourceBinding {
         simplifier: None,
         on_missing_page: None,
     }
-}
-
-#[test]
-fn compiler_parallel_cells_yaml_roundtrip() {
-    // unset → None
-    let yaml = "window: 5min\n";
-    let c: Compiler = serde_yaml_ng::from_str(yaml).unwrap();
-    assert!(c.parallel_cells.is_none());
-
-    // explicit positive value → Some(N)
-    let yaml = "window: 5min\nparallel_cells: 8\n";
-    let c: Compiler = serde_yaml_ng::from_str(yaml).unwrap();
-    assert_eq!(c.parallel_cells.map(NonZeroUsize::get), Some(8));
-
-    // zero must be rejected at parse (NonZeroUsize)
-    let yaml = "window: 5min\nparallel_cells: 0\n";
-    assert!(serde_yaml_ng::from_str::<Compiler>(yaml).is_err());
 }
 
 #[test]
