@@ -86,8 +86,7 @@ The CRD is regenerated from `bin/mars-operator/src/crd.rs` via
 |---|---|---|
 | `image.repository` | `ghcr.io/bhark/mars-operator` | Operator image |
 | `image.tag` | `""` (Chart.appVersion) | Operator image tag |
-| `replicaCount` | `1` | Operator replicas; leader-elected |
-| `leaderElection.enabled` | `true` | Required when `replicaCount > 1` |
+| `replicaCount` | `1` | Operator replicas; leader election auto-enabled when `> 1` |
 | `metrics.port` | `9090` | `/metrics` port |
 | `health.port` | `8081` | `/healthz`, `/readyz` port |
 | `log.level` | `info` | RUST_LOG-style filter |

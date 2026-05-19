@@ -17,6 +17,7 @@ marsImage:
 imagePullSecrets: []
 
 # Multiple replicas are supported - operator coordinates via a Lease.
+# Leader election is enabled automatically when replicaCount > 1.
 replicaCount: 1
 
 # Resource requests/limits for the operator pod itself (not the MARS services
@@ -69,9 +70,6 @@ metrics:
 
 health:
   port: 8081
-
-leaderElection:
-  enabled: true
 
 log:
   level: info

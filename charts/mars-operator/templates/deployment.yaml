@@ -35,7 +35,7 @@ spec:
             - "--namespace={{ .Release.Namespace }}"
             - "--metrics-addr=0.0.0.0:{{ .Values.metrics.port }}"
             - "--health-addr=0.0.0.0:{{ .Values.health.port }}"
-            - "--leader-elect={{ .Values.leaderElection.enabled }}"
+            - "--leader-elect={{ gt (int .Values.replicaCount) 1 }}"
             - "--log-level={{ .Values.log.level }}"
             - "--log-format={{ .Values.log.format }}"
           env:
