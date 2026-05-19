@@ -49,6 +49,30 @@ const RULES: &[Section] = &[
         ],
     },
     Section {
+        comment: &[
+            "MarsServiceCluster CRs (cluster-scoped; per-cluster catalog + bootstrap",
+            "reconciler). Read for the MarsService reconcile path; full CRUD on the",
+            "cluster reconcile path.",
+        ],
+        rules: &[
+            Rule {
+                api_groups: &["mars.forn.dk"],
+                resources: &["marsserviceclusters"],
+                verbs: &["get", "list", "watch", "update", "patch"],
+            },
+            Rule {
+                api_groups: &["mars.forn.dk"],
+                resources: &["marsserviceclusters/status"],
+                verbs: &["get", "update", "patch"],
+            },
+            Rule {
+                api_groups: &["mars.forn.dk"],
+                resources: &["marsserviceclusters/finalizers"],
+                verbs: &["update"],
+            },
+        ],
+    },
+    Section {
         comment: &["Owned children."],
         rules: &[
             Rule {

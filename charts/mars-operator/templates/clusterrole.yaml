@@ -19,6 +19,19 @@ rules:
     resources: ["marsservices/finalizers"]
     verbs: ["update"]
 
+  # MarsServiceCluster CRs (cluster-scoped; per-cluster catalog + bootstrap
+  # reconciler). Read for the MarsService reconcile path; full CRUD on the
+  # cluster reconcile path.
+  - apiGroups: ["mars.forn.dk"]
+    resources: ["marsserviceclusters"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["mars.forn.dk"]
+    resources: ["marsserviceclusters/status"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["mars.forn.dk"]
+    resources: ["marsserviceclusters/finalizers"]
+    verbs: ["update"]
+
   # Owned children.
   - apiGroups: ["apps"]
     resources: ["deployments"]
