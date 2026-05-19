@@ -24,7 +24,6 @@ use serde_json::Value as JsonValue;
 use crate::crd::cluster::MarsServiceCluster;
 use crate::crd::spec::MarsService;
 
-#[allow(dead_code)]
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ComposeError {
     #[error("MarsService.spec is missing required new-shape field: {0}")]
@@ -60,7 +59,6 @@ pub(crate) type Result<T> = std::result::Result<T, ComposeError>;
 /// Compose the runtime `Config` for `svc` from `cluster` and the resolved
 /// `def`. Pure — no I/O. Cross-cutting validation runs separately via
 /// `mars_config::validate` on the returned `Config`.
-#[allow(dead_code)]
 pub(crate) fn compose_config(
     svc: &MarsService,
     cluster: &MarsServiceCluster,

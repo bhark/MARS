@@ -14,10 +14,7 @@ use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-// reconcile wiring lands in a later split task; the type is exercised by
-// sibling tests and `print-crd` (also wired later).
 /// MarsServiceCluster - one cluster-scoped CR per logical deployment cluster.
-#[allow(dead_code)]
 #[derive(CustomResource, Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
 #[kube(
     group = "mars.forn.dk",
@@ -60,7 +57,6 @@ pub(crate) struct MarsServiceClusterSpec {
 
 /// Cluster-wide compiler/render tuning defaults. Each is an opaque payload
 /// parsed at reconcile into the matching `mars_config` struct.
-#[allow(dead_code)]
 #[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ClusterDefaults {

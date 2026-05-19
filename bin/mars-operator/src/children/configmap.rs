@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 
 use k8s_openapi::api::core::v1::ConfigMap;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, OwnerReference};
+use serde_json::Value as JsonValue;
 
 use crate::children::labels::{self, config_map_name};
 use crate::crd::spec::MarsService;
@@ -13,8 +14,10 @@ use crate::error::Result;
 
 /// Build the ConfigMap for a MarsService. Returns the configmap and the
 /// content checksum (the operator surfaces this on pod-template annotations
-/// so config edits roll the deployments).
-pub(crate) fn build(cr: &MarsService, owner_ref: OwnerReference) -> Result<(ConfigMap, String)> {
+/// so config edits roll the deployments). `config` is the effective config
+/// payload — on the legacy path it is `cr.spec.config`; on the new path it is
+/// the operator-composed `mars_config::Config` serialised back to a `Value`.
+pub(crate) fn build(cr: &MarsService, config: &JsonValue, owner_ref: OwnerReference) -> Result<(ConfigMap, String)> {
     let svc = cr
         .metadata
         .name
@@ -22,11 +25,6 @@ pub(crate) fn build(cr: &MarsService, owner_ref: OwnerReference) -> Result<(Conf
         .ok_or_else(|| crate::error::OperatorError::MissingField("metadata.name".into()))?;
     let ns = cr.metadata.namespace.clone();
 
-    let config = cr
-        .spec
-        .config
-        .as_ref()
-        .ok_or_else(|| crate::error::OperatorError::MissingField("spec.config".into()))?;
     let yaml = crate::config::canonicalize_yaml(config)?;
     let checksum = blake3::hash(yaml.as_bytes()).to_hex().to_string();
 

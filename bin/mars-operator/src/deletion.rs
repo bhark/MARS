@@ -17,6 +17,7 @@ use crate::bootstrap::{self, BOOTSTRAP_FINALIZER};
 use crate::bootstrap_flow;
 use crate::children::labels;
 use crate::crd::spec::MarsService;
+use crate::effective_config;
 use crate::error::{OperatorError, Result};
 use crate::reconcile::{Ctx, owner_reference};
 
@@ -69,13 +70,10 @@ pub(crate) async fn reconcile_deletion(
     // <svc>-bootstrap-admin-credentials Secret so a teardown after the user
     // migrates between admin forms still authenticates with a valid DSN.
     let secret_api: Api<Secret> = Api::namespaced(ctx.client.clone(), ns);
-    let config = cr
-        .spec
-        .config
-        .as_ref()
-        .ok_or_else(|| OperatorError::MissingField("spec.config".into()))?;
+    let effective_cfg = effective_config_for_deletion(cr.as_ref(), ctx, ns).await?;
     let resolved_admin =
-        bootstrap_flow::resolve_admin_dsn(ctx, &secret_api, svc_name, ns, bs_spec, config, owner.clone()).await?;
+        bootstrap_flow::resolve_admin_dsn(ctx, &secret_api, svc_name, ns, bs_spec, &effective_cfg, owner.clone())
+            .await?;
 
     let job_name = labels::teardown_job_name(svc_name);
     let job_api: Api<Job> = Api::namespaced(ctx.client.clone(), ns);
@@ -152,6 +150,17 @@ pub(crate) async fn ensure_finalizer(ctx: &Ctx, cr: &MarsService, svc_name: &str
     api.patch(svc_name, &PatchParams::default(), &Patch::Merge(&patch))
         .await?;
     Ok(())
+}
+
+/// Resolve the effective Config for teardown. Legacy returns `spec.config`
+/// verbatim; new path re-composes cluster + render definition so the
+/// teardown Job mounts the same `mars.yaml` the bootstrap saw.
+async fn effective_config_for_deletion(cr: &MarsService, ctx: &Ctx, ns: &str) -> Result<serde_json::Value> {
+    if cr.spec.config.is_some() {
+        effective_config::legacy(cr)
+    } else {
+        Ok(effective_config::new(cr, &ctx.client, ns).await?.config)
+    }
 }
 
 async fn remove_finalizer(ctx: &Ctx, cr: &MarsService, svc_name: &str, ns: &str) -> Result<()> {

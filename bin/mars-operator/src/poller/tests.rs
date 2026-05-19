@@ -36,10 +36,6 @@ impl InstrumentedSource {
     fn drop_count(&self) -> Arc<AtomicUsize> {
         self.drop_count.clone()
     }
-
-    async fn emit_change(&self, revision: &str) {
-        self.inner.emit_change(revision).await;
-    }
 }
 
 struct CountedStream {

@@ -44,6 +44,7 @@ pub(crate) async fn reconcile_bootstrap(
     cr: &MarsService,
     svc_name: &str,
     ns: &str,
+    effective_config: &serde_json::Value,
     owner: OwnerReference,
 ) -> Result<BootstrapOutcome> {
     let bs_spec = match cr.spec.bootstrap.as_ref() {
@@ -64,20 +65,7 @@ pub(crate) async fn reconcile_bootstrap(
             });
         }
     };
-    let Some(config) = cr.spec.config.as_ref() else {
-        return Ok(BootstrapOutcome {
-            proceed: false,
-            status: BootstrapStatus {
-                ready: false,
-                reason: BootstrapReason::ManualSetupIncomplete,
-                message: "spec.bootstrap is set but spec.config is absent",
-            },
-            requeue: Duration::from_secs(30),
-            runtime_password_ref: None,
-            bootstrap_admin_credentials_secret: None,
-        });
-    };
-    let source_bs = match bootstrap::extract_source_bootstrap(config) {
+    let source_bs = match bootstrap::extract_source_bootstrap(effective_config) {
         Some(s) => s,
         None => {
             return Ok(BootstrapOutcome {
@@ -113,7 +101,8 @@ pub(crate) async fn reconcile_bootstrap(
     // resolve admin + runtime secret resourceVersions so the plan hash rolls
     // when either secret is rotated.
     let secret_api: Api<Secret> = Api::namespaced(ctx.client.clone(), ns);
-    let resolved_admin = resolve_admin_dsn(ctx, &secret_api, svc_name, ns, bs_spec, config, owner.clone()).await?;
+    let resolved_admin =
+        resolve_admin_dsn(ctx, &secret_api, svc_name, ns, bs_spec, effective_config, owner.clone()).await?;
     let runtime_password_ref = ensure_runtime_password_secret(ctx, svc_name, ns, bs_spec, owner.clone()).await?;
     let runtime_rv = secret_api
         .get_opt(&runtime_password_ref.name)

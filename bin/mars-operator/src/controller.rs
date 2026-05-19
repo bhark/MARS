@@ -11,15 +11,20 @@ use k8s_openapi::api::core::v1::{ConfigMap, PersistentVolumeClaim, Service, Serv
 use kube::Client;
 use kube::api::Api;
 use kube::runtime::Controller;
+use kube::runtime::reflector::ObjectRef;
 use kube::runtime::watcher::Config as WatcherConfig;
 use kube_lease_manager::LeaseManagerBuilder;
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
+use tokio_stream::wrappers::ReceiverStream;
 use tracing::{error, info, warn};
 
 use crate::cli::Cli;
 use crate::crd::spec::MarsService;
 use crate::metrics::{self, Metrics};
+use crate::poller::PollerManager;
 use crate::reconcile::{self, Ctx};
+
+const RECONCILE_TRIGGER_BUFFER: usize = 32;
 
 const LEASE_NAME: &str = "mars-operator-leader";
 const LEASE_DURATION_SECS: u64 = 30;
@@ -54,11 +59,19 @@ pub(crate) async fn run(cli: Cli) -> Result<()> {
     let runtime_image = format!("{}:{}", cli.runtime_image_repository, env!("CARGO_PKG_VERSION"));
     info!(image = %runtime_image, "runtime/compiler image");
 
+    // per-CR definition-source pollers (`gitRef` / `s3Ref`) forward each
+    // adapter Change as an `ObjectRef<MarsService>` on `trigger_rx`, which we
+    // route into `Controller::reconcile_on` so the kube reconcile loop fans
+    // them in alongside watch events.
+    let (trigger_tx, trigger_rx) = mpsc::channel(RECONCILE_TRIGGER_BUFFER);
+    let poller = Arc::new(PollerManager::new(trigger_tx));
+
     let ctx = Arc::new(Ctx {
         client: client.clone(),
         field_manager: cli.field_manager.clone(),
         metrics: metrics_svc,
         runtime_image,
+        poller,
     });
 
     let crs: Api<MarsService> = Api::all(client.clone());
@@ -69,6 +82,9 @@ pub(crate) async fn run(cli: Cli) -> Result<()> {
     let jobs: Api<Job> = Api::all(client.clone());
     let sas: Api<ServiceAccount> = Api::all(client.clone());
 
+    let trigger_stream =
+        ReceiverStream::new(trigger_rx).map(|t| ObjectRef::<MarsService>::new(&t.name).within(&t.namespace));
+
     let controller = Controller::new(crs, WatcherConfig::default())
         .owns(cms, WatcherConfig::default())
         .owns(deps, WatcherConfig::default())
@@ -76,6 +92,7 @@ pub(crate) async fn run(cli: Cli) -> Result<()> {
         .owns(pvcs, WatcherConfig::default())
         .owns(jobs, WatcherConfig::default())
         .owns(sas, WatcherConfig::default())
+        .reconcile_on(trigger_stream)
         .shutdown_on_signal()
         .run(reconcile::reconcile, reconcile::error_policy, ctx)
         .for_each(|res| async move {

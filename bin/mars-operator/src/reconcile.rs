@@ -10,6 +10,7 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::OwnerReference;
 use kube::Resource;
 use kube::api::Api;
 use kube::runtime::controller::Action;
+use serde_json::Value as JsonValue;
 use tracing::{error, info, warn};
 
 use crate::apply;
@@ -17,11 +18,13 @@ use crate::bootstrap_flow;
 use crate::children::labels::{self, artifact_store_pvc_name};
 use crate::children::pvc::{self, PvcSpec};
 use crate::children::{compiler, configmap, pdb, runtime, service};
-use crate::crd::spec::MarsService;
+use crate::crd::spec::{MarsService, validate_spec};
 use crate::crd::storage::ArtifactStoreSpec;
 use crate::deletion;
+use crate::effective_config;
 use crate::error::{OperatorError, Result};
 use crate::metrics::Metrics;
+use crate::poller::PollerManager;
 use crate::status::{self, StatusInputs};
 
 pub(crate) struct Ctx {
@@ -32,6 +35,9 @@ pub(crate) struct Ctx {
     /// startup from CLI/env + operator's own CARGO_PKG_VERSION; identical
     /// for every reconcile.
     pub(crate) runtime_image: String,
+    /// Per-CR poller table for `gitRef` / `s3Ref` definition sources.
+    /// Registered on every reconcile pass; unregistered on deletion.
+    pub(crate) poller: Arc<PollerManager>,
 }
 
 pub(crate) async fn reconcile(cr: Arc<MarsService>, ctx: Arc<Ctx>) -> std::result::Result<Action, OperatorError> {
@@ -58,6 +64,12 @@ fn error_kind(e: &OperatorError) -> &'static str {
         OperatorError::Yaml(_) => "yaml",
         OperatorError::Json(_) => "json",
         OperatorError::MissingField(_) => "missing_field",
+        OperatorError::SpecInvalid(_) => "spec_invalid",
+        OperatorError::ClusterNotFound(_) => "cluster_not_found",
+        OperatorError::DefinitionResolve(_) => "definition_resolve",
+        OperatorError::DefinitionFetch(_) => "definition_fetch",
+        OperatorError::DefinitionDecode(_) => "definition_decode",
+        OperatorError::Compose(_) => "compose",
     }
 }
 
@@ -73,6 +85,7 @@ async fn reconcile_inner(cr: Arc<MarsService>, ctx: Arc<Ctx>) -> Result<Action> 
         .clone()
         .ok_or_else(|| OperatorError::MissingField("metadata.namespace".into()))?;
     let generation = cr.metadata.generation.unwrap_or(0);
+    let uid = cr.metadata.uid.clone();
 
     info!(svc = %svc_name, ns = %ns, gen = generation, "reconciling MarsService");
 
@@ -82,39 +95,46 @@ async fn reconcile_inner(cr: Arc<MarsService>, ctx: Arc<Ctx>) -> Result<Action> 
     // Job (if needed) and remove the finalizer before kube cascade-deletes
     // the children. nothing else can succeed once deletionTimestamp is set.
     if cr.metadata.deletion_timestamp.is_some() {
+        if let Some(u) = uid.as_deref() {
+            ctx.poller.unregister(u);
+        }
         return deletion::reconcile_deletion(cr.clone(), &ctx, &svc_name, &ns).await;
     }
 
-    let (config_valid, config_message) = match cr.spec.config.as_ref() {
-        Some(cfg) => match crate::config::validate(cfg) {
-            Ok(()) => (true, "spec.config validated".to_string()),
-            Err(e) => (false, e.to_string()),
-        },
-        // new-shape path lands in task 5; for now flag the absence so the
-        // legacy reconcile doesn't barrel into a None.
-        None => (false, "spec.config is required (new-shape path not yet wired)".into()),
-    };
-
-    if !config_valid {
-        warn!(svc = %svc_name, "spec.config invalid: {config_message}");
-        let status_body = status::compute(StatusInputs {
-            observed_generation: generation,
-            config_valid: false,
-            config_message: &config_message,
-            children_applied: false,
-            children_message: "skipped: config invalid",
-            compiler_ready: false,
-            runtime_ready: false,
-            degraded: None,
-            bootstrap: None,
-            runtime_credentials_secret: None,
-            bootstrap_admin_credentials_secret: None,
-        });
-        apply::patch_status(&ctx, &svc_name, &ns, status_body).await?;
-        return Ok(Action::requeue(Duration::from_secs(30)));
+    // admission: legacy XOR new-shape. caught at validation, surfaced as
+    // ConfigValid=False so the user sees a typed message.
+    if let Err(e) = validate_spec(&cr.spec) {
+        let msg = e.to_string();
+        warn!(svc = %svc_name, "spec admission failed: {msg}");
+        return surface_config_invalid(&ctx, &svc_name, &ns, generation, &msg).await;
     }
 
-    let fs_store = detect_fs_store(&cr);
+    // resolve the effective config: legacy returns spec.config verbatim, the
+    // new path composes cluster + render-definition into a Config.
+    let (effective_cfg, resolved_def) = match resolve_effective_config(&cr, &ctx, &ns, uid.as_deref()).await {
+        Ok(out) => out,
+        Err(e) => {
+            let msg = e.to_string();
+            warn!(svc = %svc_name, "effective config: {msg}");
+            return surface_config_invalid(&ctx, &svc_name, &ns, generation, &msg).await;
+        }
+    };
+
+    let config_message = match resolved_def.as_ref() {
+        Some(rd) => format!(
+            "composed from cluster + {} definition (revision {})",
+            rd.adapter, rd.revision
+        ),
+        None => "spec.config validated".to_string(),
+    };
+
+    if let Err(e) = crate::config::validate(&effective_cfg) {
+        let msg = e.to_string();
+        warn!(svc = %svc_name, "effective config invalid: {msg}");
+        return surface_config_invalid(&ctx, &svc_name, &ns, generation, &msg).await;
+    }
+
+    let fs_store = detect_fs_store(&effective_cfg, &cr);
 
     if let Some(reason) = artifact_store_guard(&cr, fs_store.as_ref()) {
         warn!(svc = %svc_name, "degraded: {reason}");
@@ -137,10 +157,11 @@ async fn reconcile_inner(cr: Arc<MarsService>, ctx: Arc<Ctx>) -> Result<Action> 
 
     // configmap must exist before the bootstrap Job pod can mount it. PVCs
     // come later because the bootstrap Job does not need them.
-    let (cm, checksum) = configmap::build(&cr, owner_ref.clone())?;
+    let (cm, checksum) = configmap::build(&cr, &effective_cfg, owner_ref.clone())?;
     apply::configmap(&ctx, &ns, &cm).await?;
 
-    let bootstrap_outcome = bootstrap_flow::reconcile_bootstrap(&ctx, &cr, &svc_name, &ns, owner_ref.clone()).await?;
+    let bootstrap_outcome =
+        bootstrap_flow::reconcile_bootstrap(&ctx, &cr, &svc_name, &ns, &effective_cfg, owner_ref.clone()).await?;
     let runtime_credentials_secret = bootstrap_outcome.runtime_password_ref.as_ref().map(|r| r.name.as_str());
     let bootstrap_admin_credentials_secret = bootstrap_outcome.bootstrap_admin_credentials_secret.as_deref();
     if !bootstrap_outcome.proceed {
@@ -254,11 +275,8 @@ pub(crate) fn owner_reference(cr: &MarsService) -> Result<OwnerReference> {
     })
 }
 
-fn detect_fs_store(cr: &MarsService) -> Option<ArtifactStoreSpec> {
-    let store_type = cr
-        .spec
-        .config
-        .as_ref()?
+fn detect_fs_store(effective_cfg: &JsonValue, cr: &MarsService) -> Option<ArtifactStoreSpec> {
+    let store_type = effective_cfg
         .get("artifacts")
         .and_then(|a| a.get("store"))
         .and_then(|s| s.get("type"))
@@ -288,4 +306,61 @@ fn artifact_store_guard(cr: &MarsService, fs_store: Option<&ArtifactStoreSpec>) 
 pub(crate) fn error_policy(_cr: Arc<MarsService>, error: &OperatorError, _ctx: Arc<Ctx>) -> Action {
     error!(error = %error, "reconcile error_policy fired");
     Action::requeue(Duration::from_secs(15))
+}
+
+/// Surface a ConfigValid=False status condition and requeue. Used for every
+/// admission / resolution / parse failure so the user sees one consistent
+/// signal instead of a stew of typed errors. Task 8 will refine the condition
+/// vocabulary; the new-path failure modes already have typed `OperatorError`
+/// variants so that refactor is purely a status-mapping change.
+async fn surface_config_invalid(ctx: &Ctx, svc_name: &str, ns: &str, generation: i64, message: &str) -> Result<Action> {
+    let status_body = status::compute(StatusInputs {
+        observed_generation: generation,
+        config_valid: false,
+        config_message: message,
+        children_applied: false,
+        children_message: "skipped: config invalid",
+        compiler_ready: false,
+        runtime_ready: false,
+        degraded: None,
+        bootstrap: None,
+        runtime_credentials_secret: None,
+        bootstrap_admin_credentials_secret: None,
+    });
+    apply::patch_status(ctx, svc_name, ns, status_body).await?;
+    Ok(Action::requeue(Duration::from_secs(30)))
+}
+
+/// Resolve the effective Config for `cr`. The legacy path returns
+/// `spec.config` verbatim and skips poller registration. The new path fetches
+/// the cluster CR, registers a poller for credentialed definition sources, and
+/// composes the resolved RenderDefinition with the cluster catalog into a
+/// `Config`. Returns the value plus, on the new path, the resolved-definition
+/// identity for status reporting.
+async fn resolve_effective_config(
+    cr: &MarsService,
+    ctx: &Ctx,
+    ns: &str,
+    uid: Option<&str>,
+) -> Result<(JsonValue, Option<effective_config::ResolvedDefinition>)> {
+    if cr.spec.config.is_some() {
+        // legacy path: no poller, no cluster lookup.
+        if let Some(u) = uid {
+            ctx.poller.unregister(u);
+        }
+        return Ok((effective_config::legacy(cr)?, None));
+    }
+    // new path. validate_spec has already enforced clusterRef + definition presence.
+    if let (Some(u), Some(def_spec)) = (uid, cr.spec.definition.as_ref()) {
+        ctx.poller.register(u, ns, &cr_name(cr)?, def_spec, &ctx.client).await?;
+    }
+    let out = effective_config::new(cr, &ctx.client, ns).await?;
+    Ok((out.config, Some(out.definition)))
+}
+
+fn cr_name(cr: &MarsService) -> Result<String> {
+    cr.metadata
+        .name
+        .clone()
+        .ok_or_else(|| OperatorError::MissingField("metadata.name".into()))
 }

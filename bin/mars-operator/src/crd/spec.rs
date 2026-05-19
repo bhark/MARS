@@ -125,9 +125,6 @@ pub(crate) struct Condition {
 
 /// Admission-time validation of `MarsServiceSpec`. Returned errors are typed
 /// so call sites can map them onto status conditions without string sniffing.
-// reconcile-side wiring lands in a later split task; tests exercise the
-// validator end-to-end already.
-#[allow(dead_code)]
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum SpecValidationError {
     #[error("spec must set either `config` (legacy) or `clusterRef + definition + sources` (new), not both")]
@@ -142,9 +139,7 @@ pub(crate) enum SpecValidationError {
 
 /// Enforce the dual-shape admission rule: exactly one of (`config`) or
 /// (`clusterRef + definition + sources`), and inside `definition` exactly one
-/// sibling variant. Run at admission time; not consulted by reconcile yet
-/// (Phase C task 5 wires the new path through).
-#[allow(dead_code)]
+/// sibling variant. Run at the top of reconcile.
 pub(crate) fn validate_spec(spec: &MarsServiceSpec) -> Result<(), SpecValidationError> {
     let legacy = spec.config.is_some();
     let new_any = spec.cluster_ref.is_some() || spec.definition.is_some() || spec.sources.is_some();

@@ -19,15 +19,12 @@ mod compose;
 mod config;
 mod controller;
 mod crd;
-// task 4f: composition module is unused until task 5 wires it into reconcile.
-#[allow(dead_code)]
 mod definition;
 mod deletion;
 mod dsn;
+mod effective_config;
 mod error;
 mod metrics;
-// task 4g: per-CR poller manager, wired by task 5.
-#[allow(dead_code)]
 mod poller;
 mod reconcile;
 mod status;
