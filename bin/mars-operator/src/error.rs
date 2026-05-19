@@ -52,4 +52,24 @@ impl From<ManagerError> for OperatorError {
     }
 }
 
+impl OperatorError {
+    /// bounded-cardinality label used on `mars_operator_errors_total{kind}`.
+    pub(crate) fn kind(&self) -> &'static str {
+        match self {
+            OperatorError::Kube(_) => "kube",
+            OperatorError::ConfigInvalid(_) => "config_invalid",
+            OperatorError::MarsConfig(_) => "mars_config",
+            OperatorError::Yaml(_) => "yaml",
+            OperatorError::Json(_) => "json",
+            OperatorError::MissingField(_) => "missing_field",
+            OperatorError::SpecInvalid(_) => "spec_invalid",
+            OperatorError::ClusterNotFound(_) => "cluster_not_found",
+            OperatorError::DefinitionResolve(_) => "definition_resolve",
+            OperatorError::DefinitionFetch(_) => "definition_fetch",
+            OperatorError::DefinitionDecode(_) => "definition_decode",
+            OperatorError::Compose(_) => "compose",
+        }
+    }
+}
+
 pub(crate) type Result<T> = std::result::Result<T, OperatorError>;

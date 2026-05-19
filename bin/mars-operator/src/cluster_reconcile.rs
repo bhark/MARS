@@ -55,26 +55,9 @@ pub(crate) async fn reconcile(
         Err(e) => {
             error!(error = %e, "cluster reconcile failed");
             ctx.metrics.record("cluster_error", start.elapsed());
-            ctx.metrics.record_error(error_kind(&e));
+            ctx.metrics.record_error(e.kind());
             Err(e)
         }
-    }
-}
-
-fn error_kind(e: &OperatorError) -> &'static str {
-    match e {
-        OperatorError::Kube(_) => "kube",
-        OperatorError::ConfigInvalid(_) => "config_invalid",
-        OperatorError::MarsConfig(_) => "mars_config",
-        OperatorError::Yaml(_) => "yaml",
-        OperatorError::Json(_) => "json",
-        OperatorError::MissingField(_) => "missing_field",
-        OperatorError::SpecInvalid(_) => "spec_invalid",
-        OperatorError::ClusterNotFound(_) => "cluster_not_found",
-        OperatorError::DefinitionResolve(_) => "definition_resolve",
-        OperatorError::DefinitionFetch(_) => "definition_fetch",
-        OperatorError::DefinitionDecode(_) => "definition_decode",
-        OperatorError::Compose(_) => "compose",
     }
 }
 
