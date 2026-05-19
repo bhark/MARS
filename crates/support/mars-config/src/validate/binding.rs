@@ -66,7 +66,6 @@ pub(super) fn validate_binding_source_refs(layers: &[Layer], sources: &[Source])
     Ok(())
 }
 
-#[cfg_attr(test, allow(dead_code))]
 fn validate_vectorfile_binding(layer: &LayerId, idx: usize, binding: &SourceBinding) -> Result<(), ConfigError> {
     let BindingKind::Vectorfile { uri, source_crs, .. } = &binding.kind else {
         unreachable!("validate_vectorfile_binding called on non-vectorfile kind");
