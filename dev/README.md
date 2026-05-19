@@ -33,13 +33,13 @@ First cold start builds images (~5-8 min); subsequent starts use caches and are 
 dev/
 ├── compose.yml             # stack definition
 ├── Makefile                # wrapper targets
-├── config/mars.yaml        # canonical MARS config (also used by manifests/base)
+├── config/mars.yaml        # canonical MARS config used by the local stack
 ├── postgis/init.sql        # postgis bootstrap (extension + schema + slot)
 ├── seed/                   # osm2pgsql ingester image
 └── viewer/                 # static OL viewer image
 ```
 
-`manifests/base/` is retained as a portable k8s baseline for future cluster deploys; nothing in local dev or e2e references it.
+For k8s deploys, `mars-operator` owns the manifest shape - see `charts/mars-operator/examples/` for ready-to-`kubectl apply` `MarsServiceCluster` + `MarsService` pairs.
 
 ## Make targets
 
