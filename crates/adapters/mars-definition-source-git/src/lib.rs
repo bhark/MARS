@@ -20,8 +20,7 @@
 //! than `gix`. `gix`'s SSH transport currently delegates to the system `ssh`
 //! binary and cannot consume an in-memory identity + custom `known_hosts`
 //! bundle cleanly, and its mTLS surface is not stable. `git2` covers all four
-//! auth modes via `RemoteCallbacks::credentials` + the per-repo HTTP config
-//! and was anticipated as the fallback path in the split plan.
+//! auth modes via `RemoteCallbacks::credentials` + the per-repo HTTP config.
 
 #![deny(unsafe_code)]
 #![deny(missing_docs)]

@@ -126,8 +126,8 @@ pub(crate) fn map_kube_error(e: kube::Error, target: &str) -> DefinitionSourceEr
 struct MissingResourceVersion;
 
 // adapter integration coverage (live apiserver) lives in the operator's
-// e2e suite (task 9 / 4h) - we cannot meaningfully exercise kube::Client
-// here without spinning a control plane.
+// e2e suite — kube::Client cannot be meaningfully exercised here without
+// spinning a control plane.
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests;

@@ -424,7 +424,7 @@ layers:
     assert!(msg.contains("empty"), "expected mention of empty: {msg}");
 }
 
-// ---- definition / deployment split (Phase A) -------------------------------
+// ---- definition / deployment split -----------------------------------------
 
 /// hand-partition a loaded Config into the two halves. The reprojection
 /// allowlist is parked on the deployment side (the cluster-default carrier);

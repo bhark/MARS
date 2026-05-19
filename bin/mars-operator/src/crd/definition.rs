@@ -49,9 +49,9 @@ pub(crate) struct ConfigMapKeyRef {
     pub(crate) key: String,
 }
 
-/// Opaque pointer to a same-namespace `Secret`. Documented key bundle per
-/// adapter (see Phase C.4 of the split plan); resolved by the adapter at
-/// fetch time.
+/// Opaque pointer to a same-namespace `Secret`. Each definition-source
+/// adapter documents the key bundle it expects; resolved by the adapter
+/// at fetch time.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SecretRef {

@@ -11,10 +11,9 @@ use crate::model::{
 // support types imported so the struct fields compile
 use crate::model::Cells;
 
-/// Top-level service configuration. Wire-format target for `Config::load` and
-/// the runtime-facing struct consumed by `bin/mars`. After Phase A of the
-/// definition/deployment split, `Config` is also the composition target of
-/// `compose(RenderDefinition, Deployment)`.
+/// Top-level service configuration. Wire-format target for `Config::load`
+/// and the runtime-facing struct consumed by `bin/mars`. Also the composition
+/// target of `compose(RenderDefinition, Deployment)`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// Service identity and capabilities metadata.
