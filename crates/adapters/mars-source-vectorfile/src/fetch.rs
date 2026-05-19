@@ -14,7 +14,7 @@ use object_store::gcp::GoogleCloudStorageBuilder;
 use object_store::http::HttpBuilder;
 use object_store::local::LocalFileSystem;
 use object_store::path::Path as OsPath;
-use object_store::{ObjectStore, ObjectStoreExt, ObjectStoreScheme};
+use object_store::{ObjectStore, ObjectStoreExt};
 use tokio::sync::RwLock;
 
 use crate::cache::DiskCache;
@@ -232,10 +232,6 @@ fn build_store(parsed: &ParsedUri, allow_http: bool) -> Result<Arc<dyn ObjectSto
         }),
     }
 }
-
-// silence unused import warning when no feature uses the type alias.
-#[allow(dead_code)]
-type _Scheme = ObjectStoreScheme;
 
 #[cfg(test)]
 mod tests;
