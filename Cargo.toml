@@ -216,12 +216,6 @@ codegen-units = 1
 strip         = "symbols"
 panic         = "abort"
 
-# inherits release; bumped to fat lto. driven by scripts/build-pgo.sh in both
-# the profile-generate and profile-use stages.
-[profile.release-pgo]
-inherits      = "release"
-lto           = "fat"
-
 [profile.dev]
 opt-level = 0
 # line tables only - backtraces stay accurate but test binaries shrink and link
