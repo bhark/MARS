@@ -111,6 +111,28 @@ pub(crate) struct MarsServiceStatus {
     /// (the user owns that Secret directly).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) bootstrap_admin_credentials_secret: Option<String>,
+    /// New-path identity of the last successfully fetched RenderDefinition.
+    /// Cleared on the legacy path and while DefinitionResolved is not True.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) definition: Option<DefinitionStatus>,
+}
+
+/// New-path status block reporting the operator's view of the resolved
+/// render definition.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DefinitionStatus {
+    pub(crate) observed: DefinitionObserved,
+}
+
+/// Identity of the most recently fetched RenderDefinition. `adapter` is one
+/// of `inline` / `configMapRef` / `gitRef` / `s3Ref`; `revision` is the
+/// adapter-stable identity (sha, etag, resourceVersion, content hash).
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DefinitionObserved {
+    pub(crate) adapter: String,
+    pub(crate) revision: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]

@@ -18,14 +18,15 @@ use crate::bootstrap_flow;
 use crate::children::labels::{self, artifact_store_pvc_name};
 use crate::children::pvc::{self, PvcSpec};
 use crate::children::{compiler, configmap, pdb, runtime, service};
-use crate::crd::spec::{MarsService, validate_spec};
+use crate::compose::ComposeError;
+use crate::crd::spec::{MarsService, SpecValidationError, validate_spec};
 use crate::crd::storage::ArtifactStoreSpec;
 use crate::deletion;
-use crate::effective_config;
+use crate::effective_config::{self, ResolvedDefinition};
 use crate::error::{OperatorError, Result};
 use crate::metrics::Metrics;
 use crate::poller::PollerManager;
-use crate::status::{self, StatusInputs};
+use crate::status::{self, ObservedDefinition, Resolution, ResolutionReason, StatusInputs};
 
 pub(crate) struct Ctx {
     pub(crate) client: kube::Client,
@@ -101,22 +102,25 @@ async fn reconcile_inner(cr: Arc<MarsService>, ctx: Arc<Ctx>) -> Result<Action> 
         return deletion::reconcile_deletion(cr.clone(), &ctx, &svc_name, &ns).await;
     }
 
-    // admission: legacy XOR new-shape. caught at validation, surfaced as
-    // ConfigValid=False so the user sees a typed message.
+    // admission: legacy XOR new-shape. typed errors map onto the catalog +
+    // definition resolution conditions so the user sees which prereq failed.
     if let Err(e) = validate_spec(&cr.spec) {
         let msg = e.to_string();
         warn!(svc = %svc_name, "spec admission failed: {msg}");
-        return surface_config_invalid(&ctx, &svc_name, &ns, generation, &msg).await;
+        let (catalog, definition) = classify_spec_validation(&e, &msg);
+        return surface_resolution_failure(&ctx, &svc_name, &ns, generation, catalog, definition, &msg).await;
     }
 
     // resolve the effective config: legacy returns spec.config verbatim, the
     // new path composes cluster + render-definition into a Config.
+    let is_legacy = cr.spec.config.is_some();
     let (effective_cfg, resolved_def) = match resolve_effective_config(&cr, &ctx, &ns, uid.as_deref()).await {
         Ok(out) => out,
         Err(e) => {
             let msg = e.to_string();
             warn!(svc = %svc_name, "effective config: {msg}");
-            return surface_config_invalid(&ctx, &svc_name, &ns, generation, &msg).await;
+            let (catalog, definition) = classify_resolve_error(&e, is_legacy, &msg);
+            return surface_resolution_failure(&ctx, &svc_name, &ns, generation, catalog, definition, &msg).await;
         }
     };
 
@@ -131,8 +135,29 @@ async fn reconcile_inner(cr: Arc<MarsService>, ctx: Arc<Ctx>) -> Result<Action> 
     if let Err(e) = crate::config::validate(&effective_cfg) {
         let msg = e.to_string();
         warn!(svc = %svc_name, "effective config invalid: {msg}");
-        return surface_config_invalid(&ctx, &svc_name, &ns, generation, &msg).await;
+        // catalog + definition both resolved fine; the composed config is what
+        // failed downstream. emit them as True so the user sees the blocker
+        // sits in ConfigValid, not in the upstream prereqs.
+        let (catalog, definition) = if is_legacy {
+            (Resolution::Legacy, Resolution::Legacy)
+        } else {
+            (Resolution::Resolved, Resolution::Resolved)
+        };
+        return surface_config_invalid(
+            &ctx,
+            &svc_name,
+            &ns,
+            generation,
+            catalog,
+            definition,
+            resolved_def.as_ref(),
+            &msg,
+        )
+        .await;
     }
+
+    let (catalog_res, def_res) = resolution_pair(is_legacy);
+    let observed = resolved_def.as_ref().map(observed_from);
 
     let fs_store = detect_fs_store(&effective_cfg, &cr);
 
@@ -140,6 +165,9 @@ async fn reconcile_inner(cr: Arc<MarsService>, ctx: Arc<Ctx>) -> Result<Action> 
         warn!(svc = %svc_name, "degraded: {reason}");
         let status_body = status::compute(StatusInputs {
             observed_generation: generation,
+            catalog: catalog_res,
+            definition: def_res,
+            definition_observed: observed,
             config_valid: true,
             config_message: &config_message,
             children_applied: false,
@@ -167,6 +195,9 @@ async fn reconcile_inner(cr: Arc<MarsService>, ctx: Arc<Ctx>) -> Result<Action> 
     if !bootstrap_outcome.proceed {
         let status_body = status::compute(StatusInputs {
             observed_generation: generation,
+            catalog: catalog_res,
+            definition: def_res,
+            definition_observed: observed,
             config_valid: true,
             config_message: &config_message,
             children_applied: false,
@@ -238,6 +269,9 @@ async fn reconcile_inner(cr: Arc<MarsService>, ctx: Arc<Ctx>) -> Result<Action> 
 
     let status_body = status::compute(StatusInputs {
         observed_generation: generation,
+        catalog: catalog_res,
+        definition: def_res,
+        definition_observed: observed,
         config_valid: true,
         config_message: &config_message,
         children_applied: true,
@@ -308,14 +342,25 @@ pub(crate) fn error_policy(_cr: Arc<MarsService>, error: &OperatorError, _ctx: A
     Action::requeue(Duration::from_secs(15))
 }
 
-/// Surface a ConfigValid=False status condition and requeue. Used for every
-/// admission / resolution / parse failure so the user sees one consistent
-/// signal instead of a stew of typed errors. Task 8 will refine the condition
-/// vocabulary; the new-path failure modes already have typed `OperatorError`
-/// variants so that refactor is purely a status-mapping change.
-async fn surface_config_invalid(ctx: &Ctx, svc_name: &str, ns: &str, generation: i64, message: &str) -> Result<Action> {
+/// Upstream resolution failed (admission, catalog lookup, definition
+/// fetch/parse). Emits the matching `CatalogResolved` / `DefinitionResolved`
+/// state plus a `ConfigValid=False` blocker so downstream conditions stay
+/// skipped. `definition_observed` is intentionally cleared - resolution
+/// failed, so the last fetched identity (if any) is not load-bearing here.
+async fn surface_resolution_failure(
+    ctx: &Ctx,
+    svc_name: &str,
+    ns: &str,
+    generation: i64,
+    catalog: Resolution<'_>,
+    definition: Resolution<'_>,
+    message: &str,
+) -> Result<Action> {
     let status_body = status::compute(StatusInputs {
         observed_generation: generation,
+        catalog,
+        definition,
+        definition_observed: None,
         config_valid: false,
         config_message: message,
         children_applied: false,
@@ -329,6 +374,179 @@ async fn surface_config_invalid(ctx: &Ctx, svc_name: &str, ns: &str, generation:
     });
     apply::patch_status(ctx, svc_name, ns, status_body).await?;
     Ok(Action::requeue(Duration::from_secs(30)))
+}
+
+/// Composed-config validation failed; catalog + definition resolved fine.
+/// Keeps the prior observed identity so consumers see what bytes the
+/// operator parsed before the composed Config tripped validation.
+#[allow(clippy::too_many_arguments)]
+async fn surface_config_invalid(
+    ctx: &Ctx,
+    svc_name: &str,
+    ns: &str,
+    generation: i64,
+    catalog: Resolution<'_>,
+    definition: Resolution<'_>,
+    resolved_def: Option<&ResolvedDefinition>,
+    message: &str,
+) -> Result<Action> {
+    let observed = resolved_def.map(observed_from);
+    let status_body = status::compute(StatusInputs {
+        observed_generation: generation,
+        catalog,
+        definition,
+        definition_observed: observed,
+        config_valid: false,
+        config_message: message,
+        children_applied: false,
+        children_message: "skipped: config invalid",
+        compiler_ready: false,
+        runtime_ready: false,
+        degraded: None,
+        bootstrap: None,
+        runtime_credentials_secret: None,
+        bootstrap_admin_credentials_secret: None,
+    });
+    apply::patch_status(ctx, svc_name, ns, status_body).await?;
+    Ok(Action::requeue(Duration::from_secs(30)))
+}
+
+/// Both resolution conditions report True (legacy variant on the legacy path,
+/// resolved on the new path).
+fn resolution_pair<'a>(is_legacy: bool) -> (Resolution<'a>, Resolution<'a>) {
+    if is_legacy {
+        (Resolution::Legacy, Resolution::Legacy)
+    } else {
+        (Resolution::Resolved, Resolution::Resolved)
+    }
+}
+
+fn observed_from(rd: &ResolvedDefinition) -> ObservedDefinition<'_> {
+    ObservedDefinition {
+        adapter: rd.adapter,
+        revision: rd.revision.as_str(),
+    }
+}
+
+/// Map admission failures onto the two resolution conditions. `BothShapes` /
+/// `NeitherShape` are ambiguous prereqs - they block both. The new-shape
+/// "missing field" errors map to whichever condition the missing field belongs
+/// to. The exactly-one definition-variant violation maps to
+/// DefinitionResolved=False with the dedicated reason.
+fn classify_spec_validation<'a>(e: &SpecValidationError, msg: &'a str) -> (Resolution<'a>, Resolution<'a>) {
+    use SpecValidationError as E;
+    match e {
+        E::BothShapes | E::NeitherShape | E::BootstrapOnNewPath => (
+            Resolution::Failed {
+                reason: ResolutionReason::SpecInvalid,
+                message: msg,
+            },
+            Resolution::Failed {
+                reason: ResolutionReason::SpecInvalid,
+                message: msg,
+            },
+        ),
+        E::NewShapeMissing("definition") => (
+            Resolution::Resolved,
+            Resolution::Failed {
+                reason: ResolutionReason::SpecInvalid,
+                message: msg,
+            },
+        ),
+        E::NewShapeMissing(_) => (
+            Resolution::Failed {
+                reason: ResolutionReason::SpecInvalid,
+                message: msg,
+            },
+            Resolution::Skipped {
+                blocked_by: "CatalogResolved",
+            },
+        ),
+        E::DefinitionVariantCount(_) => (
+            Resolution::Resolved,
+            Resolution::Failed {
+                reason: ResolutionReason::ExactlyOneViolated,
+                message: msg,
+            },
+        ),
+    }
+}
+
+/// Map a runtime resolution `OperatorError` onto the two conditions. The
+/// classification mirrors the failure point inside `resolve_effective_config`:
+/// cluster lookup feeds CatalogResolved, definition resolve/fetch/decode feed
+/// DefinitionResolved, and `ComposeError::UnknownSourceId` lands on
+/// CatalogResolved because the catalog cannot satisfy the spec.
+fn classify_resolve_error<'a>(e: &OperatorError, is_legacy: bool, msg: &'a str) -> (Resolution<'a>, Resolution<'a>) {
+    if is_legacy {
+        // legacy path: resolution doesn't apply. surface failure on definition
+        // to keep one consistent slot ("legacy + something broke").
+        return (
+            Resolution::Legacy,
+            Resolution::Failed {
+                reason: ResolutionReason::Internal,
+                message: msg,
+            },
+        );
+    }
+    match e {
+        OperatorError::ClusterNotFound(_) => (
+            Resolution::Failed {
+                reason: ResolutionReason::ClusterNotFound,
+                message: msg,
+            },
+            Resolution::Skipped {
+                blocked_by: "CatalogResolved",
+            },
+        ),
+        OperatorError::Compose(ComposeError::UnknownSourceId { .. }) => (
+            Resolution::Failed {
+                reason: ResolutionReason::UnknownSourceId,
+                message: msg,
+            },
+            Resolution::Resolved,
+        ),
+        OperatorError::Compose(ComposeError::CatalogEntryMissingId { .. })
+        | OperatorError::Compose(ComposeError::InvalidCatalogEntry { .. })
+        | OperatorError::Compose(ComposeError::InvalidClusterField { .. }) => (
+            Resolution::Failed {
+                reason: ResolutionReason::InvalidCatalog,
+                message: msg,
+            },
+            Resolution::Resolved,
+        ),
+        OperatorError::DefinitionResolve(_) => (
+            Resolution::Resolved,
+            Resolution::Failed {
+                reason: ResolutionReason::DefinitionResolveError,
+                message: msg,
+            },
+        ),
+        OperatorError::DefinitionFetch(_) => (
+            Resolution::Resolved,
+            Resolution::Failed {
+                reason: ResolutionReason::DefinitionFetchError,
+                message: msg,
+            },
+        ),
+        OperatorError::DefinitionDecode(_) => (
+            Resolution::Resolved,
+            Resolution::Failed {
+                reason: ResolutionReason::DefinitionDecodeError,
+                message: msg,
+            },
+        ),
+        _ => (
+            Resolution::Failed {
+                reason: ResolutionReason::Internal,
+                message: msg,
+            },
+            Resolution::Failed {
+                reason: ResolutionReason::Internal,
+                message: msg,
+            },
+        ),
+    }
 }
 
 /// Resolve the effective Config for `cr`. The legacy path returns
@@ -364,3 +582,6 @@ fn cr_name(cr: &MarsService) -> Result<String> {
         .clone()
         .ok_or_else(|| OperatorError::MissingField("metadata.name".into()))
 }
+
+#[cfg(test)]
+mod tests;

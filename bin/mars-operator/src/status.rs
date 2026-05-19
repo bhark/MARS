@@ -4,7 +4,7 @@
 
 use k8s_openapi::api::apps::v1::Deployment;
 
-use crate::crd::spec::{Condition, MarsServiceStatus};
+use crate::crd::spec::{Condition, DefinitionObserved, DefinitionStatus, MarsServiceStatus};
 
 pub(crate) fn now_rfc3339() -> String {
     use std::time::SystemTime;
@@ -66,9 +66,16 @@ fn days_in_month(y: i64, m: u32) -> u32 {
 }
 
 pub(crate) fn condition(type_: &str, status: bool, reason: &str, message: &str) -> Condition {
+    raw_condition(type_, if status { "True" } else { "False" }, reason, message)
+}
+
+/// kube convention is True / False / Unknown; emit Unknown when an upstream
+/// prerequisite skipped the check (so consumers see explicit "not evaluated"
+/// rather than a missing condition).
+pub(crate) fn raw_condition(type_: &str, status: &str, reason: &str, message: &str) -> Condition {
     Condition {
         type_: type_.into(),
-        status: if status { "True".into() } else { "False".into() },
+        status: status.into(),
         reason: reason.into(),
         message: message.into(),
         last_transition_time: now_rfc3339(),
@@ -107,6 +114,15 @@ pub(crate) fn deployment_ready(d: &Deployment) -> bool {
 
 pub(crate) struct StatusInputs<'a> {
     pub(crate) observed_generation: i64,
+    /// Outcome of resolving the cluster catalog + spec.sources for the new
+    /// path; on the legacy path use [`Resolution::Legacy`].
+    pub(crate) catalog: Resolution<'a>,
+    /// Outcome of resolving + fetching + parsing the RenderDefinition for the
+    /// new path; on the legacy path use [`Resolution::Legacy`].
+    pub(crate) definition: Resolution<'a>,
+    /// Identity of the most recently fetched RenderDefinition. `Some` only
+    /// when DefinitionResolved=True on the new path.
+    pub(crate) definition_observed: Option<ObservedDefinition<'a>>,
     pub(crate) config_valid: bool,
     pub(crate) config_message: &'a str,
     pub(crate) children_applied: bool,
@@ -128,6 +144,61 @@ pub(crate) struct StatusInputs<'a> {
     /// `bootstrap.adminCredentialsRef` branch is in use; absent for BYO
     /// `adminSecretRef` and for disabled/missing bootstrap.
     pub(crate) bootstrap_admin_credentials_secret: Option<&'a str>,
+}
+
+/// Tri-state outcome of an upstream resolution step.
+#[derive(Clone, Copy)]
+pub(crate) enum Resolution<'a> {
+    /// Legacy `spec.config` path - resolution does not apply.
+    Legacy,
+    /// New path, succeeded.
+    Resolved,
+    /// New path, blocked by a prior step (e.g. CatalogResolved=False).
+    /// Surfaces as `Unknown` with reason `Skipped`.
+    Skipped { blocked_by: &'a str },
+    /// New path, failed with a typed reason. Surfaces as `False`.
+    Failed { reason: ResolutionReason, message: &'a str },
+}
+
+/// Reason vocabulary for failed resolution conditions. Mirrors the typed
+/// `OperatorError` variants in `error.rs` so reconcile maps each fork to
+/// exactly one reason.
+#[derive(Clone, Copy)]
+pub(crate) enum ResolutionReason {
+    // CatalogResolved=False
+    ClusterNotFound,
+    UnknownSourceId,
+    InvalidCatalog,
+    // DefinitionResolved=False
+    ExactlyOneViolated,
+    DefinitionResolveError,
+    DefinitionFetchError,
+    DefinitionDecodeError,
+    // shared
+    SpecInvalid,
+    Internal,
+}
+
+impl ResolutionReason {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::ClusterNotFound => "ClusterNotFound",
+            Self::UnknownSourceId => "UnknownSourceId",
+            Self::InvalidCatalog => "InvalidCatalog",
+            Self::ExactlyOneViolated => "ExactlyOneViolated",
+            Self::DefinitionResolveError => "DefinitionResolveError",
+            Self::DefinitionFetchError => "DefinitionFetchError",
+            Self::DefinitionDecodeError => "DefinitionDecodeError",
+            Self::SpecInvalid => "SpecInvalid",
+            Self::Internal => "Internal",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct ObservedDefinition<'a> {
+    pub(crate) adapter: &'a str,
+    pub(crate) revision: &'a str,
 }
 
 #[derive(Clone, Copy)]
@@ -160,6 +231,8 @@ impl BootstrapReason {
 
 pub(crate) fn compute(inputs: StatusInputs<'_>) -> MarsServiceStatus {
     let mut conditions = Vec::new();
+    conditions.push(resolution_condition("CatalogResolved", inputs.catalog));
+    conditions.push(resolution_condition("DefinitionResolved", inputs.definition));
     conditions.push(condition(
         "ConfigValid",
         inputs.config_valid,
@@ -239,5 +312,28 @@ pub(crate) fn compute(inputs: StatusInputs<'_>) -> MarsServiceStatus {
         conditions,
         runtime_credentials_secret: inputs.runtime_credentials_secret.map(str::to_string),
         bootstrap_admin_credentials_secret: inputs.bootstrap_admin_credentials_secret.map(str::to_string),
+        definition: inputs.definition_observed.map(|o| DefinitionStatus {
+            observed: DefinitionObserved {
+                adapter: o.adapter.into(),
+                revision: o.revision.into(),
+            },
+        }),
     }
 }
+
+fn resolution_condition(type_: &str, resolution: Resolution<'_>) -> Condition {
+    match resolution {
+        Resolution::Legacy => raw_condition(type_, "True", "LegacyPath", "legacy spec.config path"),
+        Resolution::Resolved => raw_condition(type_, "True", "Resolved", "resolved"),
+        Resolution::Skipped { blocked_by } => raw_condition(
+            type_,
+            "Unknown",
+            "Skipped",
+            &format!("skipped: blocked by {blocked_by}"),
+        ),
+        Resolution::Failed { reason, message } => raw_condition(type_, "False", reason.as_str(), message),
+    }
+}
+
+#[cfg(test)]
+mod tests;

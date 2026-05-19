@@ -810,6 +810,29 @@ spec:
                   - type
                   type: object
                 type: array
+              definition:
+                description: |-
+                  New-path identity of the last successfully fetched RenderDefinition.
+                  Cleared on the legacy path and while DefinitionResolved is not True.
+                nullable: true
+                properties:
+                  observed:
+                    description: |-
+                      Identity of the most recently fetched RenderDefinition. `adapter` is one
+                      of `inline` / `configMapRef` / `gitRef` / `s3Ref`; `revision` is the
+                      adapter-stable identity (sha, etag, resourceVersion, content hash).
+                    properties:
+                      adapter:
+                        type: string
+                      revision:
+                        type: string
+                    required:
+                    - adapter
+                    - revision
+                    type: object
+                required:
+                - observed
+                type: object
               observedGeneration:
                 format: int64
                 nullable: true
