@@ -19,6 +19,9 @@ mod compose;
 mod config;
 mod controller;
 mod crd;
+// task 4f: composition module is unused until task 5 wires it into reconcile.
+#[allow(dead_code)]
+mod definition;
 mod deletion;
 mod dsn;
 mod error;

@@ -35,6 +35,11 @@ thiserror          = { workspace = true }
 tokio              = { workspace = true }
 tracing            = { workspace = true }
 mars-config        = { workspace = true }
+mars-definition-source             = { workspace = true }
+mars-definition-source-configmap   = { workspace = true }
+mars-definition-source-git         = { workspace = true }
+mars-definition-source-inline      = { workspace = true }
+mars-definition-source-s3          = { workspace = true }
 mars-observability = { workspace = true }
 
 [dev-dependencies]
