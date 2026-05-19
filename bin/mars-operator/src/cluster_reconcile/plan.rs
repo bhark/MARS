@@ -59,7 +59,7 @@ fn default_true() -> bool {
 /// emits one `CatalogBootstrapPlan` per entry whose `bootstrap` block is set.
 /// Entries without a `bootstrap` block are skipped silently. Entries that
 /// fail to deserialise into `mars_config::Source` are skipped with a warning
-/// trace — surfacing this as a status condition is task 8.
+/// trace — a future status condition could surface this on the CR.
 pub(crate) fn plan_jobs(cr: &MarsServiceCluster) -> Result<Vec<CatalogBootstrapPlan>> {
     let cluster_name = cr
         .metadata

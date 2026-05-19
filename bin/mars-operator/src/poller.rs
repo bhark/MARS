@@ -4,7 +4,7 @@
 //! whose `DefinitionSpec` requires polling (`gitRef` / `s3Ref`). The task
 //! drives the adapter's [`DefinitionSource::watch`] stream and forwards every
 //! [`Change`] event into a `tokio::sync::mpsc::Sender<ReconcileTrigger>` the
-//! controller wires into its reconcile-trigger fan-in (wired in task 5).
+//! controller fans into `Controller::reconcile_on`.
 //!
 //! Lifecycle rules:
 //! * `register` is idempotent. Called on every reconcile pass.
@@ -19,8 +19,7 @@
 //!
 //! The manager is intentionally narrow: it knows nothing about the controller
 //! `Action` type and does not call back into reconcile directly. The mpsc
-//! channel is the only coupling, which keeps the controller wiring (task 5) a
-//! pure plumbing change.
+//! channel is the only coupling.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -36,9 +35,9 @@ use crate::crd::definition::DefinitionSpec;
 use crate::definition::{self, ResolveError};
 
 /// Reconcile-trigger payload pushed by a poller task on every adapter
-/// [`mars_definition_source::Change`]. Task 5 wires the receiver side into
-/// `kube::runtime::Controller::reconcile_on` so each trigger becomes a
-/// reconcile pass for the named CR.
+/// [`mars_definition_source::Change`]. The controller fans the receiver
+/// side into `kube::runtime::Controller::reconcile_on` so each trigger
+/// becomes a reconcile pass for the named CR.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ReconcileTrigger {
     pub(crate) namespace: String,

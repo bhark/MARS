@@ -5,12 +5,11 @@
 //! reconcile wiring and injected into the cluster `sources_catalog` /
 //! `artifact_store` payloads before this function is called.
 //!
-//! Algorithm mirrors `SPLIT_TODO_NOCOMMIT.md` Phase C: filter the catalog by
-//! `spec.sources`, deserialise each opaque `serde_json::Value` payload into
-//! the matching `mars_config` typed struct, build a `Deployment`, and call
-//! `mars_config::compose` to merge with the render definition. Cross-cutting
-//! validation (binding source ids resolve, etc.) is left to
-//! `mars_config::validate` on the composed `Config`.
+//! Algorithm: filter the catalog by `spec.sources`, deserialise each opaque
+//! `serde_json::Value` payload into the matching `mars_config` typed struct,
+//! build a `Deployment`, and call `mars_config::compose` to merge with the
+//! render definition. Cross-cutting validation (binding source ids resolve,
+//! etc.) is left to `mars_config::validate` on the composed `Config`.
 
 use std::collections::HashSet;
 

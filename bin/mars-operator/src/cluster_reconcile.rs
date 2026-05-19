@@ -82,8 +82,8 @@ async fn reconcile_inner(cr: Arc<MarsServiceCluster>, ctx: Arc<ClusterCtx>) -> R
     let plans = match plan_jobs(&cr) {
         Ok(p) => p,
         Err(e) => {
-            // catalog parsing failed; surface and bail out. status conditions
-            // are deferred to the dedicated status task (task 8).
+            // catalog parsing failed; surface and bail out. surfacing as a
+            // status condition is a future enhancement.
             warn!(cluster = %cluster_name, "catalog parse: {e}");
             return Ok(Action::requeue(Duration::from_secs(60)));
         }
