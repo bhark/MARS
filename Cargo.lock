@@ -2820,6 +2820,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "mars-definition-source-s3"
+version = "0.0.0-dev"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "futures-core",
+ "futures-util",
+ "mars-definition-source",
+ "object_store",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+]
+
+[[package]]
 name = "mars-expr"
 version = "0.0.0-dev"
 dependencies = [

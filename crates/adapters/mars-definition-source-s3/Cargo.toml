@@ -1,0 +1,28 @@
+[package]
+name        = "mars-definition-source-s3"
+version.workspace = true
+edition.workspace     = true
+license.workspace     = true
+repository.workspace  = true
+authors.workspace     = true
+publish.workspace     = true
+rust-version.workspace = true
+description = "S3-compatible object store mars-definition-source adapter. Fetches a RenderDefinition payload via object_store and polls for ETag deltas."
+
+[lints]
+workspace = true
+
+[dependencies]
+mars-definition-source = { workspace = true }
+async-trait            = { workspace = true }
+bytes                  = { workspace = true }
+futures-core           = { workspace = true }
+futures-util           = { workspace = true }
+object_store           = { workspace = true }
+thiserror              = { workspace = true }
+tokio                  = { workspace = true }
+tokio-stream           = { workspace = true }
+tracing                = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
