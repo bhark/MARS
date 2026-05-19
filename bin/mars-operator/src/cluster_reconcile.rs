@@ -25,8 +25,7 @@ use serde_json::Value as JsonValue;
 use tracing::{error, info, warn};
 
 use crate::children::labels;
-use crate::crd::bootstrap::{AdminCredentialsRef, SecretKeyRef, TeardownPolicy};
-use crate::crd::cluster::MarsServiceCluster;
+use crate::crd::cluster::{AdminCredentialsRef, MarsServiceCluster, SecretKeyRef, TeardownPolicy};
 use crate::dsn;
 use crate::error::{OperatorError, Result};
 use crate::metrics::Metrics;

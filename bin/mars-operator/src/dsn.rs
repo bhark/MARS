@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::crd::bootstrap::AdminCredentialsRef;
+use crate::crd::cluster::AdminCredentialsRef;
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum DsnError {
