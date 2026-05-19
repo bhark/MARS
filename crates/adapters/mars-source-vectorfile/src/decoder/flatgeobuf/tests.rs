@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use super::*;
-use flatgeobuf::FgbWriter;
+use flatgeobuf::{ColumnType, FgbWriter};
 
 fn synth_fgb() -> Vec<u8> {
     // build a tiny dataset with two point features and one string attr.

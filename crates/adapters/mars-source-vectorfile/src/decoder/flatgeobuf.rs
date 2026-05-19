@@ -8,7 +8,7 @@ use std::io::Cursor;
 
 use bytes::Bytes;
 use fallible_streaming_iterator::FallibleStreamingIterator;
-use flatgeobuf::{ColumnType, FeatureProperties, FgbReader};
+use flatgeobuf::{FeatureProperties, FgbReader};
 use geozero::{CoordDimensions, PropertyProcessor, ToWkb};
 use mars_config::VectorFileFormat;
 use mars_source::AttrValue;
@@ -37,13 +37,6 @@ impl Decoder for FlatGeobufDecoder {
                 "flatgeobuf has Z dimension; v1 emits xy wkb only".into(),
             ));
         }
-        // resolve column descriptors up front so per-feature property
-        // collection knows what's expected without re-reading the header.
-        let cols: Vec<ColumnDesc> = reader
-            .header()
-            .columns()
-            .map(|cs| cs.iter().map(ColumnDesc::from).collect::<Vec<_>>())
-            .unwrap_or_default();
 
         let mut iter = reader.select_all().map_err(parse_err)?;
         let mut row_idx: u64 = 0;
@@ -53,7 +46,7 @@ impl Decoder for FlatGeobufDecoder {
                 source: Box::new(e),
             })?;
 
-            let mut collector = PropertyCollector::new(&cols);
+            let mut collector = PropertyCollector::new();
             // process_properties drives the PropertyProcessor we pass; this
             // path does not call any geometry callbacks, so it's cheap.
             feat.process_properties(&mut collector)
@@ -86,28 +79,13 @@ fn parse_err(e: flatgeobuf::Error) -> DecoderError {
     }
 }
 
-#[derive(Debug, Clone)]
-struct ColumnDesc {
-    ty: ColumnType,
-}
-
-impl ColumnDesc {
-    fn from(c: flatgeobuf::Column<'_>) -> Self {
-        Self { ty: c.type_() }
-    }
-}
-
-struct PropertyCollector<'a> {
-    cols: &'a [ColumnDesc],
+struct PropertyCollector {
     out: HashMap<String, AttrValue>,
 }
 
-impl<'a> PropertyCollector<'a> {
-    fn new(cols: &'a [ColumnDesc]) -> Self {
-        Self {
-            cols,
-            out: HashMap::new(),
-        }
+impl PropertyCollector {
+    fn new() -> Self {
+        Self { out: HashMap::new() }
     }
 
     fn into_map(self) -> HashMap<String, AttrValue> {
@@ -115,9 +93,8 @@ impl<'a> PropertyCollector<'a> {
     }
 }
 
-impl<'a> PropertyProcessor for PropertyCollector<'a> {
-    fn property(&mut self, idx: usize, name: &str, value: &geozero::ColumnValue<'_>) -> geozero::error::Result<bool> {
-        let _ = self.cols.get(idx).map(|c| &c.ty); // currently unused
+impl PropertyProcessor for PropertyCollector {
+    fn property(&mut self, _idx: usize, name: &str, value: &geozero::ColumnValue<'_>) -> geozero::error::Result<bool> {
         let v = match *value {
             geozero::ColumnValue::Bool(b) => AttrValue::Bool(b),
             geozero::ColumnValue::Byte(b) => AttrValue::Int(i64::from(b)),
