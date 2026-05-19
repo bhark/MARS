@@ -53,9 +53,11 @@ pub(crate) struct RuntimeSpec {
     #[schemars(schema_with = "super::schema::preserve_unknown_fields_array")]
     pub(crate) extra_volume_mounts: Vec<serde_json::Value>,
 
-    /// Reconcile a sibling PodDisruptionBudget targeting the runtime
-    /// Deployment's pods. Absent = no PDB; presence = the operator
-    /// creates/updates one, and clearing the field deletes the prior PDB.
+    /// Override for the runtime PodDisruptionBudget. When omitted, the
+    /// operator auto-creates a PDB with `maxUnavailable: 1` for any
+    /// multi-replica runtime (`replicas > 1`) and creates none for a single
+    /// replica. Setting this field replaces that default with the given
+    /// spec; clearing it restores the default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) pod_disruption_budget: Option<PodDisruptionBudgetSpec>,
 }

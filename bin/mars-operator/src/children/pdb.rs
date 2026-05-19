@@ -1,6 +1,7 @@
-//! Optional PodDisruptionBudget sibling targeting the runtime Deployment.
-//! Reuses the runtime label selector so it can never drift from the
-//! Deployment's pods.
+//! PodDisruptionBudget sibling targeting the runtime Deployment. A
+//! multi-replica runtime gets `maxUnavailable: 1` by default; an explicit
+//! `runtime.podDisruptionBudget` overrides that. Reuses the runtime label
+//! selector so it can never drift from the Deployment's pods.
 
 use k8s_openapi::api::policy::v1::{PodDisruptionBudget, PodDisruptionBudgetSpec as PdbSpec};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta, OwnerReference};
@@ -11,8 +12,16 @@ use crate::crd::spec::MarsService;
 use crate::error::Result;
 
 pub(crate) fn build(cr: &MarsService, owner_ref: OwnerReference) -> Result<Option<PodDisruptionBudget>> {
-    let Some(spec) = cr.spec.runtime.pod_disruption_budget.as_ref() else {
-        return Ok(None);
+    let (min_available, max_unavailable) = match cr.spec.runtime.pod_disruption_budget.as_ref() {
+        // explicit override: honour the user's spec verbatim.
+        Some(spec) => (
+            spec.min_available.as_deref().map(parse_int_or_string),
+            spec.max_unavailable.as_deref().map(parse_int_or_string),
+        ),
+        // no override + multi-replica: auto-default to maxUnavailable=1.
+        None if cr.spec.runtime.replicas > 1 => (None, Some(IntOrString::Int(1))),
+        // no override + single replica: a PDB would block every drain.
+        None => return Ok(None),
     };
     let svc = cr
         .metadata
@@ -30,8 +39,8 @@ pub(crate) fn build(cr: &MarsService, owner_ref: OwnerReference) -> Result<Optio
             ..Default::default()
         },
         spec: Some(PdbSpec {
-            min_available: spec.min_available.as_deref().map(parse_int_or_string),
-            max_unavailable: spec.max_unavailable.as_deref().map(parse_int_or_string),
+            min_available,
+            max_unavailable,
             selector: Some(LabelSelector {
                 match_labels: Some(labels::selector(&svc, COMPONENT_RUNTIME)),
                 ..Default::default()

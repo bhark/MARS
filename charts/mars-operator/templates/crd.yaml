@@ -528,9 +528,11 @@ spec:
                     type: object
                   podDisruptionBudget:
                     description: |-
-                      Reconcile a sibling PodDisruptionBudget targeting the runtime
-                      Deployment's pods. Absent = no PDB; presence = the operator
-                      creates/updates one, and clearing the field deletes the prior PDB.
+                      Override for the runtime PodDisruptionBudget. When omitted, the
+                      operator auto-creates a PDB with `maxUnavailable: 1` for any
+                      multi-replica runtime (`replicas > 1`) and creates none for a single
+                      replica. Setting this field replaces that default with the given
+                      spec; clearing it restores the default.
                     nullable: true
                     properties:
                       maxUnavailable:

@@ -5,10 +5,26 @@ use crate::children::test_support;
 use crate::crd::runtime::PodDisruptionBudgetSpec;
 
 #[test]
-fn build_returns_none_when_spec_absent() {
-    let cr = test_support::cr("demo", "svc-ns");
+fn build_returns_none_when_spec_absent_and_single_replica() {
+    let mut cr = test_support::cr("demo", "svc-ns");
+    cr.spec.runtime.replicas = 1;
     let out = build(&cr, test_support::owner_ref()).unwrap();
     assert!(out.is_none());
+}
+
+#[test]
+fn build_auto_creates_max_unavailable_one_for_multi_replica() {
+    // default fixture is replicas: 2 with no podDisruptionBudget override.
+    let cr = test_support::cr("demo", "svc-ns");
+    let pdb = build(&cr, test_support::owner_ref()).unwrap().unwrap();
+    assert_eq!(pdb.metadata.name.as_deref(), Some("demo-runtime"));
+    assert_eq!(pdb.metadata.namespace.as_deref(), Some("svc-ns"));
+    let spec = pdb.spec.unwrap();
+    assert!(spec.min_available.is_none());
+    match spec.max_unavailable.unwrap() {
+        IntOrString::Int(n) => assert_eq!(n, 1),
+        other => panic!("expected Int, got {other:?}"),
+    }
 }
 
 #[test]
