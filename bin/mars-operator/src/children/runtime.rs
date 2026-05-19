@@ -13,13 +13,13 @@ use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta, OwnerReference};
 use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
 
-use crate::children::compiler::{
-    container_security_context, env_from, env_vars, extra_volume_mounts, extra_volumes, optional_affinity,
-    optional_btree_map, optional_tolerations, pod_security_context, resource_requirements,
-};
 use crate::children::labels::{
     self, COMPONENT_RUNTIME, CONFIG_CHECKSUM_ANNOTATION, artifact_store_pvc_name, config_map_name,
     runtime_deployment_name,
+};
+use crate::children::pod::{
+    container_security_context, env_from, env_vars, extra_volume_mounts, extra_volumes, optional_affinity,
+    optional_btree_map, optional_tolerations, pod_security_context, resource_requirements,
 };
 use crate::crd::spec::MarsService;
 use crate::error::Result;

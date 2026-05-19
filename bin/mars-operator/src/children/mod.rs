@@ -5,6 +5,7 @@ pub(crate) mod compiler;
 pub(crate) mod configmap;
 pub(crate) mod labels;
 pub(crate) mod pdb;
+pub(crate) mod pod;
 pub(crate) mod pvc;
 pub(crate) mod runtime;
 pub(crate) mod service;

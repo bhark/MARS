@@ -206,7 +206,7 @@ fn build_job(
             read_only: Some(true),
             ..Default::default()
         }]),
-        security_context: Some(crate::children::compiler::container_security_context()),
+        security_context: Some(crate::children::pod::container_security_context()),
         ..Default::default()
     };
 
@@ -228,7 +228,7 @@ fn build_job(
                 }),
                 spec: Some(PodSpec {
                     restart_policy: Some("Never".into()),
-                    security_context: Some(crate::children::compiler::pod_security_context()),
+                    security_context: Some(crate::children::pod::pod_security_context()),
                     containers: vec![container],
                     volumes: Some(vec![Volume {
                         name: "config".into(),
