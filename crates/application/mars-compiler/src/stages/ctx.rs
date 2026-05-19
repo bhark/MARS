@@ -21,18 +21,29 @@ use crate::memory_governor::MemoryGovernor;
 use crate::plan::BootstrapPlan;
 use crate::stages::shared::sidecars::OwnedSidecars;
 
+/// typical number of pass-2 pages a single binding keeps partially
+/// filled - hence with an open spill file - at once. multiplied by
+/// `binding_parallelism` to size the global spill open-file budget.
+const PER_BINDING_ACTIVE_PAGES: usize = 128;
+
 /// shared compile knobs read off config. snapshot and cycle both honour
 /// every field: `binding_parallelism` bounds whole-binding compile
 /// concurrency in the snapshot pipeline and per-binding rebuild
 /// concurrency inside the cycle's rebuild stage (truncate and
-/// incremental alike).
+/// incremental alike), and also derives the spill open-file ceiling.
 pub(crate) struct CompileKnobs {
     pub(crate) working_set_bytes: u64,
     pub(crate) plan_budget_bytes: u64,
     pub(crate) in_flight_budget_bytes: u64,
     pub(crate) binding_parallelism: usize,
     pub(crate) spill_dir: PathBuf,
-    pub(crate) spill_open_file_limit: usize,
+}
+
+impl CompileKnobs {
+    /// spill open-file ceiling, derived from `binding_parallelism`.
+    pub(crate) const fn spill_open_file_limit(&self) -> usize {
+        self.binding_parallelism.saturating_mul(PER_BINDING_ACTIVE_PAGES)
+    }
 }
 
 pub(crate) struct SnapshotCtx {

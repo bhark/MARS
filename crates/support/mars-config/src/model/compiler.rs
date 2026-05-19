@@ -37,7 +37,8 @@ pub struct Compiler {
     /// `stream_rows_by_id`), so `source.pool.max_size` must allow at
     /// least this many concurrent checkouts plus headroom for sidecar /
     /// object-store I/O. Snapshot and cycle never co-execute, so one
-    /// budget covers both.
+    /// budget covers both. Also sizes the pass-2 spill open-file budget,
+    /// which scales with this value.
     #[serde(default = "default_compile_binding_parallelism")]
     pub compile_binding_parallelism: usize,
     /// Hard ceiling on pass-2 RAM allocation, summed across the whole
@@ -80,13 +81,6 @@ pub struct Compiler {
     /// [`compile_binding_parallelism`]: Self::compile_binding_parallelism
     #[serde(default)]
     pub compile_spill_dir: Option<String>,
-    /// Maximum number of spill files held open at once. The compiler keeps
-    /// recently-written spill files open for buffered append; older entries
-    /// are flushed and closed when the limit is reached. Sized for typical
-    /// `compile_binding_parallelism` × per-binding active page set; raise
-    /// if profiling shows reopen syscall churn dominating the spill path.
-    #[serde(default = "default_compile_spill_open_file_limit")]
-    pub compile_spill_open_file_limit: usize,
     /// Opportunistic rebalance settings (split / merge under size or
     /// bbox-dilation drift).
     #[serde(default)]
@@ -156,7 +150,6 @@ impl Default for Compiler {
             compile_disk_budget_bytes: None,
             compile_in_flight_pages_budget_bytes: default_compile_in_flight_pages_budget(),
             compile_spill_dir: None,
-            compile_spill_open_file_limit: default_compile_spill_open_file_limit(),
             rebalance: Rebalance::default(),
             images_dir: None,
             reconcile_max_age: None,
@@ -238,10 +231,6 @@ fn default_compile_binding_parallelism() -> usize {
 
 fn default_compile_in_flight_pages_budget() -> String {
     "256MiB".to_owned()
-}
-
-fn default_compile_spill_open_file_limit() -> usize {
-    256
 }
 
 fn default_dirty_page_ceiling_per_binding() -> Option<usize> {

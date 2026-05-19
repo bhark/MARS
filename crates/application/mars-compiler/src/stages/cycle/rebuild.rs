@@ -36,7 +36,7 @@ pub(crate) async fn run(
         ctx.knobs.plan_budget_bytes,
         ctx.knobs.in_flight_budget_bytes,
         &ctx.knobs.spill_dir,
-        ctx.knobs.spill_open_file_limit,
+        ctx.knobs.spill_open_file_limit(),
         &ctx.mem_governor,
         &ctx.disk_governor,
         ctx.failure_policy,

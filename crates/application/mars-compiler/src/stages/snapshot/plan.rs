@@ -17,7 +17,6 @@ pub(crate) async fn build(c: &Compiler) -> Result<SnapshotCtx, CompilerError> {
         in_flight_budget_bytes: c.config.compiler.compile_in_flight_pages_budget()?,
         binding_parallelism: c.config.compiler.compile_binding_parallelism,
         spill_dir: c.config.compiler.compile_spill_dir_path(),
-        spill_open_file_limit: c.config.compiler.compile_spill_open_file_limit,
     };
     Ok(SnapshotCtx {
         plan,
