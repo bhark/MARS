@@ -53,10 +53,6 @@ pub(crate) struct Cli {
     #[arg(long, env = "MARS_OPERATOR_LOG_FORMAT", value_enum, default_value_t = LogFormat::Json)]
     pub(crate) log_format: LogFormat,
 
-    /// Field manager string for server-side apply.
-    #[arg(long, env = "MARS_OPERATOR_FIELD_MANAGER", default_value = "mars-operator")]
-    pub(crate) field_manager: String,
-
     /// Container repository the operator constructs runtime/compiler image
     /// references against. The tag is always the operator's own version, so
     /// operator vX.Y.Z runs mars vX.Y.Z. Override only for air-gap mirrors.

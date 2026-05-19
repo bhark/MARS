@@ -38,7 +38,6 @@ spec:
             - "--leader-elect={{ .Values.leaderElection.enabled }}"
             - "--log-level={{ .Values.log.level }}"
             - "--log-format={{ .Values.log.format }}"
-            - "--field-manager={{ .Values.fieldManager }}"
           env:
             - name: HOSTNAME
               valueFrom:

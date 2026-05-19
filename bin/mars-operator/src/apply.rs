@@ -16,8 +16,12 @@ use crate::reconcile::Ctx;
 pub(crate) async fn configmap(ctx: &Ctx, ns: &str, cm: &ConfigMap) -> Result<()> {
     let api: Api<ConfigMap> = Api::namespaced(ctx.client.clone(), ns);
     let name = cm.metadata.name.as_deref().unwrap_or("");
-    api.patch(name, &PatchParams::apply(&ctx.field_manager).force(), &Patch::Apply(cm))
-        .await?;
+    api.patch(
+        name,
+        &PatchParams::apply(crate::controller::FIELD_MANAGER).force(),
+        &Patch::Apply(cm),
+    )
+    .await?;
     Ok(())
 }
 
@@ -31,7 +35,7 @@ pub(crate) async fn pvc(ctx: &Ctx, ns: &str, pvc: &PersistentVolumeClaim) -> Res
     }
     api.patch(
         name,
-        &PatchParams::apply(&ctx.field_manager).force(),
+        &PatchParams::apply(crate::controller::FIELD_MANAGER).force(),
         &Patch::Apply(pvc),
     )
     .await?;
@@ -43,7 +47,7 @@ pub(crate) async fn deployment(ctx: &Ctx, ns: &str, dep: &Deployment) -> Result<
     let name = dep.metadata.name.as_deref().unwrap_or("");
     api.patch(
         name,
-        &PatchParams::apply(&ctx.field_manager).force(),
+        &PatchParams::apply(crate::controller::FIELD_MANAGER).force(),
         &Patch::Apply(dep),
     )
     .await?;
@@ -55,7 +59,7 @@ pub(crate) async fn service(ctx: &Ctx, ns: &str, svc: &Service) -> Result<()> {
     let name = svc.metadata.name.as_deref().unwrap_or("");
     api.patch(
         name,
-        &PatchParams::apply(&ctx.field_manager).force(),
+        &PatchParams::apply(crate::controller::FIELD_MANAGER).force(),
         &Patch::Apply(svc),
     )
     .await?;
@@ -71,7 +75,7 @@ pub(crate) async fn runtime_pdb(ctx: &Ctx, ns: &str, svc_name: &str, pdb: Option
         Some(obj) => {
             api.patch(
                 &name,
-                &PatchParams::apply(&ctx.field_manager).force(),
+                &PatchParams::apply(crate::controller::FIELD_MANAGER).force(),
                 &Patch::Apply(obj),
             )
             .await?;

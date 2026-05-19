@@ -27,10 +27,9 @@ use plan::plan_jobs;
 
 /// Shared state for the cluster reconciler. Distinct from
 /// `reconcile::Ctx` so cluster reconciles cannot accidentally reach for
-/// MarsService-only fields (`poller`, `field_manager`).
+/// MarsService-only fields (`poller`).
 pub(crate) struct ClusterCtx {
     pub(crate) client: kube::Client,
-    pub(crate) field_manager: String,
     pub(crate) metrics: Metrics,
     /// `repo:version` for the bootstrap Job container.
     pub(crate) runtime_image: String,

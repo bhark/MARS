@@ -32,6 +32,8 @@ const LEASE_NAME: &str = "mars-operator-leader";
 const LEASE_DURATION_SECS: u64 = 30;
 const LEASE_GRACE_SECS: u64 = 5;
 const LEASE_FIELD_MANAGER: &str = "mars-operator-lease";
+/// Field manager for server-side apply of managed children.
+pub(crate) const FIELD_MANAGER: &str = "mars-operator";
 
 pub(crate) async fn run(cli: Cli) -> Result<()> {
     let client = Client::try_default().await.context("kube client")?;
@@ -70,14 +72,12 @@ pub(crate) async fn run(cli: Cli) -> Result<()> {
 
     let ctx = Arc::new(Ctx {
         client: client.clone(),
-        field_manager: cli.field_manager.clone(),
         metrics: metrics_svc.clone(),
         runtime_image: runtime_image.clone(),
         poller,
     });
     let cluster_ctx = Arc::new(ClusterCtx {
         client: client.clone(),
-        field_manager: cli.field_manager.clone(),
         metrics: metrics_svc,
         runtime_image,
         operator_namespace: cli.namespace.clone(),

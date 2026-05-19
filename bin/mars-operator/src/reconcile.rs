@@ -26,7 +26,6 @@ use crate::status::{self, ObservedDefinition, Resolution, ResolutionReason, Stat
 
 pub(crate) struct Ctx {
     pub(crate) client: kube::Client,
-    pub(crate) field_manager: String,
     pub(crate) metrics: Metrics,
     /// `repo:version` for the runtime/compiler containers. Built once at
     /// startup from CLI/env + operator's own CARGO_PKG_VERSION; identical

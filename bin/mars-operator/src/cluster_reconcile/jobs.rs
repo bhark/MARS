@@ -55,7 +55,7 @@ pub(super) async fn apply_one(
     cm_api
         .patch(
             cm.metadata.name.as_deref().unwrap_or(""),
-            &PatchParams::apply(&ctx.field_manager).force(),
+            &PatchParams::apply(crate::controller::FIELD_MANAGER).force(),
             &Patch::Apply(&cm),
         )
         .await?;
@@ -95,7 +95,7 @@ pub(super) async fn apply_one(
     job_api
         .patch(
             &job_name,
-            &PatchParams::apply(&ctx.field_manager).force(),
+            &PatchParams::apply(crate::controller::FIELD_MANAGER).force(),
             &Patch::Apply(&job),
         )
         .await?;

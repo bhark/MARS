@@ -110,7 +110,7 @@ async fn ensure_managed_admin_secret(
     let patched = api
         .patch(
             &name,
-            &PatchParams::apply(&ctx.field_manager).force(),
+            &PatchParams::apply(crate::controller::FIELD_MANAGER).force(),
             &Patch::Apply(&secret),
         )
         .await?;
@@ -166,7 +166,7 @@ pub(super) async fn ensure_runtime_password_secret(
     };
     api.patch(
         &name,
-        &PatchParams::apply(&ctx.field_manager).force(),
+        &PatchParams::apply(crate::controller::FIELD_MANAGER).force(),
         &Patch::Apply(&secret),
     )
     .await?;

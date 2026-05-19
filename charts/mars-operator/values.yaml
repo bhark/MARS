@@ -76,6 +76,3 @@ leaderElection:
 log:
   level: info
   format: json
-
-# Field manager string used for server-side apply on managed children.
-fieldManager: mars-operator
