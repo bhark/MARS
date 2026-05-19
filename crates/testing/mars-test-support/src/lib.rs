@@ -13,6 +13,8 @@ pub mod garage;
 
 pub mod port_fakes;
 
+pub mod definition_source;
+
 use std::fmt;
 
 #[derive(Debug, Clone)]

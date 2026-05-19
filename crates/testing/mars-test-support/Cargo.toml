@@ -15,10 +15,10 @@ workspace = true
 [features]
 default = []
 # docker-backed helpers (postgis, garage). pulls testcontainers + rand +
-# tempfile (for the garage config tempdir) + tokio (for the post-boot
-# settle sleep and the testcontainers exec stdout reader). off by default
-# so plain `cargo test` skips docker entirely.
-docker = ["dep:testcontainers", "dep:rand", "dep:tempfile", "dep:tokio"]
+# tempfile (for the garage config tempdir); tokio is always-on for the
+# definition-source fake but the docker harness uses it for the post-boot
+# settle sleep and the testcontainers exec stdout reader.
+docker = ["dep:testcontainers", "dep:rand", "dep:tempfile"]
 
 [dependencies]
 png       = { workspace = true }
@@ -27,17 +27,19 @@ zune-jpeg = { workspace = true }
 # port-level fakes used across application crate tests. always-on: every
 # downstream test consumer already pulls the port crates, so the fakes have
 # no extra dependency cost.
-mars-source       = { workspace = true }
-mars-store        = { workspace = true }
-mars-types        = { workspace = true }
-mars-render-port  = { workspace = true }
-mars-style        = { workspace = true }
-async-trait       = { workspace = true }
-bytes             = { workspace = true }
-futures-core      = { workspace = true }
-futures-util      = { workspace = true }
+mars-source            = { workspace = true }
+mars-store             = { workspace = true }
+mars-types             = { workspace = true }
+mars-render-port       = { workspace = true }
+mars-style             = { workspace = true }
+mars-definition-source = { workspace = true }
+async-trait            = { workspace = true }
+bytes                  = { workspace = true }
+futures-core           = { workspace = true }
+futures-util           = { workspace = true }
+tokio                  = { workspace = true }
+tokio-stream           = { workspace = true }
 
 testcontainers = { workspace = true, optional = true }
 rand           = { workspace = true, optional = true }
 tempfile       = { workspace = true, optional = true }
-tokio          = { workspace = true, optional = true }

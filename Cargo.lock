@@ -2828,6 +2828,7 @@ dependencies = [
  "futures-core",
  "futures-util",
  "mars-definition-source",
+ "mars-test-support",
  "object_store",
  "thiserror 2.0.18",
  "tokio",
@@ -2930,6 +2931,7 @@ dependencies = [
  "mars-definition-source-inline",
  "mars-definition-source-s3",
  "mars-observability",
+ "mars-test-support",
  "prometheus",
  "rand 0.10.1",
  "schemars 1.2.1",
@@ -3192,6 +3194,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-util",
+ "mars-definition-source",
  "mars-render-port",
  "mars-source",
  "mars-store",
@@ -3202,6 +3205,7 @@ dependencies = [
  "tempfile",
  "testcontainers",
  "tokio",
+ "tokio-stream",
  "zune-jpeg",
 ]
 

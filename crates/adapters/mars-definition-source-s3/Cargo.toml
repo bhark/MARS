@@ -24,5 +24,15 @@ tokio                  = { workspace = true }
 tokio-stream           = { workspace = true }
 tracing                = { workspace = true }
 
+[features]
+default = []
+# garage-backed integration tests under `tests/garage_definition_source.rs`;
+# mirrors mars-store-s3 + mars-source-postgres. off by default so plain
+# `cargo test` skips docker.
+integration = []
+
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt"] }
+tokio             = { workspace = true, features = ["macros", "rt", "rt-multi-thread"] }
+mars-test-support = { workspace = true, features = ["docker"] }
+object_store      = { workspace = true, features = ["aws"] }
+bytes             = { workspace = true }

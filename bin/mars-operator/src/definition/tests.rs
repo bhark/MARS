@@ -187,6 +187,61 @@ fn git_mixed_modes_rejected() {
 }
 
 #[test]
+fn git_ssh_plus_bearer_rejected() {
+    let bundle = make_bundle(
+        "ssh-bearer",
+        &[
+            ("identity", "k"),
+            ("identity.pub", "p"),
+            ("known_hosts", "h"),
+            ("bearerToken", "t"),
+        ],
+    );
+    let err = git_auth_from_bundle(Some(&bundle), true).expect_err("must reject");
+    assert!(matches!(err, ResolveError::ConflictingGitAuthModes { .. }));
+}
+
+#[test]
+fn git_basic_plus_bearer_rejected() {
+    let bundle = make_bundle(
+        "basic-bearer",
+        &[("username", "u"), ("password", "p"), ("bearerToken", "t")],
+    );
+    let err = git_auth_from_bundle(Some(&bundle), true).expect_err("must reject");
+    assert!(matches!(err, ResolveError::ConflictingGitAuthModes { .. }));
+}
+
+#[test]
+fn git_all_three_modes_rejected() {
+    let bundle = make_bundle(
+        "all-three",
+        &[
+            ("identity", "k"),
+            ("identity.pub", "p"),
+            ("known_hosts", "h"),
+            ("username", "u"),
+            ("password", "p"),
+            ("bearerToken", "t"),
+        ],
+    );
+    let err = git_auth_from_bundle(Some(&bundle), true).expect_err("must reject");
+    assert!(matches!(err, ResolveError::ConflictingGitAuthModes { secret } if secret == "all-three"));
+}
+
+#[test]
+fn git_partial_ssh_plus_basic_still_conflicts() {
+    // a single ssh key being present (even without the full bundle) is
+    // enough to register as "ssh mode set"; combined with basic auth keys
+    // this must trip the conflict guard before missing-field validation runs.
+    let bundle = make_bundle(
+        "partial-ssh-basic",
+        &[("identity", "k"), ("username", "u"), ("password", "p")],
+    );
+    let err = git_auth_from_bundle(Some(&bundle), true).expect_err("must reject");
+    assert!(matches!(err, ResolveError::ConflictingGitAuthModes { .. }));
+}
+
+#[test]
 fn git_ca_only_yields_public_plus_tls_ca() {
     let bundle = make_bundle("ca-only", &[("ca.crt", "-----BEGIN CERTIFICATE-----")]);
     let (auth, tls) = git_auth_from_bundle(Some(&bundle), true).expect("ca-only ok");

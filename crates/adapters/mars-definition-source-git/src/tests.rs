@@ -230,6 +230,7 @@ fn redact_strips_userinfo_in_urls() {
 }
 
 // the actual fetch + watch paths exercise libgit2 against a live remote; that
-// belongs in the operator's integration tier (mirrors the
-// mars-source-postgres `integration` feature pattern). gated on demand to
-// keep the default test loop hermetic.
+// belongs behind this crate's own `integration` feature (mirrors the
+// mars-source-postgres / mars-store-s3 pattern). a gitea testcontainer
+// fixture is not yet wired in `mars-test-support`; the feature flag is in
+// place so the test file can drop in here without a Cargo.toml change.
