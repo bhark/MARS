@@ -31,8 +31,7 @@ pub(crate) async fn run(cfg: Arc<Config>, shutdown: CancellationToken) -> Result
     let wms_cfg = mars_wms::WmsConfig::from_config(&cfg);
     let wmts_cfg = mars_wmts::WmtsConfig::from_config(&cfg);
     let metrics = mars_observability::Metrics::new().context("init metrics")?;
-    let pixel_budget =
-        mars_runtime::resolve_pixel_budget(&cfg.render).context("resolve render.pixel_budget")?;
+    let pixel_budget = mars_runtime::resolve_pixel_budget(&cfg.render).context("resolve render.pixel_budget")?;
     let images = Arc::new(mars_runtime::images::MutableImageRegistry::new());
     let raster_sources = composition::build_raster_sources(&cfg).context("build raster source registry")?;
     let runtime = Arc::new(Runtime::with_pixel_budget(
