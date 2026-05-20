@@ -9,6 +9,10 @@ publish.workspace     = true
 rust-version.workspace = true
 description = "Safe wrapper around the proj C library. Per-thread PJ_CONTEXT, transformer cache."
 
+# criterion only; libtest harness rejects --save-baseline
+[lib]
+bench = false
+
 [lints]
 workspace = true
 # `unsafe` is required for the FFI surface; the wrapper keeps it scoped.

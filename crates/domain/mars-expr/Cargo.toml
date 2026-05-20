@@ -9,6 +9,10 @@ publish.workspace     = true
 rust-version.workspace = true
 description = "MARS embedded expression language (when: filters, text: interpolations) - AST, parser, validator, in-memory evaluator."
 
+# criterion only; libtest harness rejects --save-baseline
+[lib]
+bench = false
+
 [lints]
 workspace = true
 

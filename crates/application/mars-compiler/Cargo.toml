@@ -9,6 +9,10 @@ publish.workspace     = true
 rust-version.workspace = true
 description = "MARS compiler use-case: change-feed → dirty pages → rebuild → publish manifest."
 
+# criterion only; libtest harness rejects --save-baseline
+[lib]
+bench = false
+
 [lints]
 workspace = true
 

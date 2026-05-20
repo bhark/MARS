@@ -9,6 +9,10 @@ publish.workspace     = true
 rust-version.workspace = true
 description = "Filesystem-backed mars-store adapter. Doubles as the node-local SSD cache (mirrored key layout)."
 
+# criterion only; libtest harness rejects --save-baseline
+[lib]
+bench = false
+
 [lints]
 workspace = true
 

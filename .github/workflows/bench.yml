@@ -34,16 +34,24 @@ jobs:
       - name: install proj (mars-proj FFI)
         run: sudo apt-get update -qq && sudo apt-get install -y -qq libproj-dev
 
-      - name: compile-only smoke check (every bench target)
+      # scoped to crates that declare `harness = false` (criterion). a plain
+      # `--workspace` blows up because the default libtest harness on every
+      # other lib/bin rejects `--save-baseline`. update this list whenever a
+      # new criterion bench is added.
+      - name: compile-only smoke check (every criterion target)
         run: |
-          cargo bench --workspace --no-run --locked \
+          cargo bench --no-run --locked \
+            -p mars-artifact -p mars-expr -p mars-store-fs -p mars-proj \
+            -p mars-render -p mars-runtime -p mars-compiler \
             --features mars-runtime/test-fixtures,mars-runtime/bench-internals
 
       - name: run all benches and save baseline
         env:
           BASELINE: ${{ github.event.inputs.baseline_name || 'nightly' }}
         run: |
-          cargo bench --workspace --locked \
+          cargo bench --locked \
+            -p mars-artifact -p mars-expr -p mars-store-fs -p mars-proj \
+            -p mars-render -p mars-runtime -p mars-compiler \
             --features mars-runtime/test-fixtures,mars-runtime/bench-internals \
             -- --save-baseline "$BASELINE"
 

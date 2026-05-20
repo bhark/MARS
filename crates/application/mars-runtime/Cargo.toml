@@ -9,6 +9,10 @@ publish.workspace     = true
 rust-version.workspace = true
 description = "MARS runtime use-case: render plan → resolve artifacts → label collide → call Renderer → encode."
 
+# criterion only; libtest harness rejects --save-baseline
+[lib]
+bench = false
+
 [lints]
 workspace = true
 

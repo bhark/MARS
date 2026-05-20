@@ -9,6 +9,10 @@ publish.workspace     = true
 rust-version.workspace = true
 description = "CPU rasteriser implementation of mars-render-port::Renderer (tiny-skia + rustybuzz)."
 
+# criterion only; libtest harness rejects --save-baseline
+[lib]
+bench = false
+
 [lints]
 workspace = true
 
