@@ -1,16 +1,25 @@
 # Benchmarks
 
 Criterion benches across the workspace, sized to give signal at every
-layer of the render and compile pipelines. CI runs them nightly via
-`.github/workflows/bench.yml` and uploads the full `target/criterion/`
-tree as a workflow artifact (90 day retention). Baselines are not
-checked in (machine-dependent noise).
+layer of the render and compile pipelines. CI runs them as a release
+gate via `.github/workflows/bench.yml` (called from `release.yml` on
+tag push; the criterion baseline is named after the tag) and uploads
+the full `target/criterion/` tree as a workflow artifact (90 day
+retention). The workflow can also be triggered manually via
+`workflow_dispatch`. Baselines are not checked in (machine-dependent
+noise).
+
+The workflow runs only the crates that declare `harness = false`
+(criterion). The `-p` list lives in `bench.yml`; update it whenever a
+new criterion bench is added in a new crate.
 
 ## Running
 
 ```sh
-# whole suite
-cargo bench --workspace \
+# whole suite (matches the workflow's -p list)
+cargo bench \
+  -p mars-artifact -p mars-expr -p mars-store-fs -p mars-proj \
+  -p mars-render -p mars-runtime -p mars-compiler \
   --features mars-runtime/test-fixtures,mars-runtime/bench-internals
 
 # one crate
@@ -28,7 +37,9 @@ cargo bench -p mars-runtime --bench render_e2e -- --quick
 Before starting a perf optimization pass, snapshot a baseline:
 
 ```sh
-cargo bench --workspace \
+cargo bench \
+  -p mars-artifact -p mars-expr -p mars-store-fs -p mars-proj \
+  -p mars-render -p mars-runtime -p mars-compiler \
   --features mars-runtime/test-fixtures,mars-runtime/bench-internals \
   -- --save-baseline pre-optimization
 ```
@@ -116,6 +127,15 @@ against your local baseline, not these.
    name    = "my_bench"
    harness = false
    ```
+   If the crate doesn't already have criterion benches, also add this
+   so `cargo bench` doesn't run the lib's libtest harness (which
+   rejects criterion args like `--save-baseline`):
+   ```toml
+   [lib]
+   bench = false
+   ```
 3. Use Criterion's `BenchmarkId` + `Throughput` so the parameter sweep
    reads cleanly in the output.
 4. Update this file's bench inventory.
+5. If the new bench lives in a crate that wasn't already in the
+   `-p` list in `.github/workflows/bench.yml`, add it there.
