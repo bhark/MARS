@@ -19,9 +19,10 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # release gate: run the full CI suite and the full e2e suite (including
-  # parity + kind e2e) against the tagged sha. nothing is built or published
-  # unless both pass.
+  # release gate: run the full CI suite, the full e2e suite (including parity
+  # + kind e2e), and the criterion bench suite against the tagged sha.
+  # nothing is built or published unless all three pass. baseline_name is
+  # the tag, so each release lands a named criterion baseline.
   verify-ci:
     name: verify (ci)
     uses: ./.github/workflows/ci.yml
@@ -32,9 +33,15 @@ jobs:
     with:
       run_all: true
 
+  verify-bench:
+    name: verify (bench)
+    uses: ./.github/workflows/bench.yml
+    with:
+      baseline_name: ${{ github.ref_name }}
+
   binary:
     name: build binaries (${{ matrix.target }})
-    needs: [verify-ci, verify-e2e]
+    needs: [verify-ci, verify-e2e, verify-bench]
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -98,7 +105,7 @@ jobs:
 
   container:
     name: build + push container (${{ matrix.bin }})
-    needs: [verify-ci, verify-e2e]
+    needs: [verify-ci, verify-e2e, verify-bench]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:

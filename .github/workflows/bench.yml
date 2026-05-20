@@ -1,20 +1,25 @@
 name: bench
 
-# Runs the full Criterion suite. Trigger manually via `workflow_dispatch`
-# or on the nightly schedule. Not on every PR: criterion runs are noisy on
-# shared runners and would muddy the signal until baseline storage moves
-# to a stable runner.
+# Runs the full Criterion suite. Gates on tag pushes via release.yml (the
+# baseline is named after the tag) and can be triggered manually via
+# `workflow_dispatch`. Not on every PR: criterion runs are noisy on shared
+# runners and would muddy the signal until baseline storage moves to a
+# stable runner.
 
 on:
-  schedule:
-    # 03:00 UTC nightly. shared with ci-runners' off-peak window.
-    - cron: '0 3 * * *'
   workflow_dispatch:
     inputs:
       baseline_name:
         description: 'criterion baseline name to save under'
         required: false
-        default: 'nightly'
+        default: 'manual'
+  workflow_call:
+    inputs:
+      baseline_name:
+        description: 'criterion baseline name to save under'
+        required: false
+        type: string
+        default: 'manual'
 
 env:
   CARGO_TERM_COLOR: always
@@ -47,7 +52,7 @@ jobs:
 
       - name: run all benches and save baseline
         env:
-          BASELINE: ${{ github.event.inputs.baseline_name || 'nightly' }}
+          BASELINE: ${{ inputs.baseline_name }}
         run: |
           cargo bench --locked \
             -p mars-artifact -p mars-expr -p mars-store-fs -p mars-proj \
